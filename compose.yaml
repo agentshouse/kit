@@ -8,6 +8,8 @@ services:
     mem_limit: 4g
     volumes:
       - .:/kit
+    tmpfs:
+      - /agents/house:uid=${KIT_TEST_UID:-1001},gid=${KIT_TEST_GID:-1001}
     environment:
       HOME: /tmp/home
       npm_config_cache: /kit/tmp/npm-cache

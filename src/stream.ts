@@ -2,6 +2,15 @@ import { readEnrolment } from './home.ts';
 
 export type Frame = { type: string } & Record<string, unknown>;
 
+export interface StreamHandlers {
+  opened(): void;
+  frame(frame: Frame): void;
+}
+
+export interface Stream {
+  send(frame: Frame): boolean;
+}
+
 const SUBPROTOCOL = 'house.kit.stream.1';
 
 function streamUrl(house: string): URL {
@@ -10,7 +19,8 @@ function streamUrl(house: string): URL {
   return url;
 }
 
-export function holdStream(frame: (received: Frame) => void): void {
+export function holdStream(handlers: StreamHandlers): Stream {
+  let socket: WebSocket | null = null;
   let failures = 0;
 
   const connect = async () => {
@@ -23,12 +33,15 @@ export function holdStream(frame: (received: Frame) => void): void {
     opening.onopen = () => {
       opened = true;
       failures = 0;
+      socket = opening;
+      handlers.opened();
     };
     opening.onmessage = (event) => {
-      frame(JSON.parse(String(event.data)) as Frame);
+      handlers.frame(JSON.parse(String(event.data)) as Frame);
     };
     opening.onerror = () => undefined;
     opening.onclose = (event) => {
+      if (socket === opening) socket = null;
       process.stderr.write(`kit: control stream closed ${event.code} ${event.reason}\n`);
       const delay = opened
         ? 1000 + Math.random() * 2000
@@ -38,4 +51,11 @@ export function holdStream(frame: (received: Frame) => void): void {
   };
 
   void connect();
+  return {
+    send(frame) {
+      if (socket === null || socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify(frame));
+      return true;
+    },
+  };
 }

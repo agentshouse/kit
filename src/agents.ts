@@ -47,12 +47,17 @@ async function operatingSystem(): Promise<string> {
 
 export class Agents {
   desired: Desired = { agents: [], routes: [] };
+  ready: Promise<void>;
   private readonly house: House;
+  private readied: () => void = () => undefined;
   private running: Promise<void> | null = null;
   private again = false;
 
   constructor(house: House) {
     this.house = house;
+    this.ready = new Promise((resolve) => {
+      this.readied = resolve;
+    });
   }
 
   route(agentId: string): Route | undefined {
@@ -71,6 +76,7 @@ export class Agents {
       } while (this.again);
     })().finally(() => {
       this.running = null;
+      this.readied();
     });
     return this.running;
   }
