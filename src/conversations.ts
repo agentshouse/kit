@@ -14,6 +14,9 @@ import { killTree, startAdapter, type Adapter, type JobUpdate } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
+import { openBridge, type Bridge } from './bridge.ts';
+import { placeFiles, type MessageFile } from './files.ts';
+import { instructions } from './instructions.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 import type { Frame } from './stream.ts';
 
@@ -69,6 +72,7 @@ class Turn {
 
 interface Running {
   adapter: Adapter;
+  bridge: Bridge;
   sessionId: string;
   killed: boolean;
 }
@@ -184,7 +188,7 @@ export class Conversations {
   private async open(conversation: Conversation, input: Input): Promise<Ack> {
     if (conversation.running !== null) return {};
     try {
-      return { provider_session_id: await this.start(conversation, input.agent_id, null) };
+      return { provider_session_id: await this.start(conversation, await this.route(input.agent_id), null) };
     } catch (error) {
       return { refused: causeOf(error) };
     }
@@ -192,15 +196,23 @@ export class Conversations {
 
   private async message(conversation: Conversation, input: Input): Promise<Ack> {
     let ack: Ack = {};
-    if (conversation.running === null) {
-      try {
-        const opened = await this.start(conversation, input.agent_id, input.provider_session_id);
+    const prompt: ContentBlock[] = [];
+    try {
+      const route = await this.route(input.agent_id);
+      const paths = await placeFiles(this.kit.house, route.working_directory, input.files as MessageFile[]);
+      if (conversation.running === null) {
+        const opened = await this.start(conversation, route, input.provider_session_id);
         if (input.provider_session_id === null) ack = { provider_session_id: opened };
-      } catch (error) {
-        return { refused: causeOf(error) };
       }
+      if (input.first === true) {
+        prompt.push({ type: 'text', text: await instructions(conversation.running!.bridge, route.base_instructions) });
+      }
+      prompt.push({ type: 'text', text: String(input.text) });
+      if (paths.length > 0) prompt.push({ type: 'text', text: paths.join('\n') });
+    } catch (error) {
+      return { refused: causeOf(error) };
     }
-    await this.prompt(conversation, [{ type: 'text', text: String(input.text) }]);
+    await this.prompt(conversation, prompt);
     return ack;
   }
 
@@ -234,10 +246,14 @@ export class Conversations {
     }
   }
 
-  private async start(conversation: Conversation, agentId: string, sessionId: string | null): Promise<string> {
+  private async route(agentId: string): Promise<Route> {
     await this.kit.agents.ready;
     const route = this.kit.agents.route(agentId);
     if (route === undefined) throw new Error(`this Environment hosts no Agent ${agentId}`);
+    return route;
+  }
+
+  private async start(conversation: Conversation, route: Route, sessionId: string | null): Promise<string> {
     if (route.working_directory === join(LAUNCH_BASE, route.agent_id)) {
       await mkdir(route.working_directory, { recursive: true });
     }
@@ -249,9 +265,18 @@ export class Conversations {
       .onRequest('elicitation/create', ({ params }) =>
         this.ask(conversation, 'elicitation/create', params, asksSecret(params)),
       );
-    const adapter = await startAdapter(route.kind, route.working_directory, app, (update) =>
-      this.job(conversation, update),
-    );
+    const bridge = await openBridge(this.kit.house, conversation.id);
+    const adapter = await startAdapter(
+      route.kind,
+      route.working_directory,
+      app,
+      (update) => this.job(conversation, update),
+      { ...process.env, ...bridge.env },
+    ).catch((error: unknown) => {
+      bridge.close();
+      throw error;
+    });
+    void adapter.exited.then(() => bridge.close());
     try {
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
@@ -259,7 +284,7 @@ export class Conversations {
         sessionId === null
           ? await agent.request('session/new', { cwd, mcpServers: [] })
           : { ...(await agent.request('session/resume', { sessionId, cwd, mcpServers: [] })), sessionId };
-      const running: Running = { adapter, sessionId: opened.sessionId, killed: false };
+      const running: Running = { adapter, bridge, sessionId: opened.sessionId, killed: false };
       const options = await this.launchSettings(running, route, opened.configOptions ?? []);
       conversation.running = running;
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
