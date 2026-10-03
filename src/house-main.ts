@@ -3,16 +3,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { basename } from 'node:path';
+import type { ToolResult } from './bridge.ts';
 
 interface Tool {
   name: string;
   description: string;
   inputSchema: unknown;
-}
-
-interface ToolResult {
-  content: { type: string; text: string }[];
-  isError?: boolean;
 }
 
 interface Declared {
