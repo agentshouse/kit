@@ -1,5 +1,4 @@
 import type { Bridge } from './bridge.ts';
-import { readEnrolment } from './home.ts';
 
 const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
 const FILE_LINE = 'To give the User a file, upload it with `house upload_attachment` and link it in your answer.';
@@ -28,9 +27,5 @@ async function howWeWork(bridge: Bridge): Promise<string> {
 }
 
 export async function instructions(bridge: Bridge, base: string): Promise<string> {
-  const app = new URL('/app/new.git', (await readEnrolment())!.house).href;
-  const appLine = `To show the User a page, upload it or push it to an App instead of starting a server; \`git clone ${app}\` starts a new App.`;
-  return [`${HOUSE_LINE}\n${FILE_LINE}\n${appLine}`, base, await howWeWork(bridge)]
-    .filter((part) => part !== '')
-    .join('\n\n');
+  return [`${HOUSE_LINE}\n${FILE_LINE}`, base, await howWeWork(bridge)].filter((part) => part !== '').join('\n\n');
 }

@@ -81,6 +81,56 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   expect(settings.map((entry) => entry.params)).toEqual([expect.objectContaining({ configId: 'model', value: 'changed-model' })]);
 });
 
+async function reportHeld(hosted: Hosted): Promise<void> {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  onTestFinished(release);
+  let reporting = false;
+  hosted.house.route('POST', '/kit/agents/report', async () => {
+    reporting = true;
+    await held;
+    return { body: {} };
+  });
+  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  await until(() => reporting);
+}
+
+it('writes a message to a running process while the Kit is still reporting its CLIs', async () => {
+  const hosted = await hostKit();
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  await reportHeld(hosted);
+
+  hosted.input({ kind: 'message', text: '@say reached', files: [], first: false });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  const sent = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
+  expect(sent.text).toBe('@say reached');
+});
+
+it('opens a conversation with the launch settings House changed while the Kit was still reporting its CLIs', async () => {
+  const hosted = await hostKit();
+  await reportHeld(hosted);
+  const changed = {
+    agent_id: 'agent-1',
+    kind: 'codex-acp',
+    base_instructions: 'Be useful.',
+    working_directory: hosted.workingDirectory,
+    model: 'changed-model',
+    effort: null,
+  };
+  hosted.house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['codex-acp'], routes: [changed] } }));
+
+  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.input({ kind: 'open' });
+
+  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
+  expect(settings.map((entry) => entry.params)).toEqual([expect.objectContaining({ configId: 'model', value: 'changed-model' })]);
+});
+
 it('creates an absent default launch directory before it opens the session there', async () => {
   const agentId = `agent-${randomUUID()}`;
   const directory = `/agents/house/${agentId}`;

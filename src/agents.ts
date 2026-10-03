@@ -48,15 +48,20 @@ async function operatingSystem(): Promise<string> {
 export class Agents {
   desired: Desired = { agents: [], routes: [] };
   private readonly house: House;
-  private running: Promise<void> | null = null;
+  private reading: Promise<void> = Promise.resolve();
+  private reporting: Promise<void> | null = null;
   private again = false;
 
   constructor(house: House) {
     this.house = house;
   }
 
+  read(): Promise<void> {
+    return this.reading.catch(() => undefined);
+  }
+
   settled(): Promise<void> {
-    return (this.running ?? Promise.resolve()).catch(() => undefined);
+    return (this.reporting ?? Promise.resolve()).catch(() => undefined);
   }
 
   route(agentId: string): Route | undefined {
@@ -64,19 +69,13 @@ export class Agents {
   }
 
   refresh(): Promise<void> {
-    if (this.running !== null) {
-      this.again = true;
-      return this.running;
-    }
-    this.running = (async () => {
-      do {
-        this.again = false;
-        await this.pass();
-      } while (this.again);
-    })().finally(() => {
-      this.running = null;
+    const reading = this.read().then(async () => {
+      this.desired = await this.house.deliver<Desired>('/kit/agents/desired', {});
     });
-    return this.running;
+    this.reading = reading;
+    if (this.reporting === null) this.reporting = this.reports();
+    else this.again = true;
+    return Promise.all([reading, this.reporting]).then(() => undefined);
   }
 
   async report(): Promise<void> {
@@ -92,8 +91,15 @@ export class Agents {
     });
   }
 
-  private async pass(): Promise<void> {
-    this.desired = await this.house.deliver<Desired>('/kit/agents/desired', {});
-    await this.report();
+  private async reports(): Promise<void> {
+    try {
+      do {
+        this.again = false;
+        await this.reading;
+        await this.report();
+      } while (this.again);
+    } finally {
+      this.reporting = null;
+    }
   }
 }

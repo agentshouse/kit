@@ -267,7 +267,7 @@ export class Conversations {
   }
 
   private async route(agentId: string): Promise<Route> {
-    await this.kit.agents.settled();
+    await this.kit.agents.read();
     if (this.kit.agents.route(agentId) === undefined) await this.kit.agents.refresh();
     const route = this.kit.agents.route(agentId);
     if (route === undefined) throw new Error(`this Environment hosts no Agent ${agentId}`);
