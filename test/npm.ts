@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { CLIS } from '../src/clis.ts';
 
 const ADAPTER = fileURLToPath(new URL('./adapter.ts', import.meta.url));
+const DEVICE_LOGIN = fileURLToPath(new URL('./device-login.ts', import.meta.url));
 
 export function placeCli(prefix: string, kind: string, version: string): void {
   const cli = CLIS[kind]!;
@@ -12,7 +13,16 @@ export function placeCli(prefix: string, kind: string, version: string): void {
   writeFileSync(join(manifest, 'package.json'), JSON.stringify({ name: cli.package, version }));
   mkdirSync(join(prefix, 'node_modules', '.bin'), { recursive: true });
   const bin = join(prefix, 'node_modules', '.bin', cli.bin);
-  writeFileSync(bin, `#!/bin/sh\nADAPTER_KIND=${kind} exec ${process.execPath} ${ADAPTER} "$@"\n`);
+  writeFileSync(
+    bin,
+    [
+      '#!/bin/sh',
+      `export ADAPTER_KIND=${kind}`,
+      `case " $* " in *" --device-auth "*|*" --claudeai "*) exec ${process.execPath} ${DEVICE_LOGIN} "$@" ;; esac`,
+      `exec ${process.execPath} ${ADAPTER} "$@"`,
+      '',
+    ].join('\n'),
+  );
   chmodSync(bin, 0o755);
 }
 

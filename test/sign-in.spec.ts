@@ -1,0 +1,168 @@
+import { createHash } from 'node:crypto';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { expect, it } from 'vitest';
+import { DEVICE_LOGINS } from './device-login.ts';
+import { until } from './double.ts';
+import { hostKit, lastInput, type Hosted } from './environment.ts';
+
+interface Hold {
+  subject: string;
+  body: unknown;
+}
+
+const HELD = { outcome: 'released', release: 'held' };
+const settle = () => new Promise((resolve) => setTimeout(resolve, 500));
+
+async function signingIn(kind: string, answer: (hold: number) => unknown = () => HELD) {
+  const hosted = await hostKit([{ kind }]);
+  const holds: Hold[] = [];
+  hosted.house.route('POST', '/kit/secret-input/:subject', async (request) => {
+    holds.push({ subject: request.params.subject!, body: request.body });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { body: answer(holds.length) };
+  });
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: kind });
+  return { hosted, holds, input: lastInput() };
+}
+
+async function finish(hosted: Hosted, kind: string, refusal = ''): Promise<void> {
+  await mkdir(join(hosted.home, 'device-login'), { recursive: true });
+  await writeFile(join(hosted.home, 'device-login', kind), refusal);
+}
+
+function at(hosted: Hosted, path: string): number {
+  return hosted.house.requests.findIndex((request) => request.path === path);
+}
+
+function reportBeforeAck(hosted: Hosted, input: string): unknown {
+  return hosted.house.requests
+    .slice(0, at(hosted, `/kit/inputs/${input}/ack`))
+    .filter((request) => request.path === '/kit/agents/report')
+    .at(-1)?.body;
+}
+
+async function logins(hosted: Hosted): Promise<Record<string, unknown>[]> {
+  const log = await readFile(join(hosted.home, 'login.log'), 'utf8');
+  return log
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function filesUnder(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { recursive: true, withFileTypes: true });
+  return entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
+}
+
+it.each(['codex-acp', 'grok-build'])(
+  'signs %s in through a ceremony with its link and code, reports it signed in and then acknowledges the input',
+  async (kind) => {
+    const { hosted, holds, input } = await signingIn(kind);
+
+    expect(await until(() => holds[0])).toEqual({
+      subject: input,
+      body: {
+        steps: [
+          { kind: 'visit', label: expect.any(String), url: DEVICE_LOGINS[kind]!.link },
+          { kind: 'show', label: expect.any(String), text: DEVICE_LOGINS[kind]!.code },
+        ],
+      },
+    });
+    await until(() => holds[1]);
+    expect(hosted.acks).toEqual([]);
+
+    await finish(hosted, kind);
+
+    expect(await hosted.ack(input)).toEqual({});
+    expect(reportBeforeAck(hosted, input)).toMatchObject({ agents: [{ kind, signed_in: true }] });
+    expect((await logins(hosted)).map((entry) => entry.argv)).toEqual([DEVICE_LOGINS[kind]!.argv]);
+  },
+);
+
+it('signs Claude Code in with the code the page collects and keeps the code nowhere', async () => {
+  const code = 'pasted-claude-code#4f1c9e2a';
+  const { hosted, holds, input } = await signingIn('claude-agent-acp', (hold) =>
+    hold === 1 ? HELD : { outcome: 'collected', content: { code } },
+  );
+
+  expect(await hosted.ack(input)).toEqual({});
+
+  const ceremony = {
+    subject: input,
+    body: {
+      steps: [
+        { kind: 'visit', label: expect.any(String), url: DEVICE_LOGINS['claude-agent-acp']!.link },
+        { kind: 'collect', label: expect.any(String), name: 'code' },
+      ],
+    },
+  };
+  expect(holds).toEqual([ceremony, ceremony]);
+  expect((await logins(hosted)).find((entry) => entry.pasted)!.pasted).toBe(createHash('sha256').update(code).digest('hex'));
+  expect(reportBeforeAck(hosted, input)).toMatchObject({ agents: [{ kind: 'claude-agent-acp', signed_in: true }] });
+  for (const file of await filesUnder(hosted.home)) {
+    expect(await readFile(file, 'utf8')).not.toContain(code);
+  }
+  expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(code);
+  expect(JSON.stringify(hosted.socket.frames)).not.toContain(code);
+  expect(JSON.stringify(hosted.house.requests)).not.toContain(code);
+});
+
+it('acknowledges a sign-in whose login fails and names the cause in the log', async () => {
+  const { hosted, holds, input } = await signingIn('codex-acp');
+  await until(() => holds[0]);
+
+  await finish(hosted, 'codex-acp', 'device authorization was denied');
+
+  expect(await hosted.ack(input)).toEqual({});
+  expect(hosted.kit.stderr()).toContain('device authorization was denied');
+});
+
+it('ends the login and acknowledges the input when the page releases the hold for good', async () => {
+  const { hosted, holds, input } = await signingIn('grok-build', () => ({ outcome: 'released', release: 'withdrawn' }));
+
+  expect(await hosted.ack(input)).toEqual({});
+
+  expect(holds).toHaveLength(1);
+  const [login] = await logins(hosted);
+  await until(() => !alive(login!.pid as number));
+  expect(hosted.kit.stderr()).toContain('grok-build sign-in');
+});
+
+it('starts no second login for a sign-in input sent again while it runs', async () => {
+  const { hosted, holds, input } = await signingIn('codex-acp');
+  await until(() => holds[0]);
+  hosted.socket.close(1001, 'shutting_down');
+  await until(() => hosted.house.sockets[1]);
+
+  hosted.input({ input_id: input, kind: 'sign_in', conversation_id: null, cli: 'codex-acp' });
+  await settle();
+  await finish(hosted, 'codex-acp');
+
+  await hosted.ack(input);
+  await settle();
+  expect(await logins(hosted)).toHaveLength(1);
+  expect(hosted.acks).toHaveLength(1);
+});
+
+it('reports no idle while a sign-in runs and reports idle after its acknowledgement', async () => {
+  const { hosted, holds, input } = await signingIn('codex-acp');
+  await until(() => holds[0]);
+  await settle();
+  expect(hosted.idles).toHaveLength(1);
+
+  await finish(hosted, 'codex-acp');
+
+  await until(() => hosted.idles[1]);
+  const idled = hosted.house.requests.lastIndexOf(hosted.idles[1]!);
+  expect(idled).toBeGreaterThan(at(hosted, `/kit/inputs/${input}/ack`));
+});

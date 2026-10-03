@@ -2,6 +2,7 @@ import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { Conversations, type Input } from './conversations.ts';
 import { readEnrolment } from './home.ts';
+import { SignIns, type SignIn } from './sign-in.ts';
 import { holdStream, type Frame, type Stream } from './stream.ts';
 
 function report(error: unknown): void {
@@ -22,7 +23,7 @@ export async function resident(): Promise<void> {
   let stream: Stream | null = null;
   let reported = false;
   const changed = () => {
-    if (!conversations.idle()) {
+    if (!conversations.idle() || !signIns.idle()) {
       reported = false;
     } else if (!reported) {
       reported = true;
@@ -35,6 +36,7 @@ export async function resident(): Promise<void> {
     send: (frame) => stream?.send(frame) ?? false,
     changed,
   });
+  const signIns: SignIns = new SignIns(house, agents, changed);
 
   await house.deliver('/kit/restarted', {}).catch(report);
   logged(agents.refresh());
@@ -47,7 +49,8 @@ export async function resident(): Promise<void> {
       if (received.type === 'work_available' && received.subject === 'agents') logged(agents.refresh());
       if (received.type === 'input') {
         reported = false;
-        conversations.input(received as unknown as Input);
+        if (received.kind === 'sign_in') signIns.start(received as unknown as SignIn);
+        else conversations.input(received as unknown as Input);
       }
     },
   });

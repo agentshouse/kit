@@ -9,6 +9,7 @@ export interface Cli {
   bin: string;
   args: string[];
   signedIn: { command: string[] } | { initializeMeta: string };
+  login: { args: string[]; code: 'show' | 'collect' };
 }
 
 export const CLIS: Record<string, Cli> = {
@@ -17,18 +18,21 @@ export const CLIS: Record<string, Cli> = {
     bin: 'codex-acp',
     args: [],
     signedIn: { command: ['cli', 'login', 'status'] },
+    login: { args: ['cli', 'login', '--device-auth'], code: 'show' },
   },
   'claude-agent-acp': {
     package: '@agentclientprotocol/claude-agent-acp',
     bin: 'claude-agent-acp',
     args: [],
     signedIn: { command: ['--cli', 'auth', 'status'] },
+    login: { args: ['--cli', 'auth', 'login', '--claudeai'], code: 'collect' },
   },
   'grok-build': {
     package: '@xai-official/grok',
     bin: 'grok',
     args: ['agent', '--no-leader', 'stdio'],
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
+    login: { args: ['login', '--device-auth'], code: 'show' },
   },
 };
 
