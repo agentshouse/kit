@@ -106,6 +106,18 @@ async function directive(client: AgentContext, sessionId: string, line: string):
       update: { sessionUpdate: 'config_option_update', configOptions: options(model, effort) },
     });
   }
+  if (name === 'job') {
+    await client.notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'async_task_spawned', asyncTaskId: argument, name: 'job', taskType: 'shell' },
+    } as never);
+  }
+  if (name === 'jobdone') {
+    await client.notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'async_task_state_update', asyncTaskId: argument, state: 'completed' },
+    } as never);
+  }
   if (name === 'spawn') {
     const child = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' });
     log({ spawned: child.pid });
