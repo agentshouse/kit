@@ -32,6 +32,7 @@ export interface Hosted {
   workingDirectory: string;
   acks: Received[];
   turns: Received[];
+  interactions: Received[];
   input(fields: Record<string, unknown>): void;
   ack(inputId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
@@ -64,6 +65,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
   }
   const acks: Received[] = [];
   const turns: Received[] = [];
+  const interactions: Received[] = [];
   house.route('POST', '/kit/restarted', () => ({ body: {} }));
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved } }));
   house.route('POST', '/kit/agents/report', () => ({ body: {} }));
@@ -77,6 +79,10 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
       return { body: {} };
     });
   }
+  house.route('POST', '/kit/conversations/:conversation/turns/:turn/interactions', (request) => {
+    interactions.push(request);
+    return { body: {} };
+  });
   const kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeNpm(home) });
   const socket = await until(() => house.sockets[0]);
   return {
@@ -87,6 +93,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
     workingDirectory,
     acks,
     turns,
+    interactions,
     input: (fields) => {
       inputs++;
       socket.send({

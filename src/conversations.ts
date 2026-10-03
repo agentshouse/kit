@@ -1,6 +1,8 @@
 import {
   client,
+  type AvailableCommand,
   type ContentBlock,
+  type CreateElicitationRequest,
   type PlanEntry,
   type SessionConfigOption,
   type SessionNotification,
@@ -8,7 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { startAdapter, type Adapter } from './acp.ts';
+import { killTree, startAdapter, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
@@ -34,6 +36,7 @@ type Outcome = { text: string } | { failed: string };
 
 const CLI_TURN_QUIET_MS = 10_000;
 const LAUNCH_BASE = '/agents/house';
+const KILLED = 'the conversation was killed';
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -51,6 +54,7 @@ class Turn {
   draftSequence = 0;
   planSequence = 0;
   prompts = 0;
+  questions = 0;
   quiet: NodeJS.Timeout | undefined;
   ready: Promise<void>;
 
@@ -62,13 +66,20 @@ class Turn {
 interface Running {
   adapter: Adapter;
   sessionId: string;
-  options: SessionConfigOption[];
+  killed: boolean;
+}
+
+interface Question {
+  conversation: Conversation;
+  answer(response: unknown): void;
 }
 
 class Conversation {
   readonly id: string;
   running: Running | null = null;
   turn: Turn | null = null;
+  commands: AvailableCommand[] | null = null;
+  options: SessionConfigOption[] | null = null;
   queue: Promise<unknown> = Promise.resolve();
 
   constructor(id: string) {
@@ -76,10 +87,30 @@ class Conversation {
   }
 }
 
+interface FormProperty {
+  title?: string;
+  description?: string;
+  _meta?: Record<string, unknown> | null;
+}
+
+function formProperties(request: CreateElicitationRequest): Record<string, FormProperty> {
+  if (request.mode !== 'form') return {};
+  return (request as { requestedSchema?: { properties?: Record<string, FormProperty> } }).requestedSchema?.properties ?? {};
+}
+
+function asksSecret(request: CreateElicitationRequest): boolean {
+  return Object.values(formProperties(request)).some((property) =>
+    Object.values(property._meta ?? {}).some(
+      (meta) => typeof meta === 'object' && meta !== null && (meta as { isSecret?: unknown }).isSecret === true,
+    ),
+  );
+}
+
 export class Conversations {
   private readonly kit: Kit;
   private readonly conversations = new Map<string, Conversation>();
   private readonly acks = new Map<string, Promise<Ack>>();
+  private readonly questions = new Map<string, Question>();
 
   constructor(kit: Kit) {
     this.kit = kit;
@@ -112,6 +143,10 @@ export class Conversations {
   private async carry(conversation: Conversation, input: Input): Promise<Ack> {
     if (input.kind === 'open') return this.open(conversation, input);
     if (input.kind === 'message') return this.message(conversation, input);
+    if (input.kind === 'interrupt') await this.interrupt(conversation, String(input.turn_id));
+    if (input.kind === 'kill') await this.kill(conversation);
+    if (input.kind === 'option') await this.option(conversation, String(input.option), input.value);
+    if (input.kind === 'answer') this.questions.get(String(input.interaction_id))?.answer(input.response);
     return {};
   }
 
@@ -138,6 +173,36 @@ export class Conversations {
     return ack;
   }
 
+  private async interrupt(conversation: Conversation, turnId: string): Promise<void> {
+    if (conversation.running === null || conversation.turn?.id !== turnId) return;
+    await conversation.running.adapter.connection.agent.notify('session/cancel', {
+      sessionId: conversation.running.sessionId,
+    });
+  }
+
+  private async kill(conversation: Conversation): Promise<void> {
+    const running = conversation.running;
+    if (running === null) return;
+    running.killed = true;
+    killTree(running.adapter.child);
+    await running.adapter.exited;
+  }
+
+  private async option(conversation: Conversation, option: string, value: unknown): Promise<void> {
+    const running = conversation.running;
+    if (running === null) return;
+    try {
+      const answered = await running.adapter.connection.agent.request('session/set_config_option', {
+        sessionId: running.sessionId,
+        configId: option,
+        ...(typeof value === 'boolean' ? { type: 'boolean' as const, value } : { value: String(value) }),
+      });
+      this.options(conversation, answered.configOptions);
+    } catch (error) {
+      logged(error);
+    }
+  }
+
   private async start(conversation: Conversation, agentId: string, sessionId: string | null): Promise<string> {
     await this.kit.agents.ready;
     const route = this.kit.agents.route(agentId);
@@ -145,9 +210,14 @@ export class Conversations {
     if (route.working_directory === join(LAUNCH_BASE, route.agent_id)) {
       await mkdir(route.working_directory, { recursive: true });
     }
-    const app = client({ name: '@agentshouse/kit' }).onNotification('session/update', ({ params }) =>
-      this.update(conversation, params),
-    );
+    const app = client({ name: '@agentshouse/kit' })
+      .onNotification('session/update', ({ params }) => this.update(conversation, params))
+      .onRequest('session/request_permission', ({ params }) =>
+        this.ask(conversation, 'session/request_permission', params, false),
+      )
+      .onRequest('elicitation/create', ({ params }) =>
+        this.ask(conversation, 'elicitation/create', params, asksSecret(params)),
+      );
     const adapter = await startAdapter(route.kind, route.working_directory, app);
     try {
       const agent = adapter.connection.agent;
@@ -156,40 +226,68 @@ export class Conversations {
         sessionId === null
           ? await agent.request('session/new', { cwd, mcpServers: [] })
           : { ...(await agent.request('session/resume', { sessionId, cwd, mcpServers: [] })), sessionId };
-      const running: Running = { adapter, sessionId: opened.sessionId, options: opened.configOptions ?? [] };
-      await this.launchSettings(running, route);
+      const running: Running = { adapter, sessionId: opened.sessionId, killed: false };
+      const options = await this.launchSettings(running, route, opened.configOptions ?? []);
       conversation.running = running;
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
+      if (conversation.commands !== null) this.commands(conversation, conversation.commands);
+      this.options(conversation, options);
       void adapter.exited.then((cause) => this.exited(conversation, adapter, cause));
       return running.sessionId;
     } catch (error) {
-      adapter.child.kill('SIGKILL');
+      killTree(adapter.child);
       throw error;
     }
   }
 
-  private async launchSettings(running: Running, route: Route): Promise<void> {
+  private async launchSettings(
+    running: Running,
+    route: Route,
+    offered: SessionConfigOption[],
+  ): Promise<SessionConfigOption[]> {
+    let options = offered;
     const settings: [string, string | null][] = [
       ['model', route.model],
       ['thought_level', route.effort],
     ];
     for (const [category, value] of settings) {
-      const option = running.options.find((candidate) => candidate.category === category);
+      const option = options.find((candidate) => candidate.category === category);
       if (value === null || option === undefined) continue;
       const answered = await running.adapter.connection.agent.request('session/set_config_option', {
         sessionId: running.sessionId,
         configId: option.id,
         value,
       });
-      running.options = answered.configOptions;
+      options = answered.configOptions;
     }
+    return options;
   }
 
   private exited(conversation: Conversation, adapter: Adapter, cause: string): void {
-    if (conversation.running?.adapter !== adapter) return;
+    const running = conversation.running;
+    if (running?.adapter !== adapter) return;
     conversation.running = null;
+    conversation.commands = null;
+    conversation.options = null;
+    for (const [id, question] of this.questions) {
+      if (question.conversation === conversation) this.questions.delete(id);
+    }
     this.kit.send({ type: 'process', conversation_id: conversation.id, running: false });
-    if (conversation.turn !== null) this.end(conversation, conversation.turn, { failed: cause });
+    if (conversation.turn !== null) {
+      this.end(conversation, conversation.turn, { failed: running.killed ? KILLED : cause });
+    }
+  }
+
+  private commands(conversation: Conversation, commands: AvailableCommand[]): void {
+    conversation.commands = commands;
+    if (conversation.running === null) return;
+    this.kit.send({ type: 'commands', conversation_id: conversation.id, commands });
+  }
+
+  private options(conversation: Conversation, options: SessionConfigOption[]): void {
+    conversation.options = options;
+    if (conversation.running === null) return;
+    this.kit.send({ type: 'options', conversation_id: conversation.id, options });
   }
 
   private begin(conversation: Conversation): Turn {
@@ -236,11 +334,68 @@ export class Conversations {
 
   private current(conversation: Conversation): Turn {
     const turn = conversation.turn ?? this.begin(conversation);
-    if (turn.prompts === 0) {
-      clearTimeout(turn.quiet);
-      turn.quiet = setTimeout(() => this.end(conversation, turn, { text: turn.text }), CLI_TURN_QUIET_MS);
-    }
+    this.quiet(conversation, turn);
     return turn;
+  }
+
+  private quiet(conversation: Conversation, turn: Turn): void {
+    clearTimeout(turn.quiet);
+    if (turn.prompts > 0 || turn.questions > 0) return;
+    turn.quiet = setTimeout(() => this.end(conversation, turn, { text: turn.text }), CLI_TURN_QUIET_MS);
+  }
+
+  private async ask<Response>(
+    conversation: Conversation,
+    method: string,
+    params: object,
+    secret: boolean,
+  ): Promise<Response> {
+    const turn = conversation.turn ?? this.begin(conversation);
+    const interactionId = randomUUID();
+    turn.questions++;
+    clearTimeout(turn.quiet);
+    try {
+      const answered = new Promise<Response>((answer) => {
+        this.questions.set(interactionId, { conversation, answer: (response) => answer(response as Response) });
+      });
+      await turn.ready;
+      await this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/interactions`, {
+        interaction_id: interactionId,
+        request: { method, params },
+        secret,
+      });
+      if (secret) void this.holdSecret(interactionId, params as CreateElicitationRequest);
+      return await answered;
+    } finally {
+      this.questions.delete(interactionId);
+      turn.questions--;
+      if (conversation.turn === turn) this.quiet(conversation, turn);
+    }
+  }
+
+  private async holdSecret(interactionId: string, request: CreateElicitationRequest): Promise<void> {
+    const steps = Object.entries(formProperties(request)).map(([name, property]) => ({
+      kind: 'collect',
+      label: property.title ?? name,
+      name,
+      ...(property.description ? { description: property.description } : {}),
+    }));
+    while (this.questions.has(interactionId)) {
+      try {
+        const held = await this.kit.house.post<{ outcome: string; content?: Record<string, string>; release?: string }>(
+          `/kit/secret-input/${interactionId}`,
+          { steps },
+        );
+        if (held.outcome === 'collected') {
+          this.questions.get(interactionId)?.answer({ action: 'accept', content: held.content });
+          return;
+        }
+        if (held.release !== 'held') return;
+      } catch (error) {
+        logged(error);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
   }
 
   private update(conversation: Conversation, notification: SessionNotification): void {
@@ -252,6 +407,10 @@ export class Conversations {
     } else if (update.sessionUpdate === 'plan') {
       const turn = this.current(conversation);
       void turn.ready.then(() => this.plan(conversation, turn, update.entries));
+    } else if (update.sessionUpdate === 'available_commands_update') {
+      this.commands(conversation, update.availableCommands);
+    } else if (update.sessionUpdate === 'config_option_update') {
+      this.options(conversation, update.configOptions);
     }
   }
 

@@ -1,5 +1,6 @@
 import { agent, ndJsonStream, RequestError, type AgentContext, type SessionConfigOption } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -53,6 +54,57 @@ async function directive(client: AgentContext, sessionId: string, line: string):
   if (name === 'later') {
     const [delay, ...text] = rest;
     setTimeout(() => void say(client, sessionId, text.join(' ')), Number(delay));
+  }
+  if (name === 'ask') {
+    const response = await client.request('session/request_permission', {
+      sessionId,
+      toolCall: { toolCallId: 'tool-1', title: 'Run a command' },
+      options: [
+        { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+      ],
+    });
+    await say(client, sessionId, JSON.stringify(response));
+  }
+  if (name === 'question') {
+    const response = await client.request('elicitation/create', {
+      sessionId,
+      mode: 'form',
+      message: 'Which colour?',
+      requestedSchema: { type: 'object', properties: { colour: { type: 'string', title: 'Colour' } }, required: ['colour'] },
+    });
+    await say(client, sessionId, JSON.stringify(response));
+  }
+  if (name === 'secret') {
+    const response = await client.request('elicitation/create', {
+      sessionId,
+      mode: 'form',
+      message: 'Codex needs your input to continue.',
+      requestedSchema: {
+        type: 'object',
+        properties: { token: { type: 'string', title: 'Token', _meta: { codex: { isSecret: true } } } },
+        required: ['token'],
+      },
+    });
+    const value = response.action === 'accept' ? String((response.content as Record<string, unknown>).token) : '';
+    const matched = createHash('sha256').update(value).digest('hex') === argument;
+    await say(client, sessionId, matched ? 'secret matched' : 'secret mismatched');
+  }
+  if (name === 'commands') {
+    await client.notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'available_commands_update',
+        availableCommands: [{ name: 'compact', description: 'Compact the conversation', input: null }],
+      },
+    });
+  }
+  if (name === 'config') {
+    effort = 'from-cli';
+    await client.notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'config_option_update', configOptions: options(model, effort) },
+    });
   }
   if (name === 'spawn') {
     const child = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' });
