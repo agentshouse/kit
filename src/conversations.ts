@@ -214,6 +214,7 @@ export class Conversations {
       prompt.push({ type: 'text', text: String(input.text) });
       if (paths.length > 0) prompt.push({ type: 'text', text: paths.join('\n') });
     } catch (error) {
+      if ('provider_session_id' in ack) await this.kill(conversation);
       return { refused: causeOf(error) };
     }
     await this.prompt(conversation, prompt);
@@ -400,12 +401,12 @@ export class Conversations {
     await sent.turn?.ready;
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
       () => this.answered(conversation, sent, null),
-      async (error: unknown) =>
-        this.answered(
-          conversation,
-          sent,
-          running.adapter.connection.signal.aborted ? await running.adapter.exited : causeOf(error),
-        ),
+      async (error: unknown) => {
+        if (!running.adapter.connection.signal.aborted) this.answered(conversation, sent, causeOf(error));
+        else if (sent.turn !== null) {
+          this.end(conversation, sent.turn, { failed: running.killed ? KILLED : await running.adapter.exited });
+        }
+      },
     );
   }
 
@@ -422,7 +423,7 @@ export class Conversations {
       conversation.queued.splice(queued, 1);
       if (failed !== null) this.end(conversation, this.report(conversation), { failed });
     } else if (failed !== null) {
-      this.end(conversation, turn, { failed });
+      this.end(conversation, turn.ended ? this.report(conversation) : turn, { failed });
     } else if (turn.prompt === sent) {
       this.end(conversation, turn, { text: turn.text });
     }

@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { conversationCredential, hostKit, lastInput, type Hosted, type McpCall } from './environment.ts';
+import { alive } from './kit.ts';
 
 const DOCUMENT = '# How we work\n\nWork goes into the Room it belongs to.';
 
@@ -82,6 +83,22 @@ it("refuses a first message with House's answer when the document read fails oth
 
   expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('house_unavailable') });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
+});
+
+it('stops the session it opened for a first message it refuses, so the next message opens one and reports it', async () => {
+  const hosted = await hostKit();
+  hosted.tools.inspect = () => ({ isError: true, content: [{ type: 'text', text: 'house_unavailable: call again later.\n' }] });
+  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  await hosted.ack(lastInput());
+  hosted.tools.inspect = () => ({ content: [{ type: 'text', text: DOCUMENT }] });
+
+  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+
+  const acked = await hosted.ack(lastInput());
+  const opened = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new');
+  expect(opened).toHaveLength(2);
+  expect(acked).toEqual({ provider_session_id: opened[1]!.sessionId });
+  expect(alive(opened[0]!.pid as number)).toBe(false);
 });
 
 it('carries no block on a message that is not first', async () => {

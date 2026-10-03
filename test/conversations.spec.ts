@@ -135,6 +135,51 @@ it('writes a message that arrives during a running turn to the CLI at once and e
   ]);
 });
 
+it.each(['codex-acp', 'claude-agent-acp'])(
+  'reports a prompt %s fails after its turn ended as a failed turn of its own',
+  async (kind) => {
+    const hosted = await hostKit([{ kind }]);
+    hosted.input({ kind: 'open' });
+    await hosted.ack(lastInput());
+
+    hosted.input({ kind: 'message', text: '@hold 1000\n@fail earlier prompt failed', files: [], first: true });
+    await hosted.ack(lastInput());
+    hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
+
+    const ends = await until(() => {
+      const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+      return ended.length === 2 ? ended : undefined;
+    });
+    expect(ends.map((turn) => turn.body)).toEqual([
+      { text: 'meanwhile' },
+      { failed: expect.stringContaining('earlier prompt failed') },
+    ]);
+    const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+    expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
+    expect(new Set(starts.map((turn) => turn.params.turn)).size).toBe(2);
+  },
+);
+
+it('reports no turn for a prompt the CLI never answered when its process ends after that turn', async () => {
+  const hosted = await hostKit();
+  hosted.input({ kind: 'open' });
+  const { provider_session_id } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  hosted.input({ kind: 'message', text: '@wait', files: [], first: true });
+  await hosted.ack(lastInput());
+  hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+
+  hosted.input({ kind: 'kill' });
+  await hosted.ack(lastInput());
+  hosted.input({ kind: 'message', text: '@say after', files: [], first: false, provider_session_id });
+
+  const ends = await until(() => {
+    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+    return ended.length === 2 ? ended : undefined;
+  });
+  expect(ends.map((turn) => turn.body)).toEqual([{ text: 'meanwhile' }, { text: 'after' }]);
+});
+
 it('ends a turn when Grok ends it and reports the turn Grok then runs for a message it queued during it', async () => {
   const hosted = await hostKit([{ kind: 'grok-build' }]);
   hosted.input({ kind: 'open' });
