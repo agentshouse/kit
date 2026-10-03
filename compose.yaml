@@ -1,0 +1,20 @@
+services:
+  test:
+    image: node:24.21.0-bookworm@sha256:6dac556d980b7f0e5498d08f08cee0ca67798b4ad6c23964a9214920e67758d0
+    init: true
+    user: "${KIT_TEST_UID:-1001}:${KIT_TEST_GID:-1001}"
+    working_dir: /kit
+    cpus: 4
+    mem_limit: 4g
+    volumes:
+      - .:/kit
+    environment:
+      HOME: /tmp/home
+      npm_config_cache: /kit/tmp/npm-cache
+      npm_config_update_notifier: "false"
+    entrypoint:
+      - sh
+      - -c
+      - 'if [ ! node_modules/.package-lock.json -nt package-lock.json ]; then npm ci --no-audit --no-fund --loglevel=error || exit 1; fi; exec "$$@"'
+      - kit-test
+    command: ["npm", "test"]
