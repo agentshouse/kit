@@ -7,11 +7,21 @@ import { kitHome } from './home.ts';
 export interface Notice {
   method?: string;
   params?: {
+    runningPromptId?: string;
     update?: {
       sessionUpdate?: string;
+      asyncTaskId?: string;
+      state?: string;
+      task_id?: string;
+      task_snapshot?: { task_id?: string };
       _meta?: { '_claude/origin'?: unknown; codex?: { threadStatus?: { type?: string } } } | null;
     };
   };
+}
+
+export interface Job {
+  id: string;
+  running: boolean;
 }
 
 export interface Cli {
@@ -20,7 +30,26 @@ export interface Cli {
   args: string[];
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' | 'collect' };
+  turnStarted(notice: Notice): boolean;
   turnEnded(notice: Notice): boolean;
+  job(notice: Notice): Job | null;
+}
+
+const RUNNING_JOB = new Set(['running', 'paused']);
+
+function threadStatus({ method, params }: Notice): string | undefined {
+  if (method !== 'session/update' || params?.update?.sessionUpdate !== 'session_info_update') return undefined;
+  return params.update._meta?.codex?.threadStatus?.type;
+}
+
+function asyncTask({ method, params }: Notice): Job | null {
+  const update = params?.update;
+  if (method !== 'session/update' || update?.asyncTaskId === undefined) return null;
+  if (update.sessionUpdate === 'async_task_spawned') return { id: update.asyncTaskId, running: true };
+  if (update.sessionUpdate === 'async_task_state_update' && !RUNNING_JOB.has(update.state ?? '')) {
+    return { id: update.asyncTaskId, running: false };
+  }
+  return null;
 }
 
 export const CLIS: Record<string, Cli> = {
@@ -30,10 +59,9 @@ export const CLIS: Record<string, Cli> = {
     args: [],
     signedIn: { command: ['cli', 'login', 'status'] },
     login: { args: ['cli', 'login', '--device-auth'], code: 'show' },
-    turnEnded: ({ method, params }) =>
-      method === 'session/update' &&
-      params?.update?.sessionUpdate === 'session_info_update' &&
-      params.update._meta?.codex?.threadStatus?.type === 'idle',
+    turnStarted: (notice) => threadStatus(notice) === 'active',
+    turnEnded: (notice) => threadStatus(notice) === 'idle',
+    job: asyncTask,
   },
   'claude-agent-acp': {
     package: '@agentclientprotocol/claude-agent-acp',
@@ -41,10 +69,12 @@ export const CLIS: Record<string, Cli> = {
     args: [],
     signedIn: { command: ['--cli', 'auth', 'status'] },
     login: { args: ['--cli', 'auth', 'login', '--claudeai'], code: 'collect' },
+    turnStarted: () => false,
     turnEnded: ({ method, params }) =>
       method === 'session/update' &&
       params?.update?.sessionUpdate === 'usage_update' &&
       params.update._meta?.['_claude/origin'] !== undefined,
+    job: asyncTask,
   },
   'grok-build': {
     package: '@xai-official/grok',
@@ -52,8 +82,14 @@ export const CLIS: Record<string, Cli> = {
     args: ['agent', '--no-leader', 'stdio'],
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },
+    turnStarted: ({ method, params }) => method === '_x.ai/queue/changed' && params?.runningPromptId !== undefined,
     turnEnded: ({ method, params }) =>
       method === '_x.ai/session_notification' && params?.update?.sessionUpdate === 'turn_completed',
+    job: ({ method, params }) => {
+      if (method === '_x.ai/task_backgrounded') return { id: params!.update!.task_id!, running: true };
+      if (method === '_x.ai/task_completed') return { id: params!.update!.task_snapshot!.task_id!, running: false };
+      return null;
+    },
   },
 };
 

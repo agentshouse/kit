@@ -37,6 +37,13 @@ export async function resident(): Promise<void> {
     changed,
   });
   const signIns: SignIns = new SignIns(house, agents, changed);
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(signal, () => {
+      conversations.stop();
+      signIns.stop();
+      process.kill(process.pid, signal);
+    });
+  }
 
   await house.deliver('/kit/restarted', {}).catch(report);
   logged(agents.refresh());

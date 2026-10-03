@@ -40,6 +40,22 @@ async function say(client: AgentContext, sessionId: string, text: string) {
   });
 }
 
+async function turnStarted(client: AgentContext, sessionId: string) {
+  if (kind === 'grok-build') {
+    await client.notify('_x.ai/queue/changed', { sessionId, entries: [], runningPromptId: 'task-completed-1' });
+  } else if (kind === 'claude-agent-acp') {
+    await client.notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'tool_call', toolCallId: 'tool-later', title: 'Read the job output', status: 'pending' },
+    });
+  } else {
+    await client.notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'session_info_update', _meta: { codex: { threadStatus: { type: 'active', activeFlags: [] } } } },
+    });
+  }
+}
+
 async function turnEnded(client: AgentContext, sessionId: string) {
   if (kind === 'grok-build') {
     await client.notify('_x.ai/session_notification', {
@@ -80,7 +96,10 @@ async function directive(client: AgentContext, sessionId: string, line: string):
   }
   if (name === 'later') {
     const [delay, ...text] = rest;
-    setTimeout(() => void say(client, sessionId, text.join(' ')), Number(delay));
+    setTimeout(async () => {
+      await turnStarted(client, sessionId);
+      if (text.length > 0) await say(client, sessionId, text.join(' '));
+    }, Number(delay));
     setTimeout(() => void turnEnded(client, sessionId), 2 * Number(delay));
   }
   if (name === 'ask') {
@@ -153,13 +172,23 @@ async function directive(client: AgentContext, sessionId: string, line: string):
       update: { sessionUpdate: 'config_option_update', configOptions: options(model, effort) },
     });
   }
-  if (name === 'job') {
+  if (name === 'job' && kind === 'grok-build') {
+    await client.notify('_x.ai/task_backgrounded', {
+      sessionId,
+      update: { sessionUpdate: 'task_backgrounded', task_id: argument, command: 'sleep 600' },
+    });
+  } else if (name === 'job') {
     await client.notify('session/update', {
       sessionId,
       update: { sessionUpdate: 'async_task_spawned', asyncTaskId: argument, name: 'job', taskType: 'shell' },
     } as never);
   }
-  if (name === 'jobdone') {
+  if (name === 'jobdone' && kind === 'grok-build') {
+    await client.notify('_x.ai/task_completed', {
+      sessionId,
+      update: { sessionUpdate: 'task_completed', task_snapshot: { task_id: argument, command: 'sleep 600' } },
+    });
+  } else if (name === 'jobdone') {
     await client.notify('session/update', {
       sessionId,
       update: { sessionUpdate: 'async_task_state_update', asyncTaskId: argument, state: 'completed' },
@@ -220,7 +249,10 @@ const app = agent({ name: 'adapter-double' })
     log({ method: 'session/prompt', params, text });
     const directives = text.split('\n').filter((line) => line.startsWith('@'));
     for (const line of directives.length === 0 ? ['@say ok'] : directives) {
-      if ((await directive(client, params.sessionId, line)) === 'cancelled') return { stopReason: 'cancelled' };
+      if ((await directive(client, params.sessionId, line)) === 'cancelled') {
+        await turnEnded(client, params.sessionId);
+        return { stopReason: 'cancelled' };
+      }
     }
     await turnEnded(client, params.sessionId);
     return { stopReason: 'end_turn' };

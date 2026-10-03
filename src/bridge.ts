@@ -111,11 +111,11 @@ export async function openBridge(house: House, conversationId: string): Promise<
   bridge.listen(socketPath);
   await once(bridge, 'listening');
 
-  const apps = new URL('/apps/', origin).href;
+  const app = new URL('/app/', origin).href;
   const authorization = `Basic ${Buffer.from(`house:${credential}`).toString('base64')}`;
   const git = createServer((request, response) => {
-    const target = new URL(request.url ?? '', apps);
-    if (!target.href.startsWith(apps)) {
+    const target = new URL(request.url ?? '', app);
+    if (!target.href.startsWith(app)) {
       response.writeHead(404).end();
       return;
     }
@@ -139,8 +139,8 @@ export async function openBridge(house: House, conversationId: string): Promise<
     env: {
       HOUSE_BRIDGE: socketPath,
       GIT_CONFIG_COUNT: '1',
-      GIT_CONFIG_KEY_0: `url.${proxy}/apps/.insteadOf`,
-      GIT_CONFIG_VALUE_0: apps,
+      GIT_CONFIG_KEY_0: `url.${proxy}/app/.insteadOf`,
+      GIT_CONFIG_VALUE_0: app,
     },
     tool: async (name, args) => {
       const forwarded = await forward(

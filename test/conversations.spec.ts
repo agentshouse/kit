@@ -119,18 +119,39 @@ it('reports a refused resume with the CLI cause', async () => {
   expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('the session cannot be resumed') });
 });
 
-it('writes a message that arrives during a running turn to the CLI at once', async () => {
+it('writes a message that arrives during a running turn to the CLI at once and ends the turn when the CLI ends it, its first prompt still unanswered', async () => {
   const hosted = await hostKit();
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
   hosted.input({ kind: 'message', text: '@wait', files: [], first: true });
   await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: 'meanwhile', files: [], first: false });
+  hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
+
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(ended.body).toEqual({ text: 'meanwhile' });
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started')).map((turn) => turn.params.turn)).toEqual([
+    ended.params.turn,
+  ]);
+});
+
+it('ends a turn when the CLI ends it and reports the turn the CLI then runs for a message sent during it', async () => {
+  const hosted = await hostKit();
+  hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
-  await until(async () => (await hosted.adapterLog()).some((entry) => entry.text === 'meanwhile'));
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended'))).toEqual([]);
+  hosted.input({ kind: 'message', text: '@hold 1000\n@say first', files: [], first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.input({ kind: 'message', text: '@hold 1500\n@say second', files: [], first: false });
+
+  const ends = await until(() => {
+    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+    return ended.length === 2 ? ended : undefined;
+  });
+  expect(ends.map((turn) => turn.body)).toEqual([{ text: 'first' }, { text: 'second' }]);
+  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+  expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
+  expect(new Set(starts.map((turn) => turn.params.turn)).size).toBe(2);
 });
 
 it('reports a turn start and end once each under the turn id Kit gave it', async () => {
@@ -183,6 +204,25 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
     const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
     expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
     expect(draft).toMatchObject({ turn_id: ends[1]!.params.turn, blocks: [{ type: 'paragraph', text: 'by itself' }] });
+  },
+);
+
+it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
+  'reports a turn %s starts by itself when it starts it, before it writes any text',
+  async (kind) => {
+    const hosted = await hostKit([{ kind }]);
+    hosted.input({ kind: 'open' });
+    await hosted.ack(lastInput());
+
+    hosted.input({ kind: 'message', text: '@later 500', files: [], first: true });
+
+    const ends = await until(() => {
+      const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+      return ended.length === 2 ? ended : undefined;
+    });
+    expect(ends.map((turn) => turn.body)).toEqual([{ text: '' }, { text: '' }]);
+    const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+    expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
   },
 );
 

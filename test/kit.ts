@@ -8,6 +8,7 @@ import { onTestFinished } from 'vitest';
 const KIT = fileURLToPath(new URL('../src/kit-main.ts', import.meta.url));
 
 export interface KitRun {
+  pid: number;
   stdout(): string;
   stderr(): string;
   exited: Promise<number | null>;
@@ -37,7 +38,7 @@ export function runKit(argv: string[], environment: Record<string, string>): Kit
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await exited;
   });
-  return { stdout: () => stdout, stderr: () => stderr, exited };
+  return { pid: child.pid!, stdout: () => stdout, stderr: () => stderr, exited };
 }
 
 export async function fakeNpm(home: string): Promise<string> {

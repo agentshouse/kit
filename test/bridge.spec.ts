@@ -145,7 +145,7 @@ it('carries the credential on a Git call to a House App source remote', async ()
   const hosted = await hostKit();
   const commit = 'a'.repeat(40);
   const credentials: string[] = [];
-  hosted.house.route('GET', '/apps/:app/info/refs', (received) => {
+  hosted.house.route('GET', '/app/:app/info/refs', (received) => {
     const basic = /^Basic (.+)$/.exec(received.headers.authorization ?? '')?.[1];
     const presented = Buffer.from(basic ?? '', 'base64').toString('utf8');
     credentials.push(presented.slice(presented.indexOf(':') + 1));
@@ -165,7 +165,7 @@ it('carries the credential on a Git call to a House App source remote', async ()
   });
   await opened(hosted);
 
-  directed(hosted, `@git ls-remote ${hosted.house.origin}/apps/a_app.git`);
+  directed(hosted, `@git ls-remote ${hosted.house.origin}/app/a_app.git`);
 
   const [ran] = await runs(hosted, 1);
   expect(ran).toMatchObject({ status: 0, stdout: `${commit}\tHEAD\n${commit}\trefs/heads/main\n` });
@@ -179,8 +179,8 @@ it("closes the process's socket and Git proxy when the process exits", async () 
     (entry) => entry.method === 'initialize' && (entry.env as Record<string, string>).HOUSE_BRIDGE !== undefined,
   )!;
   const env = started.env as Record<string, string>;
-  const proxy = /^url\.(.+)\/apps\/\.insteadOf$/.exec(env.GIT_CONFIG_KEY_0!)![1]!;
-  expect(env.GIT_CONFIG_VALUE_0).toBe(`${hosted.house.origin}/apps/`);
+  const proxy = /^url\.(.+)\/app\/\.insteadOf$/.exec(env.GIT_CONFIG_KEY_0!)![1]!;
+  expect(env.GIT_CONFIG_VALUE_0).toBe(`${hosted.house.origin}/app/`);
   expect(await answers(env.HOUSE_BRIDGE!)).toBe(true);
 
   hosted.input({ kind: 'kill' });
@@ -188,7 +188,7 @@ it("closes the process's socket and Git proxy when the process exits", async () 
 
   await until(() => !existsSync(env.HOUSE_BRIDGE!));
   expect(await answers(env.HOUSE_BRIDGE!)).toBe(false);
-  await expect(fetch(`${proxy}/apps/a_app.git/info/refs`)).rejects.toThrow();
+  await expect(fetch(`${proxy}/app/a_app.git/info/refs`)).rejects.toThrow();
 });
 
 function line(text: string): string {

@@ -70,8 +70,8 @@ it('does not count a turn waiting on a secret question as idle', async () => {
   expect(hosted.idles).toHaveLength(2);
 });
 
-it('does not report idle while the CLI reports a running background job', async () => {
-  const hosted = await hostKit();
+it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])('does not report idle while %s reports a running background job', async (kind) => {
+  const hosted = await hostKit([{ kind }]);
   await opened(hosted);
   await until(() => hosted.idles[1]);
   expect(

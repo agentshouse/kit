@@ -8,7 +8,7 @@ import {
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_VERSION, cliCommand, type Notice } from './clis.ts';
+import { CLIS, KIT_VERSION, cliCommand, type Job, type Notice } from './clis.ts';
 
 export interface Adapter {
   child: ChildProcess;
@@ -17,25 +17,14 @@ export interface Adapter {
   exited: Promise<string>;
 }
 
+export const TURN_STARTED = 'kit/turn_started';
 export const TURN_ENDED = 'kit/turn_ended';
-
-export interface JobUpdate {
-  sessionUpdate: string;
-  asyncTaskId: string;
-  state?: string;
-}
-
-function jobUpdate(message: unknown): JobUpdate | null {
-  const update = (message as { method?: string; params?: { update?: JobUpdate } }).params?.update;
-  if ((message as { method?: string }).method !== 'session/update' || update === undefined) return null;
-  return update.sessionUpdate?.startsWith('async_task_') ? update : null;
-}
 
 export async function startAdapter(
   kind: string,
   cwd: string,
   app: ClientApp,
-  job: (update: JobUpdate) => void = () => undefined,
+  jobs: (job: Job) => void = () => undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Adapter> {
   const child = spawn(cliCommand(kind), CLIS[kind]!.args, {
@@ -64,10 +53,12 @@ export async function startAdapter(
     readable: stream.readable.pipeThrough(
       new TransformStream({
         transform(message, controller) {
-          const update = jobUpdate(message);
-          if (update === null) controller.enqueue(message);
-          else job(update);
-          if (CLIS[kind]!.turnEnded(message as Notice)) controller.enqueue({ jsonrpc: '2.0', method: TURN_ENDED });
+          const notice = message as Notice;
+          const job = CLIS[kind]!.job(notice);
+          if (job !== null) jobs(job);
+          if (!notice.params?.update?.sessionUpdate?.startsWith('async_task_')) controller.enqueue(message);
+          if (CLIS[kind]!.turnStarted(notice)) controller.enqueue({ jsonrpc: '2.0', method: TURN_STARTED });
+          if (CLIS[kind]!.turnEnded(notice)) controller.enqueue({ jsonrpc: '2.0', method: TURN_ENDED });
         },
       }),
     ),

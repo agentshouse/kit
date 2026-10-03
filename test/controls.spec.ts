@@ -60,6 +60,18 @@ it('kills the process and every process it started, and the next message resumes
   expect(resumed.params).toMatchObject({ sessionId: session });
 });
 
+it.each(['SIGTERM', 'SIGINT'] as const)('kills every process it started when %s stops it', async (signal) => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  hosted.input({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
+  const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
+
+  process.kill(hosted.kit.pid, signal);
+  await hosted.kit.exited;
+
+  await until(() => !alive(spawned.pid as number) && !alive(spawned.spawned as number));
+});
+
 it('sets an option on the running process and relays the commands and options the CLI sends', async () => {
   const hosted = await hostKit();
   await opened(hosted);
