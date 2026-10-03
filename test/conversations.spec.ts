@@ -496,15 +496,29 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
   },
 );
 
+function startHeld(hosted: Hosted): () => void {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  onTestFinished(release);
+  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async (request) => {
+    await held;
+    hosted.turns.push(request);
+    return { body: {} };
+  });
+  return release;
+}
+
 it('writes each message chunk as a draft frame with the next sequence and plan updates as plan frames', async () => {
   const hosted = await hostKit();
+  const admit = startHeld(hosted);
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
   hosted.input({ kind: 'message', text: '@say Hello\n@say  world\n@say \\n\\n\n@say Next\n@plan first|second', files: [], first: true });
 
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  const turn = ended.params.turn;
+  const turn = (await until(() => hosted.socket.frames.find((frame) => frame.type === 'plan'))).turn_id;
   const drafts = hosted.socket.frames.filter((frame) => frame.type === 'draft');
   expect(drafts).toEqual([
     { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 1, from: 0, blocks: [{ type: 'paragraph', text: 'Hello' }] },
@@ -525,11 +539,15 @@ it('writes each message chunk as a draft frame with the next sequence and plan u
       ],
     },
   ]);
+  admit();
+  const ended = await until(() => hosted.turns.find((report) => report.path.endsWith('/ended')));
+  expect(ended.params.turn).toBe(turn);
   expect(ended.body).toEqual({ text: 'Hello world\n\nNext' });
 });
 
 it("writes the turn's whole view as its next draft on a new socket", async () => {
   const hosted = await hostKit();
+  startHeld(hosted);
   hosted.input({ kind: 'message', text: '@say first\\n\\nsecond\n@hold 4000\n@say  suffix', files: [], first: false });
   await until(() => hosted.socket.frames.find((frame) => frame.type === 'draft'));
 
@@ -546,26 +564,64 @@ it("writes the turn's whole view as its next draft on a new socket", async () =>
   });
 });
 
-it("writes each chunk as its own draft while the turn's start report is still on its way", async () => {
+it("writes each chunk and plan update at once, then the turn's whole view once House answers its start report", async () => {
   const hosted = await hostKit();
-  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async (request) => {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    hosted.turns.push(request);
-    return { body: {} };
-  });
+  const admit = startHeld(hosted);
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
-  hosted.input({ kind: 'message', text: '@say one\n@say  two\n@say  three', files: [], first: true });
+  hosted.input({ kind: 'message', text: '@say one\n@say  two\n@plan first', files: [], first: true });
 
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const plan = await until(() => hosted.socket.frames.find((frame) => frame.type === 'plan'));
   expect(
     hosted.socket.frames.filter((frame) => frame.type === 'draft').map((frame) => [frame.sequence, frame.blocks]),
   ).toEqual([
     [1, [{ type: 'paragraph', text: 'one' }]],
     [2, [{ type: 'paragraph', text: 'one two' }]],
-    [3, [{ type: 'paragraph', text: 'one two three' }]],
   ]);
+  expect(plan).toMatchObject({ sequence: 1, steps: [{ label: 'first', priority: 'medium', status: 'pending' }] });
+  admit();
+  expect(
+    await until(() => hosted.socket.frames.find((frame) => frame.type === 'draft' && frame.sequence === 3)),
+  ).toMatchObject({ from: 0, blocks: [{ type: 'paragraph', text: 'one two' }] });
+  expect(
+    await until(() => hosted.socket.frames.find((frame) => frame.type === 'plan' && frame.sequence === 2)),
+  ).toMatchObject({ from: 0, steps: [{ label: 'first', priority: 'medium', status: 'pending' }] });
+  expect(await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')))).toMatchObject({
+    body: { text: 'one two' },
+  });
+});
+
+it("writes the turn's whole view and plan on the new socket once House answers its start report, though both came while the socket was closed", async () => {
+  const hosted = await hostKit();
+  const admit = startHeld(hosted);
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  hosted.input({ kind: 'message', text: '@gate closed\n@say one\n@plan first\n@ping', files: [], first: true });
+  await hosted.ack(lastInput());
+  const reconnect = hosted.house.holdStreams();
+  const closed = new Promise((resolve) => hosted.socket.socket.once('close', resolve));
+
+  hosted.socket.close(1001, 'shutting_down');
+  await closed;
+  await writeFile(join(hosted.home, 'closed'), '');
+  await until(async () => (await hosted.adapterLog()).some((entry) => entry.pinged === true));
+  reconnect();
+  const reopened = await until(() => hosted.house.sockets[1]);
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  admit();
+
+  expect(await until(() => reopened.frames.find((frame) => frame.type === 'draft'))).toMatchObject({
+    sequence: 1,
+    from: 0,
+    blocks: [{ type: 'paragraph', text: 'one' }],
+  });
+  expect(await until(() => reopened.frames.find((frame) => frame.type === 'plan'))).toMatchObject({
+    sequence: 1,
+    from: 0,
+    steps: [{ label: 'first', priority: 'medium', status: 'pending' }],
+  });
 });
 
 it('calls restarted before it opens its socket', async () => {

@@ -33,6 +33,7 @@ export interface House {
   requests: Received[];
   sockets: KitSocket[];
   route(method: string, path: string, handler: Route): void;
+  holdStreams(): () => void;
 }
 
 function matched(pattern: string, path: string): Record<string, string> | null {
@@ -84,12 +85,14 @@ export async function startHouse(): Promise<House> {
     });
   });
   const streams = new WebSocketServer({ noServer: true, handleProtocols: (offered) => [...offered][0] ?? false });
-  server.on('upgrade', (request, duplex, head) => {
+  let streamsHeld = Promise.resolve();
+  server.on('upgrade', async (request, duplex, head) => {
     if (new URL(request.url ?? '/', 'http://house').pathname !== '/kit/stream') {
       duplex.destroy();
       return;
     }
     requests.push({ method: 'UPGRADE', path: '/kit/stream', params: {}, headers: request.headers, body: null });
+    await streamsHeld;
     streams.handleUpgrade(request, duplex, head, (socket) => {
       const held: KitSocket = {
         headers: request.headers,
@@ -117,6 +120,14 @@ export async function startHouse(): Promise<House> {
     sockets,
     route: (method, pattern, handler) => {
       routes.unshift({ method, pattern, handler });
+    },
+    holdStreams: () => {
+      let release!: () => void;
+      streamsHeld = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      onTestFinished(release);
+      return release;
     },
   };
 }

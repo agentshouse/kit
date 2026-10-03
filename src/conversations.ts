@@ -75,11 +75,11 @@ class Turn {
   unsentFrom: number | null = null;
   draftSequence = 0;
   planSequence = 0;
+  entries: PlanEntry[] | null = null;
   questions = 0;
   secrets = 0;
   prompt: Sent | null = null;
   ended = false;
-  ready: Promise<void> = Promise.resolve();
 }
 
 interface Sent {
@@ -428,8 +428,18 @@ export class Conversations {
   private report(conversation: Conversation): Turn {
     const turn = new Turn();
     conversation.open++;
-    turn.ready = this.deliver(conversation, turn, 'started', {}).then(() => undefined, logged);
+    void this.deliver(conversation, turn, 'started', {})
+      .then(() => this.admitted(conversation, turn))
+      .catch(logged);
     return turn;
+  }
+
+  private admitted(conversation: Conversation, turn: Turn): void {
+    if (turn.text !== '') {
+      turn.unsentFrom = 0;
+      this.draft(conversation, turn);
+    }
+    if (turn.entries !== null) this.plan(conversation, turn);
   }
 
   private begin(conversation: Conversation): Turn {
@@ -564,11 +574,11 @@ export class Conversations {
     if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
       const turn = this.started(conversation);
       turn.text += update.content.text;
-      const text = turn.text;
-      void turn.ready.then(() => this.draft(conversation, turn, text));
+      this.draft(conversation, turn);
     } else if (update.sessionUpdate === 'plan') {
       const turn = this.started(conversation);
-      void turn.ready.then(() => this.plan(conversation, turn, update.entries));
+      turn.entries = update.entries;
+      this.plan(conversation, turn);
     } else if (update.sessionUpdate === 'agent_thought_chunk' || update.sessionUpdate === 'tool_call') {
       this.started(conversation);
     } else if (update.sessionUpdate === 'available_commands_update') {
@@ -584,8 +594,8 @@ export class Conversations {
     this.kit.changed();
   }
 
-  private draft(conversation: Conversation, turn: Turn, text: string): void {
-    const blocks = blocksOf(text);
+  private draft(conversation: Conversation, turn: Turn): void {
+    const blocks = blocksOf(turn.text);
     const from = Math.min(firstChange(turn.sent, blocks), turn.unsentFrom ?? Infinity);
     const sent = this.kit.send({
       type: 'draft',
@@ -604,14 +614,14 @@ export class Conversations {
     }
   }
 
-  private plan(conversation: Conversation, turn: Turn, entries: PlanEntry[]): void {
+  private plan(conversation: Conversation, turn: Turn): void {
     const sent = this.kit.send({
       type: 'plan',
       conversation_id: conversation.id,
       turn_id: turn.id,
       sequence: turn.planSequence + 1,
       from: 0,
-      steps: entries.map((entry) => ({ label: entry.content, priority: entry.priority, status: entry.status })),
+      steps: turn.entries!.map((entry) => ({ label: entry.content, priority: entry.priority, status: entry.status })),
     });
     if (sent) turn.planSequence++;
   }

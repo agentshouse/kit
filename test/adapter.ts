@@ -96,6 +96,13 @@ async function directive(
   if (name === 'fail') throw new RequestError(-32603, argument);
   if (name === 'answer') return 'answered';
   if (name === 'hold') await new Promise((resolve) => setTimeout(resolve, Number(argument)));
+  if (name === 'gate') {
+    while (!existsSync(join(home, argument))) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (name === 'ping') {
+    await client.request('_kit/ping').catch(() => undefined);
+    log({ pinged: true });
+  }
   if (name === 'exit') process.exit(Number(argument));
   if (name === 'plan') {
     await client.notify('session/update', {
