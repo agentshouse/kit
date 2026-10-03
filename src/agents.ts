@@ -48,7 +48,7 @@ async function operatingSystem(): Promise<string> {
 export class Agents {
   desired: Desired = { agents: [], routes: [] };
   private readonly house: House;
-  private reading: Promise<void> = Promise.resolve();
+  private reading: Promise<unknown> = Promise.resolve();
   private installing: Promise<void> = Promise.resolve();
   private releases = new Map<string, string | null>();
   private reporting: Promise<void> | null = null;
@@ -59,7 +59,10 @@ export class Agents {
   }
 
   read(): Promise<void> {
-    return this.reading.catch(() => undefined);
+    return this.reading.then(
+      () => undefined,
+      () => undefined,
+    );
   }
 
   installed(): Promise<void> {
@@ -73,11 +76,12 @@ export class Agents {
   refresh(): Promise<void> {
     const reading = this.read().then(async () => {
       this.desired = await this.house.deliver<Desired>('/kit/agents/desired', {});
+      return this.desired;
     });
     this.reading = reading;
     const installing = this.installed()
       .then(() => reading)
-      .then(() => this.install());
+      .then(({ agents }) => this.install(agents));
     this.installing = installing;
     if (this.reporting === null) this.reporting = this.reports();
     else this.again = true;
@@ -96,9 +100,9 @@ export class Agents {
     });
   }
 
-  private async install(): Promise<void> {
+  private async install(kinds: string[]): Promise<void> {
     const releases = new Map<string, string | null>();
-    for (const kind of this.desired.agents) releases.set(kind, await install(kind));
+    for (const kind of kinds) releases.set(kind, await install(kind));
     this.releases = releases;
   }
 

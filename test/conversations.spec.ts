@@ -70,6 +70,40 @@ it('opens a conversation of an Agent whose CLI House added once the Kit has inst
   expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')).toBeDefined();
 });
 
+it('opens a conversation with the CLI its route named after House moved that Agent to another CLI during installs', async () => {
+  const hosted = await hostKit();
+  const hold = await installHeld(hosted);
+  const agentId = `agent-${randomUUID()}`;
+  const directory = `/agents/house/${agentId}`;
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const route = {
+    agent_id: agentId,
+    kind: 'grok-build',
+    base_instructions: 'Be useful.',
+    working_directory: directory,
+    model: 'route-model',
+    effort: null,
+  };
+  hosted.house.route('POST', '/kit/agents/desired', () => ({
+    body: { agents: ['codex-acp', 'grok-build'], routes: [route] },
+  }));
+  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.input({ kind: 'open', agent_id: agentId });
+  const open = lastInput();
+  await until(async () => (await stat(directory).catch(() => null))?.isDirectory());
+  let moved = false;
+  hosted.house.route('POST', '/kit/agents/desired', () => {
+    moved = true;
+    return { body: { agents: ['codex-acp'], routes: [{ ...route, kind: 'codex-acp' }] } };
+  });
+  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  await until(() => moved);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await rm(hold);
+
+  expect(await hosted.ack(open)).toEqual({ provider_session_id: expect.any(String) });
+});
+
 it('opens a conversation with the launch settings House changed while the Kit was still reading them', async () => {
   const hosted = await hostKit();
   await until(() => hosted.house.requests.find((request) => request.path === '/kit/agents/report'));
