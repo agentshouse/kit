@@ -29,6 +29,11 @@ let model = 'default-model';
 let effort = 'default-effort';
 const cancelled = new Map<string, () => void>();
 
+function spawnJob(): void {
+  const child = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' });
+  log({ spawned: child.pid });
+}
+
 function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): void {
   log({ ...entry, status: result.status, stdout: result.stdout, stderr: result.stderr });
 }
@@ -75,10 +80,18 @@ async function turnEnded(client: AgentContext, sessionId: string) {
   }
 }
 
-async function directive(client: AgentContext, sessionId: string, line: string): Promise<'cancelled' | undefined> {
+async function directive(
+  client: AgentContext,
+  sessionId: string,
+  line: string,
+): Promise<'cancelled' | 'answered' | undefined> {
   const [name, ...rest] = line.slice(1).split(' ');
   const argument = rest.join(' ');
   if (name === 'say') await say(client, sessionId, argument.replaceAll('\\n', '\n'));
+  if (name === 'started') await turnStarted(client, sessionId);
+  if (name === 'ended') await turnEnded(client, sessionId);
+  if (name === 'fail') throw new RequestError(-32603, argument);
+  if (name === 'answer') return 'answered';
   if (name === 'hold') await new Promise((resolve) => setTimeout(resolve, Number(argument)));
   if (name === 'exit') process.exit(Number(argument));
   if (name === 'plan') {
@@ -201,10 +214,7 @@ async function directive(client: AgentContext, sessionId: string, line: string):
   if (name === 'git') {
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }
-  if (name === 'spawn') {
-    const child = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' });
-    log({ spawned: child.pid });
-  }
+  if (name === 'spawn') spawnJob();
   return undefined;
 }
 
@@ -218,9 +228,13 @@ const app = agent({ name: 'adapter-double' })
       ...(signedIn() ? { _meta: { defaultAuthMethodId: 'device' } } : {}),
     };
   })
-  .onRequest('session/new', ({ params }) => {
+  .onRequest('session/new', async ({ params }) => {
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
+    if (existsSync(join(home, 'hold-open'))) {
+      spawnJob();
+      await new Promise(() => undefined);
+    }
     return { sessionId, configOptions: options(model, effort) };
   })
   .onRequest('session/resume', ({ params }) => {
@@ -249,7 +263,9 @@ const app = agent({ name: 'adapter-double' })
     log({ method: 'session/prompt', params, text });
     const directives = text.split('\n').filter((line) => line.startsWith('@'));
     for (const line of directives.length === 0 ? ['@say ok'] : directives) {
-      if ((await directive(client, params.sessionId, line)) === 'cancelled') {
+      const outcome = await directive(client, params.sessionId, line);
+      if (outcome === 'answered') return { stopReason: 'end_turn' };
+      if (outcome === 'cancelled') {
         await turnEnded(client, params.sessionId);
         return { stopReason: 'cancelled' };
       }

@@ -1,3 +1,4 @@
+import { killDescendants } from './acp.ts';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { Conversations, type Input } from './conversations.ts';
@@ -39,8 +40,7 @@ export async function resident(): Promise<void> {
   const signIns: SignIns = new SignIns(house, agents, changed);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
-      conversations.stop();
-      signIns.stop();
+      killDescendants();
       process.kill(process.pid, signal);
     });
   }

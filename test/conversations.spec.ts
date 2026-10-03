@@ -135,8 +135,8 @@ it('writes a message that arrives during a running turn to the CLI at once and e
   ]);
 });
 
-it('ends a turn when the CLI ends it and reports the turn the CLI then runs for a message sent during it', async () => {
-  const hosted = await hostKit();
+it('ends a turn when Grok ends it and reports the turn Grok then runs for a message it queued during it', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }]);
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
@@ -181,6 +181,77 @@ it('ends a turn failed when its process exits during it', async () => {
   await until(() =>
     hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false),
   );
+});
+
+it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
+  'ends a turn failed with the cause %s gives when it fails the prompt after it ends the turn',
+  async (kind) => {
+    const hosted = await hostKit([{ kind }]);
+    hosted.input({ kind: 'open' });
+    await hosted.ack(lastInput());
+
+    hosted.input({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', files: [], first: true });
+
+    const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+    expect(ended.body).toEqual({ failed: expect.stringContaining('provider request failed') });
+    expect(hosted.turns.filter((turn) => turn.path.endsWith('/started')).map((turn) => turn.params.turn)).toEqual([
+      ended.params.turn,
+    ]);
+  },
+);
+
+it('ends a turn when Claude answers its prompt without an end notice, as it does for a local command', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+
+  hosted.input({ kind: 'message', text: '@say local output\n@answer', files: [], first: true });
+
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(ended.body).toEqual({ text: 'local output' });
+});
+
+it('ends the turn Grok runs for a message it queued failed when Grok fails that message', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }]);
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+
+  hosted.input({ kind: 'message', text: '@hold 500\n@say first', files: [], first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.input({ kind: 'message', text: '@hold 1000\n@started\n@fail queued message refused', files: [], first: false });
+
+  const ends = await until(() => {
+    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+    return ended.length === 2 ? ended : undefined;
+  });
+  expect(ends.map((turn) => turn.body)).toEqual([
+    { text: 'first' },
+    { failed: expect.stringContaining('queued message refused') },
+  ]);
+  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+  expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
+});
+
+it('reports a message Grok fails before it runs it as a failed turn of its own', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }]);
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+
+  hosted.input({ kind: 'message', text: '@hold 1000\n@say first', files: [], first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.input({ kind: 'message', text: '@fail refused before it ran', files: [], first: false });
+
+  const ends = await until(() => {
+    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+    return ended.length === 2 ? ended : undefined;
+  });
+  expect(ends.map((turn) => turn.body)).toEqual([
+    { failed: expect.stringContaining('refused before it ran') },
+    { text: 'first' },
+  ]);
+  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+  expect(starts).toHaveLength(2);
+  expect(ends.map((turn) => turn.params.turn)).toEqual([starts[1]!.params.turn, starts[0]!.params.turn]);
 });
 
 it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(

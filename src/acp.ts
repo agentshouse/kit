@@ -95,21 +95,32 @@ function parents(): Map<number, number[]> {
   return children;
 }
 
-export function killTree(child: ChildProcess): void {
+function descendants(root: number): number[] {
   const children = parents();
   const tree: number[] = [];
-  const pending = [child.pid!];
+  const pending = [...(children.get(root) ?? [])];
   while (pending.length > 0) {
     const pid = pending.pop()!;
     tree.push(pid);
     pending.push(...(children.get(pid) ?? []));
   }
-  try {
-    process.kill(-child.pid!, 'SIGKILL');
-  } catch {}
-  for (const pid of tree) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {}
+  return tree;
+}
+
+function killAll(pids: number[]): void {
+  for (const pid of pids) {
+    for (const target of [-pid, pid]) {
+      try {
+        process.kill(target, 'SIGKILL');
+      } catch {}
+    }
   }
+}
+
+export function killTree(child: ChildProcess): void {
+  killAll([child.pid!, ...descendants(child.pid!)]);
+}
+
+export function killDescendants(): void {
+  killAll(descendants(process.pid));
 }

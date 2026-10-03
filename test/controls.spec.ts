@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
@@ -60,17 +61,26 @@ it('kills the process and every process it started, and the next message resumes
   expect(resumed.params).toMatchObject({ sessionId: session });
 });
 
-it.each(['SIGTERM', 'SIGINT'] as const)('kills every process it started when %s stops it', async (signal) => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  hosted.input({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
-  const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
+it.each(['SIGTERM', 'SIGINT'] as const)(
+  'kills every process it started, of a running conversation and of one still opening, when %s stops it',
+  async (signal) => {
+    const hosted = await hostKit();
+    await opened(hosted);
+    hosted.input({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
+    await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
+    await writeFile(join(hosted.home, 'hold-open'), '');
+    hosted.input({ kind: 'open', conversation_id: 'conversation-2' });
+    const spawned = await until(async () => {
+      const entries = (await hosted.adapterLog()).filter((entry) => entry.spawned);
+      return entries.length === 2 ? entries : undefined;
+    });
 
-  process.kill(hosted.kit.pid, signal);
-  await hosted.kit.exited;
+    process.kill(hosted.kit.pid, signal);
+    await hosted.kit.exited;
 
-  await until(() => !alive(spawned.pid as number) && !alive(spawned.spawned as number));
-});
+    await until(() => spawned.every((entry) => !alive(entry.pid as number) && !alive(entry.spawned as number)));
+  },
+);
 
 it('sets an option on the running process and relays the commands and options the CLI sends', async () => {
   const hosted = await hostKit();

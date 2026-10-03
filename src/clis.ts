@@ -30,6 +30,7 @@ export interface Cli {
   args: string[];
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' | 'collect' };
+  queues: boolean;
   turnStarted(notice: Notice): boolean;
   turnEnded(notice: Notice): boolean;
   job(notice: Notice): Job | null;
@@ -59,6 +60,7 @@ export const CLIS: Record<string, Cli> = {
     args: [],
     signedIn: { command: ['cli', 'login', 'status'] },
     login: { args: ['cli', 'login', '--device-auth'], code: 'show' },
+    queues: false,
     turnStarted: (notice) => threadStatus(notice) === 'active',
     turnEnded: (notice) => threadStatus(notice) === 'idle',
     job: asyncTask,
@@ -69,6 +71,7 @@ export const CLIS: Record<string, Cli> = {
     args: [],
     signedIn: { command: ['--cli', 'auth', 'status'] },
     login: { args: ['--cli', 'auth', 'login', '--claudeai'], code: 'collect' },
+    queues: false,
     turnStarted: () => false,
     turnEnded: ({ method, params }) =>
       method === 'session/update' &&
@@ -82,6 +85,7 @@ export const CLIS: Record<string, Cli> = {
     args: ['agent', '--no-leader', 'stdio'],
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },
+    queues: true,
     turnStarted: ({ method, params }) => method === '_x.ai/queue/changed' && params?.runningPromptId !== undefined,
     turnEnded: ({ method, params }) =>
       method === '_x.ai/session_notification' && params?.update?.sessionUpdate === 'turn_completed',

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { killTree } from './acp.ts';
 import type { Agents } from './agents.ts';
@@ -24,7 +24,6 @@ export class SignIns {
   private readonly agents: Agents;
   private readonly changed: () => void;
   private readonly running = new Set<string>();
-  private readonly children = new Set<ChildProcess>();
 
   constructor(house: House, agents: Agents, changed: () => void) {
     this.house = house;
@@ -34,10 +33,6 @@ export class SignIns {
 
   idle(): boolean {
     return this.running.size === 0;
-  }
-
-  stop(): void {
-    for (const child of this.children) killTree(child);
   }
 
   start(input: SignIn): void {
@@ -58,7 +53,6 @@ export class SignIns {
     await this.agents.settled();
     const login = CLIS[input.cli]!.login;
     const child = spawn(cliCommand(input.cli), login.args, { stdio: ['pipe', 'pipe', 'pipe'], detached: true });
-    this.children.add(child);
     const running = () => child.exitCode === null && child.signalCode === null;
     let link: string | undefined;
     let code: string | undefined;
@@ -92,7 +86,6 @@ export class SignIns {
         resolve(status === 0 ? null : `exited with ${status ?? signal}${last ? `: ${last}` : ''}`),
       );
     });
-    this.children.delete(child);
     if (failed !== null) process.stderr.write(`kit: the ${input.cli} sign-in failed: ${failed}\n`);
   }
 }

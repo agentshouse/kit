@@ -15,7 +15,7 @@ import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
 import { openBridge, type Bridge } from './bridge.ts';
-import type { Job } from './clis.ts';
+import { CLIS, type Job } from './clis.ts';
 import { placeFiles, type MessageFile } from './files.ts';
 import { instructions } from './instructions.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
@@ -60,6 +60,8 @@ class Turn {
   planSequence = 0;
   questions = 0;
   secrets = 0;
+  prompt: Sent | null = null;
+  ended = false;
   ready: Promise<void>;
 
   constructor(ready: (turn: Turn) => Promise<void>) {
@@ -67,11 +69,16 @@ class Turn {
   }
 }
 
+interface Sent {
+  turn: Turn | null;
+}
+
 interface Running {
   adapter: Adapter;
   bridge: Bridge;
   sessionId: string;
   killed: boolean;
+  queues: boolean;
 }
 
 interface Question {
@@ -86,6 +93,7 @@ class Conversation {
   commands: AvailableCommand[] | null = null;
   options: SessionConfigOption[] | null = null;
   readonly jobs = new Set<string>();
+  readonly queued: Sent[] = [];
   queue: Promise<unknown> = Promise.resolve();
 
   constructor(id: string) {
@@ -151,12 +159,6 @@ export class Conversations {
       if (turn !== null && (turn.questions === 0 || turn.secrets > 0)) return false;
     }
     return true;
-  }
-
-  stop(): void {
-    for (const conversation of this.conversations.values()) {
-      if (conversation.running !== null) killTree(conversation.running.adapter.child);
-    }
   }
 
   replay(): void {
@@ -262,7 +264,7 @@ export class Conversations {
   private async start(conversation: Conversation, route: Route, sessionId: string | null): Promise<string> {
     const app = client({ name: '@agentshouse/kit' })
       .onNotification('session/update', ({ params }) => this.update(conversation, params))
-      .onNotification(TURN_STARTED, (params) => params, () => this.started(conversation))
+      .onNotification(TURN_STARTED, (params) => params, () => void this.started(conversation))
       .onNotification(TURN_ENDED, (params) => params, () => this.ended(conversation))
       .onRequest('session/request_permission', ({ params, signal }) =>
         this.ask(conversation, 'session/request_permission', params, false, signal),
@@ -289,7 +291,13 @@ export class Conversations {
         sessionId === null
           ? await agent.request('session/new', { cwd, mcpServers: [] })
           : { ...(await agent.request('session/resume', { sessionId, cwd, mcpServers: [] })), sessionId };
-      const running: Running = { adapter, bridge, sessionId: opened.sessionId, killed: false };
+      const running: Running = {
+        adapter,
+        bridge,
+        sessionId: opened.sessionId,
+        killed: false,
+        queues: CLIS[route.kind]!.queues,
+      };
       const options = await this.launchSettings(running, route, opened.configOptions ?? []);
       conversation.running = running;
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
@@ -333,6 +341,7 @@ export class Conversations {
     conversation.commands = null;
     conversation.options = null;
     conversation.jobs.clear();
+    conversation.queued.length = 0;
     for (const [id, question] of this.questions) {
       if (question.conversation === conversation) this.questions.delete(id);
     }
@@ -355,20 +364,25 @@ export class Conversations {
     this.kit.send({ type: 'options', conversation_id: conversation.id, options });
   }
 
-  private begin(conversation: Conversation): Turn {
-    const turn = new Turn((started) =>
+  private report(conversation: Conversation): Turn {
+    return new Turn((started) =>
       this.kit.house
         .deliver(`/kit/conversations/${conversation.id}/turns/${started.id}/started`, {})
         .then(() => undefined, logged),
     );
+  }
+
+  private begin(conversation: Conversation): Turn {
+    const turn = this.report(conversation);
     conversation.turn = turn;
     this.kit.changed();
     return turn;
   }
 
   private end(conversation: Conversation, turn: Turn, outcome: Outcome): void {
-    if (conversation.turn !== turn) return;
-    conversation.turn = null;
+    if (turn.ended) return;
+    turn.ended = true;
+    if (conversation.turn === turn) conversation.turn = null;
     void turn.ready
       .then(() => this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/ended`, outcome))
       .catch(logged);
@@ -377,24 +391,60 @@ export class Conversations {
 
   private async prompt(conversation: Conversation, prompt: ContentBlock[]): Promise<void> {
     const running = conversation.running!;
-    const turn = conversation.turn ?? this.begin(conversation);
-    await turn.ready;
-    running.adapter.connection.agent
-      .request('session/prompt', { sessionId: running.sessionId, prompt })
-      .catch(async (error: unknown) => {
-        const adapter = running.adapter;
-        const failed = adapter.connection.signal.aborted ? await adapter.exited : causeOf(error);
-        this.end(conversation, turn, { failed });
-      });
+    const sent: Sent = { turn: null };
+    if (running.queues && (conversation.turn !== null || conversation.queued.length > 0)) {
+      conversation.queued.push(sent);
+    } else {
+      this.attach(conversation.turn ?? this.begin(conversation), sent);
+    }
+    await sent.turn?.ready;
+    running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
+      () => this.answered(conversation, sent, null),
+      async (error: unknown) =>
+        this.answered(
+          conversation,
+          sent,
+          running.adapter.connection.signal.aborted ? await running.adapter.exited : causeOf(error),
+        ),
+    );
   }
 
-  private started(conversation: Conversation): void {
-    if (conversation.turn === null) this.begin(conversation);
+  private attach(turn: Turn, sent: Sent): void {
+    turn.prompt = sent;
+    sent.turn = turn;
+  }
+
+  private answered(conversation: Conversation, sent: Sent, failed: string | null): void {
+    const turn = sent.turn;
+    if (turn === null) {
+      const queued = conversation.queued.indexOf(sent);
+      if (queued < 0) return;
+      conversation.queued.splice(queued, 1);
+      if (failed !== null) this.end(conversation, this.report(conversation), { failed });
+    } else if (failed !== null) {
+      this.end(conversation, turn, { failed });
+    } else if (turn.prompt === sent) {
+      this.end(conversation, turn, { text: turn.text });
+    }
+  }
+
+  private started(conversation: Conversation): Turn {
+    if (conversation.turn !== null) return conversation.turn;
+    const turn = this.begin(conversation);
+    const queued = conversation.queued.shift();
+    if (queued !== undefined) this.attach(turn, queued);
+    return turn;
   }
 
   private ended(conversation: Conversation): void {
     const turn = conversation.turn;
-    if (turn !== null) this.end(conversation, turn, { text: turn.text });
+    if (turn === null) return;
+    if (turn.prompt === null) {
+      this.end(conversation, turn, { text: turn.text });
+    } else {
+      conversation.turn = null;
+      this.kit.changed();
+    }
   }
 
   private async ask<Response>(
@@ -404,7 +454,7 @@ export class Conversations {
     secret: boolean,
     signal: AbortSignal,
   ): Promise<Response> {
-    const turn = conversation.turn ?? this.begin(conversation);
+    const turn = this.started(conversation);
     const interactionId = randomUUID();
     const answered = new Promise<Response | null>((answer, fail) => {
       this.questions.set(interactionId, { conversation, answer: (response) => answer(response as Response) });
@@ -450,12 +500,12 @@ export class Conversations {
   private update(conversation: Conversation, notification: SessionNotification): void {
     const update = notification.update;
     if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
-      const turn = conversation.turn ?? this.begin(conversation);
+      const turn = this.started(conversation);
       turn.text += update.content.text;
       const text = turn.text;
       void turn.ready.then(() => this.draft(conversation, turn, text));
     } else if (update.sessionUpdate === 'plan') {
-      const turn = conversation.turn ?? this.begin(conversation);
+      const turn = this.started(conversation);
       void turn.ready.then(() => this.plan(conversation, turn, update.entries));
     } else if (update.sessionUpdate === 'agent_thought_chunk' || update.sessionUpdate === 'tool_call') {
       this.started(conversation);
