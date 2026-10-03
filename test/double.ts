@@ -6,7 +6,6 @@ import { WebSocketServer, type WebSocket } from 'ws';
 export interface Received {
   method: string;
   path: string;
-  headers: IncomingHttpHeaders;
   body: unknown;
 }
 
@@ -48,7 +47,6 @@ export async function startHouse(): Promise<House> {
       const received: Received = {
         method: request.method ?? 'GET',
         path,
-        headers: request.headers,
         body: bodyOf(chunks),
       };
       requests.push(received);

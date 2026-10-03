@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +8,6 @@ import { onTestFinished } from 'vitest';
 const KIT = fileURLToPath(new URL('../src/kit-main.ts', import.meta.url));
 
 export interface KitRun {
-  child: ChildProcess;
   stdout(): string;
   stderr(): string;
   exited: Promise<number | null>;
@@ -38,5 +37,5 @@ export function runKit(argv: string[], environment: Record<string, string>): Kit
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await exited;
   });
-  return { child, stdout: () => stdout, stderr: () => stderr, exited };
+  return { stdout: () => stdout, stderr: () => stderr, exited };
 }
