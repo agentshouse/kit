@@ -10,7 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { killTree, startAdapter, TURN_ENDED, TURN_STARTED, type Adapter } from './acp.ts';
+import { killMarked, startAdapter, TURN_ENDED, TURN_STARTED, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
@@ -51,8 +51,8 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
-function stop(adapter: Adapter, bridge: Bridge): void {
-  killTree(adapter.child, `HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`);
+function stop(bridge: Bridge): void {
+  killMarked(`HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`);
 }
 
 class Turn {
@@ -95,6 +95,8 @@ class Conversation {
   readonly jobs = new Set<string>();
   readonly queued: Sent[] = [];
   readonly late: string[] = [];
+  opening: Bridge | null = null;
+  kills = 0;
   open = 0;
   queue: Promise<unknown> = Promise.resolve();
   reports: Promise<unknown> = Promise.resolve();
@@ -141,6 +143,10 @@ export class Conversations {
       this.acks.get(input.input_id) ??
       (() => {
         const conversation = this.conversation(input.conversation_id);
+        if (input.kind === 'kill') {
+          conversation.kills++;
+          if (conversation.opening !== null) stop(conversation.opening);
+        }
         const work = conversation.queue.then(() => this.carry(conversation, input));
         conversation.queue = work.catch(() => undefined);
         this.acks.set(input.input_id, work);
@@ -188,7 +194,10 @@ export class Conversations {
     if (input.kind === 'open') return this.open(conversation, input);
     if (input.kind === 'message') return this.message(conversation, input);
     if (input.kind === 'interrupt') await this.interrupt(conversation, String(input.turn_id));
-    if (input.kind === 'kill') await this.kill(conversation);
+    if (input.kind === 'kill') {
+      await this.kill(conversation);
+      conversation.kills--;
+    }
     if (input.kind === 'option') await this.option(conversation, String(input.option), input.value);
     if (input.kind === 'answer') this.questions.get(String(input.interaction_id))?.answer(input.response);
     return {};
@@ -237,7 +246,7 @@ export class Conversations {
     const running = conversation.running;
     if (running === null) return;
     running.killed = true;
-    stop(running.adapter, running.bridge);
+    stop(running.bridge);
     await running.adapter.exited;
   }
 
@@ -279,18 +288,20 @@ export class Conversations {
         this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       );
     const bridge = await openBridge(this.kit.house, conversation.id);
-    const adapter = await startAdapter(
-      route.kind,
-      route.working_directory,
-      app,
-      (job) => this.job(conversation, job),
-      { ...process.env, ...bridge.env },
-    ).catch((error: unknown) => {
+    if (conversation.kills > 0) {
       bridge.close();
-      throw error;
-    });
-    void adapter.exited.then(() => bridge.close());
+      throw new Error(KILLED);
+    }
+    conversation.opening = bridge;
     try {
+      const adapter = await startAdapter(
+        route.kind,
+        route.working_directory,
+        app,
+        (job) => this.job(conversation, job),
+        { ...process.env, ...bridge.env },
+      );
+      void adapter.exited.then(() => bridge.close());
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
       const opened =
@@ -312,8 +323,11 @@ export class Conversations {
       void adapter.exited.then((cause) => this.exited(conversation, adapter, cause));
       return running.sessionId;
     } catch (error) {
-      stop(adapter, bridge);
-      throw error;
+      stop(bridge);
+      bridge.close();
+      throw conversation.kills > 0 ? new Error(KILLED) : error;
+    } finally {
+      conversation.opening = null;
     }
   }
 

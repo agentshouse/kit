@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
@@ -59,6 +59,24 @@ it('kills the process and every process it started, and the next message resumes
   await hosted.ack(lastInput());
   const resumed = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/resume'));
   expect(resumed.params).toMatchObject({ sessionId: session });
+});
+
+it('kills a process still opening its session and refuses the open, and the next message opens a new one', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-open'), '');
+  hosted.input({ kind: 'open' });
+  const open = lastInput();
+  const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
+
+  hosted.input({ kind: 'kill' });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.ack(open)).toEqual({ refused: 'the conversation was killed' });
+  expect(alive(spawned.pid as number)).toBe(false);
+  await until(() => !alive(spawned.spawned as number));
+  await rm(join(hosted.home, 'hold-open'));
+  hosted.input({ kind: 'message', text: '@say again', files: [], first: false });
+  expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
 });
 
 it.each(['SIGTERM', 'SIGINT'] as const)(

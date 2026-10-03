@@ -95,10 +95,10 @@ function parents(): Map<number, number[]> {
   return children;
 }
 
-function descendants(root: number): number[] {
+function descendants(roots: number[]): number[] {
   const children = parents();
   const tree: number[] = [];
-  const pending = [...(children.get(root) ?? [])];
+  const pending = roots.flatMap((root) => children.get(root) ?? []);
   while (pending.length > 0) {
     const pid = pending.pop()!;
     tree.push(pid);
@@ -129,10 +129,15 @@ function marked(marker: string): number[] {
     .map(Number);
 }
 
-export function killTree(child: ChildProcess, marker?: string): void {
-  killAll([child.pid!, ...descendants(child.pid!), ...(marker === undefined ? [] : marked(marker))]);
+export function killTree(child: ChildProcess): void {
+  killAll([child.pid!, ...descendants([child.pid!])]);
+}
+
+export function killMarked(marker: string): void {
+  const pids = marked(marker);
+  killAll([...pids, ...descendants(pids)]);
 }
 
 export function killDescendants(): void {
-  killAll([...descendants(process.pid), ...marked(`HOUSE_KIT_RESIDENT=${process.pid}`)]);
+  killAll([...descendants([process.pid]), ...marked(`HOUSE_KIT_RESIDENT=${process.pid}`)]);
 }
