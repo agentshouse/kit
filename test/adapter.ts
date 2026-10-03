@@ -1,10 +1,12 @@
 import { agent, ndJsonStream, RequestError, type AgentContext, type SessionConfigOption } from '@agentclientprotocol/sdk';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 
+const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const kind = process.env.ADAPTER_KIND ?? 'codex-acp';
 const home = process.env.HOUSE_KIT_HOME ?? '/tmp';
 const signedIn = () => existsSync(join(home, 'signed-in', kind));
@@ -24,6 +26,10 @@ const options = (model: string, effort: string): SessionConfigOption[] => [
 let model = 'default-model';
 let effort = 'default-effort';
 const cancelled = new Map<string, () => void>();
+
+function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): void {
+  log({ ...entry, status: result.status, stdout: result.stdout, stderr: result.stderr });
+}
 
 async function say(client: AgentContext, sessionId: string, text: string) {
   await client.notify('session/update', {
@@ -118,6 +124,13 @@ async function directive(client: AgentContext, sessionId: string, line: string):
       update: { sessionUpdate: 'async_task_state_update', asyncTaskId: argument, state: 'completed' },
     } as never);
   }
+  if (name === 'house') {
+    const args = rest.length > 1 ? [rest[0]!, rest.slice(1).join(' ')] : rest;
+    ran({ house: args }, spawnSync(process.execPath, [HOUSE, ...args], { encoding: 'utf8' }));
+  }
+  if (name === 'git') {
+    ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
+  }
   if (name === 'spawn') {
     const child = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' });
     log({ spawned: child.pid });
@@ -127,7 +140,7 @@ async function directive(client: AgentContext, sessionId: string, line: string):
 
 const app = agent({ name: 'adapter-double' })
   .onRequest('initialize', ({ params }) => {
-    log({ method: 'initialize', params });
+    log({ method: 'initialize', params, env: process.env, argv: process.argv });
     return {
       protocolVersion: params.protocolVersion,
       agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
@@ -159,7 +172,7 @@ const app = agent({ name: 'adapter-double' })
     cancelled.delete(params.sessionId);
   })
   .onRequest('session/prompt', async ({ params, client }) => {
-    const text = params.prompt.map((block) => (block.type === 'text' ? block.text : '')).join('');
+    const text = params.prompt.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
     log({ method: 'session/prompt', params, text });
     const directives = text.split('\n').filter((line) => line.startsWith('@'));
     for (const line of directives.length === 0 ? ['@say ok'] : directives) {

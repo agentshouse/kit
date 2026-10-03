@@ -7,12 +7,14 @@ export interface Received {
   method: string;
   path: string;
   params: Record<string, string>;
+  headers: IncomingHttpHeaders;
   body: unknown;
 }
 
 export interface Answer {
   status?: number;
   body?: unknown;
+  bytes?: { type: string; content: Buffer | string };
 }
 
 export type Route = (request: Received) => Answer | Promise<Answer>;
@@ -45,9 +47,10 @@ function matched(pattern: string, path: string): Record<string, string> | null {
   return params;
 }
 
-function bodyOf(chunks: Buffer[]): unknown {
-  const text = Buffer.concat(chunks).toString('utf8');
-  return text.length === 0 ? null : JSON.parse(text);
+function bodyOf(chunks: Buffer[], type: string | undefined): unknown {
+  const bytes = Buffer.concat(chunks);
+  if (bytes.length === 0) return null;
+  return type?.startsWith('application/json') ? JSON.parse(bytes.toString('utf8')) : bytes;
 }
 
 export async function startHouse(): Promise<House> {
@@ -65,11 +68,17 @@ export async function startHouse(): Promise<House> {
         method,
         path,
         params: route === undefined ? {} : matched(route.pattern, path)!,
-        body: bodyOf(chunks),
+        headers: request.headers,
+        body: bodyOf(chunks, request.headers['content-type']),
       };
       requests.push(received);
-      const answer =
+      const answer: Answer =
         route === undefined ? { status: 404, body: { error: { code: 'not_found' } } } : await route.handler(received);
+      if (answer.bytes !== undefined) {
+        response.writeHead(answer.status ?? 200, { 'content-type': answer.bytes.type });
+        response.end(answer.bytes.content);
+        return;
+      }
       response.writeHead(answer.status ?? 200, { 'content-type': 'application/json' });
       response.end(answer.body === undefined ? '{}' : JSON.stringify(answer.body));
     });
@@ -80,7 +89,7 @@ export async function startHouse(): Promise<House> {
       duplex.destroy();
       return;
     }
-    requests.push({ method: 'UPGRADE', path: '/kit/stream', params: {}, body: null });
+    requests.push({ method: 'UPGRADE', path: '/kit/stream', params: {}, headers: request.headers, body: null });
     streams.handleUpgrade(request, duplex, head, (socket) => {
       const held: KitSocket = {
         headers: request.headers,

@@ -15,6 +15,47 @@ const PACKAGES: Record<string, string> = {
   'grok-build': '@xai-official/grok',
 };
 
+export interface ToolResult {
+  content: { type: 'text'; text: string }[];
+  isError?: boolean;
+}
+
+export type ToolAnswer = (args: Record<string, unknown>) => ToolResult;
+
+export const LISTING = [
+  {
+    name: 'search',
+    description: 'Search Rooms and `/private` by words, meaning or date.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+  },
+  {
+    name: 'inspect',
+    description: 'Open a file or `ref` with its provenance and revisions.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+  },
+  {
+    name: 'append_record',
+    description: 'Add a record to a Room, stored as given.',
+    inputSchema: { type: 'object', properties: { room_ref: { type: 'string' }, attachments: { type: 'array' } } },
+  },
+  {
+    name: 'upload_attachment',
+    description: 'Store a file to link from a document.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, room_ref: { type: 'string' } } },
+  },
+];
+
+const WRITES = new Set(['append_record', 'upload_attachment']);
+
+export function conversationCredential(conversation: string): string {
+  return `ahc_${conversation}`;
+}
+
+export interface McpCall {
+  method: string;
+  params: { name?: string; arguments?: Record<string, unknown>; _meta: Record<string, unknown> };
+}
+
 export interface RouteOverrides {
   agent_id?: string;
   kind?: string;
@@ -34,6 +75,8 @@ export interface Hosted {
   turns: Received[];
   interactions: Received[];
   idles: Received[];
+  mcp: Received[];
+  tools: Record<string, ToolAnswer>;
   input(fields: Record<string, unknown>): void;
   ack(inputId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
@@ -68,6 +111,24 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
   const turns: Received[] = [];
   const interactions: Received[] = [];
   const idles: Received[] = [];
+  const mcp: Received[] = [];
+  const tools: Record<string, ToolAnswer> = {
+    inspect: () => ({ isError: true, content: [{ type: 'text', text: 'not_found: check the reference, then call again.' }] }),
+  };
+  house.route('POST', '/', (request) => {
+    mcp.push(request);
+    const message = request.body as { id: number } & McpCall;
+    const name = message.params.name!;
+    const answer = tools[name] ?? (() => ({ content: [{ type: 'text', text: `${name} answered` }] }));
+    const result = message.method === 'tools/list' ? { tools: LISTING } : answer(message.params.arguments ?? {});
+    return { body: { jsonrpc: '2.0', id: message.id, result } };
+  });
+  house.route('POST', '/kit/tools/mutations', () => ({
+    body: { tools: LISTING.map((tool) => ({ name: tool.name, writes: WRITES.has(tool.name) })) },
+  }));
+  house.route('POST', '/kit/conversations/:conversation/credential', (request) => ({
+    body: { credential: conversationCredential(request.params.conversation!) },
+  }));
   house.route('POST', '/kit/restarted', () => ({ body: {} }));
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved } }));
   house.route('POST', '/kit/agents/report', () => ({ body: {} }));
@@ -101,6 +162,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
     turns,
     interactions,
     idles,
+    mcp,
+    tools,
     input: (fields) => {
       inputs++;
       house.sockets.at(-1)!.send({
