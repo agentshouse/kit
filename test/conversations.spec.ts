@@ -431,6 +431,24 @@ it('writes each message chunk as a draft frame with the next sequence and plan u
   expect(ended.body).toEqual({ text: 'Hello world\n\nNext' });
 });
 
+it("writes the turn's whole view as its next draft on a new socket", async () => {
+  const hosted = await hostKit();
+  hosted.input({ kind: 'message', text: '@say first\\n\\nsecond\n@hold 4000\n@say  suffix', files: [], first: false });
+  await until(() => hosted.socket.frames.find((frame) => frame.type === 'draft'));
+
+  hosted.socket.close(1001, 'shutting_down');
+  const reopened = await until(() => hosted.house.sockets[1]);
+
+  expect(await until(() => reopened.frames.find((frame) => frame.type === 'draft'))).toMatchObject({
+    sequence: 2,
+    from: 0,
+    blocks: [
+      { type: 'paragraph', text: 'first' },
+      { type: 'paragraph', text: 'second suffix' },
+    ],
+  });
+});
+
 it("writes each chunk as its own draft while the turn's start report is still on its way", async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async (request) => {

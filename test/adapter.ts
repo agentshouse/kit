@@ -1,5 +1,5 @@
 import { agent, ndJsonStream, RequestError, type AgentContext, type SessionConfigOption } from '@agentclientprotocol/sdk';
-import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,8 +30,12 @@ let effort = 'default-effort';
 const cancelled = new Map<string, () => void>();
 
 function spawnJob(): void {
-  const child = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' });
-  log({ spawned: child.pid });
+  const launcher = spawnSync(
+    process.execPath,
+    ['-e', "const job = require('node:child_process').spawn('sleep', ['600'], { detached: true, stdio: 'ignore' }); job.unref(); process.stdout.write(String(job.pid));"],
+    { encoding: 'utf8' },
+  );
+  log({ spawned: Number(launcher.stdout) });
 }
 
 function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): void {

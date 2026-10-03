@@ -117,12 +117,7 @@ function killAll(pids: number[]): void {
   }
 }
 
-export function killTree(child: ChildProcess): void {
-  killAll([child.pid!, ...descendants(child.pid!)]);
-}
-
-function marked(): number[] {
-  const marker = `HOUSE_KIT_RESIDENT=${process.pid}`;
+function marked(marker: string): number[] {
   return readdirSync('/proc')
     .filter((entry) => {
       try {
@@ -134,6 +129,10 @@ function marked(): number[] {
     .map(Number);
 }
 
+export function killTree(child: ChildProcess, marker?: string): void {
+  killAll([child.pid!, ...descendants(child.pid!), ...(marker === undefined ? [] : marked(marker))]);
+}
+
 export function killDescendants(): void {
-  killAll([...descendants(process.pid), ...marked()]);
+  killAll([...descendants(process.pid), ...marked(`HOUSE_KIT_RESIDENT=${process.pid}`)]);
 }

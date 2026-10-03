@@ -51,6 +51,10 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
+function stop(adapter: Adapter, bridge: Bridge): void {
+  killTree(adapter.child, `HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`);
+}
+
 class Turn {
   readonly id = randomUUID();
   text = '';
@@ -163,6 +167,7 @@ export class Conversations {
 
   replay(): void {
     for (const conversation of this.conversations.values()) {
+      if (conversation.turn !== null) conversation.turn.unsentFrom = 0;
       if (conversation.running === null) continue;
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
       if (conversation.commands !== null) this.commands(conversation, conversation.commands);
@@ -232,7 +237,7 @@ export class Conversations {
     const running = conversation.running;
     if (running === null) return;
     running.killed = true;
-    killTree(running.adapter.child);
+    stop(running.adapter, running.bridge);
     await running.adapter.exited;
   }
 
@@ -307,7 +312,7 @@ export class Conversations {
       void adapter.exited.then((cause) => this.exited(conversation, adapter, cause));
       return running.sessionId;
     } catch (error) {
-      killTree(adapter.child);
+      stop(adapter, bridge);
       throw error;
     }
   }
