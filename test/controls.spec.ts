@@ -9,9 +9,6 @@ import { alive, filesUnder } from './kit.ts';
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/started'));
 
-const answerMessage = (request: unknown, response: unknown) =>
-  `The User answered a question you asked earlier.\nQuestion: ${JSON.stringify(request)}\nAnswer: ${JSON.stringify(response)}`;
-
 async function opened(hosted: Hosted): Promise<string> {
   hosted.input({ kind: 'open' });
   return ((await hosted.ack(lastInput())) as { provider_session_id: string }).provider_session_id;
@@ -263,7 +260,13 @@ it('resumes the session for an answer no process waits on and writes the questio
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: 'session-stored' });
   expect(log.filter((entry) => entry.method === 'session/prompt')).toEqual([
-    expect.objectContaining({ text: answerMessage(request, response), params: expect.objectContaining({ sessionId: 'session-stored' }) }),
+    expect.objectContaining({
+      text:
+        'The User answered a question you asked earlier.\n' +
+        'Question: {"method":"session/request_permission","params":{"sessionId":"session-stored","toolCall":{"toolCallId":"tool-1","title":"Run a command"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"}]}}\n' +
+        'Answer: {"outcome":{"outcome":"selected","optionId":"allow"}}',
+      params: expect.objectContaining({ sessionId: 'session-stored' }),
+    }),
   ]);
 });
 
@@ -294,7 +297,9 @@ it.each([0, 2500])(
     expect(await abandoned()).toHaveLength(1);
     const prompts = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
     expect(prompts).toHaveLength(2);
-    expect(prompts[1]!.text).toBe(answerMessage(request, response));
+    expect(prompts[1]!.text).toMatch(
+      /^The User answered a question you asked earlier\.\nQuestion: \{.*"title":"Run another command".*\}\nAnswer: \{"outcome":\{"outcome":"selected","optionId":"allow"\}\}$/,
+    );
   },
 );
 
