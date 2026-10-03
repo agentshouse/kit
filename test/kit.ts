@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 
-const KIT = fileURLToPath(new URL('../src/kit.ts', import.meta.url));
+const KIT = fileURLToPath(new URL('../src/kit-main.ts', import.meta.url));
 
 export interface KitRun {
   child: ChildProcess;

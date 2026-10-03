@@ -52,10 +52,9 @@ function listen(): Promise<Callback> {
         code,
         answer: (text) =>
           new Promise((written) => {
-            if (held === null) return written();
-            held
-              .writeHead(200, { 'content-type': 'text/plain; charset=utf-8', connection: 'close' })
-              .end(`${text}\n`, written);
+            if (held === null || held.destroyed || !held.socket || held.socket.destroyed) return written();
+            held.once('close', () => written());
+            held.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', connection: 'close' }).end(`${text}\n`);
           }),
         close,
       });

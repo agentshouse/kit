@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { get } from 'node:http';
 import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -98,4 +99,23 @@ it('tells the browser the Environment was not connected when the exchange is ref
   expect(browser).toContain('This Environment was not connected');
   expect(login.stderr()).toContain('kit_login_rejected');
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
+});
+
+it('finishes and keeps the credential when the browser disconnects before its answer', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  const started = await until(() => house.requests.find((request) => request.path === '/kit'));
+  const { loopback_uri } = started.body as { loopback_uri: string };
+  const browser = get(`${loopback_uri}?code=ahk_code_one`);
+  browser.on('error', () => undefined);
+  house.route('POST', '/kit/token', async () => {
+    browser.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { body: { credential: 'ahk_first', environment: 'environment-one', user: 'user-one' } };
+  });
+
+  expect(await login.exited).toBe(0);
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
 });

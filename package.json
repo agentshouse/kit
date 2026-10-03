@@ -9,8 +9,8 @@
   },
   "type": "module",
   "bin": {
-    "kit": "dist/kit.js",
-    "house": "dist/house.js"
+    "kit": "dist/kit-main.js",
+    "house": "dist/house-main.js"
   },
   "files": [
     "dist"

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 
 it('refuses a house command outside an Agent conversation', () => {
-  const ran = spawnSync(process.execPath, [fileURLToPath(new URL('../src/house.ts', import.meta.url)), 'tools'], {
+  const ran = spawnSync(process.execPath, [fileURLToPath(new URL('../src/house-main.ts', import.meta.url)), 'tools'], {
     encoding: 'utf8',
   });
 

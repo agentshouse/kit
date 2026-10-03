@@ -20,9 +20,7 @@ export type Route = (request: Received) => Answer | Promise<Answer>;
 export interface KitSocket {
   headers: IncomingHttpHeaders;
   protocol: string;
-  frames: Record<string, unknown>[];
   socket: WebSocket;
-  send(frame: Record<string, unknown>): void;
   close(code: number, reason: string): void;
 }
 
@@ -35,12 +33,7 @@ export interface House {
 
 function bodyOf(chunks: Buffer[]): unknown {
   const text = Buffer.concat(chunks).toString('utf8');
-  if (text.length === 0) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
+  return text.length === 0 ? null : JSON.parse(text);
 }
 
 export async function startHouse(): Promise<House> {
@@ -75,12 +68,9 @@ export async function startHouse(): Promise<House> {
       const held: KitSocket = {
         headers: request.headers,
         protocol: socket.protocol,
-        frames: [],
         socket,
-        send: (frame) => socket.send(JSON.stringify(frame)),
         close: (code, reason) => socket.close(code, reason),
       };
-      socket.on('message', (data) => held.frames.push(JSON.parse(String(data)) as Record<string, unknown>));
       sockets.push(held);
     });
   });
