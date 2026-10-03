@@ -1,11 +1,9 @@
 import type { House } from './api.ts';
 
-export interface Step {
-  kind: 'collect';
-  label: string;
-  name: string;
-  description?: string;
-}
+export type Step =
+  | { kind: 'visit'; label: string; url: string }
+  | { kind: 'show'; label: string; text: string }
+  | { kind: 'collect'; label: string; name: string; description?: string };
 
 type Held = { outcome: 'collected'; content: Record<string, string> } | { outcome: 'released'; release: string };
 
