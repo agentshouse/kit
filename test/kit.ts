@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,4 +38,13 @@ export function runKit(argv: string[], environment: Record<string, string>): Kit
     await exited;
   });
   return { stdout: () => stdout, stderr: () => stderr, exited };
+}
+
+export async function fakeNpm(home: string): Promise<string> {
+  const bin = join(home, 'bin');
+  await mkdir(bin, { recursive: true });
+  const npm = join(bin, 'npm');
+  await writeFile(npm, `#!/bin/sh\nexec ${process.execPath} ${fileURLToPath(new URL('./npm.ts', import.meta.url))} "$@"\n`);
+  await chmod(npm, 0o755);
+  return `${bin}:${process.env.PATH}`;
 }

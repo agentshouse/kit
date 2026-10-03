@@ -20,6 +20,7 @@ export interface KitSocket {
   headers: IncomingHttpHeaders;
   protocol: string;
   socket: WebSocket;
+  send(frame: Record<string, unknown>): void;
   close(code: number, reason: string): void;
 }
 
@@ -67,6 +68,7 @@ export async function startHouse(): Promise<House> {
         headers: request.headers,
         protocol: socket.protocol,
         socket,
+        send: (frame) => socket.send(JSON.stringify(frame)),
         close: (code, reason) => socket.close(code, reason),
       };
       sockets.push(held);
