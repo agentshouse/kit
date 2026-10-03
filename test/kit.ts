@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { onTestFinished } from 'vitest';
 
 const KIT = fileURLToPath(new URL('../src/kit.ts', import.meta.url));
 
@@ -11,11 +12,12 @@ export interface KitRun {
   stdout(): string;
   stderr(): string;
   exited: Promise<number | null>;
-  stop(): Promise<void>;
 }
 
 export async function temporaryHome(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'kit-home-'));
+  const home = await mkdtemp(join(tmpdir(), 'kit-home-'));
+  onTestFinished(() => rm(home, { recursive: true, force: true }));
+  return home;
 }
 
 export function runKit(argv: string[], environment: Record<string, string>): KitRun {
@@ -32,14 +34,9 @@ export function runKit(argv: string[], environment: Record<string, string>): Kit
     stderr += chunk.toString('utf8');
   });
   const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
-  return {
-    child,
-    stdout: () => stdout,
-    stderr: () => stderr,
-    exited,
-    stop: async () => {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-      await exited;
-    },
-  };
+  onTestFinished(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  });
+  return { child, stdout: () => stdout, stderr: () => stderr, exited };
 }

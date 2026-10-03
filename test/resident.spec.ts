@@ -1,32 +1,21 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
-import { runKit, temporaryHome, type KitRun } from './kit.ts';
+import { runKit, temporaryHome } from './kit.ts';
 
-let house: House;
-let kit: KitRun | undefined;
-
-beforeEach(async () => {
-  house = await startHouse();
-});
-
-afterEach(async () => {
-  await kit?.stop();
-  await house.stop();
-});
-
-async function enrolled(): Promise<string> {
-  const home = await temporaryHome();
+async function enrol(house: House, home: string, credential: string) {
   await writeFile(
     join(home, 'credential.json'),
-    JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }),
+    JSON.stringify({ house: house.origin, environment: 'environment-one', credential }),
   );
-  return home;
 }
 
 it('holds the control stream with its credential and opens a new socket after every close', async () => {
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: await enrolled() });
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await enrol(house, home, 'ahk_held');
+  runKit(['resident'], { HOUSE_KIT_HOME: home });
 
   const first = await until(() => house.sockets[0]);
   expect(first.headers.authorization).toBe('Bearer ahk_held');
@@ -41,4 +30,18 @@ it('holds the control stream with its credential and opens a new socket after ev
 
   house.sockets[2]!.socket.terminate();
   await until(() => house.sockets[3]);
-}, 30_000);
+});
+
+it('presents the credential a later login stored when it opens its next socket', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await enrol(house, home, 'ahk_first');
+  runKit(['resident'], { HOUSE_KIT_HOME: home });
+  const first = await until(() => house.sockets[0]);
+
+  await enrol(house, home, 'ahk_second');
+  first.close(1008, 'authority_changed');
+
+  const second = await until(() => house.sockets[1]);
+  expect(second.headers.authorization).toBe('Bearer ahk_second');
+});

@@ -1,5 +1,6 @@
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { onTestFinished } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 export interface Received {
@@ -30,7 +31,6 @@ export interface House {
   requests: Received[];
   sockets: KitSocket[];
   route(method: string, path: string, handler: Route): void;
-  stop(): Promise<void>;
 }
 
 function bodyOf(chunks: Buffer[]): unknown {
@@ -86,17 +86,17 @@ export async function startHouse(): Promise<House> {
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
+  onTestFinished(async () => {
+    for (const held of sockets) held.socket.terminate();
+    streams.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
   return {
     origin: `http://127.0.0.1:${port}`,
     requests,
     sockets,
     route: (method, path, handler) => routes.set(`${method} ${path}`, handler),
-    stop: async () => {
-      for (const held of sockets) held.socket.terminate();
-      streams.close();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
   };
 }
 
