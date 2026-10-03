@@ -8,9 +8,10 @@ import { hostKit, lastInput } from './environment.ts';
 const STORED: Record<string, { name: string; content: Buffer }> = {
   'version-1': { name: 'notes.txt', content: Buffer.from('first file\n') },
   'version-2': { name: 'data.bin', content: Buffer.from([0, 1, 2, 255]) },
+  'version-3': { name: 'notes.txt', content: Buffer.from('second file of the same name\n') },
 };
 
-it("places a message's files under .house/files/<message id>/ with their stored bytes and lists their paths", async () => {
+it("places a message's files under .house/files/<message id>/ with their stored bytes, each its own, and lists their paths", async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/conversation/originals/get', (received) => {
     const { version } = received.body as { version: string };
@@ -43,14 +44,15 @@ it("places a message's files under .house/files/<message id>/ with their stored 
   });
 
   expect(await hosted.ack(lastInput())).toEqual({});
-  const folder = join(hosted.workingDirectory, '.house', 'files', 'message-1');
+  const paths = Object.entries(STORED).map(([version, file]) =>
+    join(hosted.workingDirectory, '.house', 'files', 'message-1', version, file.name),
+  );
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect((prompted.params as { prompt: unknown }).prompt).toEqual([
     { type: 'text', text: 'read these' },
-    { type: 'text', text: `${join(folder, 'notes.txt')}\n${join(folder, 'data.bin')}` },
+    { type: 'text', text: paths.join('\n') },
   ]);
-  expect(await readFile(join(folder, 'notes.txt'))).toEqual(STORED['version-1']!.content);
-  expect(await readFile(join(folder, 'data.bin'))).toEqual(STORED['version-2']!.content);
+  for (const [index, file] of Object.values(STORED).entries()) expect(await readFile(paths[index]!)).toEqual(file.content);
   expect(
     hosted.house.requests
       .filter((received) => received.path === '/kit/conversation/originals/get')
@@ -58,5 +60,6 @@ it("places a message's files under .house/files/<message id>/ with their stored 
   ).toEqual([
     ['Bearer ahk_held', { version: 'version-1', download: true }],
     ['Bearer ahk_held', { version: 'version-2', download: true }],
+    ['Bearer ahk_held', { version: 'version-3', download: true }],
   ]);
 });

@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { alive, filesUnder } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/started'));
@@ -11,20 +11,6 @@ const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.ends
 async function opened(hosted: Hosted): Promise<string> {
   hosted.input({ kind: 'open' });
   return ((await hosted.ack(lastInput())) as { provider_session_id: string }).provider_session_id;
-}
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function filesUnder(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { recursive: true, withFileTypes: true });
-  return entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
 }
 
 it('cancels the running turn on interrupt and keeps the process and session', async () => {
@@ -137,6 +123,24 @@ it('reports a question with the CLI request unchanged and passes the answer back
   expect((await until(() => ended(hosted)[0])).body).toEqual({ text: JSON.stringify(response) });
   hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'cancelled' } } });
   expect(await hosted.ack(lastInput())).toEqual({});
+});
+
+it('drops a question the CLI stops waiting on, so its answer does nothing and the turn no longer counts as waiting', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  await until(() => hosted.idles[1]);
+  hosted.input({ kind: 'message', text: '@abandon 300\n@hold 1500\n@say after', files: [], first: true });
+  const { interaction_id } = (await until(() => hosted.interactions[0])).body as { interaction_id: string };
+  await until(() => hosted.idles[2]);
+
+  const abandoned = async () => (await hosted.adapterLog()).filter((entry) => 'abandoned' in entry);
+  expect(await until(async () => (await abandoned())[0])).toMatchObject({ abandoned: 'cancelled' });
+  hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'after' });
+  await until(() => hosted.idles[3]);
+  expect(await abandoned()).toHaveLength(1);
 });
 
 it('passes a secret from the held secret-input request to the CLI and keeps it nowhere', async () => {

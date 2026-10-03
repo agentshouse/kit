@@ -127,24 +127,23 @@ export class Conversations {
   }
 
   input(input: Input): void {
+    this.carrying++;
     const carried =
       this.acks.get(input.input_id) ??
       (() => {
         const conversation = this.conversation(input.conversation_id);
-        this.carrying++;
-        const work = conversation.queue
-          .then(() => this.carry(conversation, input))
-          .finally(() => this.carrying--);
+        const work = conversation.queue.then(() => this.carry(conversation, input));
         conversation.queue = work.catch(() => undefined);
         this.acks.set(input.input_id, work);
         return work;
       })();
     carried
-      .then((body) => {
+      .then((body) => this.kit.house.deliver(`/kit/inputs/${input.input_id}/ack`, body))
+      .catch(logged)
+      .finally(() => {
+        this.carrying--;
         this.kit.changed();
-        return this.kit.house.deliver(`/kit/inputs/${input.input_id}/ack`, body);
-      })
-      .catch(logged);
+      });
   }
 
   idle(): boolean {
@@ -248,6 +247,7 @@ export class Conversations {
 
   private async route(agentId: string): Promise<Route> {
     await this.kit.agents.ready;
+    if (this.kit.agents.route(agentId) === undefined) await this.kit.agents.refresh();
     const route = this.kit.agents.route(agentId);
     if (route === undefined) throw new Error(`this Environment hosts no Agent ${agentId}`);
     return route;
@@ -259,11 +259,11 @@ export class Conversations {
     }
     const app = client({ name: '@agentshouse/kit' })
       .onNotification('session/update', ({ params }) => this.update(conversation, params))
-      .onRequest('session/request_permission', ({ params }) =>
-        this.ask(conversation, 'session/request_permission', params, false),
+      .onRequest('session/request_permission', ({ params, signal }) =>
+        this.ask(conversation, 'session/request_permission', params, false, signal),
       )
-      .onRequest('elicitation/create', ({ params }) =>
-        this.ask(conversation, 'elicitation/create', params, asksSecret(params)),
+      .onRequest('elicitation/create', ({ params, signal }) =>
+        this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       );
     const bridge = await openBridge(this.kit.house, conversation.id);
     const adapter = await startAdapter(
@@ -309,11 +309,11 @@ export class Conversations {
       ['thought_level', route.effort],
     ];
     for (const [category, value] of settings) {
+      if (value === null) continue;
       const option = options.find((candidate) => candidate.category === category);
-      if (value === null || option === undefined) continue;
       const answered = await running.adapter.connection.agent.request('session/set_config_option', {
         sessionId: running.sessionId,
-        configId: option.id,
+        configId: option?.id ?? category,
         value,
       });
       options = answered.configOptions;
@@ -411,6 +411,7 @@ export class Conversations {
     method: string,
     params: object,
     secret: boolean,
+    signal: AbortSignal,
   ): Promise<Response> {
     const turn = conversation.turn ?? this.begin(conversation);
     const interactionId = randomUUID();
@@ -419,8 +420,9 @@ export class Conversations {
     clearTimeout(turn.quiet);
     this.kit.changed();
     try {
-      const answered = new Promise<Response>((answer) => {
+      const answered = new Promise<Response | null>((answer) => {
         this.questions.set(interactionId, { conversation, answer: (response) => answer(response as Response) });
+        signal.addEventListener('abort', () => answer(null), { once: true });
       });
       await turn.ready;
       await this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/interactions`, {
@@ -429,7 +431,9 @@ export class Conversations {
         secret,
       });
       if (secret) void this.holdSecret(interactionId, params as CreateElicitationRequest);
-      return await answered;
+      const response = await answered;
+      if (response === null) throw signal.reason;
+      return response;
     } finally {
       this.questions.delete(interactionId);
       turn.questions--;
@@ -455,7 +459,8 @@ export class Conversations {
     if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
       const turn = this.current(conversation);
       turn.text += update.content.text;
-      void turn.ready.then(() => this.draft(conversation, turn));
+      const text = turn.text;
+      void turn.ready.then(() => this.draft(conversation, turn, text));
     } else if (update.sessionUpdate === 'plan') {
       const turn = this.current(conversation);
       void turn.ready.then(() => this.plan(conversation, turn, update.entries));
@@ -474,8 +479,8 @@ export class Conversations {
     this.kit.changed();
   }
 
-  private draft(conversation: Conversation, turn: Turn): void {
-    const blocks = blocksOf(turn.text);
+  private draft(conversation: Conversation, turn: Turn, text: string): void {
+    const blocks = blocksOf(text);
     const from = Math.min(firstChange(turn.sent, blocks), turn.unsentFrom ?? Infinity);
     if (from === blocks.length && blocks.length === turn.sent.length && turn.unsentFrom === null) return;
     const sent = this.kit.send({

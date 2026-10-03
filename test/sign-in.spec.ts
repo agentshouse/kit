@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { until } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { alive, filesUnder } from './kit.ts';
 
 interface Hold {
   subject: string;
@@ -48,20 +49,6 @@ async function logins(hosted: Hosted): Promise<Record<string, unknown>[]> {
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function filesUnder(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { recursive: true, withFileTypes: true });
-  return entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
 }
 
 it.each(['codex-acp', 'grok-build'])(

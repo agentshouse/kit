@@ -51,8 +51,9 @@ it('begins a first message with the house line, the file line, the base instruct
   );
 });
 
-it('adds nothing for an absent or unreadable How-we-work document and still sends the message', async () => {
+it.each(['path_not_found', 'operation_denied'])('adds nothing when the read answers %s and still sends the message', async (code) => {
   const hosted = await hostKit();
+  hosted.tools.inspect = () => ({ isError: true, content: [{ type: 'text', text: `${code}: check the reference, then call again.\n` }] });
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 
@@ -70,6 +71,16 @@ it('refuses a first message with the cause when House cannot answer the document
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 
   expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('503') });
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
+});
+
+it("refuses a first message with House's answer when the document read fails otherwise", async () => {
+  const hosted = await hostKit();
+  hosted.tools.inspect = () => ({ isError: true, content: [{ type: 'text', text: 'house_unavailable: call again later.\n' }] });
+
+  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('house_unavailable') });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
 });
 

@@ -24,6 +24,33 @@ it('opens the provider session in the launch directory with the route settings a
   expect(hosted.socket.frames).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
 });
 
+it("refuses the open with the CLI's cause when the CLI does not take the route's effort", async () => {
+  const hosted = await hostKit([{ model: 'effortless', effort: 'high' }]);
+
+  hosted.input({ kind: 'open' });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('Unknown config option: thought_level') });
+  expect(hosted.socket.frames.filter((frame) => frame.type === 'process')).toEqual([]);
+});
+
+it('opens a conversation of an Agent House added after the Kit read its Agents', async () => {
+  const hosted = await hostKit();
+  await until(() => hosted.house.requests.find((request) => request.path === '/kit/agents/report'));
+  const added = {
+    agent_id: 'agent-2',
+    kind: 'codex-acp',
+    base_instructions: 'Be useful.',
+    working_directory: hosted.workingDirectory,
+    model: 'route-model',
+    effort: null,
+  };
+  hosted.house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['codex-acp'], routes: [added] } }));
+
+  hosted.input({ kind: 'open', agent_id: 'agent-2' });
+
+  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+});
+
 it('creates an absent default launch directory before it opens the session there', async () => {
   const hosted = await hostKit([{ working_directory: '/agents/house/agent-1' }]);
 
@@ -155,6 +182,28 @@ it('writes each message chunk as a draft frame with the next sequence and plan u
     },
   ]);
   expect(ended.body).toEqual({ text: 'Hello world\n\nNext' });
+});
+
+it("writes each chunk as its own draft while the turn's start report is still on its way", async () => {
+  const hosted = await hostKit();
+  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async (request) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    hosted.turns.push(request);
+    return { body: {} };
+  });
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+
+  hosted.input({ kind: 'message', text: '@say one\n@say  two\n@say  three', files: [], first: true });
+
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(
+    hosted.socket.frames.filter((frame) => frame.type === 'draft').map((frame) => [frame.sequence, frame.blocks]),
+  ).toEqual([
+    [1, [{ type: 'paragraph', text: 'one' }]],
+    [2, [{ type: 'paragraph', text: 'one two' }]],
+    [3, [{ type: 'paragraph', text: 'one two three' }]],
+  ]);
 });
 
 it('calls restarted before it opens its socket', async () => {

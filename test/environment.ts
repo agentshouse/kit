@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { onTestFinished } from 'vitest';
 import { startHouse, until, type House, type KitSocket, type Received } from './double.ts';
-import { fakeNpm, runKit, temporaryHome, type KitRun } from './kit.ts';
+import { fakeNpm, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeCli } from './npm.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -87,6 +87,15 @@ let inputs = 0;
 export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> {
   const house = await startHouse();
   const home = await temporaryHome();
+  onTestFinished(async () => {
+    for (const log of ['adapter.log', 'login.log']) {
+      const lines = (await readFile(join(home, log), 'utf8').catch(() => '')).split('\n').filter((line) => line !== '');
+      for (const line of lines) {
+        const { pid, spawned } = JSON.parse(line) as { pid?: number; spawned?: number };
+        for (const target of [pid, spawned]) if (target !== undefined) stop(target);
+      }
+    }
+  });
   const workingDirectory = await mkdtemp(join(tmpdir(), 'kit-agent-'));
   onTestFinished(() => rm(workingDirectory, { recursive: true, force: true }));
   await writeFile(
@@ -113,7 +122,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
   const idles: Received[] = [];
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
-    inspect: () => ({ isError: true, content: [{ type: 'text', text: 'not_found: check the reference, then call again.' }] }),
+    inspect: () => ({ isError: true, content: [{ type: 'text', text: 'path_not_found: check the reference, then call again.\n' }] }),
   };
   house.route('POST', '/', (request) => {
     mcp.push(request);

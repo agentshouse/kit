@@ -26,6 +26,23 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
   await until(() => hosted.idles[2]);
 });
 
+it('reports idle only after it acknowledges the input it carried out', async () => {
+  const hosted = await hostKit();
+  await until(() => hosted.idles[0]);
+  hosted.house.route('POST', '/kit/inputs/:input/ack', async (request) => {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    hosted.acks.push(request);
+    return { body: {} };
+  });
+
+  hosted.input({ kind: 'open' });
+
+  await hosted.ack(lastInput());
+  const paths = (await until(() => hosted.idles[1] && hosted.house.requests)).map((request) => request.path);
+  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf(`/kit/inputs/${lastInput()}/ack`));
+  expect(paths.filter((path) => path === '/kit/idle')).toHaveLength(2);
+});
+
 it('counts a turn waiting on a non-secret question as idle', async () => {
   const hosted = await hostKit();
   await opened(hosted);

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,4 +47,24 @@ export async function fakeNpm(home: string): Promise<string> {
   await writeFile(npm, `#!/bin/sh\nexec ${process.execPath} ${fileURLToPath(new URL('./npm.ts', import.meta.url))} "$@"\n`);
   await chmod(npm, 0o755);
   return `${bin}:${process.env.PATH}`;
+}
+
+export function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function stop(pid: number): void {
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {}
+}
+
+export async function filesUnder(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { recursive: true, withFileTypes: true });
+  return entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
 }

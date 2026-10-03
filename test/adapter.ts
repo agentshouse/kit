@@ -21,7 +21,9 @@ if (process.argv.includes('status')) {
 
 const options = (model: string, effort: string): SessionConfigOption[] => [
   { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model, options: [] },
-  { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: effort, options: [] },
+  ...(model === 'effortless'
+    ? []
+    : [{ id: 'effort', name: 'Effort', category: 'thought_level', type: 'select' as const, currentValue: effort, options: [] }]),
 ];
 let model = 'default-model';
 let effort = 'default-effort';
@@ -71,6 +73,25 @@ async function directive(client: AgentContext, sessionId: string, line: string):
       ],
     });
     await say(client, sessionId, JSON.stringify(response));
+  }
+  if (name === 'abandon') {
+    const abandon = new AbortController();
+    setTimeout(() => abandon.abort(), Number(argument));
+    const outcome = await client
+      .request(
+        'session/request_permission',
+        {
+          sessionId,
+          toolCall: { toolCallId: 'tool-2', title: 'Run another command' },
+          options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+        },
+        { cancellationSignal: abandon.signal },
+      )
+      .then(
+        () => 'answered',
+        () => 'cancelled',
+      );
+    log({ abandoned: outcome });
   }
   if (name === 'question') {
     const response = await client.request('elicitation/create', {
@@ -162,6 +183,9 @@ const app = agent({ name: 'adapter-double' })
   })
   .onRequest('session/set_config_option', ({ params }) => {
     log({ method: 'session/set_config_option', params });
+    if (!options(model, effort).some((option) => option.id === params.configId)) {
+      throw new RequestError(-32602, `Unknown config option: ${params.configId}`);
+    }
     if (params.configId === 'model') model = String(params.value);
     if (params.configId === 'effort') effort = String(params.value);
     return { configOptions: options(model, effort) };
