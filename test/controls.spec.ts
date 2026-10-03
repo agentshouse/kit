@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
-import { until } from './double.ts';
+import { expect, it, onTestFinished } from 'vitest';
+import { until, type Answer } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
 import { alive, filesUnder } from './kit.ts';
 
@@ -51,7 +51,7 @@ it('kills the process and every process it started, and the next message resumes
 
   expect(await hosted.ack(lastInput())).toEqual({});
   expect(alive(adapter)).toBe(false);
-  await until(() => !alive(spawned.spawned as number));
+  await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
   expect(await until(() => ended(hosted)[0])).toMatchObject({ body: { failed: 'the conversation was killed' } });
   await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
 
@@ -79,6 +79,27 @@ it('kills a process still opening its session and refuses the open, and the next
   expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
 });
 
+it('kills a running process the moment the kill arrives while its first message waits on House, and refuses that message', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  const adapter = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.pid as number;
+  let release!: (answer: Answer) => void;
+  const held = new Promise<Answer>((resolve) => {
+    release = resolve;
+  });
+  onTestFinished(() => release({ body: {} }));
+  hosted.house.route('POST', '/', () => held);
+  hosted.input({ kind: 'message', text: '@say hello', files: [], first: true });
+  const message = lastInput();
+  await until(() => hosted.house.requests.find((request) => request.path === '/'));
+
+  hosted.input({ kind: 'kill' });
+
+  expect(await hosted.ack(message)).toEqual({ refused: 'the conversation was killed' });
+  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(alive(adapter)).toBe(false);
+});
+
 it.each(['SIGTERM', 'SIGINT'] as const)(
   'kills every process it started, of a running conversation and of one still opening, when %s stops it',
   async (signal) => {
@@ -96,7 +117,9 @@ it.each(['SIGTERM', 'SIGINT'] as const)(
     process.kill(hosted.kit.pid, signal);
     await hosted.kit.exited;
 
-    await until(() => spawned.every((entry) => !alive(entry.pid as number) && !alive(entry.spawned as number)));
+    await until(() =>
+      spawned.every((entry) => [entry.pid, entry.spawned, entry.clean].every((pid) => !alive(pid as number))),
+    );
   },
 );
 
@@ -107,11 +130,12 @@ it('kills a background job its crashed process left behind when SIGTERM stops it
   await until(() => ended(hosted)[0]);
   expect(alive(spawned.pid as number)).toBe(false);
   expect(alive(spawned.spawned as number)).toBe(true);
+  expect(alive(spawned.clean as number)).toBe(true);
 
   process.kill(hosted.kit.pid, 'SIGTERM');
   await hosted.kit.exited;
 
-  await until(() => !alive(spawned.spawned as number));
+  await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
 });
 
 it('sets an option on the running process and relays the commands and options the CLI sends', async () => {

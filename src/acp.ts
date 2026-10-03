@@ -139,5 +139,6 @@ export function killMarked(marker: string): void {
 }
 
 export function killDescendants(): void {
-  killAll([...descendants([process.pid]), ...marked(`HOUSE_KIT_RESIDENT=${process.pid}`)]);
+  const pids = marked(`HOUSE_KIT_RESIDENT=${process.pid}`);
+  killAll([...pids, ...descendants([process.pid, ...pids])]);
 }

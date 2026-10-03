@@ -144,7 +144,7 @@ export class Conversations {
         const conversation = this.conversation(input.conversation_id);
         if (input.kind === 'kill') {
           conversation.kills++;
-          if (conversation.opening !== null) stop(conversation.opening);
+          this.halt(conversation);
         }
         const work = conversation.queue.then(() => this.carry(conversation, input));
         conversation.queue = work.catch(() => undefined);
@@ -222,9 +222,10 @@ export class Conversations {
       }
       prompt.push({ type: 'text', text: String(input.text) });
       if (paths.length > 0) prompt.push({ type: 'text', text: paths.join('\n') });
+      if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
       if ('provider_session_id' in ack) await this.kill(conversation);
-      return { refused: causeOf(error) };
+      return { refused: conversation.kills > 0 ? KILLED : causeOf(error) };
     }
     this.prompt(conversation, prompt);
     return ack;
@@ -237,12 +238,17 @@ export class Conversations {
     });
   }
 
+  private halt(conversation: Conversation): void {
+    if (conversation.opening !== null) stop(conversation.opening);
+    if (conversation.running === null) return;
+    conversation.running.killed = true;
+    stop(conversation.running.bridge);
+  }
+
   private async kill(conversation: Conversation): Promise<void> {
     const running = conversation.running;
-    if (running === null) return;
-    running.killed = true;
-    stop(running.bridge);
-    await running.adapter.exited;
+    this.halt(conversation);
+    await running?.adapter.exited;
   }
 
   private async option(conversation: Conversation, option: string, value: unknown): Promise<void> {

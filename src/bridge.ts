@@ -86,12 +86,14 @@ export async function openBridge(house: House, conversationId: string): Promise<
     };
   };
 
+  const closed = new AbortController();
   const forward = async (path: string, text: string): Promise<Forwarded> => {
     const call = path === '/' ? await mcp(JSON.parse(text) as Message) : null;
     const answer = await fetch(new URL(path, origin), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...call?.headers },
       body: call === null ? text : JSON.stringify(call.body),
+      signal: closed.signal,
     });
     return { status: answer.status, text: await answer.text() };
   };
@@ -153,6 +155,7 @@ export async function openBridge(house: House, conversationId: string): Promise<
       return answer.result!;
     },
     close: () => {
+      closed.abort();
       bridge.close();
       bridge.closeAllConnections();
       git.close();

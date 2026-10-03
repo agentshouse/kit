@@ -29,13 +29,12 @@ let model = 'default-model';
 let effort = 'default-effort';
 const cancelled = new Map<string, () => void>();
 
+const JOB =
+  "const clean = require('node:child_process').spawn('sleep', ['600'], { detached: true, stdio: 'ignore', env: { PATH: process.env.PATH } }); process.stdout.write(String(clean.pid)); setInterval(() => undefined, 60_000);";
+const LAUNCHER = `const job = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(JOB)}], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] }); job.stdout.once('data', (clean) => { process.stdout.write(JSON.stringify({ spawned: job.pid, clean: Number(clean) })); process.exit(0); });`;
+
 function spawnJob(): void {
-  const launcher = spawnSync(
-    process.execPath,
-    ['-e', "const job = require('node:child_process').spawn('sleep', ['600'], { detached: true, stdio: 'ignore' }); job.unref(); process.stdout.write(String(job.pid));"],
-    { encoding: 'utf8' },
-  );
-  log({ spawned: Number(launcher.stdout) });
+  log(JSON.parse(spawnSync(process.execPath, ['-e', LAUNCHER], { encoding: 'utf8' }).stdout) as Record<string, unknown>);
 }
 
 function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): void {
