@@ -14,6 +14,7 @@ import { killTree, startAdapter, type Adapter, type JobUpdate } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
+import { holdSecretInput, type Step } from './secret-input.ts';
 import type { Frame } from './stream.ts';
 
 export interface Kit {
@@ -414,28 +415,14 @@ export class Conversations {
   }
 
   private async holdSecret(interactionId: string, request: CreateElicitationRequest): Promise<void> {
-    const steps = Object.entries(formProperties(request)).map(([name, property]) => ({
+    const steps: Step[] = Object.entries(formProperties(request)).map(([name, property]) => ({
       kind: 'collect',
       label: property.title ?? name,
       name,
       ...(property.description ? { description: property.description } : {}),
     }));
-    while (this.questions.has(interactionId)) {
-      try {
-        const held = await this.kit.house.post<{ outcome: string; content?: Record<string, string>; release?: string }>(
-          `/kit/secret-input/${interactionId}`,
-          { steps },
-        );
-        if (held.outcome === 'collected') {
-          this.questions.get(interactionId)?.answer({ action: 'accept', content: held.content });
-          return;
-        }
-        if (held.release !== 'held') return;
-      } catch (error) {
-        logged(error);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
+    const content = await holdSecretInput(this.kit.house, interactionId, steps, () => this.questions.has(interactionId));
+    if (content !== null) this.questions.get(interactionId)?.answer({ action: 'accept', content });
   }
 
   private update(conversation: Conversation, notification: SessionNotification): void {
