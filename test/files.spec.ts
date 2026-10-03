@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, lastInput } from './environment.ts';
+import { hostKit, lastInput, type Hosted } from './environment.ts';
 
 const STORED: Record<string, { name: string; content: Buffer }> = {
   'version-1': { name: 'notes.txt', content: Buffer.from('first file\n') },
@@ -11,8 +12,7 @@ const STORED: Record<string, { name: string; content: Buffer }> = {
   'version-3': { name: 'notes.txt', content: Buffer.from('second file of the same name\n') },
 };
 
-it("places a message's files under .house/files/<message id>/ with their stored bytes, each its own, and lists their paths", async () => {
-  const hosted = await hostKit();
+function serveFiles(hosted: Hosted): void {
   hosted.house.route('POST', '/kit/conversation/originals/get', (received) => {
     const { version } = received.body as { version: string };
     return {
@@ -27,21 +27,23 @@ it("places a message's files under .house/files/<message id>/ with their stored 
   hosted.house.route('GET', '/bytes/:version', (received) => ({
     bytes: { type: 'application/octet-stream', content: STORED[received.params.version!]!.content },
   }));
+}
+
+const described = Object.entries(STORED).map(([version, file]) => ({
+  version,
+  name: file.name,
+  media_type: 'application/octet-stream',
+  bytes: file.content.length,
+  sha256: createHash('sha256').update(file.content).digest('hex'),
+}));
+
+it("places a message's files under .house/files/<message id>/ with their stored bytes, each its own, and lists their paths", async () => {
+  const hosted = await hostKit();
+  serveFiles(hosted);
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
-  hosted.input({
-    kind: 'message',
-    text: 'read these',
-    files: Object.entries(STORED).map(([version, file]) => ({
-      version,
-      name: file.name,
-      media_type: 'application/octet-stream',
-      bytes: file.content.length,
-      sha256: createHash('sha256').update(file.content).digest('hex'),
-    })),
-    first: false,
-  });
+  hosted.input({ kind: 'message', text: 'read these', files: described, first: false });
 
   expect(await hosted.ack(lastInput())).toEqual({});
   const paths = Object.entries(STORED).map(([version, file]) =>
@@ -62,4 +64,17 @@ it("places a message's files under .house/files/<message id>/ with their stored 
     ['Bearer ahk_held', { version: 'version-2', download: true }],
     ['Bearer ahk_held', { version: 'version-3', download: true }],
   ]);
+});
+
+it('refuses a message with files for a launch directory that does not exist and creates nothing there', async () => {
+  const directory = join(tmpdir(), `kit-missing-${randomUUID()}`);
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const hosted = await hostKit([{ working_directory: directory }]);
+  serveFiles(hosted);
+
+  hosted.input({ kind: 'message', text: 'read these', files: described, first: true });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining(directory) });
+  await expect(stat(directory)).rejects.toThrow('ENOENT');
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toEqual([]);
 });

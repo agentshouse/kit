@@ -40,6 +40,25 @@ async function say(client: AgentContext, sessionId: string, text: string) {
   });
 }
 
+async function turnEnded(client: AgentContext, sessionId: string) {
+  if (kind === 'grok-build') {
+    await client.notify('_x.ai/session_notification', {
+      sessionId,
+      update: { sessionUpdate: 'turn_completed', stop_reason: 'end_turn' },
+    });
+  } else if (kind === 'claude-agent-acp') {
+    await client.notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'usage_update', used: 1, size: 2, _meta: { '_claude/origin': { kind: 'task-notification' } } },
+    });
+  } else {
+    await client.notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'session_info_update', _meta: { codex: { threadStatus: { type: 'idle' } } } },
+    });
+  }
+}
+
 async function directive(client: AgentContext, sessionId: string, line: string): Promise<'cancelled' | undefined> {
   const [name, ...rest] = line.slice(1).split(' ');
   const argument = rest.join(' ');
@@ -62,6 +81,7 @@ async function directive(client: AgentContext, sessionId: string, line: string):
   if (name === 'later') {
     const [delay, ...text] = rest;
     setTimeout(() => void say(client, sessionId, text.join(' ')), Number(delay));
+    setTimeout(() => void turnEnded(client, sessionId), 2 * Number(delay));
   }
   if (name === 'ask') {
     const response = await client.request('session/request_permission', {
@@ -202,6 +222,7 @@ const app = agent({ name: 'adapter-double' })
     for (const line of directives.length === 0 ? ['@say ok'] : directives) {
       if ((await directive(client, params.sessionId, line)) === 'cancelled') return { stopReason: 'cancelled' };
     }
+    await turnEnded(client, params.sessionId);
     return { stopReason: 'end_turn' };
   });
 

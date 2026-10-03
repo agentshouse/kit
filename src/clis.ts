@@ -4,12 +4,23 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { kitHome } from './home.ts';
 
+export interface Notice {
+  method?: string;
+  params?: {
+    update?: {
+      sessionUpdate?: string;
+      _meta?: { '_claude/origin'?: unknown; codex?: { threadStatus?: { type?: string } } } | null;
+    };
+  };
+}
+
 export interface Cli {
   package: string;
   bin: string;
   args: string[];
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' | 'collect' };
+  turnEnded(notice: Notice): boolean;
 }
 
 export const CLIS: Record<string, Cli> = {
@@ -19,6 +30,10 @@ export const CLIS: Record<string, Cli> = {
     args: [],
     signedIn: { command: ['cli', 'login', 'status'] },
     login: { args: ['cli', 'login', '--device-auth'], code: 'show' },
+    turnEnded: ({ method, params }) =>
+      method === 'session/update' &&
+      params?.update?.sessionUpdate === 'session_info_update' &&
+      params.update._meta?.codex?.threadStatus?.type === 'idle',
   },
   'claude-agent-acp': {
     package: '@agentclientprotocol/claude-agent-acp',
@@ -26,6 +41,10 @@ export const CLIS: Record<string, Cli> = {
     args: [],
     signedIn: { command: ['--cli', 'auth', 'status'] },
     login: { args: ['--cli', 'auth', 'login', '--claudeai'], code: 'collect' },
+    turnEnded: ({ method, params }) =>
+      method === 'session/update' &&
+      params?.update?.sessionUpdate === 'usage_update' &&
+      params.update._meta?.['_claude/origin'] !== undefined,
   },
   'grok-build': {
     package: '@xai-official/grok',
@@ -33,6 +52,8 @@ export const CLIS: Record<string, Cli> = {
     args: ['agent', '--no-leader', 'stdio'],
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },
+    turnEnded: ({ method, params }) =>
+      method === '_x.ai/session_notification' && params?.update?.sessionUpdate === 'turn_completed',
   },
 };
 

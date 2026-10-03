@@ -125,23 +125,31 @@ it('reports a question with the CLI request unchanged and passes the answer back
   expect(await hosted.ack(lastInput())).toEqual({});
 });
 
-it('drops a question the CLI stops waiting on, so its answer does nothing and the turn no longer counts as waiting', async () => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  await until(() => hosted.idles[1]);
-  hosted.input({ kind: 'message', text: '@abandon 300\n@hold 1500\n@say after', files: [], first: true });
-  const { interaction_id } = (await until(() => hosted.interactions[0])).body as { interaction_id: string };
-  await until(() => hosted.idles[2]);
+it.each([0, 2500])(
+  'drops a question the CLI stops waiting on, its report %i ms on its way, so its answer does nothing and the turn no longer counts as waiting',
+  async (delay) => {
+    const hosted = await hostKit();
+    hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/interactions', async (request) => {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      hosted.interactions.push(request);
+      return { body: {} };
+    });
+    await opened(hosted);
+    await until(() => hosted.idles[1]);
+    hosted.input({ kind: 'message', text: '@abandon 300\n@hold 1500\n@say after', files: [], first: true });
+    await until(() => hosted.idles[2]);
 
-  const abandoned = async () => (await hosted.adapterLog()).filter((entry) => 'abandoned' in entry);
-  expect(await until(async () => (await abandoned())[0])).toMatchObject({ abandoned: 'cancelled' });
-  hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
+    const abandoned = async () => (await hosted.adapterLog()).filter((entry) => 'abandoned' in entry);
+    expect(await until(async () => (await abandoned())[0])).toMatchObject({ abandoned: 'cancelled' });
+    const { interaction_id } = (await until(() => hosted.interactions[0])).body as { interaction_id: string };
+    hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
-  expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'after' });
-  await until(() => hosted.idles[3]);
-  expect(await abandoned()).toHaveLength(1);
-});
+    expect(await hosted.ack(lastInput())).toEqual({});
+    expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'after' });
+    await until(() => hosted.idles[3]);
+    expect(await abandoned()).toHaveLength(1);
+  },
+);
 
 it('passes a secret from the held secret-input request to the CLI and keeps it nowhere', async () => {
   const hosted = await hostKit();

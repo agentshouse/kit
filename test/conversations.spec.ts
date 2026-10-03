@@ -1,6 +1,7 @@
-import { stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, lastInput } from './environment.ts';
 
@@ -51,15 +52,42 @@ it('opens a conversation of an Agent House added after the Kit read its Agents',
   expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
 });
 
-it('creates an absent default launch directory before it opens the session there', async () => {
-  const hosted = await hostKit([{ working_directory: '/agents/house/agent-1' }]);
+it('opens a conversation with the launch settings House changed while the Kit was still reading them', async () => {
+  const hosted = await hostKit();
+  await until(() => hosted.house.requests.find((request) => request.path === '/kit/agents/report'));
+  const changed = {
+    agent_id: 'agent-1',
+    kind: 'codex-acp',
+    base_instructions: 'Be useful.',
+    working_directory: hosted.workingDirectory,
+    model: 'changed-model',
+    effort: null,
+  };
+  hosted.house.route('POST', '/kit/agents/desired', async () => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return { body: { agents: ['codex-acp'], routes: [changed] } };
+  });
 
+  hosted.socket.send({ type: 'work_available', subject: 'agents' });
   hosted.input({ kind: 'open' });
 
   expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
-  expect((await stat('/agents/house/agent-1')).isDirectory()).toBe(true);
+  const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
+  expect(settings.map((entry) => entry.params)).toEqual([expect.objectContaining({ configId: 'model', value: 'changed-model' })]);
+});
+
+it('creates an absent default launch directory before it opens the session there', async () => {
+  const agentId = `agent-${randomUUID()}`;
+  const directory = `/agents/house/${agentId}`;
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const hosted = await hostKit([{ agent_id: agentId, working_directory: directory }]);
+
+  hosted.input({ kind: 'open', agent_id: agentId });
+
+  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect((await stat(directory)).isDirectory()).toBe(true);
   const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
-  expect(opened.params).toMatchObject({ cwd: '/agents/house/agent-1' });
+  expect(opened.params).toMatchObject({ cwd: directory });
 });
 
 it('resumes the stored provider session for a message with no process and prompts it', async () => {
@@ -134,31 +162,36 @@ it('ends a turn failed when its process exits during it', async () => {
   );
 });
 
-it('reports a turn the CLI starts by itself like any other', async () => {
-  const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
+  'reports a turn the CLI starts by itself like any other and ends it when %s ends it',
+  async (kind) => {
+    const hosted = await hostKit([{ kind }]);
+    hosted.input({ kind: 'open' });
+    await hosted.ack(lastInput());
 
-  hosted.input({ kind: 'message', text: '@later 300 by itself', files: [], first: true });
+    hosted.input({ kind: 'message', text: '@later 500 by itself', files: [], first: true });
 
-  const ends = await until(() => {
-    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-    return ended.length === 2 ? ended : undefined;
-  }, 20_000);
-  expect(ends.map((turn) => turn.body)).toEqual([{ text: '' }, { text: 'by itself' }]);
-  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-  expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
-  expect(hosted.socket.frames).toContainEqual(
-    expect.objectContaining({ type: 'draft', turn_id: ends[1]!.params.turn, blocks: [{ type: 'paragraph', text: 'by itself' }] }),
-  );
-});
+    const draft = await until(() =>
+      hosted.socket.frames.find((frame) => frame.type === 'draft' && JSON.stringify(frame.blocks).includes('by itself')),
+    );
+    expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended'))).toHaveLength(1);
+    const ends = await until(() => {
+      const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+      return ended.length === 2 ? ended : undefined;
+    });
+    expect(ends.map((turn) => turn.body)).toEqual([{ text: '' }, { text: 'by itself' }]);
+    const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+    expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
+    expect(draft).toMatchObject({ turn_id: ends[1]!.params.turn, blocks: [{ type: 'paragraph', text: 'by itself' }] });
+  },
+);
 
 it('writes each message chunk as a draft frame with the next sequence and plan updates as plan frames', async () => {
   const hosted = await hostKit();
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
-  hosted.input({ kind: 'message', text: '@say Hello\n@say  world\n@say \\n\\nNext\n@plan first|second', files: [], first: true });
+  hosted.input({ kind: 'message', text: '@say Hello\n@say  world\n@say \\n\\n\n@say Next\n@plan first|second', files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   const turn = ended.params.turn;
@@ -166,7 +199,8 @@ it('writes each message chunk as a draft frame with the next sequence and plan u
   expect(drafts).toEqual([
     { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 1, from: 0, blocks: [{ type: 'paragraph', text: 'Hello' }] },
     { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 2, from: 0, blocks: [{ type: 'paragraph', text: 'Hello world' }] },
-    { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 3, from: 1, blocks: [{ type: 'paragraph', text: 'Next' }] },
+    { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 3, from: 1, blocks: [] },
+    { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 4, from: 1, blocks: [{ type: 'paragraph', text: 'Next' }] },
   ]);
   expect(hosted.socket.frames.filter((frame) => frame.type === 'plan')).toEqual([
     {

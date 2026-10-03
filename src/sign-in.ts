@@ -50,7 +50,7 @@ export class SignIns {
   }
 
   private async login(input: SignIn): Promise<void> {
-    await this.agents.ready;
+    await this.agents.settled();
     const login = CLIS[input.cli]!.login;
     const child = spawn(cliCommand(input.cli), login.args, { stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     const running = () => child.exitCode === null && child.signalCode === null;

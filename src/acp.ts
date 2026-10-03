@@ -8,7 +8,7 @@ import {
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_VERSION, cliCommand } from './clis.ts';
+import { CLIS, KIT_VERSION, cliCommand, type Notice } from './clis.ts';
 
 export interface Adapter {
   child: ChildProcess;
@@ -16,6 +16,8 @@ export interface Adapter {
   initialized: InitializeResponse;
   exited: Promise<string>;
 }
+
+export const TURN_ENDED = 'kit/turn_ended';
 
 export interface JobUpdate {
   sessionUpdate: string;
@@ -65,6 +67,7 @@ export async function startAdapter(
           const update = jobUpdate(message);
           if (update === null) controller.enqueue(message);
           else job(update);
+          if (CLIS[kind]!.turnEnded(message as Notice)) controller.enqueue({ jsonrpc: '2.0', method: TURN_ENDED });
         },
       }),
     ),
