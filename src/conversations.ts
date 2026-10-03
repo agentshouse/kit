@@ -47,6 +47,10 @@ function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function answerMessage(request: unknown, response: unknown): string {
+  return `The User answered a question you asked earlier.\nQuestion: ${JSON.stringify(request)}\nAnswer: ${JSON.stringify(response)}`;
+}
+
 function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
@@ -205,7 +209,13 @@ export class Conversations {
       if (--conversation.kills === 0) conversation.killed = new AbortController();
     }
     if (input.kind === 'option') await this.option(conversation, String(input.option), input.value);
-    if (input.kind === 'answer') this.questions.get(String(input.interaction_id))?.answer(input.response);
+    if (input.kind === 'answer') {
+      const question = this.questions.get(String(input.interaction_id));
+      if (question === undefined) {
+        return this.message(conversation, { ...input, text: answerMessage(input.request, input.response), files: [], first: false });
+      }
+      question.answer(input.response);
+    }
     return {};
   }
 

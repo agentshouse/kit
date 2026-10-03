@@ -9,6 +9,9 @@ import { alive, filesUnder } from './kit.ts';
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/started'));
 
+const answerMessage = (request: unknown, response: unknown) =>
+  `The User answered a question you asked earlier.\nQuestion: ${JSON.stringify(request)}\nAnswer: ${JSON.stringify(response)}`;
+
 async function opened(hosted: Hosted): Promise<string> {
   hosted.input({ kind: 'open' });
   return ((await hosted.ack(lastInput())) as { provider_session_id: string }).provider_session_id;
@@ -240,8 +243,32 @@ it('reports a question with the CLI request unchanged and passes the answer back
   expect(await hosted.ack(lastInput())).toEqual({});
 });
 
+it('resumes the session for an answer no process waits on and writes the question and the answer as one message whose turn reaches House', async () => {
+  const hosted = await hostKit();
+  const request = {
+    method: 'session/request_permission',
+    params: {
+      sessionId: 'session-stored',
+      toolCall: { toolCallId: 'tool-1', title: 'Run a command' },
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+    },
+  };
+  const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
+
+  hosted.input({ kind: 'answer', provider_session_id: 'session-stored', interaction_id: 'interaction-1', request, response });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'ok' });
+  expect(started(hosted)).toHaveLength(1);
+  const log = await hosted.adapterLog();
+  expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: 'session-stored' });
+  expect(log.filter((entry) => entry.method === 'session/prompt')).toEqual([
+    expect.objectContaining({ text: answerMessage(request, response), params: expect.objectContaining({ sessionId: 'session-stored' }) }),
+  ]);
+});
+
 it.each([0, 2500])(
-  'drops a question the CLI stops waiting on, its report %i ms on its way, so its answer does nothing and the turn no longer counts as waiting',
+  'drops a question the CLI stops waiting on, its report %i ms on its way, so the turn no longer counts as waiting and its answer goes to the CLI as a new message',
   async (delay) => {
     const hosted = await hostKit();
     hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/interactions', async (request) => {
@@ -256,13 +283,18 @@ it.each([0, 2500])(
 
     const abandoned = async () => (await hosted.adapterLog()).filter((entry) => 'abandoned' in entry);
     expect(await until(async () => (await abandoned())[0])).toMatchObject({ abandoned: 'cancelled' });
-    const { interaction_id } = (await until(() => hosted.interactions[0])).body as { interaction_id: string };
-    hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
+    expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'after' });
+    const { interaction_id, request } = (await until(() => hosted.interactions[0])).body as { interaction_id: string; request: unknown };
+    const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
+    hosted.input({ kind: 'answer', interaction_id, request, response });
 
     expect(await hosted.ack(lastInput())).toEqual({});
-    expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'after' });
+    expect((await until(() => ended(hosted)[1])).body).toEqual({ text: 'ok' });
     await until(() => hosted.idles[3]);
     expect(await abandoned()).toHaveLength(1);
+    const prompts = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]!.text).toBe(answerMessage(request, response));
   },
 );
 
