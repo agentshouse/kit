@@ -82,6 +82,20 @@ it.each(['SIGTERM', 'SIGINT'] as const)(
   },
 );
 
+it('kills a background job its crashed process left behind when SIGTERM stops it', async () => {
+  const hosted = await hostKit();
+  hosted.input({ kind: 'message', text: '@spawn\n@exit 1', files: [], first: false });
+  const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
+  await until(() => ended(hosted)[0]);
+  expect(alive(spawned.pid as number)).toBe(false);
+  expect(alive(spawned.spawned as number)).toBe(true);
+
+  process.kill(hosted.kit.pid, 'SIGTERM');
+  await hosted.kit.exited;
+
+  await until(() => !alive(spawned.spawned as number));
+});
+
 it('sets an option on the running process and relays the commands and options the CLI sends', async () => {
   const hosted = await hostKit();
   await opened(hosted);

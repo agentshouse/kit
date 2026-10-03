@@ -1,9 +1,10 @@
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { conversationCredential, hostKit, lastInput, type Hosted, type McpCall } from './environment.ts';
+import { conversationCredential, hostKit, lastInput, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
 import { alive } from './kit.ts';
 
 const DOCUMENT = '# How we work\n\nWork goes into the Room it belongs to.';
+const READ = 'cat /private/library/how-we-work.md';
 
 type Prompt = { type: string; text: string }[];
 
@@ -12,6 +13,10 @@ async function prompts(hosted: Hosted, count: number): Promise<Prompt[]> {
     const sent = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
     return sent.length >= count ? sent.map((entry) => (entry.params as { prompt: Prompt }).prompt) : undefined;
   });
+}
+
+function refused(code: string): ToolResult {
+  return { isError: true, content: [{ type: 'text', text: `${code}: check the reference, then call again.\n` }] };
 }
 
 function blockOf(prompt: Prompt): string[] {
@@ -23,7 +28,7 @@ function blockOf(prompt: Prompt): string[] {
 it('begins a first message with the house line, the file line, the base instructions and the How-we-work text, the same for every CLI', async () => {
   const kinds = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   const hosted = await hostKit(kinds.map((kind) => ({ kind })));
-  hosted.tools.inspect = () => ({ content: [{ type: 'text', text: DOCUMENT }] });
+  hosted.tools.shell = () => shelled(DOCUMENT);
 
   for (const [index] of kinds.entries()) {
     hosted.input({
@@ -47,14 +52,18 @@ it('begins a first message with the house line, the file line, the base instruct
   ).toEqual(
     kinds.map((_, index) => [
       `Bearer ${conversationCredential(`conversation-${index + 1}`)}`,
-      { path: '/private/library/how-we-work.md' },
+      { command: READ },
     ]),
   );
 });
 
-it.each(['path_not_found', 'operation_denied'])('adds nothing when the read answers %s and still sends the message', async (code) => {
+it.each([
+  ['an absent document', shelled('', 1, ['cat: path_not_found /private/library/how-we-work.md'])],
+  ['a Private Room the Profile cannot read', refused('room_not_found')],
+  ['a read the Profile does not allow', refused('operation_denied')],
+])('adds nothing for %s and still sends the message', async (_case, answer) => {
   const hosted = await hostKit();
-  hosted.tools.inspect = () => ({ isError: true, content: [{ type: 'text', text: `${code}: check the reference, then call again.\n` }] });
+  hosted.tools.shell = () => answer;
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 
@@ -75,22 +84,41 @@ it('refuses a first message with the cause when House cannot answer the document
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
 });
 
-it("refuses a first message with House's answer when the document read fails otherwise", async () => {
+it.each([
+  ['house_unavailable', refused('house_unavailable')],
+  ['is_a_directory', shelled('', 1, ['cat: is_a_directory /private/library/how-we-work.md'])],
+])("refuses a first message with House's answer when the document read fails with %s", async (code, answer) => {
   const hosted = await hostKit();
-  hosted.tools.inspect = () => ({ isError: true, content: [{ type: 'text', text: 'house_unavailable: call again later.\n' }] });
+  hosted.tools.shell = () => answer;
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('house_unavailable') });
+  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining(code) });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
+});
+
+it('reads a document longer than one House reply whole by following its continuation', async () => {
+  const hosted = await hostKit();
+  const document = `# How we work\n\n${'- Work goes into the Room it belongs to; é.\n'.repeat(900)}`;
+  const shown = Buffer.from(document).subarray(0, 32_769).toString();
+  const next = `{ ${READ}; } | tail -c +32770`;
+  hosted.tools.shell = (args) =>
+    args.command === READ
+      ? shelled(shown, 0, [`shell: output_cut 32769 of ${Buffer.byteLength(document)} bytes; continue with: ${next}`])
+      : shelled(Buffer.from(document).subarray(32_769).toString());
+
+  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+
+  expect(blockOf((await prompts(hosted, 1))[0]!).slice(2).join('\n')).toBe(`\nBe useful.\n\n${document.replace(/\n$/, '')}`);
+  expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
 });
 
 it('stops the session it opened for a first message it refuses, so the next message opens one and reports it', async () => {
   const hosted = await hostKit();
-  hosted.tools.inspect = () => ({ isError: true, content: [{ type: 'text', text: 'house_unavailable: call again later.\n' }] });
+  hosted.tools.shell = () => refused('house_unavailable');
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
   await hosted.ack(lastInput());
-  hosted.tools.inspect = () => ({ content: [{ type: 'text', text: DOCUMENT }] });
+  hosted.tools.shell = () => shelled(DOCUMENT);
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 

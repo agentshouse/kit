@@ -22,6 +22,22 @@ export interface ToolResult {
 
 export type ToolAnswer = (args: Record<string, unknown>) => ToolResult;
 
+const AUTHORITY = 'provenance=house-derived epistemic_role=projection attestation=house-attested control_scope=read-protocol';
+
+export function shelled(stdout: string, exit = 0, stderr: string[] = []): ToolResult {
+  const text = [
+    `protocol: render=shell/1 ${AUTHORITY}`,
+    'cwd: /',
+    `exit: ${exit}`,
+    `truncation: ${stderr.some((line) => line.startsWith('shell: output_cut ')) ? 'egress' : 'none'}`,
+    'receipt: commands=1',
+    ...(stdout === '' ? [] : [`authority: ${AUTHORITY}`]),
+    ...stderr.map((line) => `stderr: ${line}`),
+    ...(stdout === '' ? [] : [stdout.replace(/\n$/, '')]),
+  ];
+  return { content: [{ type: 'text', text: text.join('\n') }] };
+}
+
 export const LISTING = [
   {
     name: 'search',
@@ -122,7 +138,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
   const idles: Received[] = [];
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
-    inspect: () => ({ isError: true, content: [{ type: 'text', text: 'path_not_found: check the reference, then call again.\n' }] }),
+    shell: () => shelled('', 1, ['cat: path_not_found /private/library/how-we-work.md']),
   };
   house.route('POST', '/', (request) => {
     mcp.push(request);

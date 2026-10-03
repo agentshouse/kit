@@ -20,6 +20,7 @@ export async function resident(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  process.env.HOUSE_KIT_RESIDENT = String(process.pid);
   const agents = new Agents(house);
   let stream: Stream | null = null;
   let reported = false;

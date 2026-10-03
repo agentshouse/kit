@@ -121,6 +121,19 @@ export function killTree(child: ChildProcess): void {
   killAll([child.pid!, ...descendants(child.pid!)]);
 }
 
+function marked(): number[] {
+  const marker = `HOUSE_KIT_RESIDENT=${process.pid}`;
+  return readdirSync('/proc')
+    .filter((entry) => {
+      try {
+        return /^\d+$/.test(entry) && readFileSync(`/proc/${entry}/environ`, 'utf8').split('\0').includes(marker);
+      } catch {
+        return false;
+      }
+    })
+    .map(Number);
+}
+
 export function killDescendants(): void {
-  killAll(descendants(process.pid));
+  killAll([...descendants(process.pid), ...marked()]);
 }
