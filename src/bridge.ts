@@ -56,14 +56,15 @@ export async function openBridge(house: House, conversationId: string): Promise<
     {},
   );
 
+  const closed = new AbortController();
   const mcp = async (message: Message) => {
     const params = message.params ?? {};
     const tool = message.method === 'tools/call' ? String(params.name) : null;
     const writes =
       tool !== null &&
-      (await house.post<{ tools: { name: string; writes: boolean }[] }>('/kit/tools/mutations', {})).tools.some(
-        (listed) => listed.name === tool && listed.writes,
-      );
+      (
+        await house.post<{ tools: { name: string; writes: boolean }[] }>('/kit/tools/mutations', {}, closed.signal)
+      ).tools.some((listed) => listed.name === tool && listed.writes);
     return {
       headers: {
         accept: 'application/json, text/event-stream',
@@ -86,7 +87,6 @@ export async function openBridge(house: House, conversationId: string): Promise<
     };
   };
 
-  const closed = new AbortController();
   const forward = async (path: string, text: string): Promise<Forwarded> => {
     const call = path === '/' ? await mcp(JSON.parse(text) as Message) : null;
     const answer = await fetch(new URL(path, origin), {

@@ -9,7 +9,13 @@ export class HouseRefusal extends Error {
   }
 }
 
-export async function post<T>(house: string, path: string, body: unknown, credential?: string): Promise<T> {
+export async function post<T>(
+  house: string,
+  path: string,
+  body: unknown,
+  credential?: string,
+  signal?: AbortSignal,
+): Promise<T> {
   const answer = await fetch(new URL(path, house), {
     method: 'POST',
     headers: {
@@ -17,6 +23,7 @@ export async function post<T>(house: string, path: string, body: unknown, creden
       ...(credential === undefined ? {} : { authorization: `Bearer ${credential}` }),
     },
     body: JSON.stringify(body),
+    signal,
   });
   const text = await answer.text();
   if (!answer.ok) throw new HouseRefusal(path, answer.status, text);
@@ -24,13 +31,13 @@ export async function post<T>(house: string, path: string, body: unknown, creden
 }
 
 export interface House {
-  post<T>(path: string, body: unknown): Promise<T>;
+  post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T>;
   deliver<T>(path: string, body: unknown, current?: () => boolean): Promise<T>;
 }
 
-async function enrolledPost<T>(path: string, body: unknown): Promise<T> {
+async function enrolledPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const { house, credential } = (await readEnrolment())!;
-  return post<T>(house, path, body, credential);
+  return post<T>(house, path, body, credential, signal);
 }
 
 export const house: House = {

@@ -79,26 +79,32 @@ it('kills a process still opening its session and refuses the open, and the next
   expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
 });
 
-it('kills a running process the moment the kill arrives while its first message waits on House, and refuses that message', async () => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  const adapter = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.pid as number;
-  let release!: (answer: Answer) => void;
-  const held = new Promise<Answer>((resolve) => {
-    release = resolve;
-  });
-  onTestFinished(() => release({ body: {} }));
-  hosted.house.route('POST', '/', () => held);
-  hosted.input({ kind: 'message', text: '@say hello', files: [], first: true });
-  const message = lastInput();
-  await until(() => hosted.house.requests.find((request) => request.path === '/'));
+it.each([
+  ['its tool call', '/', {}],
+  ['the tool list its call is classified by', '/kit/tools/mutations', { tools: [] }],
+])(
+  'kills a running process the moment the kill arrives while House holds %s for its first message, and refuses that message',
+  async (_held, path, body) => {
+    const hosted = await hostKit();
+    await opened(hosted);
+    const adapter = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.pid as number;
+    let release!: (answer: Answer) => void;
+    const held = new Promise<Answer>((resolve) => {
+      release = resolve;
+    });
+    onTestFinished(() => release({ body }));
+    hosted.house.route('POST', path, () => held);
+    hosted.input({ kind: 'message', text: '@say hello', files: [], first: true });
+    const message = lastInput();
+    await until(() => hosted.house.requests.find((request) => request.path === path));
 
-  hosted.input({ kind: 'kill' });
+    hosted.input({ kind: 'kill' });
 
-  expect(await hosted.ack(message)).toEqual({ refused: 'the conversation was killed' });
-  expect(await hosted.ack(lastInput())).toEqual({});
-  expect(alive(adapter)).toBe(false);
-});
+    expect(await hosted.ack(message)).toEqual({ refused: 'the conversation was killed' });
+    expect(await hosted.ack(lastInput())).toEqual({});
+    expect(alive(adapter)).toBe(false);
+  },
+);
 
 it.each(['SIGTERM', 'SIGINT'] as const)(
   'kills every process it started, of a running conversation and of one still opening, when %s stops it',
