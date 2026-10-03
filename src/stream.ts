@@ -1,5 +1,7 @@
 import { readEnrolment } from './home.ts';
 
+export type Frame = { type: string } & Record<string, unknown>;
+
 const SUBPROTOCOL = 'house.kit.stream.1';
 
 function streamUrl(house: string): URL {
@@ -8,7 +10,7 @@ function streamUrl(house: string): URL {
   return url;
 }
 
-export function holdStream(): void {
+export function holdStream(frame: (received: Frame) => void): void {
   let failures = 0;
 
   const connect = async () => {
@@ -21,6 +23,9 @@ export function holdStream(): void {
     opening.onopen = () => {
       opened = true;
       failures = 0;
+    };
+    opening.onmessage = (event) => {
+      frame(JSON.parse(String(event.data)) as Frame);
     };
     opening.onerror = () => undefined;
     opening.onclose = (event) => {
