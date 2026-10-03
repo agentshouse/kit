@@ -112,21 +112,3 @@ it('drops an idle report House did not take once the CLI reports a running backg
 
   expect(endedAtReport).toEqual([0, 2]);
 });
-
-it('writes each running process frames again on a new socket and carries out the answer it then receives', async () => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  hosted.input({ kind: 'message', text: '@commands\n@ask', files: [], first: true });
-  const question = (await until(() => hosted.interactions[0])).body as { interaction_id: string };
-
-  hosted.socket.close(1001, 'shutting_down');
-  const reopened = await until(() => hosted.house.sockets[1]);
-  await until(() => reopened.frames.find((frame) => frame.type === 'options'));
-  expect(reopened.frames.map((frame) => frame.type)).toEqual(['process', 'commands', 'options']);
-  expect(reopened.frames[0]).toEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
-
-  const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
-  hosted.input({ kind: 'answer', interaction_id: question.interaction_id, response });
-
-  expect((await until(() => ended(hosted)[0])).body).toEqual({ text: JSON.stringify(response) });
-});

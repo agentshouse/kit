@@ -51,7 +51,7 @@ export async function resident(): Promise<void> {
   logged(agents.refresh());
   stream = holdStream({
     opened: () => {
-      conversations.replay();
+      conversations.opened();
       changed();
     },
     frame: (received: Frame) => {

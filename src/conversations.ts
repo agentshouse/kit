@@ -91,7 +91,6 @@ class Conversation {
   running: Running | null = null;
   turn: Turn | null = null;
   commands: AvailableCommand[] | null = null;
-  options: SessionConfigOption[] | null = null;
   readonly jobs = new Set<string>();
   readonly queued: Sent[] = [];
   readonly late: string[] = [];
@@ -171,13 +170,9 @@ export class Conversations {
     return true;
   }
 
-  replay(): void {
+  opened(): void {
     for (const conversation of this.conversations.values()) {
       if (conversation.turn !== null) conversation.turn.unsentFrom = 0;
-      if (conversation.running === null) continue;
-      this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
-      if (conversation.commands !== null) this.commands(conversation, conversation.commands);
-      if (conversation.options !== null) this.options(conversation, conversation.options);
     }
   }
 
@@ -359,7 +354,6 @@ export class Conversations {
     if (running?.adapter !== adapter) return;
     conversation.running = null;
     conversation.commands = null;
-    conversation.options = null;
     conversation.jobs.clear();
     conversation.queued.length = 0;
     for (const [id, question] of this.questions) {
@@ -379,7 +373,6 @@ export class Conversations {
   }
 
   private options(conversation: Conversation, options: SessionConfigOption[]): void {
-    conversation.options = options;
     if (conversation.running === null) return;
     this.kit.send({ type: 'options', conversation_id: conversation.id, options });
   }
