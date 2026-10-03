@@ -90,6 +90,29 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])('does not report idle w
   await until(() => hosted.idles[2]);
 });
 
+it('drops an idle report House did not take once the CLI reports a running background job', async () => {
+  const hosted = await hostKit();
+  await until(() => hosted.idles[0]);
+  const endedAtReport: number[] = [];
+  hosted.house.route('POST', '/kit/idle', (request) => {
+    endedAtReport.push(ended(hosted).length);
+    if (endedAtReport.length === 1) return { status: 503, body: { error: { code: 'house_unavailable' } } };
+    hosted.idles.push(request);
+    return { body: {} };
+  });
+  await opened(hosted);
+  await until(() => endedAtReport.length > 0);
+
+  hosted.input({ kind: 'message', text: '@job job-1\n@say started', files: [], first: true });
+  await until(() => ended(hosted)[0]);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  hosted.input({ kind: 'message', text: '@jobdone job-1', files: [], first: false });
+  await until(() => ended(hosted)[1]);
+  await until(() => hosted.idles[1]);
+
+  expect(endedAtReport).toEqual([0, 2]);
+});
+
 it('writes each running process frames again on a new socket and carries out the answer it then receives', async () => {
   const hosted = await hostKit();
   await opened(hosted);

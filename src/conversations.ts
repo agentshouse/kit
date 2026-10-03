@@ -62,11 +62,7 @@ class Turn {
   secrets = 0;
   prompt: Sent | null = null;
   ended = false;
-  ready: Promise<void>;
-
-  constructor(ready: (turn: Turn) => Promise<void>) {
-    this.ready = ready(this);
-  }
+  ready: Promise<void> = Promise.resolve();
 }
 
 interface Sent {
@@ -94,7 +90,10 @@ class Conversation {
   options: SessionConfigOption[] | null = null;
   readonly jobs = new Set<string>();
   readonly queued: Sent[] = [];
+  readonly late: string[] = [];
+  open = 0;
   queue: Promise<unknown> = Promise.resolve();
+  reports: Promise<unknown> = Promise.resolve();
 
   constructor(id: string) {
     this.id = id;
@@ -126,6 +125,7 @@ export class Conversations {
   private readonly acks = new Map<string, Promise<Ack>>();
   private readonly questions = new Map<string, Question>();
   private carrying = 0;
+  private reporting = 0;
 
   constructor(kit: Kit) {
     this.kit = kit;
@@ -152,11 +152,11 @@ export class Conversations {
   }
 
   idle(): boolean {
-    if (this.carrying > 0) return false;
+    if (this.carrying > 0 || this.reporting > 0) return false;
     for (const conversation of this.conversations.values()) {
       const turn = conversation.turn;
-      if (conversation.jobs.size > 0) return false;
-      if (turn !== null && (turn.questions === 0 || turn.secrets > 0)) return false;
+      const asking = turn !== null && turn.questions > 0 && turn.secrets === 0;
+      if (conversation.jobs.size > 0 || conversation.open > (asking ? 1 : 0)) return false;
     }
     return true;
   }
@@ -217,7 +217,7 @@ export class Conversations {
       if ('provider_session_id' in ack) await this.kill(conversation);
       return { refused: causeOf(error) };
     }
-    await this.prompt(conversation, prompt);
+    this.prompt(conversation, prompt);
     return ack;
   }
 
@@ -365,12 +365,25 @@ export class Conversations {
     this.kit.send({ type: 'options', conversation_id: conversation.id, options });
   }
 
-  private report(conversation: Conversation): Turn {
-    return new Turn((started) =>
-      this.kit.house
-        .deliver(`/kit/conversations/${conversation.id}/turns/${started.id}/started`, {})
-        .then(() => undefined, logged),
+  private deliver(conversation: Conversation, turn: Turn, event: string, body: unknown): Promise<unknown> {
+    this.reporting++;
+    const delivered = conversation.reports.then(() =>
+      this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/${event}`, body),
     );
+    conversation.reports = delivered
+      .catch(() => undefined)
+      .finally(() => {
+        this.reporting--;
+        this.kit.changed();
+      });
+    return delivered;
+  }
+
+  private report(conversation: Conversation): Turn {
+    const turn = new Turn();
+    conversation.open++;
+    turn.ready = this.deliver(conversation, turn, 'started', {}).then(() => undefined, logged);
+    return turn;
   }
 
   private begin(conversation: Conversation): Turn {
@@ -383,14 +396,20 @@ export class Conversations {
   private end(conversation: Conversation, turn: Turn, outcome: Outcome): void {
     if (turn.ended) return;
     turn.ended = true;
+    conversation.open--;
     if (conversation.turn === turn) conversation.turn = null;
-    void turn.ready
-      .then(() => this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/ended`, outcome))
-      .catch(logged);
+    void this.deliver(conversation, turn, 'ended', outcome).catch(logged);
+    const late = conversation.open === 0 ? conversation.late.shift() : undefined;
+    if (late !== undefined) this.failed(conversation, late);
     this.kit.changed();
   }
 
-  private async prompt(conversation: Conversation, prompt: ContentBlock[]): Promise<void> {
+  private failed(conversation: Conversation, cause: string): void {
+    if (conversation.open > 0) conversation.late.push(cause);
+    else this.end(conversation, this.report(conversation), { failed: cause });
+  }
+
+  private prompt(conversation: Conversation, prompt: ContentBlock[]): void {
     const running = conversation.running!;
     const sent: Sent = { turn: null };
     if (running.queues && (conversation.turn !== null || conversation.queued.length > 0)) {
@@ -398,7 +417,6 @@ export class Conversations {
     } else {
       this.attach(conversation.turn ?? this.begin(conversation), sent);
     }
-    await sent.turn?.ready;
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
       () => this.answered(conversation, sent, null),
       async (error: unknown) => {
@@ -421,9 +439,10 @@ export class Conversations {
       const queued = conversation.queued.indexOf(sent);
       if (queued < 0) return;
       conversation.queued.splice(queued, 1);
-      if (failed !== null) this.end(conversation, this.report(conversation), { failed });
+      if (failed !== null) this.failed(conversation, failed);
     } else if (failed !== null) {
-      this.end(conversation, turn.ended ? this.report(conversation) : turn, { failed });
+      if (turn.ended) this.failed(conversation, failed);
+      else this.end(conversation, turn, { failed });
     } else if (turn.prompt === sent) {
       this.end(conversation, turn, { text: turn.text });
     }
@@ -460,17 +479,13 @@ export class Conversations {
     const answered = new Promise<Response | null>((answer, fail) => {
       this.questions.set(interactionId, { conversation, answer: (response) => answer(response as Response) });
       signal.addEventListener('abort', () => answer(null), { once: true });
-      turn.ready
-        .then(() =>
-          this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/interactions`, {
-            interaction_id: interactionId,
-            request: { method, params },
-            secret,
-          }),
-        )
-        .then(() => {
-          if (secret) void this.holdSecret(interactionId, params as CreateElicitationRequest);
-        }, fail);
+      this.deliver(conversation, turn, 'interactions', {
+        interaction_id: interactionId,
+        request: { method, params },
+        secret,
+      }).then(() => {
+        if (secret) void this.holdSecret(interactionId, params as CreateElicitationRequest);
+      }, fail);
     });
     turn.questions++;
     if (secret) turn.secrets++;

@@ -3,9 +3,14 @@ import { rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, lastInput } from './environment.ts';
+import { hostKit, lastInput, type Hosted } from './environment.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+async function reports(hosted: Hosted, count: number): Promise<[string, string, unknown][]> {
+  const received = await until(() => (hosted.turns.length === count ? hosted.turns : undefined));
+  return received.map((report) => [report.path.slice(report.path.lastIndexOf('/') + 1), report.params.turn!, report.body]);
+}
 
 it('opens the provider session in the launch directory with the route settings and reports its id', async () => {
   const hosted = await hostKit([{ model: 'gpt-route', effort: 'high' }]);
@@ -135,6 +140,33 @@ it('writes a message that arrives during a running turn to the CLI at once and e
   ]);
 });
 
+it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
+  'writes each message to %s at once while House has not answered its turn start',
+  async (kind) => {
+    const hosted = await hostKit([{ kind }]);
+    hosted.input({ kind: 'open' });
+    await hosted.ack(lastInput());
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    onTestFinished(release);
+    hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async () => {
+      await held;
+      return { body: {} };
+    });
+
+    hosted.input({ kind: 'message', text: '@hold 500\n@say first', files: [], first: false });
+    hosted.input({ kind: 'message', text: '@say second', files: [], first: false });
+
+    const prompts = await until(async () => {
+      const sent = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
+      return sent.length === 2 ? sent : undefined;
+    });
+    expect(prompts.map((entry) => entry.text)).toEqual(['@hold 500\n@say first', '@say second']);
+  },
+);
+
 it.each(['codex-acp', 'claude-agent-acp'])(
   'reports a prompt %s fails after its turn ended as a failed turn of its own',
   async (kind) => {
@@ -157,6 +189,33 @@ it.each(['codex-acp', 'claude-agent-acp'])(
     const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
     expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
     expect(new Set(starts.map((turn) => turn.params.turn)).size).toBe(2);
+  },
+);
+
+it.each(['codex-acp', 'claude-agent-acp'])(
+  'reports a prompt %s fails while a later turn runs as a failed turn of its own once that turn ends',
+  async (kind) => {
+    const hosted = await hostKit([{ kind }]);
+    hosted.input({ kind: 'open' });
+    await hosted.ack(lastInput());
+    hosted.input({ kind: 'message', text: '@hold 1000\n@fail earlier prompt failed', files: [], first: true });
+    await hosted.ack(lastInput());
+    hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
+    await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+
+    hosted.input({ kind: 'message', text: '@hold 2000\n@say current', files: [], first: false });
+
+    const sequence = await reports(hosted, 6);
+    const [first, second, third] = [0, 2, 4].map((index) => sequence[index]![1]);
+    expect(new Set([first, second, third]).size).toBe(3);
+    expect(sequence).toEqual([
+      ['started', first, {}],
+      ['ended', first, { text: 'meanwhile' }],
+      ['started', second, {}],
+      ['ended', second, { text: 'current' }],
+      ['started', third, {}],
+      ['ended', third, { failed: expect.stringContaining('earlier prompt failed') }],
+    ]);
   },
 );
 
@@ -277,7 +336,7 @@ it('ends the turn Grok runs for a message it queued failed when Grok fails that 
   expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
 });
 
-it('reports a message Grok fails before it runs it as a failed turn of its own', async () => {
+it('reports a message Grok fails before it runs it as a failed turn of its own once the running turn ends', async () => {
   const hosted = await hostKit([{ kind: 'grok-build' }]);
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
@@ -286,17 +345,15 @@ it('reports a message Grok fails before it runs it as a failed turn of its own',
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   hosted.input({ kind: 'message', text: '@fail refused before it ran', files: [], first: false });
 
-  const ends = await until(() => {
-    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-    return ended.length === 2 ? ended : undefined;
-  });
-  expect(ends.map((turn) => turn.body)).toEqual([
-    { failed: expect.stringContaining('refused before it ran') },
-    { text: 'first' },
+  const sequence = await reports(hosted, 4);
+  const [first, second] = [0, 2].map((index) => sequence[index]![1]);
+  expect(first).not.toBe(second);
+  expect(sequence).toEqual([
+    ['started', first, {}],
+    ['ended', first, { text: 'first' }],
+    ['started', second, {}],
+    ['ended', second, { failed: expect.stringContaining('refused before it ran') }],
   ]);
-  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-  expect(starts).toHaveLength(2);
-  expect(ends.map((turn) => turn.params.turn)).toEqual([starts[1]!.params.turn, starts[0]!.params.turn]);
 });
 
 it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(

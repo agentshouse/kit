@@ -23,12 +23,13 @@ export async function resident(): Promise<void> {
   const agents = new Agents(house);
   let stream: Stream | null = null;
   let reported = false;
+  const idle = () => conversations.idle() && signIns.idle();
   const changed = () => {
-    if (!conversations.idle() || !signIns.idle()) {
+    if (!idle()) {
       reported = false;
     } else if (!reported) {
       reported = true;
-      logged(house.deliver('/kit/idle', {}));
+      logged(house.deliver('/kit/idle', {}, idle));
     }
   };
   const conversations: Conversations = new Conversations({

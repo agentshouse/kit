@@ -25,7 +25,7 @@ export async function post<T>(house: string, path: string, body: unknown, creden
 
 export interface House {
   post<T>(path: string, body: unknown): Promise<T>;
-  deliver<T>(path: string, body: unknown): Promise<T>;
+  deliver<T>(path: string, body: unknown, current?: () => boolean): Promise<T>;
 }
 
 async function enrolledPost<T>(path: string, body: unknown): Promise<T> {
@@ -35,7 +35,7 @@ async function enrolledPost<T>(path: string, body: unknown): Promise<T> {
 
 export const house: House = {
   post: enrolledPost,
-  deliver: async <T>(path: string, body: unknown): Promise<T> => {
+  deliver: async <T>(path: string, body: unknown, current = () => true): Promise<T> => {
     for (let attempt = 0; ; attempt++) {
       try {
         return await enrolledPost<T>(path, body);
@@ -43,6 +43,7 @@ export const house: House = {
         if (error instanceof HouseRefusal && error.status < 500) throw error;
         process.stderr.write(`kit: ${path} did not reach House: ${(error as Error).message}\n`);
         await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 1000 * 2 ** attempt)));
+        if (!current()) throw error;
       }
     }
   },
