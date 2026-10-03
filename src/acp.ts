@@ -17,10 +17,23 @@ export interface Adapter {
   exited: Promise<string>;
 }
 
+export interface JobUpdate {
+  sessionUpdate: string;
+  asyncTaskId: string;
+  state?: string;
+}
+
+function jobUpdate(message: unknown): JobUpdate | null {
+  const update = (message as { method?: string; params?: { update?: JobUpdate } }).params?.update;
+  if ((message as { method?: string }).method !== 'session/update' || update === undefined) return null;
+  return update.sessionUpdate?.startsWith('async_task_') ? update : null;
+}
+
 export async function startAdapter(
   kind: string,
   cwd: string,
   app: ClientApp,
+  job: (update: JobUpdate) => void = () => undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Adapter> {
   const child = spawn(cliCommand(kind), CLIS[kind]!.args, {
@@ -40,12 +53,22 @@ export async function startAdapter(
       resolve(`the CLI exited with ${code ?? signal}${last ? `: ${last}` : ''}`);
     });
   });
-  const connection = app.connect(
-    ndJsonStream(
-      Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-      Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
-    ),
+  const stream = ndJsonStream(
+    Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+    Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
   );
+  const connection = app.connect({
+    writable: stream.writable,
+    readable: stream.readable.pipeThrough(
+      new TransformStream({
+        transform(message, controller) {
+          const update = jobUpdate(message);
+          if (update === null) controller.enqueue(message);
+          else job(update);
+        },
+      }),
+    ),
+  });
   void exited.then((cause) => connection.close(new Error(cause)));
   try {
     const initialized = await connection.agent.request('initialize', {
@@ -54,6 +77,7 @@ export async function startAdapter(
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
         elicitation: { form: {} },
+        _meta: { jetbrains: { air: { version: 1, capabilities: ['asyncTasks'] } } },
       },
       clientInfo: { name: '@agentshouse/kit', version: KIT_VERSION },
     });

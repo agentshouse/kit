@@ -10,7 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { killTree, startAdapter, type Adapter } from './acp.ts';
+import { killTree, startAdapter, type Adapter, type JobUpdate } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
@@ -20,6 +20,7 @@ export interface Kit {
   house: House;
   agents: Agents;
   send(frame: Frame): boolean;
+  changed(): void;
 }
 
 export interface Input {
@@ -37,6 +38,7 @@ type Outcome = { text: string } | { failed: string };
 const CLI_TURN_QUIET_MS = 10_000;
 const LAUNCH_BASE = '/agents/house';
 const KILLED = 'the conversation was killed';
+const RUNNING_JOB = new Set(['running', 'paused']);
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -55,6 +57,7 @@ class Turn {
   planSequence = 0;
   prompts = 0;
   questions = 0;
+  secrets = 0;
   quiet: NodeJS.Timeout | undefined;
   ready: Promise<void>;
 
@@ -80,6 +83,7 @@ class Conversation {
   turn: Turn | null = null;
   commands: AvailableCommand[] | null = null;
   options: SessionConfigOption[] | null = null;
+  readonly jobs = new Set<string>();
   queue: Promise<unknown> = Promise.resolve();
 
   constructor(id: string) {
@@ -111,6 +115,7 @@ export class Conversations {
   private readonly conversations = new Map<string, Conversation>();
   private readonly acks = new Map<string, Promise<Ack>>();
   private readonly questions = new Map<string, Question>();
+  private carrying = 0;
 
   constructor(kit: Kit) {
     this.kit = kit;
@@ -121,14 +126,39 @@ export class Conversations {
       this.acks.get(input.input_id) ??
       (() => {
         const conversation = this.conversation(input.conversation_id);
-        const work = conversation.queue.then(() => this.carry(conversation, input));
+        this.carrying++;
+        const work = conversation.queue
+          .then(() => this.carry(conversation, input))
+          .finally(() => this.carrying--);
         conversation.queue = work.catch(() => undefined);
         this.acks.set(input.input_id, work);
         return work;
       })();
     carried
-      .then((body) => this.kit.house.deliver(`/kit/inputs/${input.input_id}/ack`, body))
+      .then((body) => {
+        this.kit.changed();
+        return this.kit.house.deliver(`/kit/inputs/${input.input_id}/ack`, body);
+      })
       .catch(logged);
+  }
+
+  idle(): boolean {
+    if (this.carrying > 0) return false;
+    for (const conversation of this.conversations.values()) {
+      const turn = conversation.turn;
+      if (conversation.jobs.size > 0) return false;
+      if (turn !== null && (turn.questions === 0 || turn.secrets > 0)) return false;
+    }
+    return true;
+  }
+
+  replay(): void {
+    for (const conversation of this.conversations.values()) {
+      if (conversation.running === null) continue;
+      this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
+      if (conversation.commands !== null) this.commands(conversation, conversation.commands);
+      if (conversation.options !== null) this.options(conversation, conversation.options);
+    }
   }
 
   private conversation(id: string): Conversation {
@@ -218,7 +248,9 @@ export class Conversations {
       .onRequest('elicitation/create', ({ params }) =>
         this.ask(conversation, 'elicitation/create', params, asksSecret(params)),
       );
-    const adapter = await startAdapter(route.kind, route.working_directory, app);
+    const adapter = await startAdapter(route.kind, route.working_directory, app, (update) =>
+      this.job(conversation, update),
+    );
     try {
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
@@ -269,6 +301,7 @@ export class Conversations {
     conversation.running = null;
     conversation.commands = null;
     conversation.options = null;
+    conversation.jobs.clear();
     for (const [id, question] of this.questions) {
       if (question.conversation === conversation) this.questions.delete(id);
     }
@@ -276,6 +309,7 @@ export class Conversations {
     if (conversation.turn !== null) {
       this.end(conversation, conversation.turn, { failed: running.killed ? KILLED : cause });
     }
+    this.kit.changed();
   }
 
   private commands(conversation: Conversation, commands: AvailableCommand[]): void {
@@ -297,6 +331,7 @@ export class Conversations {
         .then(() => undefined, logged),
     );
     conversation.turn = turn;
+    this.kit.changed();
     return turn;
   }
 
@@ -307,6 +342,7 @@ export class Conversations {
     void turn.ready
       .then(() => this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/ended`, outcome))
       .catch(logged);
+    this.kit.changed();
   }
 
   private async prompt(conversation: Conversation, prompt: ContentBlock[]): Promise<void> {
@@ -353,7 +389,9 @@ export class Conversations {
     const turn = conversation.turn ?? this.begin(conversation);
     const interactionId = randomUUID();
     turn.questions++;
+    if (secret) turn.secrets++;
     clearTimeout(turn.quiet);
+    this.kit.changed();
     try {
       const answered = new Promise<Response>((answer) => {
         this.questions.set(interactionId, { conversation, answer: (response) => answer(response as Response) });
@@ -369,7 +407,9 @@ export class Conversations {
     } finally {
       this.questions.delete(interactionId);
       turn.questions--;
+      if (secret) turn.secrets--;
       if (conversation.turn === turn) this.quiet(conversation, turn);
+      this.kit.changed();
     }
   }
 
@@ -412,6 +452,14 @@ export class Conversations {
     } else if (update.sessionUpdate === 'config_option_update') {
       this.options(conversation, update.configOptions);
     }
+  }
+
+  private job(conversation: Conversation, update: JobUpdate): void {
+    if (update.sessionUpdate === 'async_task_spawned') conversation.jobs.add(update.asyncTaskId);
+    else if (update.sessionUpdate === 'async_task_state_update' && !RUNNING_JOB.has(update.state ?? '')) {
+      conversation.jobs.delete(update.asyncTaskId);
+    } else return;
+    this.kit.changed();
   }
 
   private draft(conversation: Conversation, turn: Turn): void {

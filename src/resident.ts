@@ -20,19 +20,35 @@ export async function resident(): Promise<void> {
   }
   const agents = new Agents(house);
   let stream: Stream | null = null;
-  const conversations = new Conversations({
+  let reported = false;
+  const changed = () => {
+    if (!conversations.idle()) {
+      reported = false;
+    } else if (!reported) {
+      reported = true;
+      logged(house.deliver('/kit/idle', {}));
+    }
+  };
+  const conversations: Conversations = new Conversations({
     house,
     agents,
     send: (frame) => stream?.send(frame) ?? false,
+    changed,
   });
 
   await house.deliver('/kit/restarted', {}).catch(report);
   logged(agents.refresh());
   stream = holdStream({
-    opened: () => undefined,
+    opened: () => {
+      conversations.replay();
+      changed();
+    },
     frame: (received: Frame) => {
       if (received.type === 'work_available' && received.subject === 'agents') logged(agents.refresh());
-      if (received.type === 'input') conversations.input(received as unknown as Input);
+      if (received.type === 'input') {
+        reported = false;
+        conversations.input(received as unknown as Input);
+      }
     },
   });
 }

@@ -33,6 +33,7 @@ export interface Hosted {
   acks: Received[];
   turns: Received[];
   interactions: Received[];
+  idles: Received[];
   input(fields: Record<string, unknown>): void;
   ack(inputId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
@@ -66,6 +67,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
   const acks: Received[] = [];
   const turns: Received[] = [];
   const interactions: Received[] = [];
+  const idles: Received[] = [];
   house.route('POST', '/kit/restarted', () => ({ body: {} }));
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved } }));
   house.route('POST', '/kit/agents/report', () => ({ body: {} }));
@@ -83,6 +85,10 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
     interactions.push(request);
     return { body: {} };
   });
+  house.route('POST', '/kit/idle', (request) => {
+    idles.push(request);
+    return { body: {} };
+  });
   const kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeNpm(home) });
   const socket = await until(() => house.sockets[0]);
   return {
@@ -94,9 +100,10 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
     acks,
     turns,
     interactions,
+    idles,
     input: (fields) => {
       inputs++;
-      socket.send({
+      house.sockets.at(-1)!.send({
         type: 'input',
         input_id: `input-${inputs}`,
         conversation_id: 'conversation-1',
