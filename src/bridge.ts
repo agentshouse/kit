@@ -49,11 +49,12 @@ async function received(request: IncomingMessage): Promise<string> {
   return text;
 }
 
-export async function openBridge(house: House, conversationId: string): Promise<Bridge> {
+export async function openBridge(house: House, conversationId: string, signal: AbortSignal): Promise<Bridge> {
   const origin = (await readEnrolment())!.house;
   const { credential } = await house.post<{ credential: string }>(
     `/kit/conversations/${conversationId}/credential`,
     {},
+    signal,
   );
 
   const closed = new AbortController();

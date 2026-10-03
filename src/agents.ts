@@ -49,6 +49,8 @@ export class Agents {
   desired: Desired = { agents: [], routes: [] };
   private readonly house: House;
   private reading: Promise<void> = Promise.resolve();
+  private installing: Promise<void> = Promise.resolve();
+  private releases = new Map<string, string | null>();
   private reporting: Promise<void> | null = null;
   private again = false;
 
@@ -60,8 +62,8 @@ export class Agents {
     return this.reading.catch(() => undefined);
   }
 
-  settled(): Promise<void> {
-    return (this.reporting ?? Promise.resolve()).catch(() => undefined);
+  installed(): Promise<void> {
+    return this.installing.catch(() => undefined);
   }
 
   route(agentId: string): Route | undefined {
@@ -73,15 +75,18 @@ export class Agents {
       this.desired = await this.house.deliver<Desired>('/kit/agents/desired', {});
     });
     this.reading = reading;
+    const installing = this.installed()
+      .then(() => reading)
+      .then(() => this.install());
+    this.installing = installing;
     if (this.reporting === null) this.reporting = this.reports();
     else this.again = true;
-    return Promise.all([reading, this.reporting]).then(() => undefined);
+    return Promise.all([installing, this.reporting]).then(() => undefined);
   }
 
   async report(): Promise<void> {
     const agents: Reported[] = [];
-    for (const kind of this.desired.agents) {
-      const release = await install(kind);
+    for (const [kind, release] of this.releases) {
       agents.push({ kind, release, signed_in: release !== null && (await signedIn(kind)) });
     }
     await this.house.deliver('/kit/agents/report', {
@@ -91,11 +96,17 @@ export class Agents {
     });
   }
 
+  private async install(): Promise<void> {
+    const releases = new Map<string, string | null>();
+    for (const kind of this.desired.agents) releases.set(kind, await install(kind));
+    this.releases = releases;
+  }
+
   private async reports(): Promise<void> {
     try {
       do {
         this.again = false;
-        await this.reading;
+        await this.installing;
         await this.report();
       } while (this.again);
     } finally {

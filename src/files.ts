@@ -12,14 +12,20 @@ interface Original {
   download: { url: string };
 }
 
-export async function placeFiles(house: House, directory: string, files: MessageFile[]): Promise<string[]> {
+export async function placeFiles(
+  house: House,
+  directory: string,
+  files: MessageFile[],
+  signal: AbortSignal,
+): Promise<string[]> {
   const paths: string[] = [];
   for (const file of files) {
-    const original = await house.post<Original>('/kit/conversation/originals/get', {
-      version: file.version,
-      download: true,
-    });
-    const answer = await fetch(original.download.url);
+    const original = await house.post<Original>(
+      '/kit/conversation/originals/get',
+      { version: file.version, download: true },
+      signal,
+    );
+    const answer = await fetch(original.download.url, { signal });
     if (!answer.ok) throw new Error(`${file.name} did not download: ${answer.status}`);
     const folder = join(directory, '.house', 'files', original.message, file.version);
     await mkdir(join(directory, '.house')).catch((error: NodeJS.ErrnoException) => {

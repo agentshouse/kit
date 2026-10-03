@@ -3,7 +3,7 @@ import { rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -55,6 +55,19 @@ it('opens a conversation of an Agent House added after the Kit read its Agents',
   hosted.input({ kind: 'open', agent_id: 'agent-2' });
 
   expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+});
+
+it('opens a conversation of an Agent whose CLI House added once the Kit has installed that CLI', async () => {
+  const hosted = await hostKit();
+  const hold = await installHeld(hosted);
+
+  hosted.input({ kind: 'open', agent_id: 'agent-2' });
+  const open = lastInput();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await rm(hold);
+
+  expect(await hosted.ack(open)).toEqual({ provider_session_id: expect.any(String) });
+  expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')).toBeDefined();
 });
 
 it('opens a conversation with the launch settings House changed while the Kit was still reading them', async () => {

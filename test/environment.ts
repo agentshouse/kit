@@ -218,3 +218,25 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
 export function lastInput(): string {
   return `input-${inputs}`;
 }
+
+export async function installHeld(hosted: Hosted): Promise<string> {
+  const hold = join(hosted.home, 'npm-hold');
+  await writeFile(hold, '');
+  onTestFinished(() => rm(hold, { force: true }));
+  const added = {
+    agent_id: 'agent-2',
+    kind: 'claude-agent-acp',
+    base_instructions: 'Be useful.',
+    working_directory: hosted.workingDirectory,
+    model: 'route-model',
+    effort: null,
+  };
+  hosted.house.route('POST', '/kit/agents/desired', () => ({
+    body: { agents: ['codex-acp', 'claude-agent-acp'], routes: [added] },
+  }));
+  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  await until(async () =>
+    (await readFile(join(hosted.home, 'npm.log'), 'utf8').catch(() => '')).includes(PACKAGES['claude-agent-acp']!),
+  );
+  return hold;
+}

@@ -51,6 +51,15 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
+function unlessKilled<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const killed = () => reject(signal.reason);
+    signal.addEventListener('abort', killed, { once: true });
+    if (signal.aborted) killed();
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', killed));
+  });
+}
+
 function stop(bridge: Bridge): void {
   killMarked(`HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`);
 }
@@ -96,6 +105,7 @@ class Conversation {
   readonly late: string[] = [];
   opening: Bridge | null = null;
   kills = 0;
+  killed = new AbortController();
   open = 0;
   queue: Promise<unknown> = Promise.resolve();
   reports: Promise<unknown> = Promise.resolve();
@@ -144,6 +154,7 @@ export class Conversations {
         const conversation = this.conversation(input.conversation_id);
         if (input.kind === 'kill') {
           conversation.kills++;
+          conversation.killed.abort(new Error(KILLED));
           this.halt(conversation);
         }
         const work = conversation.queue.then(() => this.carry(conversation, input));
@@ -191,7 +202,7 @@ export class Conversations {
     if (input.kind === 'interrupt') await this.interrupt(conversation, String(input.turn_id));
     if (input.kind === 'kill') {
       await this.kill(conversation);
-      conversation.kills--;
+      if (--conversation.kills === 0) conversation.killed = new AbortController();
     }
     if (input.kind === 'option') await this.option(conversation, String(input.option), input.value);
     if (input.kind === 'answer') this.questions.get(String(input.interaction_id))?.answer(input.response);
@@ -201,7 +212,7 @@ export class Conversations {
   private async open(conversation: Conversation, input: Input): Promise<Ack> {
     if (conversation.running !== null) return {};
     try {
-      return { provider_session_id: await this.start(conversation, await this.route(input.agent_id), null) };
+      return { provider_session_id: await this.start(conversation, await this.route(conversation, input.agent_id), null) };
     } catch (error) {
       return { refused: causeOf(error) };
     }
@@ -211,8 +222,13 @@ export class Conversations {
     let ack: Ack = {};
     const prompt: ContentBlock[] = [];
     try {
-      const route = await this.route(input.agent_id);
-      const paths = await placeFiles(this.kit.house, route.working_directory, input.files as MessageFile[]);
+      const route = await this.route(conversation, input.agent_id);
+      const paths = await placeFiles(
+        this.kit.house,
+        route.working_directory,
+        input.files as MessageFile[],
+        conversation.killed.signal,
+      );
       if (conversation.running === null) {
         const opened = await this.start(conversation, route, input.provider_session_id);
         if (input.provider_session_id === null) ack = { provider_session_id: opened };
@@ -266,9 +282,10 @@ export class Conversations {
     }
   }
 
-  private async route(agentId: string): Promise<Route> {
-    await this.kit.agents.read();
-    if (this.kit.agents.route(agentId) === undefined) await this.kit.agents.refresh();
+  private async route(conversation: Conversation, agentId: string): Promise<Route> {
+    const signal = conversation.killed.signal;
+    await unlessKilled(this.kit.agents.read(), signal);
+    if (this.kit.agents.route(agentId) === undefined) await unlessKilled(this.kit.agents.refresh(), signal);
     const route = this.kit.agents.route(agentId);
     if (route === undefined) throw new Error(`this Environment hosts no Agent ${agentId}`);
     if (route.working_directory === join(LAUNCH_BASE, route.agent_id)) {
@@ -288,7 +305,8 @@ export class Conversations {
       .onRequest('elicitation/create', ({ params, signal }) =>
         this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       );
-    const bridge = await openBridge(this.kit.house, conversation.id);
+    await unlessKilled(this.kit.agents.installed(), conversation.killed.signal);
+    const bridge = await openBridge(this.kit.house, conversation.id, conversation.killed.signal);
     if (conversation.kills > 0) {
       bridge.close();
       throw new Error(KILLED);

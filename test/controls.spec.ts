@@ -3,7 +3,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until, type Answer } from './double.ts';
-import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
 import { alive, filesUnder } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
@@ -80,11 +80,12 @@ it('kills a process still opening its session and refuses the open, and the next
 });
 
 it.each([
-  ['its tool call', '/', {}],
-  ['the tool list its call is classified by', '/kit/tools/mutations', { tools: [] }],
+  ['its tool call', '/', {}, []],
+  ['the tool list its call is classified by', '/kit/tools/mutations', { tools: [] }, []],
+  ['the file it attaches', '/kit/conversation/originals/get', {}, [{ version: 'version-1', name: 'file.txt' }]],
 ])(
   'kills a running process the moment the kill arrives while House holds %s for its first message, and refuses that message',
-  async (_held, path, body) => {
+  async (_held, path, body, files) => {
     const hosted = await hostKit();
     await opened(hosted);
     const adapter = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.pid as number;
@@ -94,7 +95,7 @@ it.each([
     });
     onTestFinished(() => release({ body }));
     hosted.house.route('POST', path, () => held);
-    hosted.input({ kind: 'message', text: '@say hello', files: [], first: true });
+    hosted.input({ kind: 'message', text: '@say hello', files, first: true });
     const message = lastInput();
     await until(() => hosted.house.requests.find((request) => request.path === path));
 
@@ -105,6 +106,36 @@ it.each([
     expect(alive(adapter)).toBe(false);
   },
 );
+
+it('refuses an open and acknowledges the kill at once while the Kit still installs the CLI the open needs', async () => {
+  const hosted = await hostKit();
+  await installHeld(hosted);
+  hosted.input({ kind: 'open', agent_id: 'agent-2' });
+  const open = lastInput();
+
+  hosted.input({ kind: 'kill', agent_id: 'agent-2' });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.ack(open)).toEqual({ refused: 'the conversation was killed' });
+});
+
+it('refuses an open and acknowledges the kill at once while House holds the credential for its process', async () => {
+  const hosted = await hostKit();
+  let release!: (answer: Answer) => void;
+  const held = new Promise<Answer>((resolve) => {
+    release = resolve;
+  });
+  onTestFinished(() => release({ status: 503, body: {} }));
+  hosted.house.route('POST', '/kit/conversations/:conversation/credential', () => held);
+  hosted.input({ kind: 'open' });
+  const open = lastInput();
+  await until(() => hosted.house.requests.find((request) => request.path === '/kit/conversations/conversation-1/credential'));
+
+  hosted.input({ kind: 'kill' });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.ack(open)).toEqual({ refused: 'the conversation was killed' });
+});
 
 it.each(['SIGTERM', 'SIGINT'] as const)(
   'kills every process it started, of a running conversation and of one still opening, when %s stops it',
