@@ -56,7 +56,8 @@ jobs:
           docker buildx imagetools inspect --raw "ghcr.io/agentshouse/kit@$digest" > tmp/manifest.json
           node -e "const m=require('./tmp/manifest.json'); const p=m.manifests.map(x=>x.platform.os+'/'+x.platform.architecture); if(!p.includes('linux/amd64')||!p.includes('linux/arm64')) process.exit(1)"
           for arch in amd64 arm64; do
-            output=$(docker run --rm --quiet --platform "linux/$arch" "ghcr.io/agentshouse/kit@$digest" invalid-command 2>&1 || true)
+            platform=$(node -p "require('./tmp/manifest.json').manifests.find(x=>x.platform.architecture==='$arch').digest")
+            output=$(docker run --rm --quiet --platform "linux/$arch" "ghcr.io/agentshouse/kit@$platform" invalid-command 2>&1 || true)
             if [[ "$output" != *'usage: kit '* ]]; then
               printf '::error::Kit did not start on linux/%s: %s\n' "$arch" "$output"
               exit 1
