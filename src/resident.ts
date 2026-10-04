@@ -13,6 +13,7 @@ import { kitHome, readEnrolment } from './home.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
 import { holdStream, type Frame, type Stream } from './stream.ts';
+import { Updates, type Update } from './update.ts';
 
 function report(error: unknown): void {
   process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -86,6 +87,7 @@ export async function resident(): Promise<void> {
     changed,
   });
   const signIns: SignIns = new SignIns(house, agents, changed);
+  const updates = new Updates(house);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
       killDescendants();
@@ -94,6 +96,7 @@ export async function resident(): Promise<void> {
   }
 
   await house.deliver('/kit/restarted', {}).catch(report);
+  await updates.resumed().catch(report);
   logged(agents.refresh());
   stream = holdStream({
     opened: () => {
@@ -110,6 +113,7 @@ export async function resident(): Promise<void> {
       if (arrived.type === 'input') {
         reported = false;
         if (arrived.kind === 'sign_in') signIns.start(arrived as unknown as SignIn);
+        else if (arrived.kind === 'update') updates.start(arrived as unknown as Update);
         else conversations.input(arrived as unknown as Input);
       }
     },

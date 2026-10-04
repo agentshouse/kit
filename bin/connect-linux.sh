@@ -268,8 +268,16 @@ stage_native_kit() {
 place_native_kit() {
   local command
   printf 'Installing House Kit in %s; sudo may ask for your password.\n' "$NATIVE_PREFIX"
-  elevated rm -rf "$NATIVE_PREFIX" && elevated mv "$NATIVE_STAGE/kit" "$NATIVE_PREFIX" && elevated chown -R root:root "$NATIVE_PREFIX" ||
+  elevated rm -rf "$NATIVE_PREFIX.new" "$NATIVE_PREFIX.old" && elevated mv "$NATIVE_STAGE/kit" "$NATIVE_PREFIX.new" &&
+    elevated chown -R root:root "$NATIVE_PREFIX.new" || refuse "House Kit could not be installed in $NATIVE_PREFIX"
+  if [[ -e "$NATIVE_PREFIX" ]]; then
+    elevated mv "$NATIVE_PREFIX" "$NATIVE_PREFIX.old" || refuse "House Kit could not be installed in $NATIVE_PREFIX"
+  fi
+  if ! elevated mv "$NATIVE_PREFIX.new" "$NATIVE_PREFIX"; then
+    [[ ! -e "$NATIVE_PREFIX.old" ]] || elevated mv "$NATIVE_PREFIX.old" "$NATIVE_PREFIX"
     refuse "House Kit could not be installed in $NATIVE_PREFIX"
+  fi
+  elevated rm -rf "$NATIVE_PREFIX.old"
   for command in kit house; do
     printf '#!/bin/sh\nPATH="%s/bin:$PATH" exec "%s/bin/%s" "$@"\n' "$NATIVE_PREFIX" "$NATIVE_PREFIX" "$command" |
       elevated tee "$NATIVE_BIN/$command" >/dev/null && elevated chmod 0755 "$NATIVE_BIN/$command" ||

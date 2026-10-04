@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { beforeEach, expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
@@ -39,8 +39,10 @@ async function installs(): Promise<string[]> {
     .map((line) => (JSON.parse(line) as string[]).at(-1)!);
 }
 
-async function start() {
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeBin(home) });
+async function start(bin?: (directory: string) => Promise<void>) {
+  const path = await fakeBin(home);
+  await bin?.(join(home, 'bin'));
+  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path });
 }
 
 it('installs exactly the named CLIs at their pinned versions and adds one a later work frame names', async () => {
@@ -95,4 +97,19 @@ it('reports a CLI that failed to install with no release and its cause in the lo
     { kind: 'claude-agent-acp', release: null, signed_in: false },
   ]);
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: npm error 404 Not Found');
+});
+
+it('reports the SHA256 fingerprint of the host SSH key when the host has one', async () => {
+  desired = [];
+  await start(async (bin) => {
+    await writeFile(
+      join(bin, 'ssh-keygen'),
+      '#!/bin/sh\n[ "$*" = "-l -E sha256 -f /etc/ssh/ssh_host_ed25519_key.pub" ] || exit 1\necho "256 SHA256:kOo3WBbkkD4lemUHYroV3Ndz9eyygFTzdlqlS/+yLlE root@guest (ED25519)"\n',
+    );
+    await chmod(join(bin, 'ssh-keygen'), 0o755);
+  });
+
+  const report = await until(() => reports[0]);
+
+  expect(report.ssh_host_key).toBe('SHA256:kOo3WBbkkD4lemUHYroV3Ndz9eyygFTzdlqlS/+yLlE');
 });

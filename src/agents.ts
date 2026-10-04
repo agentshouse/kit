@@ -40,6 +40,11 @@ async function signedIn(kind: string): Promise<boolean> {
   }
 }
 
+async function sshHostKey(): Promise<string | null> {
+  const listed = await run('ssh-keygen', ['-l', '-E', 'sha256', '-f', '/etc/ssh/ssh_host_ed25519_key.pub'], 10_000);
+  return listed.status === 0 ? (/^\d+ (SHA256:\S+)/.exec(listed.output)?.[1] ?? null) : null;
+}
+
 async function operatingSystem(): Promise<string> {
   const release = await readFile('/etc/os-release', 'utf8');
   return /^PRETTY_NAME="?([^"\n]*)"?$/m.exec(release)?.[1] ?? release;
@@ -93,10 +98,12 @@ export class Agents {
     for (const [kind, release] of this.releases) {
       agents.push({ kind, release, signed_in: release !== null && (await signedIn(kind)) });
     }
+    const hostKey = await sshHostKey();
     await this.house.deliver('/kit/agents/report', {
       os: await operatingSystem(),
       kit_version: KIT_VERSION,
       agents,
+      ...(hostKey === null ? {} : { ssh_host_key: hostKey }),
     });
   }
 
