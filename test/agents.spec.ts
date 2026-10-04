@@ -179,27 +179,75 @@ it("names npm's exit status as the cause of an install that failed without outpu
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: npm exited with 1');
 });
 
-it('leaves out a model its CLI refuses to select and reports the others', async () => {
+it('reports a model its CLI refuses to select with the efforts the Kit last read for it, none before it read any', async () => {
   desired = ['claude-agent-acp'];
   await signIn('claude-agent-acp');
   await writeFile(join(home, 'refuse-model'), 'sonnet');
   await start();
-
-  const report = await until(() => reports[0]);
-
-  expect(report.agents).toEqual([
+  const claude = (models: { model: string; efforts: string[] }[]) => [
     {
       kind: 'claude-agent-acp',
       release: PINNED['@agentclientprotocol/claude-agent-acp'],
       failure: null,
       signed_in: true,
-      models: [
-        { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
-        { model: 'haiku', efforts: [] },
-      ],
+      models,
     },
-  ]);
+  ];
+
+  const refused = await until(() => reports[0]);
+  expect(refused.agents).toEqual(
+    claude([
+      { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
+      { model: 'sonnet', efforts: [] },
+      { model: 'haiku', efforts: [] },
+    ]),
+  );
   expect(kit!.stderr()).toContain('claude-agent-acp refused its model sonnet: Model switch blocked by a PreModelSwitch hook');
+
+  await rm(join(home, 'refuse-model'));
+  const socket = await until(() => house.sockets[0]);
+  socket.send({ type: 'work_available', subject: 'agents' });
+  const selected = await until(() => reports[1]);
+  expect(selected.agents).toEqual(
+    claude([
+      { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
+      { model: 'sonnet', efforts: ['default', 'low', 'medium', 'high', 'max'] },
+      { model: 'haiku', efforts: [] },
+    ]),
+  );
+
+  await writeFile(join(home, 'refuse-model'), 'sonnet');
+  await mkdir(join(home, 'models'));
+  await writeFile(
+    join(home, 'models', 'claude-agent-acp'),
+    JSON.stringify([
+      { id: 'default', name: 'Default (recommended)', efforts: ['high'] },
+      { id: 'sonnet', name: 'Sonnet', efforts: ['low'] },
+    ]),
+  );
+  socket.send({ type: 'work_available', subject: 'agents' });
+  const again = await until(() => reports[2]);
+  expect(again.agents).toEqual(
+    claude([
+      { model: 'default', efforts: ['default', 'high'] },
+      { model: 'sonnet', efforts: ['default', 'low', 'medium', 'high', 'max'] },
+    ]),
+  );
+});
+
+it("keeps reporting the models the Kit last read while the CLI's session does not open", async () => {
+  desired = ['grok-build'];
+  await signIn('grok-build');
+  await start();
+  const read = await until(() => reports[0]);
+
+  await writeFile(join(home, 'refuse-new'), '');
+  await placeHostKey(home);
+  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+
+  const kept = await until(() => reports[1]);
+  expect(kept).toEqual({ ...read, ssh_host_key: HOST_KEY });
+  expect(kit!.stderr()).toContain('grok-build did not offer its models: the session did not open');
 });
 
 it('reads its CLIs again on its own, so a recovered install and changed efforts reach House without a work frame', async () => {

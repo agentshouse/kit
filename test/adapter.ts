@@ -295,6 +295,7 @@ const app = agent({ name: 'adapter-double' })
   .onRequest('session/new', async ({ params }) => {
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
+    if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
     if (existsSync(join(home, 'hold-open'))) {
       spawnJob();
       await new Promise(() => undefined);

@@ -48,7 +48,7 @@ function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function models(kind: string, adapter: Adapter): Promise<Model[]> {
+async function models(kind: string, adapter: Adapter, known: Model[]): Promise<Model[]> {
   const agent = adapter.connection.agent;
   const opened = await agent.request('session/new', { cwd: kitHome(), mcpServers: [] });
   let options = opened.configOptions ?? [];
@@ -63,6 +63,7 @@ async function models(kind: string, adapter: Adapter): Promise<Model[]> {
         ).configOptions;
       } catch (error) {
         process.stderr.write(`kit: ${kind} refused its model ${value}: ${causeOf(error)}\n`);
+        offered.push({ model: value, efforts: known.find((entry) => entry.model === value)?.efforts ?? [] });
         continue;
       }
     }
@@ -72,7 +73,7 @@ async function models(kind: string, adapter: Adapter): Promise<Model[]> {
   return offered;
 }
 
-async function offer(kind: string): Promise<Offer> {
+async function offer(kind: string, known: Model[]): Promise<Offer> {
   const probe = CLIS[kind]!.signedIn;
   if ('command' in probe && (await run(cliCommand(kind), probe.command, 30_000)).status !== 0) return SIGNED_OUT;
   let adapter: Adapter | undefined;
@@ -82,10 +83,10 @@ async function offer(kind: string): Promise<Offer> {
       const method = adapter.initialized._meta?.[probe.initializeMeta];
       if (typeof method !== 'string' || method.length === 0) return SIGNED_OUT;
     }
-    return { signed_in: true, models: await models(kind, adapter) };
+    return { signed_in: true, models: await models(kind, adapter, known) };
   } catch (error) {
     process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
-    return { signed_in: adapter !== undefined || 'command' in probe, models: [] };
+    return adapter === undefined && 'initializeMeta' in probe ? SIGNED_OUT : { signed_in: true, models: known };
   } finally {
     if (adapter !== undefined) killTree(adapter.child);
   }
@@ -107,6 +108,7 @@ export class Agents {
   private reading: Promise<unknown> = Promise.resolve();
   private installing: Promise<void> = Promise.resolve();
   private installs = new Map<string, Installed>();
+  private offers = new Map<string, Model[]>();
   private reporting: Promise<void> | null = null;
   private again = false;
   private sending: Promise<void> = Promise.resolve();
@@ -155,7 +157,9 @@ export class Agents {
   private async send(): Promise<void> {
     const agents: Reported[] = [];
     for (const [kind, installed] of this.installs) {
-      agents.push({ kind, ...installed, ...(installed.release === null ? SIGNED_OUT : await offer(kind)) });
+      const offered = installed.release === null ? SIGNED_OUT : await offer(kind, this.offers.get(kind) ?? []);
+      this.offers.set(kind, offered.models);
+      agents.push({ kind, ...installed, ...offered });
     }
     const hostKey = await sshHostKey();
     const body = {
