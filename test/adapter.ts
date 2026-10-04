@@ -43,11 +43,45 @@ function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): 
   log({ ...entry, status: result.status, stdout: result.stdout, stderr: result.stderr });
 }
 
-async function say(client: AgentContext, sessionId: string, text: string) {
+let items = 0;
+let apiMessages = 1;
+let toolCalls = 0;
+
+function messageSignal(phase: 'commentary' | 'final_answer'): Record<string, unknown> {
+  if (kind === 'codex-acp') {
+    return { messageId: `item-${phase}-${items}`, _meta: { jetbrains: { air: { phase } } } };
+  }
+  if (kind === 'claude-agent-acp') return { messageId: `msg_${apiMessages}` };
+  return {};
+}
+
+async function chunk(client: AgentContext, sessionId: string, text: string, phase: 'commentary' | 'final_answer') {
   await client.notify('session/update', {
     sessionId,
-    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } },
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, ...messageSignal(phase) },
   });
+}
+
+async function say(client: AgentContext, sessionId: string, text: string) {
+  await chunk(client, sessionId, text, 'final_answer');
+}
+
+async function note(client: AgentContext, sessionId: string, text: string) {
+  items++;
+  for (const fragment of text.match(/\S+\s*/g) ?? []) await chunk(client, sessionId, fragment, 'commentary');
+}
+
+async function tool(client: AgentContext, sessionId: string, title: string) {
+  const toolCallId = `call-${++toolCalls}`;
+  await client.notify('session/update', {
+    sessionId,
+    update: { sessionUpdate: 'tool_call', toolCallId, title, kind: 'read', status: 'pending' },
+  });
+  await client.notify('session/update', {
+    sessionId,
+    update: { sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' },
+  });
+  apiMessages++;
 }
 
 async function turnStarted(client: AgentContext, sessionId: string) {
@@ -93,6 +127,17 @@ async function directive(
   const [name, ...rest] = line.slice(1).split(' ');
   const argument = rest.join(' ');
   if (name === 'say') await say(client, sessionId, argument.replaceAll('\\n', '\n'));
+  if (name === 'note') await note(client, sessionId, argument);
+  if (name === 'tool') await tool(client, sessionId, argument);
+  if (name === 'think') {
+    const messageId =
+      kind === 'codex-acp' ? `item-reasoning-${++items}` : kind === 'claude-agent-acp' ? `msg_${apiMessages}` : undefined;
+    await client.notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: argument }, messageId },
+    });
+  }
+  if (name === 'hidden') apiMessages++;
   if (name === 'started') await turnStarted(client, sessionId);
   if (name === 'ended') await turnEnded(client, sessionId);
   if (name === 'fail') throw new RequestError(-32603, argument);
@@ -126,6 +171,14 @@ async function directive(
       if (text.length > 0) await say(client, sessionId, text.join(' '));
     }, Number(delay));
     setTimeout(() => void turnEnded(client, sessionId), 2 * Number(delay));
+  }
+  if (name === 'itself') {
+    const [delay, ...script] = rest;
+    setTimeout(async () => {
+      await turnStarted(client, sessionId);
+      for (const step of script.join(' ').split(';')) await directive(client, sessionId, step.trim());
+      await turnEnded(client, sessionId);
+    }, Number(delay));
   }
   if (name === 'ask') {
     const response = await client.request('session/request_permission', {

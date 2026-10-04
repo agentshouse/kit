@@ -2,6 +2,7 @@ import {
   client,
   type AvailableCommand,
   type ContentBlock,
+  type ContentChunk,
   type CreateElicitationRequest,
   type PlanEntry,
   type SessionConfigOption,
@@ -15,7 +16,7 @@ import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
 import { openBridge, type Bridge } from './bridge.ts';
-import { CLIS, type Job } from './clis.ts';
+import { CLIS, type Cli, type Job, type Phase } from './clis.ts';
 import type { WorkingCopies } from './copies.ts';
 import { placeFiles, type MessageFile } from './files.ts';
 import { instructions } from './instructions.ts';
@@ -71,9 +72,18 @@ function stop(bridge: Bridge): void {
   killMarked(`HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`);
 }
 
+interface Segment {
+  messageId: string | null;
+  phase: Phase | null;
+  text: string;
+}
+
 class Turn {
   readonly id = randomUUID();
   text = '';
+  segment: Segment | null = null;
+  admitted = false;
+  readonly notes: Frame[] = [];
   sent: Block[] = [];
   unsentFrom: number | null = null;
   draftSequence = 0;
@@ -95,6 +105,7 @@ interface Running {
   sessionId: string;
   killed: boolean;
   queues: boolean;
+  phase: Cli['phase'];
 }
 
 interface Question {
@@ -350,6 +361,7 @@ export class Conversations {
         sessionId: opened.sessionId,
         killed: false,
         queues: CLIS[route.kind]!.queues,
+        phase: CLIS[route.kind]!.phase,
       };
       const options = await this.launchSettings(running, route, opened.configOptions ?? []);
       conversation.running = running;
@@ -442,6 +454,8 @@ export class Conversations {
   }
 
   private admitted(conversation: Conversation, turn: Turn): void {
+    turn.admitted = true;
+    for (const note of turn.notes.splice(0)) this.kit.send(note);
     if (turn.text !== '') {
       turn.unsentFrom = 0;
       this.draft(conversation, turn);
@@ -454,6 +468,15 @@ export class Conversations {
     conversation.turn = turn;
     this.kit.changed();
     return turn;
+  }
+
+  private finish(conversation: Conversation, turn: Turn): void {
+    if (turn.ended) return;
+    const segment = turn.segment;
+    turn.segment = null;
+    if (segment?.phase === 'note') this.note(conversation, turn, segment.text);
+    else if (segment !== null) this.answer(conversation, turn, segment.text);
+    this.end(conversation, turn, { text: turn.text });
   }
 
   private end(conversation: Conversation, turn: Turn, outcome: Outcome): void {
@@ -507,7 +530,7 @@ export class Conversations {
       if (turn.ended) this.failed(conversation, failed);
       else this.end(conversation, turn, { failed });
     } else if (turn.prompt === sent) {
-      this.end(conversation, turn, { text: turn.text });
+      this.finish(conversation, turn);
     }
   }
 
@@ -523,7 +546,7 @@ export class Conversations {
     const turn = conversation.turn;
     if (turn === null) return;
     if (turn.prompt === null) {
-      this.end(conversation, turn, { text: turn.text });
+      this.finish(conversation, turn);
     } else {
       conversation.turn = null;
       this.kit.changed();
@@ -579,15 +602,17 @@ export class Conversations {
   private update(conversation: Conversation, notification: SessionNotification): void {
     const update = notification.update;
     if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
-      const turn = this.started(conversation);
-      turn.text += update.content.text;
-      this.draft(conversation, turn);
+      this.chunk(conversation, this.started(conversation), update, update.content.text);
     } else if (update.sessionUpdate === 'plan') {
       const turn = this.started(conversation);
+      this.close(conversation, turn);
       turn.entries = update.entries;
       this.plan(conversation, turn);
-    } else if (update.sessionUpdate === 'agent_thought_chunk' || update.sessionUpdate === 'tool_call') {
-      this.started(conversation);
+    } else if (update.sessionUpdate === 'tool_call') {
+      this.close(conversation, this.started(conversation));
+    } else if (update.sessionUpdate === 'agent_thought_chunk') {
+      const turn = this.started(conversation);
+      if (turn.segment?.messageId !== (update.messageId ?? null)) this.close(conversation, turn);
     } else if (update.sessionUpdate === 'available_commands_update') {
       this.commands(conversation, update.availableCommands);
     } else if (update.sessionUpdate === 'config_option_update') {
@@ -599,6 +624,37 @@ export class Conversations {
     if (job.running) conversation.jobs.add(job.id);
     else conversation.jobs.delete(job.id);
     this.kit.changed();
+  }
+
+  private chunk(conversation: Conversation, turn: Turn, chunk: ContentChunk, text: string): void {
+    const phase = conversation.running?.phase(chunk) ?? null;
+    const messageId = chunk.messageId ?? null;
+    if (turn.segment?.messageId !== messageId || turn.segment.phase !== phase) this.close(conversation, turn);
+    if (phase === 'answer') {
+      this.answer(conversation, turn, text);
+      return;
+    }
+    turn.segment ??= { messageId, phase, text: '' };
+    turn.segment.text += text;
+  }
+
+  private close(conversation: Conversation, turn: Turn): void {
+    const segment = turn.segment;
+    if (segment === null) return;
+    turn.segment = null;
+    this.note(conversation, turn, segment.text);
+  }
+
+  private note(conversation: Conversation, turn: Turn, text: string): void {
+    if (text.trim() === '') return;
+    const note = { type: 'working-note', conversation_id: conversation.id, note_id: randomUUID(), text };
+    if (turn.admitted) this.kit.send(note);
+    else turn.notes.push(note);
+  }
+
+  private answer(conversation: Conversation, turn: Turn, text: string): void {
+    turn.text += text;
+    this.draft(conversation, turn);
   }
 
   private draft(conversation: Conversation, turn: Turn): void {
