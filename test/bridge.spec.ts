@@ -60,11 +60,11 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   expect(help!.stdout).toBe(
     [
       "usage: house <tool> ['<arguments as JSON>']",
-      'git push [commit]: Submit a Room commit to House; default HEAD. Use --owner only outside an Agent conversation. Native git push is not a House remote.',
+      'git push [commit]',
       ...LISTING.map((tool) => `${tool.name}: ${tool.description}`),
     ].join('\n') + '\n',
   );
-  expect(toolHelp!.stdout).toBe(`${LISTING[1]!.description}\n${JSON.stringify(LISTING[1]!.inputSchema, null, 2)}\n`);
+  expect(toolHelp!.stdout).toBe(`${LISTING[1]!.description}\n${JSON.stringify(LISTING[1]!.inputSchema)}\n`);
   expect(search!.stdout).toBe('search answered\n');
   expect(hosted.mcp.map((received) => [received.headers['mcp-method'], called(received).params.name])).toEqual([
     ['tools/list', undefined],

@@ -345,9 +345,7 @@ it('pushes as the owner only with --owner outside a conversation and explains it
 
   expect(bare).toMatchObject({ status: 1, stderr: 'house: outside an Agent conversation, house git push needs --owner\n' });
   expect(help.status).toBe(0);
-  expect(help.stdout).toBe(
-    'usage: house git push [commit] [--owner]\nSubmit a Room commit to House; default HEAD. Use --owner only outside an Agent conversation. Native git push is not a House remote.\n',
-  );
+  expect(help.stdout).toBe('usage: house git push [commit] [--owner]\n');
   expect(outside).toMatchObject({
     status: 1,
     stderr: 'house: / is not a House working copy; run house git push inside one\n',

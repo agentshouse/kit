@@ -19,13 +19,16 @@ function refused(code: string): ToolResult {
   return { isError: true, content: [{ type: 'text', text: `${code}: you read no Room there\n` }] };
 }
 
+const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
+const FILE_LINE = 'To give the User a file or a page, upload it with `house upload_attachment` and link it; never start a server.';
+
 function blockOf(prompt: Prompt): string[] {
   expect(prompt).toHaveLength(2);
   expect(prompt[1]).toEqual({ type: 'text', text: 'hello' });
   return prompt[0]!.text.split('\n');
 }
 
-it('begins a first message with the house line, the file line, the App line, the base instructions and the How-we-work text, the same for every CLI', async () => {
+it('begins a first message with the house line, the file line, the base instructions and the How-we-work text, the same for every CLI', async () => {
   const kinds = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   const hosted = await hostKit(kinds.map((kind) => ({ kind })));
   hosted.tools.shell = () => shelled(DOCUMENT);
@@ -42,11 +45,7 @@ it('begins a first message with the house line, the file line, the App line, the
   }
 
   const sent = await prompts(hosted, kinds.length);
-  const [houseLine, fileLine, appLine, ...rest] = blockOf(sent[0]!);
-  expect(houseLine).toContain('`house`');
-  expect(fileLine).toContain('`house upload_attachment`');
-  expect(appLine).toBe(`To show the User a page, upload it or push it to an App instead of starting a server; \`git clone ${hosted.house.origin}/app/new.git\` starts a new App.`);
-  expect(rest.join('\n')).toBe(`\nBe useful.\n\n${DOCUMENT}`);
+  expect(blockOf(sent[0]!)).toEqual([HOUSE_LINE, FILE_LINE, '', 'Be useful.', '', ...DOCUMENT.split('\n')]);
   for (const prompt of sent) expect(prompt).toEqual(sent[0]);
   expect(
     hosted.mcp.map((received) => [received.headers.authorization, (received.body as McpCall).params.arguments]).sort(),
@@ -69,11 +68,7 @@ it.each([
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 
   expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
-  const [houseLine, fileLine, appLine, ...rest] = blockOf((await prompts(hosted, 1))[0]!);
-  expect(houseLine).toContain('`house`');
-  expect(fileLine).toContain('`house upload_attachment`');
-  expect(appLine).toBe(`To show the User a page, upload it or push it to an App instead of starting a server; \`git clone ${hosted.house.origin}/app/new.git\` starts a new App.`);
-  expect(rest.join('\n')).toBe('\nBe useful.');
+  expect(blockOf((await prompts(hosted, 1))[0]!)).toEqual([HOUSE_LINE, FILE_LINE, '', 'Be useful.']);
 });
 
 it('refuses a first message with the cause when House cannot answer the document read', async () => {
@@ -111,7 +106,7 @@ it('reads a document longer than one House reply whole by following its continua
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 
-  expect(blockOf((await prompts(hosted, 1))[0]!).slice(3).join('\n')).toBe(`\nBe useful.\n\n${document.replace(/\n$/, '')}`);
+  expect(blockOf((await prompts(hosted, 1))[0]!).slice(2).join('\n')).toBe(`\nBe useful.\n\n${document.replace(/\n$/, '')}`);
   expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
 });
 
@@ -127,7 +122,7 @@ it('keeps document lines that read like House diagnostics, in one reply and afte
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 
-  expect(blockOf((await prompts(hosted, 1))[0]!).slice(3).join('\n')).toBe(`\nBe useful.\n\n${first}${rest}`);
+  expect(blockOf((await prompts(hosted, 1))[0]!).slice(2).join('\n')).toBe(`\nBe useful.\n\n${first}${rest}`);
   expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
 });
 
