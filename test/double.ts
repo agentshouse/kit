@@ -22,6 +22,7 @@ export interface Answer {
   status?: number;
   body?: unknown;
   bytes?: { type: string; content: Buffer | string };
+  drop?: boolean;
 }
 
 export type Route = (request: Received) => Answer | Promise<Answer>;
@@ -145,6 +146,10 @@ export async function startHouse(tls?: Certificate): Promise<House> {
       requests.push(received);
       const answer: Answer =
         route === undefined ? { status: 404, body: { error: { code: 'not_found' } } } : await route.handler(received);
+      if (answer.drop === true) {
+        response.destroy();
+        return;
+      }
       if (answer.bytes !== undefined) {
         response.writeHead(answer.status ?? 200, { 'content-type': answer.bytes.type });
         response.end(answer.bytes.content);

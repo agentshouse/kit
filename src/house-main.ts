@@ -2,8 +2,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { request } from 'node:http';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 import type { ToolResult } from './bridge.ts';
+import { kitHome } from './home.ts';
 
 interface Tool {
   name: string;
@@ -16,15 +17,18 @@ interface Declared {
 }
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
+const GIT_HELP = 'Submit a Room commit to House; default HEAD. Use --owner only outside an Agent conversation. Native git push is not a House remote.';
+const GIT_USAGE = `usage: house git push [commit] [--owner]\n${GIT_HELP}`;
 const socketPath = process.env.HOUSE_BRIDGE;
 
 function bridged(
   path: string,
   body: unknown,
   headers: Record<string, string> = { 'content-type': 'application/json' },
+  to = socketPath,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const sent = request({ socketPath, path, method: 'POST', headers }, (answer) => {
+    const sent = request({ socketPath: to, path, method: 'POST', headers }, (answer) => {
       let text = '';
       answer.setEncoding('utf8');
       answer.on('data', (chunk: string) => {
@@ -70,9 +74,23 @@ async function upload(path: string, roomRef: unknown): Promise<string> {
   });
 }
 
+async function gitPush(args: string[]): Promise<string> {
+  if (args.includes('--help')) return GIT_USAGE;
+  if (args[0] !== 'push') throw new Error(GIT_USAGE);
+  const owner = args.includes('--owner');
+  const commit = args.slice(1).find((arg) => arg !== '--owner') ?? 'HEAD';
+  if (owner && socketPath !== undefined) throw new Error('house git push --owner runs outside an Agent conversation');
+  if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house git push needs --owner');
+  const pushed = JSON.parse(
+    await bridged('/git/push', { cwd: process.cwd(), commit }, undefined, owner ? join(kitHome(), 'owner.sock') : socketPath),
+  ) as { refused: boolean; text: string };
+  if (pushed.refused) throw new Error(pushed.text);
+  return pushed.text;
+}
+
 async function house([verb, argument]: string[]): Promise<string> {
   if (verb === undefined || verb === '--help') {
-    return [USAGE, ...(await tools()).map((tool) => `${tool.name}: ${tool.description}`)].join('\n');
+    return [USAGE, `git push [commit]: ${GIT_HELP}`, ...(await tools()).map((tool) => `${tool.name}: ${tool.description}`)].join('\n');
   }
   if (argument === '--help') {
     const tool = (await tools()).find((listed) => listed.name === verb);
@@ -94,11 +112,12 @@ async function house([verb, argument]: string[]): Promise<string> {
   return text;
 }
 
-if (socketPath === undefined) {
+const argv = process.argv.slice(2);
+if (argv[0] !== 'git' && socketPath === undefined) {
   process.stderr.write('house: house runs inside an Agent conversation\n');
   process.exitCode = 1;
 } else {
-  house(process.argv.slice(2)).then(
+  (argv[0] === 'git' ? gitPush(argv.slice(1)) : house(argv)).then(
     (text) => {
       process.stdout.write(`${text}\n`);
     },

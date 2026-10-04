@@ -59,6 +59,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   expect(help!.stdout).toBe(
     [
       "usage: house <tool> ['<arguments as JSON>']",
+      'git push [commit]: Submit a Room commit to House; default HEAD. Use --owner only outside an Agent conversation. Native git push is not a House remote.',
       ...LISTING.map((tool) => `${tool.name}: ${tool.description}`),
     ].join('\n') + '\n',
   );

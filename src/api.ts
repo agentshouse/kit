@@ -2,10 +2,12 @@ import { readEnrolment } from './home.ts';
 
 export class HouseRefusal extends Error {
   readonly status: number;
+  readonly text: string;
 
   constructor(path: string, status: number, text: string) {
     super(`House refused ${path} with ${status}: ${text}`);
     this.status = status;
+    this.text = text;
   }
 }
 

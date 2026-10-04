@@ -223,6 +223,7 @@ async function directive(
     const args = rest.length > 1 ? [rest[0]!, rest.slice(1).join(' ')] : rest;
     ran({ house: args }, spawnSync(process.execPath, [HOUSE, ...args], { encoding: 'utf8' }));
   }
+  if (name === 'sh') ran({ sh: argument }, spawnSync('sh', ['-c', argument], { encoding: 'utf8' }));
   if (name === 'git') {
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }

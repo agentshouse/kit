@@ -16,6 +16,7 @@ import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS, type Job } from './clis.ts';
+import type { WorkingCopies } from './copies.ts';
 import { placeFiles, type MessageFile } from './files.ts';
 import { instructions } from './instructions.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
@@ -24,6 +25,7 @@ import type { Frame } from './stream.ts';
 export interface Kit {
   house: House;
   agents: Agents;
+  copies: WorkingCopies;
   send(frame: Frame): boolean;
   changed(): void;
 }
@@ -244,7 +246,10 @@ export class Conversations {
         if (input.provider_session_id === null) ack = { provider_session_id: opened };
       }
       if (input.first === true) {
-        prompt.push({ type: 'text', text: await instructions(conversation.running!.bridge, route.base_instructions) });
+        prompt.push({
+          type: 'text',
+          text: await instructions(conversation.running!.bridge, route.base_instructions, await this.kit.copies.mapping()),
+        });
       }
       prompt.push({ type: 'text', text: String(input.text) });
       if (paths.length > 0) prompt.push({ type: 'text', text: paths.join('\n') });
@@ -316,7 +321,7 @@ export class Conversations {
         this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       );
     await unlessKilled(this.kit.agents.installed(), conversation.killed.signal);
-    const bridge = await openBridge(this.kit.house, conversation.id, conversation.killed.signal);
+    const bridge = await openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal);
     if (conversation.kills > 0) {
       bridge.close();
       throw new Error(KILLED);

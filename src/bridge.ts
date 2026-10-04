@@ -1,13 +1,25 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir } from 'node:fs/promises';
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
+import { parse } from 'yaml';
 import type { House } from './api.ts';
 import { KIT_VERSION } from './clis.ts';
+import {
+  changedPaths,
+  refusalCode,
+  type Caller,
+  type Observed,
+  type Submitted,
+  type Upload,
+  type WorkingCopies,
+} from './copies.ts';
 import { kitHome, readEnrolment } from './home.ts';
+import { operationId } from './operation.ts';
+import type { Edit } from './translate.ts';
 
 export interface ToolResult {
   content: { type: string; text: string }[];
@@ -31,18 +43,10 @@ interface Forwarded {
 }
 
 const MCP_PROTOCOL_VERSION = '2026-07-28';
+const MCP_REQUEST_BYTES = 4 * 1024 * 1024;
 const FORWARDED = new Set(['/', '/kit/attachments/upload']);
 
-function operationId(): string {
-  const bytes = randomBytes(16);
-  bytes.writeUIntBE(Date.now(), 0, 6);
-  bytes[6] = 0x70 | (bytes[6]! & 0x0f);
-  bytes[8] = 0x80 | (bytes[8]! & 0x3f);
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-async function received(request: IncomingMessage): Promise<string> {
+export async function received(request: IncomingMessage): Promise<string> {
   let text = '';
   request.setEncoding('utf8');
   for await (const chunk of request) text += chunk;
@@ -66,7 +70,33 @@ function relay(request: IncomingMessage, response: ServerResponse, target: URL, 
   request.pipe(forwarded);
 }
 
-export async function openBridge(house: House, conversationId: string, signal: AbortSignal): Promise<Bridge> {
+function answered(forwarded: Forwarded): { text: string } | { refused: { code: string; text: string } } {
+  if (forwarded.status >= 500) throw new Error(`House answered ${forwarded.status}`);
+  if (forwarded.status !== 200) return { refused: { code: refusalCode(forwarded.text), text: forwarded.text } };
+  const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
+  if (answer.error !== undefined) return { refused: { code: refusalCode(answer.error.message), text: answer.error.message } };
+  const text = answer.result!.content.map((content) => content.text).join('\n');
+  return answer.result!.isError === true ? { refused: { code: refusalCode(text), text } } : { text };
+}
+
+function editAnswer(forwarded: Forwarded): Submitted {
+  const answer = answered(forwarded);
+  if ('refused' in answer) return answer;
+  const { results } = parse(answer.text) as { results: { path: string; op: string; revision: string; from?: string }[] };
+  return {
+    accepted: results.flatMap((result) => [
+      ...(result.from === undefined ? [] : [{ path: result.from, revision: null, content: null }]),
+      { path: result.path, revision: result.op === 'remove' ? null : result.revision },
+    ]),
+  };
+}
+
+export async function openBridge(
+  house: House,
+  copies: WorkingCopies,
+  conversationId: string,
+  signal: AbortSignal,
+): Promise<Bridge> {
   const origin = (await readEnrolment())!.house;
   const { credential } = await house.post<{ credential: string }>(
     `/kit/conversations/${conversationId}/credential`,
@@ -75,45 +105,115 @@ export async function openBridge(house: House, conversationId: string, signal: A
   );
 
   const closed = new AbortController();
-  const mcp = async (message: Message) => {
-    const params = message.params ?? {};
-    const tool = message.method === 'tools/call' ? String(params.name) : null;
-    const writes =
-      tool !== null &&
-      (
-        await house.post<{ tools: { name: string; writes: boolean }[] }>('/kit/tools/mutations', {}, closed.signal)
-      ).tools.some((listed) => listed.name === tool && listed.writes);
-    return {
+  const body = (message: Message, operation: string | null): string =>
+    JSON.stringify({
+      ...message,
+      params: {
+        ...message.params,
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
+          'io.modelcontextprotocol/clientInfo': { name: '@agentshouse/kit', version: KIT_VERSION },
+          'io.modelcontextprotocol/clientCapabilities': {},
+          ...(operation === null ? {} : { 'agents.house/agent-operation': operation }),
+        },
+      },
+    });
+
+  const send = async (message: Message, operation: string | null): Promise<Forwarded> => {
+    const tool = message.method === 'tools/call' ? String(message.params?.name) : null;
+    const answer = await fetch(new URL('/', origin), {
+      method: 'POST',
       headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${credential}`,
         accept: 'application/json, text/event-stream',
         'mcp-protocol-version': MCP_PROTOCOL_VERSION,
         'mcp-method': message.method,
         ...(tool === null ? {} : { 'mcp-name': tool }),
       },
-      body: {
-        ...message,
-        params: {
-          ...params,
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
-            'io.modelcontextprotocol/clientInfo': { name: '@agentshouse/kit', version: KIT_VERSION },
-            'io.modelcontextprotocol/clientCapabilities': {},
-            ...(writes ? { 'agents.house/agent-operation': operationId() } : {}),
-          },
-        },
-      },
-    };
-  };
-
-  const forward = async (path: string, text: string): Promise<Forwarded> => {
-    const call = path === '/' ? await mcp(JSON.parse(text) as Message) : null;
-    const answer = await fetch(new URL(path, origin), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...call?.headers },
-      body: call === null ? text : JSON.stringify(call.body),
+      body: body(message, operation),
       signal: closed.signal,
     });
     return { status: answer.status, text: await answer.text() };
+  };
+
+  const call = (name: string, args: Record<string, unknown>): Message =>
+    ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) as Message;
+
+  const staged = async (operation: string, changes: Edit[]): Promise<Upload | { refused: { code: string; text: string } }> => {
+    const bytes = Buffer.from(JSON.stringify({ changes }));
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const prepared = answered(
+      await send(
+        call('run_command', {
+          command: 'prepare_edit_upload',
+          arguments: { paths: changedPaths(changes), bytes: bytes.length, sha256 },
+        }),
+        operation,
+      ),
+    );
+    if ('refused' in prepared) return prepared;
+    const { transfer } = parse(prepared.text) as { transfer: { url: string; operation: string } };
+    const posted = await fetch(transfer.url, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+      body: Buffer.concat([Buffer.from(`${transfer.operation}\n`), bytes]),
+      signal: closed.signal,
+    });
+    const text = await posted.text();
+    if (posted.status >= 500) throw new Error(`House answered ${posted.status}`);
+    if (!posted.ok) return { refused: { code: refusalCode(text), text } };
+    const held = (JSON.parse(text) as { transfer: { url: string; operation: string } }).transfer;
+    return { url: held.url, operation: held.operation, bytes: bytes.length, sha256 };
+  };
+
+  const forward = async (path: string, text: string): Promise<Forwarded> => {
+    if (path === '/') {
+      const message = JSON.parse(text) as Message;
+      const tool = message.method === 'tools/call' ? String(message.params?.name) : null;
+      const writes =
+        tool !== null &&
+        (
+          await house.post<{ tools: { name: string; writes: boolean }[] }>('/kit/tools/mutations', {}, closed.signal)
+        ).tools.some((listed) => listed.name === tool && listed.writes);
+      return send(message, writes ? operationId() : null);
+    }
+    const answer = await fetch(new URL(path, origin), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+      body: text,
+      signal: closed.signal,
+    });
+    return { status: answer.status, text: await answer.text() };
+  };
+
+  const caller: Caller = {
+    key: `conversation:${conversationId}`,
+    submit: async (operation, changes, held, retain) => {
+      const inline = call('edit', { changes });
+      let upload = held;
+      if (upload === undefined && Buffer.byteLength(body(inline, operation)) > MCP_REQUEST_BYTES) {
+        const prepared = await staged(operation, changes);
+        if ('refused' in prepared) return prepared;
+        upload = prepared;
+        await retain(upload);
+      }
+      return editAnswer(
+        await send(upload === undefined ? inline : call('edit', { paths: changedPaths(changes), upload }), operation),
+      );
+    },
+  };
+
+  const local = async (path: string, text: string): Promise<Forwarded> => {
+    if (path === '/git/push') {
+      const { cwd, commit } = JSON.parse(text) as { cwd: string; commit: string };
+      return { status: 200, text: JSON.stringify(await copies.push(cwd, commit, caller)) };
+    }
+    if (path === '/git/observed') {
+      await copies.observed(JSON.parse(text) as Observed);
+      return { status: 200, text: '{}' };
+    }
+    return FORWARDED.has(path) ? forward(path, text) : { status: 404, text: '' };
   };
 
   const sockets = join(kitHome(), 'bridges');
@@ -126,8 +226,8 @@ export async function openBridge(house: House, conversationId: string, signal: A
         relay(request, response, new URL(path));
         return;
       }
-      const forwarded = FORWARDED.has(path) ? await forward(path, await received(request)) : { status: 404, text: '' };
-      response.writeHead(forwarded.status, { 'content-type': 'application/json' }).end(forwarded.text);
+      const answered = await local(path, await received(request));
+      response.writeHead(answered.status, { 'content-type': 'application/json' }).end(answered.text);
     } catch (error) {
       response.writeHead(502).end(error instanceof Error ? error.message : String(error));
     }
@@ -152,6 +252,7 @@ export async function openBridge(house: House, conversationId: string, signal: A
   return {
     env: {
       HOUSE_BRIDGE: socketPath,
+      PATH: `${join(kitHome(), 'shim')}${delimiter}${process.env.PATH ?? ''}`,
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: `url.${proxy}/app/.insteadOf`,
       GIT_CONFIG_VALUE_0: app,

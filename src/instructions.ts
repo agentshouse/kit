@@ -3,6 +3,7 @@ import { readEnrolment } from './home.ts';
 
 const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
 const FILE_LINE = 'To give the User a file, upload it with `house upload_attachment` and link it in your answer.';
+const COPIES_LINE = 'These House paths are Git working copies here; commit in one and run `house git push` to send the commit to House:';
 const HOW_WE_WORK = '/private/library/how-we-work.md';
 const UNREADABLE = /^(?:\S+: )?(?:path_not_found|room_not_found|operation_denied)\b/;
 const CUT = /^stderr: shell: output_cut (\d+) of \d+ bytes; continue with: (.+)$/;
@@ -27,8 +28,9 @@ async function howWeWork(bridge: Bridge): Promise<string> {
   return document.replace(/\n$/, '');
 }
 
-export async function instructions(bridge: Bridge, base: string): Promise<string> {
+export async function instructions(bridge: Bridge, base: string, copies: string[]): Promise<string> {
   const app = new URL('/app/new.git', (await readEnrolment())!.house).href;
   const appLine = `To show the User a page, upload it or push it to an App instead of starting a server; \`git clone ${app}\` starts a new App.`;
-  return [`${HOUSE_LINE}\n${FILE_LINE}\n${appLine}`, base, await howWeWork(bridge)].filter((part) => part !== '').join('\n\n');
+  const lines = [HOUSE_LINE, FILE_LINE, appLine, ...(copies.length === 0 ? [] : [COPIES_LINE, ...copies])];
+  return [lines.join('\n'), base, await howWeWork(bridge)].filter((part) => part !== '').join('\n\n');
 }

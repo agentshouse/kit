@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { beforeEach, expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
-import { fakeNpm, runKit, temporaryHome, type KitRun } from './kit.ts';
+import { fakeBin, runKit, temporaryHome, type KitRun } from './kit.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
@@ -40,7 +40,7 @@ async function installs(): Promise<string[]> {
 }
 
 async function start() {
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeNpm(home) });
+  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeBin(home) });
 }
 
 it('installs exactly the named CLIs at their pinned versions and adds one a later work frame names', async () => {

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { onTestFinished } from 'vitest';
 import { certificate, startHouse, until, type House, type KitSocket, type Received } from './double.ts';
-import { fakeNpm, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
+import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeCli } from './npm.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -20,7 +20,7 @@ export interface ToolResult {
   isError?: boolean;
 }
 
-export type ToolAnswer = (args: Record<string, unknown>) => ToolResult;
+export type ToolAnswer = (args: Record<string, unknown>, request: Received) => ToolResult | null;
 
 const AUTHORITY = 'provenance=house-derived epistemic_role=projection attestation=house-attested control_scope=read-protocol';
 
@@ -103,6 +103,13 @@ export interface Hosted {
   adapterLog(): Promise<Record<string, unknown>[]>;
 }
 
+export const GIT_IDENTITY = {
+  GIT_AUTHOR_NAME: 'Agent',
+  GIT_AUTHOR_EMAIL: 'agent@example.com',
+  GIT_COMMITTER_NAME: 'Agent',
+  GIT_COMMITTER_EMAIL: 'agent@example.com',
+};
+
 let inputs = 0;
 
 export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): Promise<Hosted> {
@@ -150,8 +157,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     const message = request.body as { id: number } & McpCall;
     const name = message.params.name!;
     const answer = tools[name] ?? (() => ({ content: [{ type: 'text', text: `${name} answered` }] }));
-    const result = message.method === 'tools/list' ? { tools: LISTING } : answer(message.params.arguments ?? {});
-    return { body: { jsonrpc: '2.0', id: message.id, result } };
+    const result = message.method === 'tools/list' ? { tools: LISTING } : answer(message.params.arguments ?? {}, request);
+    return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });
   house.route('POST', '/kit/tools/mutations', () => ({
     body: { tools: LISTING.map((tool) => ({ name: tool.name, writes: WRITES.has(tool.name) })) },
@@ -160,6 +167,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     body: { credential: conversationCredential(request.params.conversation!) },
   }));
   house.route('POST', '/kit/restarted', () => ({ body: {} }));
+  house.route('POST', '/kit/working-copy/selection', () => ({ body: { working_copy: null } }));
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved } }));
   house.route('POST', '/kit/agents/report', () => ({ body: {} }));
   house.route('POST', '/kit/inputs/:input/ack', (request) => {
@@ -182,7 +190,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   });
   const kit = runKit(['resident'], {
     HOUSE_KIT_HOME: home,
-    PATH: await fakeNpm(home),
+    PATH: await fakeBin(home),
+    ...GIT_IDENTITY,
     ...(hosting.tls ? { NODE_EXTRA_CA_CERTS: certificate().path } : {}),
     ...hosting.environment,
   });

@@ -16,7 +16,10 @@ Environment's credential in `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is
 set. Pass `--manual` to paste the code by hand on a machine without a browser,
 and `--environment <id>` to reconnect an Environment you already have.
 
-`kit resident` keeps the Environment connected.
+`kit resident` keeps the Environment connected, and keeps the Rooms you chose
+for this Environment as Git repositories under `/agents/house/working-copies`.
+Commit in one and run `house git push --owner` there to send the commit to
+House; inside an Agent conversation the Agent runs `house git push`.
 
 ## License
 
