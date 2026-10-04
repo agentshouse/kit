@@ -17,6 +17,7 @@ import {
 } from './git.ts';
 import { kitHome } from './home.ts';
 import { operationId } from './operation.ts';
+import { refusalOf, type Refusal } from './refusals.ts';
 import { changed, type Edit } from './translate.ts';
 
 const BRANCH = 'main';
@@ -122,7 +123,7 @@ interface Read {
   readOnly: Map<string, string>;
 }
 
-export type Submitted = { accepted: Written[] } | { refused: { code: string; text: string } };
+export type Submitted = { accepted: Written[] } | { refused: Refusal };
 
 export interface Caller {
   key: string;
@@ -153,12 +154,17 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
-export function refusalCode(text: string): string {
-  try {
-    return String((JSON.parse(text) as { error: { code: string } }).error.code);
-  } catch {
-    return text.split(':')[0]!.trim();
-  }
+const REBASED = new Set([
+  'field_base_stale',
+  'section_base_stale',
+  'preamble_base_stale',
+  'base_revision_stale',
+  'path_exists',
+  'path_absent',
+]);
+
+function rebaseFixes(refusal: Refusal): boolean {
+  return refusal.code === 'edit_conflict' && refusal.conflicts.some((code) => REBASED.has(code));
 }
 
 function short(commit: string): string {
@@ -332,7 +338,9 @@ export class WorkingCopies {
           return { accepted: outcome.contents };
         } catch (error) {
           if (!(error instanceof HouseRefusal) || error.status >= 500) throw error;
-          return { refused: { code: refusalCode(error.text), text: error.message } };
+          return {
+            refused: refusalOf(error.text) ?? { code: '', text: `House refused it with ${error.status}`, conflicts: [] },
+          };
         }
       },
     };
@@ -420,10 +428,10 @@ export class WorkingCopies {
 
   async push(cwd: string, selector: string, caller: Caller): Promise<Pushed> {
     const located = await run(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']);
-    if (located.status !== 0) return { refused: true, text: `${cwd} is not in a Git repository` };
+    if (located.status !== 0) return { refused: true, text: `${cwd} is not a House working copy; run house git push inside one` };
     const [common, worktree] = located.stdout.toString('utf8').split('\n') as [string, string];
     const key = await this.keyAt(dirname(common));
-    if (key === undefined) return { refused: true, text: `${worktree} is not a House working copy` };
+    if (key === undefined) return { refused: true, text: `${worktree} is not a House working copy; run house git push inside one` };
     return this.exclusive(key, () => this.pushed(key, worktree, selector, caller));
   }
 
@@ -605,7 +613,7 @@ export class WorkingCopies {
           positions: [{ authority: copy.room_ref, position: copy.position, log_epoch: copy.log_epoch }],
         });
       } catch (error) {
-        const code = error instanceof HouseRefusal ? refusalCode(error.text) : null;
+        const code = error instanceof HouseRefusal ? (refusalOf(error.text)?.code ?? null) : null;
         if (code === 'position_expired') return this.received(copy);
         if (code !== 'replica_behind') throw error;
         setTimeout(() => this.deliver(copy.key), REPLICA_RETRY_MS).unref();
@@ -673,7 +681,9 @@ export class WorkingCopies {
       }
       copy = await this.save(without(copy));
     }
-    if (!copy.active) return { refused: true, text: `${rootOf(copy)} is no longer kept in this Environment` };
+    if (!copy.active) {
+      return { refused: true, text: `${rootOf(copy)} is no longer synced to this Environment, so House takes no push from it` };
+    }
     const listed = (await git(copy.repository, ['rev-list', '--topo-order', commit])).split('\n');
     const base = listed.find((ancestor) => ancestor in copy.manifests);
     if (base === undefined) {
@@ -740,18 +750,17 @@ export class WorkingCopies {
   private async settle(start: Copy, caller: Caller, restaged = false): Promise<Pushed> {
     let copy = start;
     const push = copy.push!;
-    if (push.caller !== caller.key) {
-      return this.recovered(copy, `${short(push.commit)} was pushed by another caller and awaited its outcome`);
-    }
+    if (push.caller !== caller.key) return this.recovered(copy);
     let outcome: Submitted;
     try {
       outcome = await caller.submit(push.operation_id, push.changes, push.upload, async (upload) => {
         copy = await this.save({ ...copy, push: { ...push, upload } });
       });
     } catch (error) {
+      const refusal = error instanceof HouseRefusal ? refusalOf(error.text) : null;
       return {
         refused: true,
-        text: `House's answer to ${short(push.commit)} did not arrive (${causeOf(error)}); run house git push again to recover its outcome.`,
+        text: refusal?.text ?? `House's answer to ${short(push.commit)} did not arrive; run house git push again`,
       };
     }
     if ('refused' in outcome) {
@@ -759,22 +768,28 @@ export class WorkingCopies {
         const { upload, ...unstaged } = copy.push!;
         return this.settle(await this.save({ ...copy, push: unstaged }), caller, true);
       }
-      if (outcome.refused.code === 'operation_expired') return this.recovered(copy, outcome.refused.text);
+      if (outcome.refused.code === 'operation_expired') return this.recovered(copy);
+      const rebased = rebaseFixes(outcome.refused);
       let settled = await this.save(without(copy));
       try {
         settled = await this.save(await this.caughtUp(settled));
-      } catch (error) {
-        return { refused: true, text: `${outcome.refused.text}\n${HOUSE_REF} is unchanged: ${causeOf(error)}` };
+      } catch {
+        return {
+          refused: true,
+          text: rebased ? `${outcome.refused.text}\nHouse's current state did not arrive; push again later` : outcome.refused.text,
+        };
       }
       return {
         refused: true,
-        text: `${outcome.refused.text}\n${HOUSE_REF} holds House's current state; merge or rebase onto it, commit and push again.`,
+        text: rebased
+          ? `${outcome.refused.text}\n${HOUSE_REF} holds House's current state; rebase onto it and push again`
+          : outcome.refused.text,
       };
     }
     return this.finished(await this.save({ ...copy, push: { ...copy.push!, state: 'accepted', written: outcome.accepted } }));
   }
 
-  private async recovered(copy: Copy, reason: string): Promise<Pushed> {
+  private async recovered(copy: Copy): Promise<Pushed> {
     const push = copy.push!;
     const current = await this.save(await this.caughtUp(copy));
     const house = await tree(copy.repository, current.house);
@@ -783,7 +798,7 @@ export class WorkingCopies {
       await this.save(without(current));
       return {
         refused: true,
-        text: `${reason}; House does not hold ${short(push.commit)}; run house git push again to submit it as a new operation.`,
+        text: `House does not hold ${short(push.commit)}; run house git push again`,
       };
     }
     const written: Written[] = [];
@@ -806,10 +821,10 @@ export class WorkingCopies {
       const integrated = await this.integrated(copy.push!);
       if (integrated.done) await this.save(without(copy));
       return { refused: false, text: integrated.text };
-    } catch (error) {
+    } catch {
       return {
         refused: false,
-        text: `House accepted ${short(commit)}; local integration is pending (${causeOf(error)}); run house git push again to finish it.`,
+        text: `House accepted ${short(commit)}; run house git push again to finish integrating it here`,
       };
     }
   }

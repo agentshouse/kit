@@ -179,7 +179,7 @@ it('refuses a stale component or whole-file base as one batch, records House sta
 
   expect(refused.status).toBe(1);
   expect(refused.stderr).toContain('edit_conflict');
-  expect(refused.stderr).toContain("refs/house/received holds House's current state");
+  expect(refused.stderr).toContain("refs/house/received holds House's current state; rebase onto it and push again");
   expect(room.files.get('ROOM.md')!.content).toBe('The notes Room\n');
   expect(git(room.repository, 'show', 'refs/house/received:library/memo.md')).toBe(MEMO.replace('Grow.', 'Grow theirs.'));
   expect(git(room.repository, 'show', 'HEAD:library/memo.md')).toBe(MEMO.replace('Grow.', 'Grow mine.'));
@@ -228,6 +228,7 @@ it('refuses a change to a read-only path whatever the ignore file says and chang
 
   expect(refused.status).toBe(1);
   expect(refused.stderr).toContain('protected_path');
+  expect(refused.stderr).not.toContain('refs/house/received');
   expect(room.files.get('capture/mail/one.md')!.content).toBe('one\n');
   expect(room.files.get('library/plan.md')!.content).toBe('one\ntwo\n');
 });
@@ -347,7 +348,10 @@ it('pushes as the owner only with --owner outside a conversation and explains it
   expect(help.stdout).toBe(
     'usage: house git push [commit] [--owner]\nSubmit a Room commit to House; default HEAD. Use --owner only outside an Agent conversation. Native git push is not a House remote.\n',
   );
-  expect(outside).toMatchObject({ status: 1, stderr: 'house: / is not in a Git repository\n' });
+  expect(outside).toMatchObject({
+    status: 1,
+    stderr: 'house: / is not a House working copy; run house git push inside one\n',
+  });
   expect(batches(hosted)).toEqual([]);
 });
 

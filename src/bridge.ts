@@ -6,11 +6,10 @@ import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { delimiter, join } from 'node:path';
 import { parse } from 'yaml';
-import type { House } from './api.ts';
+import { HouseRefusal, type House } from './api.ts';
 import { KIT_VERSION } from './clis.ts';
 import {
   changedPaths,
-  refusalCode,
   type Caller,
   type Observed,
   type Submitted,
@@ -19,6 +18,7 @@ import {
 } from './copies.ts';
 import { kitHome, readEnrolment } from './home.ts';
 import { operationId } from './operation.ts';
+import { refusalOf, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
 
 export interface ToolResult {
@@ -70,13 +70,19 @@ function relay(request: IncomingMessage, response: ServerResponse, target: URL, 
   request.pipe(forwarded);
 }
 
-function answered(forwarded: Forwarded): { text: string } | { refused: { code: string; text: string } } {
-  if (forwarded.status >= 500) throw new Error(`House answered ${forwarded.status}`);
-  if (forwarded.status !== 200) return { refused: { code: refusalCode(forwarded.text), text: forwarded.text } };
+const UNREACHABLE = 'House is unreachable; call again in a minute';
+
+function refusalIn(text: string, status: number): Refusal {
+  return refusalOf(text) ?? { code: '', text: text === '' ? `House refused it with ${status}` : text, conflicts: [] };
+}
+
+function answered(forwarded: Forwarded): { text: string } | { refused: Refusal } {
+  if (forwarded.status >= 500) throw new HouseRefusal('/', forwarded.status, forwarded.text);
+  if (forwarded.status !== 200) return { refused: refusalIn(forwarded.text, forwarded.status) };
   const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
-  if (answer.error !== undefined) return { refused: { code: refusalCode(answer.error.message), text: answer.error.message } };
+  if (answer.error !== undefined) return { refused: refusalIn(answer.error.message, forwarded.status) };
   const text = answer.result!.content.map((content) => content.text).join('\n');
-  return answer.result!.isError === true ? { refused: { code: refusalCode(text), text } } : { text };
+  return answer.result!.isError === true ? { refused: refusalIn(text, forwarded.status) } : { text };
 }
 
 function editAnswer(forwarded: Forwarded): Submitted {
@@ -138,9 +144,9 @@ export async function openBridge(
   };
 
   const call = (name: string, args: Record<string, unknown>): Message =>
-    ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) as Message;
+    ({ jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: args } }) as Message;
 
-  const staged = async (operation: string, changes: Edit[]): Promise<Upload | { refused: { code: string; text: string } }> => {
+  const staged = async (operation: string, changes: Edit[]): Promise<Upload | { refused: Refusal }> => {
     const bytes = Buffer.from(JSON.stringify({ changes }));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const prepared = answered(
@@ -161,8 +167,8 @@ export async function openBridge(
       signal: closed.signal,
     });
     const text = await posted.text();
-    if (posted.status >= 500) throw new Error(`House answered ${posted.status}`);
-    if (!posted.ok) return { refused: { code: refusalCode(text), text } };
+    if (posted.status >= 500) throw new HouseRefusal('/', posted.status, text);
+    if (!posted.ok) return { refused: refusalIn(text, posted.status) };
     const held = (JSON.parse(text) as { transfer: { url: string; operation: string } }).transfer;
     return { url: held.url, operation: held.operation, bytes: bytes.length, sha256 };
   };
@@ -237,7 +243,11 @@ export async function openBridge(
       const answered = await local(path, await received(request));
       response.writeHead(answered.status, { 'content-type': 'application/json' }).end(answered.text);
     } catch (error) {
-      response.writeHead(502).end(error instanceof Error ? error.message : String(error));
+      if (error instanceof HouseRefusal) {
+        response.writeHead(error.status, { 'content-type': 'application/json' }).end(error.text);
+        return;
+      }
+      response.writeHead(502).end(request.url === '/git/push' && error instanceof Error ? error.message : UNREACHABLE);
     }
   });
   bridge.listen(socketPath);
@@ -268,7 +278,7 @@ export async function openBridge(
     tool: async (name, args) => {
       const forwarded = await forward(
         '/',
-        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+        JSON.stringify({ jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: args } }),
       );
       if (forwarded.status !== 200) throw new Error(`House refused ${name} with ${forwarded.status}: ${forwarded.text}`);
       const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
