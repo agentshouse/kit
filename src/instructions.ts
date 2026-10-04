@@ -11,9 +11,7 @@ const CUT = /^stderr: shell: output_cut (\d+) of \d+ bytes; continue with: (.+)$
 
 function cutOf(lines: string[]): RegExpExecArray | null {
   const cut = CUT.exec(lines[0] ?? '');
-  if (cut === null) return null;
-  const shown = Buffer.byteLength(`${lines.slice(1).join('\n')}\n`);
-  return shown === Number(cut[1]) || shown === Number(cut[1]) + 1 ? cut : null;
+  return cut !== null && Buffer.byteLength(lines.slice(1).join('\n')) === Number(cut[1]) ? cut : null;
 }
 
 async function howWeWork(bridge: Bridge): Promise<string> {
@@ -28,8 +26,7 @@ async function howWeWork(bridge: Bridge): Promise<string> {
       throw new Error(refusal);
     }
     const cut = cutOf(lines);
-    const shown = Buffer.from(`${lines.slice(cut === null ? 0 : 1).join('\n')}\n`);
-    document += (cut === null ? shown : shown.subarray(0, Number(cut[1]))).toString();
+    document += lines.slice(cut === null ? 0 : 1).join('\n');
     command = cut?.[2];
   }
   return document.replace(/\n$/, '');

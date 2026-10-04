@@ -26,7 +26,7 @@ export function shelled(stdout: string, exit = 0, stderr: string[] = []): ToolRe
   const text = [
     ...(exit === 0 ? [] : [`exit: ${exit}`]),
     ...stderr.map((line) => `stderr: ${line}`),
-    ...(stdout === '' ? [] : [stdout.replace(/\n$/, '')]),
+    ...(stdout === '' ? [] : [stdout]),
   ];
   return { content: [{ type: 'text', text: text.join('\n') }] };
 }
