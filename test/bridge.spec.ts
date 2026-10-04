@@ -86,6 +86,27 @@ it('attaches a fresh operation id to each mutation and none to a read', async ()
   expect(operations[0]).not.toBe(operations[1]);
 });
 
+it('resends a write House answers pending, and one whose answer is lost, as the same request until its outcome arrives', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  let calls = 0;
+  hosted.tools.append_record = (_args, request) => {
+    calls++;
+    if (calls === 1) {
+      const operation = called(request).params._meta[OPERATION];
+      return { content: [{ type: 'text', text: JSON.stringify({ pending: { retry_after: 1, operation_id: operation } }) }] };
+    }
+    return calls === 2 ? null : { content: [{ type: 'text', text: 'record: ep_1' }] };
+  };
+
+  directed(hosted, '@house append_record {"room_ref":"r_room","source_ref":"s_source","body":"hello"}');
+
+  expect((await runs(hosted, 1))[0]).toMatchObject({ status: 0, stdout: 'record: ep_1\n', stderr: '' });
+  expect(hosted.mcp).toHaveLength(3);
+  expect(hosted.mcp.map((received) => received.body)).toEqual(Array(3).fill(hosted.mcp[0]!.body));
+  expect(called(hosted.mcp[0]!).params._meta[OPERATION]).toMatch(UUID_V7);
+});
+
 it('asks House which tools write once per conversation, however many calls it forwards', async () => {
   const hosted = await hostKit();
   await opened(hosted);
@@ -144,6 +165,86 @@ it("uploads append_record's attachments and sends their references", async () =>
     { room_ref: 'r_room', source_ref: 's_source', body: 'see', attachments: ['at_1', 'at_2'] },
   ]);
   expect(called(hosted.mcp[0]!).params._meta[OPERATION]).toMatch(UUID_V7);
+});
+
+it('declares a file under one version per conversation, Room and content, and sends bytes House already holds no second time', async () => {
+  const hosted = await hostKit([{}, { kind: 'claude-agent-acp' }]);
+  await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
+  await writeFile(join(hosted.workingDirectory, 'other.txt'), 'other\n');
+  const saved = new Map<string, string>();
+  const posted: string[] = [];
+  hosted.house.route('POST', '/kit/attachments/upload', (received) => {
+    const { version } = received.body as { version: string };
+    const attachment = saved.get(version);
+    if (attachment !== undefined) return { body: { attachment, save: { status: 'saved' } } };
+    return {
+      body: {
+        attachment: `at_${saved.size + 1}`,
+        save: { status: 'pending' },
+        upload: { method: 'POST', operation: version, url: `${hosted.house.origin}/bytes/${version}`, expires_at: '2026-10-03T12:00:00Z' },
+      },
+    };
+  });
+  hosted.house.route('POST', '/bytes/:grant', (received) => {
+    posted.push(received.params.grant!);
+    saved.set(received.params.grant!, `at_${saved.size + 1}`);
+    return { body: { attachment: saved.get(received.params.grant!) } };
+  });
+  await opened(hosted);
+  await opened(hosted, 'conversation-2', 'agent-2');
+
+  directed(
+    hosted,
+    [
+      '@house upload_attachment {"path":"report.txt","room_ref":"r_room"}',
+      '@house upload_attachment {"path":"report.txt","room_ref":"r_room"}',
+      '@house upload_attachment {"path":"report.txt","room_ref":"r_other"}',
+      '@house upload_attachment {"path":"other.txt","room_ref":"r_room"}',
+    ].join('\n'),
+  );
+  await runs(hosted, 4);
+  directed(hosted, '@house upload_attachment {"path":"report.txt","room_ref":"r_room"}', 'conversation-2', 'agent-2');
+
+  const ran = await runs(hosted, 5);
+  expect(ran.map((each) => [each.status, each.stdout])).toEqual([
+    [0, '{"attachment":"at_1"}\n'],
+    [0, '{"attachment":"at_1"}\n'],
+    [0, '{"attachment":"at_2"}\n'],
+    [0, '{"attachment":"at_3"}\n'],
+    [0, '{"attachment":"at_4"}\n'],
+  ]);
+  const versions = hosted.house.requests
+    .filter((received) => received.path === '/kit/attachments/upload')
+    .map((received) => (received.body as { version: string }).version);
+  expect(versions[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(versions[1]).toBe(versions[0]);
+  expect(new Set(versions).size).toBe(4);
+  expect(posted).toHaveLength(4);
+});
+
+it('refuses a file the byte origin did not save, and appends nothing', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
+  await attachmentDouble(hosted);
+  hosted.house.route('POST', '/bytes/:grant', () => ({
+    body: { attachment: 'at_1', upload_failure: 'storage_unavailable' },
+  }));
+  await opened(hosted);
+
+  directed(
+    hosted,
+    [
+      '@house upload_attachment {"path":"report.txt","room_ref":"r_room"}',
+      '@house append_record {"room_ref":"r_room","source_ref":"s_source","body":"see","attachments":["report.txt"]}',
+    ].join('\n'),
+  );
+
+  const unsaved = 'house: report.txt was not saved: storage_unavailable; call again later\n';
+  expect((await runs(hosted, 2)).map((ran) => [ran.status, ran.stdout, ran.stderr])).toEqual([
+    [1, '', unsaved],
+    [1, '', unsaved],
+  ]);
+  expect(hosted.mcp).toEqual([]);
 });
 
 it("prints House's own line for a refused call, and no route, status or body", async () => {

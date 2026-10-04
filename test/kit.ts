@@ -19,7 +19,7 @@ export interface KitRun {
 
 export async function temporaryHome(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'kit-home-'));
-  onTestFinished(() => rm(home, { recursive: true, force: true }));
+  onTestFinished(() => rm(home, { recursive: true, force: true, maxRetries: 10 }));
   return home;
 }
 

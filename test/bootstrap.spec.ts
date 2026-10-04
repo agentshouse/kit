@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -104,4 +104,57 @@ place_native_kit`,
   expect(ran.status).toBe(1);
   expect(ran.stderr).toContain(`refused: House Kit could not be installed in ${home}/opt/house-kit`);
   expect(await readFile(join(home, 'opt', 'house-kit', 'release'), 'utf8')).toBe('old');
+});
+
+it('downloads its packages, Node.js and the Kit without the proxy variables a Flex sandbox sets for House traffic', async () => {
+  const home = await temporaryHome();
+  const linux = await readFile(LINUX, 'utf8');
+  const steps = ['establish_native_packages', 'stage_native_kit'].map(
+    (step) => new RegExp(`^${step}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0],
+  );
+  const bin = join(home, 'bin');
+  await mkdir(bin);
+  for (const tool of ['apt-get', 'curl', 'npm', 'sha256sum', 'tar']) {
+    const logged = ['sha256sum', 'tar'].includes(tool)
+      ? ''
+      : `printf '%s %s\\n' ${tool} "\${HTTP_PROXY-}\${HTTPS_PROXY-}\${http_proxy-}\${https_proxy-}" >> "$LOG"\n`;
+    await writeFile(join(bin, tool), `#!/bin/sh\n${logged}`);
+    await chmod(join(bin, tool), 0o755);
+  }
+  const ran = spawnSync(
+    'bash',
+    [
+      '-c',
+      `set -u
+elevated() { "$@"; }
+refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
+installed_packages() { :; }
+${/^DIRECT=.*$/m.exec(linux)![0]}
+NATIVE_PACKAGES=(ca-certificates curl git)
+VERSION=0.2.1-alpha.1
+NODE_VERSION=24.21.0
+NODE_SHA256=${'0'.repeat(64)}
+RELEASE=release
+${steps.join('')}
+establish_native_packages
+stage_native_kit`,
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        LOG: join(home, 'downloads.log'),
+        TMPDIR: home,
+        HTTP_PROXY: 'http://forwarder:3128',
+        HTTPS_PROXY: 'http://forwarder:3128',
+        http_proxy: 'http://forwarder:3128',
+        https_proxy: 'http://forwarder:3128',
+      },
+    },
+  );
+
+  expect(ran.stderr).toBe('');
+  expect((await readFile(join(home, 'downloads.log'), 'utf8')).split('\n').filter(Boolean).sort()).toEqual(
+    ['apt-get ', 'apt-get ', 'curl ', 'npm '],
+  );
 });

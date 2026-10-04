@@ -11,6 +11,10 @@ export class HouseRefusal extends Error {
   }
 }
 
+export function retryDelay(attempt: number): number {
+  return Math.min(30_000, 1000 * 2 ** attempt);
+}
+
 export async function post<T>(
   house: string,
   path: string,
@@ -51,7 +55,7 @@ export const house: House = {
       } catch (error) {
         if (error instanceof HouseRefusal && error.status < 500) throw error;
         process.stderr.write(`kit: ${path} did not reach House: ${(error as Error).message}\n`);
-        await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 1000 * 2 ** attempt)));
+        await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
         if (!current()) throw error;
       }
     }
