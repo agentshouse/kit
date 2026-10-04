@@ -285,6 +285,7 @@ async function directive(
 const app = agent({ name: 'adapter-double' })
   .onRequest('initialize', ({ params }) => {
     log({ method: 'initialize', params, env: process.env, argv: process.argv });
+    if (existsSync(join(home, 'refuse-initialize'))) throw new RequestError(-32603, 'the CLI did not initialize');
     return {
       protocolVersion: params.protocolVersion,
       agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },

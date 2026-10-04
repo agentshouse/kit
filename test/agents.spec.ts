@@ -235,19 +235,22 @@ it('reports a model its CLI refuses to select with the efforts the Kit last read
   );
 });
 
-it("keeps reporting the models the Kit last read while the CLI's session does not open", async () => {
+it.each([
+  ['its CLI session does not open', 'refuse-new', 'the session did not open'],
+  ['its CLI does not initialize', 'refuse-initialize', 'the CLI did not initialize'],
+])('keeps reporting the sign-in and models the Kit last read while %s', async (_, refusal, cause) => {
   desired = ['grok-build'];
   await signIn('grok-build');
   await start();
   const read = await until(() => reports[0]);
 
-  await writeFile(join(home, 'refuse-new'), '');
+  await writeFile(join(home, refusal), '');
   await placeHostKey(home);
   house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
 
   const kept = await until(() => reports[1]);
   expect(kept).toEqual({ ...read, ssh_host_key: HOST_KEY });
-  expect(kit!.stderr()).toContain('grok-build did not offer its models: the session did not open');
+  expect(kit!.stderr()).toContain(`grok-build did not offer its models: ${cause}`);
 });
 
 it('reads its CLIs again on its own, so a recovered install and changed efforts reach House without a work frame', async () => {

@@ -73,7 +73,7 @@ async function models(kind: string, adapter: Adapter, known: Model[]): Promise<M
   return offered;
 }
 
-async function offer(kind: string, known: Model[]): Promise<Offer> {
+async function offer(kind: string, known: Offer): Promise<Offer> {
   const probe = CLIS[kind]!.signedIn;
   if ('command' in probe && (await run(cliCommand(kind), probe.command, 30_000)).status !== 0) return SIGNED_OUT;
   let adapter: Adapter | undefined;
@@ -83,10 +83,10 @@ async function offer(kind: string, known: Model[]): Promise<Offer> {
       const method = adapter.initialized._meta?.[probe.initializeMeta];
       if (typeof method !== 'string' || method.length === 0) return SIGNED_OUT;
     }
-    return { signed_in: true, models: await models(kind, adapter, known) };
+    return { signed_in: true, models: await models(kind, adapter, known.models) };
   } catch (error) {
     process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
-    return adapter === undefined && 'initializeMeta' in probe ? SIGNED_OUT : { signed_in: true, models: known };
+    return adapter === undefined && 'initializeMeta' in probe ? known : { signed_in: true, models: known.models };
   } finally {
     if (adapter !== undefined) killTree(adapter.child);
   }
@@ -108,7 +108,7 @@ export class Agents {
   private reading: Promise<unknown> = Promise.resolve();
   private installing: Promise<void> = Promise.resolve();
   private installs = new Map<string, Installed>();
-  private offers = new Map<string, Model[]>();
+  private offers = new Map<string, Offer>();
   private reporting: Promise<void> | null = null;
   private again = false;
   private sending: Promise<void> = Promise.resolve();
@@ -157,8 +157,8 @@ export class Agents {
   private async send(): Promise<void> {
     const agents: Reported[] = [];
     for (const [kind, installed] of this.installs) {
-      const offered = installed.release === null ? SIGNED_OUT : await offer(kind, this.offers.get(kind) ?? []);
-      this.offers.set(kind, offered.models);
+      const offered = installed.release === null ? SIGNED_OUT : await offer(kind, this.offers.get(kind) ?? SIGNED_OUT);
+      this.offers.set(kind, offered);
       agents.push({ kind, ...installed, ...offered });
     }
     const hostKey = await sshHostKey();
