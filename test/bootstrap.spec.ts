@@ -77,3 +77,31 @@ it('leaves a native host its own kit and house rather than forwarding to them', 
     stderr: "kit_bootstrap_refused: --linux puts kit and house on this host's PATH; run house there directly\n",
   });
 });
+
+it('keeps the installed Kit in place when its replacement cannot be placed beside it', async () => {
+  const home = await temporaryHome();
+  const linux = await readFile(LINUX, 'utf8');
+  const placement = /^place_native_kit\(\) \{\n[\s\S]*?\n\}\n/m.exec(linux)![0];
+  const ran = spawnSync(
+    'bash',
+    [
+      '-c',
+      `set -u
+elevated() { "$@"; }
+refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
+NATIVE_PREFIX="$0/opt/house-kit"
+NATIVE_STAGE="$0/stage"
+NATIVE_BIN="$0/bin"
+mkdir -p "$NATIVE_PREFIX" "$NATIVE_BIN" "$NATIVE_STAGE"
+printf old > "$NATIVE_PREFIX/release"
+${placement}
+place_native_kit`,
+      home,
+    ],
+    { encoding: 'utf8' },
+  );
+
+  expect(ran.status).toBe(1);
+  expect(ran.stderr).toContain(`refused: House Kit could not be installed in ${home}/opt/house-kit`);
+  expect(await readFile(join(home, 'opt', 'house-kit', 'release'), 'utf8')).toBe('old');
+});
