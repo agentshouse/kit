@@ -95,7 +95,7 @@ it('uploads a local file through the attachments route and its transfer before u
   directed(hosted, '@house upload_attachment {"path":"report.txt","room_ref":"r_room"}');
 
   const [ran] = await runs(hosted, 1);
-  expect(JSON.parse(ran!.stdout)).toEqual({ attachment: 'at_1', save: { status: 'saved' } });
+  expect(JSON.parse(ran!.stdout)).toEqual({ attachment: 'at_1' });
   const declared = hosted.house.requests.find((received) => received.path === '/kit/attachments/upload')!;
   expect(declared.headers.authorization).toBe(`Bearer ${conversationCredential('conversation-1')}`);
   expect(declared.body).toEqual({

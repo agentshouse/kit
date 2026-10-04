@@ -22,16 +22,9 @@ export interface ToolResult {
 
 export type ToolAnswer = (args: Record<string, unknown>, request: Received) => ToolResult | null;
 
-const AUTHORITY = 'provenance=house-derived epistemic_role=projection attestation=house-attested control_scope=read-protocol';
-
 export function shelled(stdout: string, exit = 0, stderr: string[] = []): ToolResult {
   const text = [
-    `protocol: render=shell/1 ${AUTHORITY}`,
-    'cwd: /',
-    `exit: ${exit}`,
-    `truncation: ${stderr.some((line) => line.startsWith('shell: output_cut ')) ? 'egress' : 'none'}`,
-    'receipt: commands=1',
-    ...(stdout === '' ? [] : [`authority: ${AUTHORITY}`]),
+    ...(exit === 0 ? [] : [`exit: ${exit}`]),
     ...stderr.map((line) => `stderr: ${line}`),
     ...(stdout === '' ? [] : [stdout.replace(/\n$/, '')]),
   ];
@@ -347,7 +340,7 @@ export async function attachmentDouble(
       authorization: received.headers.authorization,
       bytes: received.body as Buffer,
     });
-    return { body: { attachment: `at_${received.params.grant!.slice('upload-'.length)}`, save: { status: 'saved' } } };
+    return { body: { attachment: `at_${received.params.grant!.slice('upload-'.length)}` } };
   });
   return transfers;
 }

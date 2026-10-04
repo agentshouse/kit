@@ -6,7 +6,15 @@ const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.
 const FILE_LINE = 'To give the User a file, upload it with `house upload_attachment` and link it in your answer.';
 const COPIES_LINE = 'These House paths are Git working copies here; commit in one and run `house git push` to send the commit to House:';
 const UNREADABLE = /^(?:\S+: )?(?:path_not_found|room_not_found|operation_denied)\b/;
+const FAILED = /^exit: [1-9]\d*$/;
 const CUT = /^stderr: shell: output_cut (\d+) of \d+ bytes; continue with: (.+)$/;
+
+function cutOf(lines: string[]): RegExpExecArray | null {
+  const cut = CUT.exec(lines[0] ?? '');
+  if (cut === null) return null;
+  const shown = Buffer.byteLength(`${lines.slice(1).join('\n')}\n`);
+  return shown === Number(cut[1]) || shown === Number(cut[1]) + 1 ? cut : null;
+}
 
 async function howWeWork(bridge: Bridge): Promise<string> {
   let document = '';
@@ -14,14 +22,13 @@ async function howWeWork(bridge: Bridge): Promise<string> {
     const read = await bridge.tool('shell', { command });
     const text = read.content.map((content) => content.text).join('\n');
     const lines = text.split('\n');
-    let at = lines[5]?.startsWith('authority: ') ? 6 : 5;
-    if (read.isError === true || lines[2] !== 'exit: 0') {
-      const refusal = read.isError === true ? text : lines.slice(at).join('\n').replace(/^stderr: /gm, '');
+    if (read.isError === true || (FAILED.test(lines[0] ?? '') && lines[1]?.startsWith('stderr: '))) {
+      const refusal = read.isError === true ? text : lines.slice(1).join('\n').replace(/^stderr: /gm, '');
       if (UNREADABLE.test(refusal)) return '';
       throw new Error(refusal);
     }
-    const cut = lines[3] === 'truncation: egress' ? CUT.exec(lines[at++] ?? '') : null;
-    const shown = Buffer.from(`${lines.slice(at).join('\n')}\n`);
+    const cut = cutOf(lines);
+    const shown = Buffer.from(`${lines.slice(cut === null ? 0 : 1).join('\n')}\n`);
     document += (cut === null ? shown : shown.subarray(0, Number(cut[1]))).toString();
     command = cut?.[2];
   }
