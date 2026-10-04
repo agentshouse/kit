@@ -16,7 +16,7 @@ async function prompts(hosted: Hosted, count: number): Promise<Prompt[]> {
 }
 
 function refused(code: string): ToolResult {
-  return { isError: true, content: [{ type: 'text', text: `${code}: check the reference, then call again.\n` }] };
+  return { isError: true, content: [{ type: 'text', text: `${code}: you read no Room there\n` }] };
 }
 
 function blockOf(prompt: Prompt): string[] {

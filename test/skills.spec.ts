@@ -85,14 +85,19 @@ function configure(home: string, argv: string[]): { status: number | null; stdou
 }
 
 function refused(code: string): ToolResult {
-  return { isError: true, content: [{ type: 'text', text: `${code}: read the current state, then call again.\n` }] };
+  return { isError: true, content: [{ type: 'text', text: `${code}: you may not write here\n` }] };
 }
 
-function conflicted(code: string, state: string): ToolResult {
-  const conflicts = [{ path: DOCUMENT, code, state, ...(code === 'ancestor_conflict' ? { blocking: `${DOCUMENT}/notes.md` } : {}) }];
+function conflicted(code: string): ToolResult {
+  const conflicts = [{ path: DOCUMENT, code, ...(code === 'ancestor_conflict' ? { blocking: `${DOCUMENT}/notes.md` } : {}) }];
   return {
     isError: true,
-    content: [{ type: 'text', text: `edit_conflict: read the current state, then call again.\n${stringify({ conflicts })}` }],
+    content: [
+      {
+        type: 'text',
+        text: `edit_conflict: nothing was written; fix each conflict listed, then send the edit again\n${stringify({ conflicts })}`,
+      },
+    ],
   };
 }
 
@@ -300,7 +305,7 @@ it.each(['operation_denied', 'room_not_found'])(
 
 it('keeps a present document as it is and never creates it again', async () => {
   const hosted = await hostKit([{}], { skills: true });
-  hosted.tools.edit = () => conflicted('path_exists', 'current');
+  hosted.tools.edit = () => conflicted('path_exists');
 
   await opened(hosted, 'conversation-1');
   await opened(hosted, 'conversation-2');
@@ -323,7 +328,7 @@ it("refuses to open a conversation with House's answer when another refusal stop
 
 it('refuses to open a conversation while another path blocks the absent document, and creates it once the path is free', async () => {
   const hosted = await hostKit([{}], { skills: true });
-  hosted.tools.edit = () => conflicted('ancestor_conflict', 'absent');
+  hosted.tools.edit = () => conflicted('ancestor_conflict');
 
   hosted.input({ kind: 'open', conversation_id: 'conversation-1' });
 
