@@ -312,7 +312,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     const { prefixes } = request.body as { prefixes: string[] };
     return {
       body: {
-        md_model_version: '0.1.0-alpha.15',
+        md_model_version: '0.1.0-alpha.17',
         authorities: selectedRooms(rooms, prefixes).map((room) => room.authority()),
       },
     };

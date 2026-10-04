@@ -50,6 +50,7 @@ function components(path: string, before: Document, after: Document, text: strin
 }
 
 export function changed(path: string, file: string, base: string | undefined, before: string, after: string): Edit[] {
+  if (!file.endsWith('.md')) return [{ op: 'replace', path, base, content: after }];
   const parsedBefore = parse(before, file);
   const parsedAfter = parse(after, file);
   const structured =

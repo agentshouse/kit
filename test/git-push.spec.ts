@@ -94,6 +94,27 @@ it('sends the selected commit, HEAD by default, as exact-base edits and leaves s
   expect(batches(hosted)).toHaveLength(2);
 });
 
+it('sends a changed schema as one whole-text replacement against its revision', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room(null);
+  room.write = ['library', 'settings/schema.yaml'];
+  room.protected = ['agents', 'house'];
+  const schema = 'types:\n  note:\n    fields:\n      title: { kind: string }\n';
+  room.put('settings/schema.yaml', schema);
+  await rooms.select([room]);
+  const revision = room.revision('settings/schema.yaml');
+  const widened = `${schema}      status: { kind: string }\n`;
+  await writeFile(join(room.repository, 'settings/schema.yaml'), widened);
+  commitAll(room.repository, 'widen');
+
+  expect(await house(hosted, room.repository, 'git', 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [{ op: 'replace', path: '/private/settings/schema.yaml', base: revision, content: widened }],
+  ]);
+  expect(room.files.get('settings/schema.yaml')!.content).toBe(widened);
+});
+
 it('sends a changed field, section and preamble against its own prior value, so different remote changes to the same file both stand', async () => {
   const { hosted, room } = await copied();
   const local = MEMO.replace('status: draft', 'status: ready').replace('Grow.', 'Grow fast.').replace('Opening words.', 'New opening.');
