@@ -17,6 +17,7 @@ import {
   runs,
   type McpCall,
 } from './environment.ts';
+import { OVERLOADED } from './rooms.ts';
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const OPERATION = 'agents.house/agent-operation';
@@ -171,6 +172,21 @@ it("prints House's own line for a refused call, and no route, status or body", a
     [1, 'house: house_overloaded: House is busy; call again in 5 s\n'],
     [1, 'house: room_archived: this Room is archived and read-only; its owner can unarchive it at /rooms/<room>/settings\n'],
   ]);
+});
+
+it("prints the byte origin's refusal of an upload as House words it, with its delay", async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
+  await attachmentDouble(hosted);
+  hosted.house.route('POST', '/bytes/:grant', () => ({ status: 503, body: OVERLOADED }));
+  await opened(hosted);
+
+  directed(hosted, '@house upload_attachment {"path":"report.txt"}');
+
+  expect((await runs(hosted, 1))[0]).toMatchObject({
+    status: 1,
+    stderr: 'house: house_overloaded: House is busy; call again in 5 s\n',
+  });
 });
 
 it('says a refused upload transfer failed without its capability address', async () => {

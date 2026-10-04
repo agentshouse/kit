@@ -170,6 +170,19 @@ it('sends a change set above the MCP bound as one prepared upload under the push
   expect(room.files.get('library/big.md')!.content).toBe(big);
 });
 
+it("prints the byte origin's refusal of a prepared upload as House words it, with its delay", async () => {
+  const { hosted, rooms, room } = await copied();
+  await writeFile(join(room.repository, 'library/big.md'), '\u0001'.repeat(800_000));
+  commitAll(room.repository, 'big');
+  rooms.overloadsUploads = 1;
+
+  const refused = await shell(hosted, `cd ${room.repository} && house git push`);
+  const landed = await shell(hosted, `cd ${room.repository} && house git push`);
+
+  expect(refused).toMatchObject({ status: 1, stderr: 'house: house_overloaded: House is busy; call again in 5 s\n' });
+  expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+});
+
 it("prints House's refusal of a push as House words it, keeps its delay, and the next push lands it", async () => {
   const { hosted, room } = await copied();
   let overloaded = false;

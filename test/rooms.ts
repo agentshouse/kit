@@ -257,6 +257,7 @@ export interface Rooms {
   expired: Set<string>;
   dropping: number;
   dropsEdits: number;
+  overloadsUploads: number;
   reads: boolean[];
   prepared: unknown[];
   uploaded: Buffer[];
@@ -269,6 +270,10 @@ function selectedRooms(rooms: Room[], prefixes: string[]): Room[] {
   );
 }
 
+export const OVERLOADED = {
+  error: { code: 'house_overloaded', message: 'house_overloaded: House is busy; call again in 5 s', retry_after: 5, retryable: true },
+};
+
 export function serveRooms(hosted: Hosted): Rooms {
   const rooms: Room[] = [];
   const receipts = new Map<string, unknown>();
@@ -278,6 +283,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     expired: new Set(),
     dropping: 0,
     dropsEdits: 0,
+    overloadsUploads: 0,
     reads: [],
     prepared: [],
     uploaded: [],
@@ -371,6 +377,10 @@ export function serveRooms(hosted: Hosted): Rooms {
     return { content: [{ type: 'text', text: stringify({ transfer: { method: 'POST', url: `${hosted.house.origin}/uploads/${grant}`, operation } }) }] };
   };
   hosted.house.route('POST', '/uploads/:grant', (request) => {
+    if (state.overloadsUploads > 0) {
+      state.overloadsUploads--;
+      return { status: 503, body: OVERLOADED };
+    }
     const framed = request.body as Buffer;
     const line = framed.indexOf(10);
     const grant = grants.get(request.params.grant!)!;

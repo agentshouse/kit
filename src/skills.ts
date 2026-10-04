@@ -3,7 +3,6 @@ import { cp, lstat, mkdir, readdir, realpath, rm, symlink, writeFile } from 'nod
 import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
 import type { Bridge } from './bridge.ts';
 import { KIT_VERSION } from './clis.ts';
 import { kitHome, readConfiguration, readHome, writeHome } from './home.ts';
@@ -71,19 +70,14 @@ export async function placeSkillSet(): Promise<void> {
   else await rm(join(kitHome(), RECORD), { force: true });
 }
 
-function documentPresent(refusal: string): boolean {
-  const { conflicts } = parse(refusal.slice(refusal.indexOf('\n') + 1)) as { conflicts: { code: string }[] };
-  return conflicts.some((conflict) => conflict.code === 'path_exists');
-}
-
 export async function createHowWeWork(bridge: Bridge): Promise<void> {
   if ((await readHome<Installed>(RECORD)) === null || (await present(join(kitHome(), CREATED)))) return;
   const created = await bridge.tool('edit', { changes: [{ op: 'create', path: HOW_WE_WORK, content: HOW_WE_WORK_TEXT }] });
   if (created.isError === true) {
     const text = created.content.map((content) => content.text).join('\n');
-    const code = refusalOf(text)?.code ?? '';
-    if (UNWRITABLE.has(code)) return;
-    if (code !== 'edit_conflict' || !documentPresent(text)) throw new Error(text);
+    const refusal = refusalOf(text);
+    if (UNWRITABLE.has(refusal?.code ?? '')) return;
+    if (refusal?.code !== 'edit_conflict' || !refusal.conflicts.includes('path_exists')) throw new Error(text);
   }
   await writeFile(join(kitHome(), CREATED), '');
 }
