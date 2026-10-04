@@ -56,6 +56,13 @@ it('enrolls with a credential only on a server', async () => {
   });
 });
 
+it('takes --no-skills as a bootstrap option', async () => {
+  expect(bootstrap(await published(), ['--no-skills', '--enroll', 'environment-one'])).toMatchObject({
+    status: 1,
+    stderr: 'kit_bootstrap_refused: --enroll enrolls a server; add --linux\n',
+  });
+});
+
 it('refuses a native install on any host but the one selected Linux platform before changing it', async () => {
   const refused = bootstrap(await published(), ['--linux', '--house', 'https://agents.house', '--enroll', 'environment-one']);
 

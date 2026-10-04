@@ -20,6 +20,7 @@ import type { WorkingCopies } from './copies.ts';
 import { placeFiles, type MessageFile } from './files.ts';
 import { instructions } from './instructions.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
+import { createHowWeWork } from './skills.ts';
 import type { Frame } from './stream.ts';
 
 export interface Kit {
@@ -328,6 +329,7 @@ export class Conversations {
     }
     conversation.opening = bridge;
     try {
+      await unlessKilled(createHowWeWork(bridge), conversation.killed.signal);
       const adapter = await startAdapter(
         route.kind,
         route.working_directory,

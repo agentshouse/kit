@@ -16,7 +16,9 @@
     "./bootstrap": "./dist/bootstrap.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "how-we-work.md",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/bootstrap-manifest.mjs",

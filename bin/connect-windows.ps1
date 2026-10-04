@@ -7,6 +7,7 @@ $KitHome = 'house-kit-home'
 $KitHomeMount = "type=volume,src=$KitHome,dst=/kit-home"
 $Link = 'Open this link and confirm: '
 $AuthorityMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/authority-main.js'
+$ConfigureMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js'
 $EnrolmentReader = "try{const e=JSON.parse(require('fs').readFileSync('/kit-home/credential.json','utf8'));console.log('house',e.house);console.log('environment',e.environment)}catch(e){if(e.code!=='ENOENT')throw e}"
 $BootstrapArguments = @($args | ForEach-Object { [string]$_ })
 $MinimumBuild = 22631
@@ -234,6 +235,13 @@ function Test-Authority {
   if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
 }
 
+function Set-Configuration {
+  $ErrorActionPreference = 'Continue'
+  $output = @(& docker run --rm --network none --mount $KitHomeMount --entrypoint node $Image $ConfigureMain @NoSkills 2>&1 | ForEach-Object { "$_" })
+  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "the Kit configuration could not be written: $(@($output | Where-Object { $_ })[-1])" }
+  $output -contains 'changed'
+}
+
 function Start-Resident {
   $resident = @()
   if (-not $House.StartsWith('https://')) { $resident = @('--network', 'host') }
@@ -249,6 +257,7 @@ function Connect-Kit {
   $Forwarding = $false
   $Forwarded = 'kit'
   $Forward = @()
+  $NoSkills = @()
   $Arguments = $BootstrapArguments
   for ($index = 0; $index -lt $Arguments.Count; $index++) {
     $argument = $Arguments[$index]
@@ -271,6 +280,8 @@ function Connect-Kit {
       }
     } elseif ($argument -ceq '--manual') {
       $Manual = $true
+    } elseif ($argument -ceq '--no-skills') {
+      $NoSkills = @('--no-skills')
     } else {
       Stop-Bootstrap "unknown argument $argument"
     }
@@ -363,17 +374,21 @@ function Connect-Kit {
       Exit-Bootstrap $LASTEXITCODE
     }
     Test-Authority
+    $configured = Set-Configuration
     if ($installed -cne $Image) {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
       Write-Host "House Kit updated for Environment $($enrolment['environment'])."
       return
     }
-    if ((Read-Inspect '{{.State.Running}}') -ceq 'true') {
-      Write-Host "House Kit is already running for Environment $($enrolment['environment'])."
-    } else {
+    if ((Read-Inspect '{{.State.Running}}') -cne 'true') {
       Invoke-Docker start $Name | Out-Null
       Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
+    } elseif ($configured) {
+      Invoke-Docker restart $Name | Out-Null
+      Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
+    } else {
+      Write-Host "House Kit is already running for Environment $($enrolment['environment'])."
     }
     return
   }
@@ -388,6 +403,7 @@ function Connect-Kit {
     $enrolment = Read-Enrolment
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
   }
+  [void](Set-Configuration)
   Start-Resident
   Write-Host "House Kit connected for Environment $($enrolment['environment'])."
 }

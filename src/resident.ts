@@ -11,6 +11,7 @@ import { Conversations, type Input } from './conversations.ts';
 import { WorkingCopies } from './copies.ts';
 import { kitHome, readEnrolment } from './home.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
+import { placeSkillSet } from './skills.ts';
 import { holdStream, type Frame, type Stream } from './stream.ts';
 
 function report(error: unknown): void {
@@ -59,6 +60,7 @@ export async function resident(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  await placeSkillSet();
   process.env.HOUSE_KIT_RESIDENT = String(process.pid);
   const agents = new Agents(house);
   const copies = new WorkingCopies(house);

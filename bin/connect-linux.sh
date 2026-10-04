@@ -17,6 +17,8 @@ ENROLL_SELECTED=0
 FORWARDING=0
 FORWARDED=kit
 FORWARD=()
+NO_SKILLS=()
+CONFIGURED=''
 UBUNTU_RELEASES=(jammy noble resolute)
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 CONFLICTING_PACKAGES=(docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc)
@@ -103,6 +105,10 @@ bind_house() {
 check_authority() {
   HOUSE_KIT_HOME="$KIT_HOME" "$@" ||
     refuse "House refuses the stored Kit credential of Environment $(enrolled environment); to reconnect it, $RECONNECT"
+}
+
+configure_kit() {
+  CONFIGURED=$(HOUSE_KIT_HOME="$KIT_HOME" "$@" ${NO_SKILLS[@]+"${NO_SKILLS[@]}"}) || refuse 'the Kit configuration could not be written'
 }
 
 elevated() {
@@ -335,12 +341,17 @@ connect_native() {
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
+  configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
   if ! service_manager; then
     printf 'House Kit %s is installed for Environment %s; no service manager runs on this host, so start it with: %s/kit resident\n' \
       "$VERSION" "$(enrolled environment)" "$NATIVE_BIN"
     return
   fi
   start_native_service
+  if [[ "$connected" == running && -n "$CONFIGURED" ]]; then
+    elevated systemctl restart "$NATIVE_SERVICE" || refuse 'the House Kit service could not be restarted'
+    connected=restarted
+  fi
   case "$connected" in
     connected) printf 'House Kit connected for Environment %s.\n' "$(enrolled environment)" ;;
     updated) printf 'House Kit updated for Environment %s.\n' "$(enrolled environment)" ;;
@@ -402,11 +413,14 @@ update_kit() {
 }
 
 resume_kit() {
-  if kit_running; then
+  if ! kit_running; then
+    docker start "$NAME" >/dev/null
+  elif [[ -n "$CONFIGURED" ]]; then
+    docker restart "$NAME" >/dev/null
+  else
     printf 'House Kit is already running for Environment %s.\n' "$(enrolled environment)"
     return
   fi
-  docker start "$NAME" >/dev/null
   printf 'House Kit restarted for Environment %s.\n' "$(enrolled environment)"
 }
 
@@ -417,6 +431,7 @@ connect_kit() {
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
+  configure_kit "${CONFIGURE[@]}"
   start_resident
   printf 'House Kit connected for Environment %s.\n' "$(enrolled environment)"
 }
@@ -456,6 +471,10 @@ while (($#)); do
       ;;
     --linux)
       NATIVE=1
+      shift
+      ;;
+    --no-skills)
+      NO_SKILLS=(--no-skills)
       shift
       ;;
     *) refuse "unknown argument $1" ;;
@@ -540,6 +559,7 @@ DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${NAMED[@]+"${NAMED[@]
 LOGIN_TYPED=("${DOCKER_RUN[@]:0:2}" -i "${DOCKER_RUN[@]:2}" login)
 LOGIN_OPENED=("${DOCKER_RUN[@]:0:2}" ${PUBLISHED[@]+"${PUBLISHED[@]}"} "${DOCKER_RUN[@]:2}" login)
 AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/authority-main.js")
+CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/configure-main.js")
 
 if kit_installed; then
   check_installation
@@ -554,6 +574,7 @@ if kit_installed; then
     exit
   fi
   check_authority "${AUTHORITY[@]}"
+  configure_kit "${CONFIGURE[@]}"
   if [[ "$(docker inspect --format '{{.Config.Image}}' "$NAME")" != "$IMAGE" ]]; then
     update_kit
   else

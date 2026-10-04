@@ -59,9 +59,14 @@ export const LISTING = [
     description: 'Store a file to link from a document.',
     inputSchema: { type: 'object', properties: { path: { type: 'string' }, room_ref: { type: 'string' } } },
   },
+  {
+    name: 'edit',
+    description: 'Create or change files in a Room or `/private`.',
+    inputSchema: { type: 'object', properties: { changes: { type: 'array' } } },
+  },
 ];
 
-const WRITES = new Set(['append_record', 'upload_attachment']);
+const WRITES = new Set(['append_record', 'upload_attachment', 'edit']);
 
 export function conversationCredential(conversation: string): string {
   return `ahc_${conversation}`;
@@ -84,6 +89,8 @@ export interface RouteOverrides {
 export interface Hosting {
   tls?: boolean;
   environment?: Record<string, string>;
+  home?: string;
+  skills?: boolean;
 }
 
 export interface Hosted {
@@ -114,7 +121,7 @@ let inputs = 0;
 
 export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): Promise<Hosted> {
   const house = await startHouse(hosting.tls ? certificate() : undefined);
-  const home = await temporaryHome();
+  const home = hosting.home ?? (await temporaryHome());
   onTestFinished(async () => {
     for (const log of ['adapter.log', 'login.log']) {
       const lines = (await readFile(join(home, log), 'utf8').catch(() => '')).split('\n').filter((line) => line !== '');
@@ -130,6 +137,9 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     join(home, 'credential.json'),
     JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }),
   );
+  if (hosting.home === undefined || hosting.skills !== undefined) {
+    await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: hosting.skills ?? false }));
+  }
   const resolved = routes.map((route, index) => ({
     agent_id: `agent-${index + 1}`,
     kind: 'codex-acp',

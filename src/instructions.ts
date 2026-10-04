@@ -1,10 +1,10 @@
 import type { Bridge } from './bridge.ts';
 import { readEnrolment } from './home.ts';
+import { HOW_WE_WORK } from './skills.ts';
 
 const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
 const FILE_LINE = 'To give the User a file, upload it with `house upload_attachment` and link it in your answer.';
 const COPIES_LINE = 'These House paths are Git working copies here; commit in one and run `house git push` to send the commit to House:';
-const HOW_WE_WORK = '/private/library/how-we-work.md';
 const UNREADABLE = /^(?:\S+: )?(?:path_not_found|room_not_found|operation_denied)\b/;
 const CUT = /^stderr: shell: output_cut (\d+) of \d+ bytes; continue with: (.+)$/;
 

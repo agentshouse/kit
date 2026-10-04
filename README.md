@@ -17,6 +17,10 @@ On your own Ubuntu 26.04 server, run the Linux command with `--linux` to
 install House Kit natively, with its workspace at `/agents/house`; `kit` and
 `house` are then on the server's `PATH`.
 
+House Kit also gives every Agent on the Environment a set of agent skills. Add
+`--no-skills` to the command to leave them out; running it again without the
+flag brings them back.
+
 ## Commands
 
 `kit login` opens a link you confirm in your browser and keeps the
@@ -33,3 +37,5 @@ directory. Inside an Agent conversation the Agent runs `house git push`.
 ## License
 
 MIT
+
+The skills come from [mattpocock/skills](https://github.com/mattpocock/skills); thank you, Matt Pocock.
