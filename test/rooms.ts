@@ -29,7 +29,15 @@ interface Write {
   rewrite?: true;
 }
 
-type Edited = { writes: Write[] } | { refusal: { code: string; conflicts?: Record<string, unknown>[] } };
+type Refused = { code: string; path?: string; conflicts?: Record<string, unknown>[] };
+
+type Edited = { writes: Write[] } | { refusal: Refused };
+
+function said(refusal: Refused): string {
+  if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
+  const conflicts = stringify({ conflicts: refusal.conflicts }).trimEnd();
+  return `edit_conflict: nothing was written; fix each conflict listed, then send the edit again\n${conflicts}`;
+}
 
 interface EditChange {
   op: string;
@@ -182,11 +190,11 @@ export class Room {
       const path = change.path.slice(this.root.length + 1);
       const to = change.to?.slice(this.root.length + 1);
       if (!this.writable(path) || (to !== undefined && !this.writable(to))) {
-        return { refusal: { code: 'protected_path' } };
+        return { refusal: { code: 'protected_path', path: change.path } };
       }
       const current = next.get(path);
       const stale = (code: string) =>
-        conflicts.push({ path: change.path, code, state: current === undefined ? 'absent' : 'current', revision: current?.revision });
+        conflicts.push({ path: change.path, code, ...(current === undefined ? {} : { revision: current.revision }) });
       if (change.op === 'create') {
         if (current !== undefined) stale('path_exists');
         else set(path, 'create', change.content!);
@@ -225,7 +233,7 @@ export class Room {
               ? { kind: 'preamble', value: change.content!, prior: String(change.base) }
               : { kind: 'section', name: change.section!, value: change.content!, prior: String(change.base) };
         const result = apply(parsed.document, structured);
-        if (result.outcome !== 'applied') stale('component_stale');
+        if (result.outcome !== 'applied') stale(`${structured.kind}_base_stale`);
         else set(path, 'replace', serialize(result.document));
       }
     }
@@ -347,7 +355,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       state.dropping--;
       return { drop: true };
     }
-    if ('refusal' in outcome) return { status: 409, body: { error: outcome.refusal } };
+    if ('refusal' in outcome) return { status: 409, body: { error: { ...outcome.refusal, message: said(outcome.refusal) } } };
     const { writes, ...rest } = outcome;
     return {
       body: { ...rest, contents: answered(writes).map((write) => ({ path: write.path, content: write.content, revision: write.revision })) },
@@ -376,7 +384,7 @@ export function serveRooms(hosted: Hosted): Rooms {
   hosted.tools.edit = (args, request) => {
     const bearer = request.headers.authorization!;
     if (state.denied.has(bearer)) {
-      return { isError: true, content: [{ type: 'text', text: 'operation_denied: you cannot get around this.\n' }] };
+      return { isError: true, content: [{ type: 'text', text: 'operation_denied: you may not write here; the Room owner grants Room access, your User widens an Agent at /agents\n' }] };
     }
     const upload = args.upload as { url: string } | undefined;
     const changes = (
@@ -391,9 +399,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     }
     const outcome = receipts.get(operation) as ReturnType<typeof edited>;
     if ('refusal' in outcome) {
-      const { code, ...facts } = outcome.refusal;
-      const said = `${code}: read the current state, then call again.\n${Object.keys(facts).length > 0 ? stringify(facts) : ''}`;
-      return { isError: true, content: [{ type: 'text', text: said }] } satisfies ToolResult;
+      return { isError: true, content: [{ type: 'text', text: `${said(outcome.refusal)}\n` }] } satisfies ToolResult;
     }
     const room = roomOf(changes[0]!.path);
     return {

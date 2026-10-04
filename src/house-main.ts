@@ -5,6 +5,7 @@ import { request } from 'node:http';
 import { basename, join } from 'node:path';
 import type { ToolResult } from './bridge.ts';
 import { kitHome } from './home.ts';
+import { refusalOf } from './refusals.ts';
 
 interface Tool {
   name: string;
@@ -19,7 +20,19 @@ interface Declared {
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
 const GIT_HELP = 'Submit a Room commit to House; default HEAD. Use --owner only outside an Agent conversation. Native git push is not a House remote.';
 const GIT_USAGE = `usage: house git push [commit] [--owner]\n${GIT_HELP}`;
+const ARGUMENTS = `the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'`;
+const CLOSED = "this conversation's House connection is closed; nothing to do from here";
+const REVOKED = 'this conversation no longer has House access; nothing to do from here';
 const socketPath = process.env.HOUSE_BRIDGE;
+
+function refused(path: string, status: number, text: string): string {
+  const refusal = refusalOf(text);
+  if (refusal !== null) return refusal.text;
+  if (status === 401) return REVOKED;
+  if (URL.canParse(path)) return `the upload answered ${status}; upload the file again`;
+  if (status === 502 && /^[A-Za-z]/.test(text)) return text;
+  return `${path} answered ${status}`;
+}
 
 function bridged(
   path: string,
@@ -36,16 +49,16 @@ function bridged(
       });
       answer.on('end', () => {
         if (answer.statusCode === 200) resolve(text);
-        else reject(new Error(`${path} answered ${answer.statusCode}: ${text}`));
+        else reject(new Error(refused(path, answer.statusCode!, text)));
       });
     });
-    sent.on('error', reject);
+    sent.on('error', () => reject(new Error(CLOSED)));
     sent.end(body instanceof Buffer ? body : JSON.stringify(body));
   });
 }
 
 async function mcp<T>(method: string, params: object): Promise<T> {
-  const answer = JSON.parse(await bridged('/', { jsonrpc: '2.0', id: 1, method, params })) as {
+  const answer = JSON.parse(await bridged('/', { jsonrpc: '2.0', id: randomUUID(), method, params })) as {
     result?: T;
     error?: { message: string };
   };
@@ -57,8 +70,21 @@ async function tools(): Promise<Tool[]> {
   return (await mcp<{ tools: Tool[] }>('tools/list', {})).tools;
 }
 
-async function upload(path: string, roomRef: unknown): Promise<string> {
-  const bytes = await readFile(path);
+async function localFile(path: string): Promise<Buffer> {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    throw new Error(
+      (error as NodeJS.ErrnoException).code === 'EISDIR'
+        ? `${path} is a folder; upload one file at a time`
+        : `${path} is not a readable file`,
+    );
+  }
+}
+
+async function upload(path: unknown, roomRef: unknown, missing: string): Promise<string> {
+  if (typeof path !== 'string' || path === '') throw new Error(missing);
+  const bytes = await localFile(path);
   const declared = JSON.parse(
     await bridged('/kit/attachments/upload', {
       ...(roomRef === undefined ? {} : { room_ref: roomRef }),
@@ -76,10 +102,10 @@ async function upload(path: string, roomRef: unknown): Promise<string> {
 
 async function gitPush(args: string[]): Promise<string> {
   if (args.includes('--help')) return GIT_USAGE;
-  if (args[0] !== 'push') throw new Error(GIT_USAGE);
+  if (args[0] !== 'push') throw new Error('only house git push [commit] exists; use plain git for the rest');
   const owner = args.includes('--owner');
   const commit = args.slice(1).find((arg) => arg !== '--owner') ?? 'HEAD';
-  if (owner && socketPath !== undefined) throw new Error('house git push --owner runs outside an Agent conversation');
+  if (owner && socketPath !== undefined) throw new Error('--owner is not for Agent conversations; run house git push without it');
   if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house git push needs --owner');
   const pushed = JSON.parse(
     await bridged('/git/push', { cwd: process.cwd(), commit }, undefined, owner ? join(kitHome(), 'owner.sock') : socketPath),
@@ -88,27 +114,40 @@ async function gitPush(args: string[]): Promise<string> {
   return pushed.text;
 }
 
+function argumentsOf(argument: string | undefined): Record<string, unknown> {
+  if (argument === undefined) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argument);
+  } catch {
+    throw new Error(ARGUMENTS);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error(ARGUMENTS);
+  return parsed as Record<string, unknown>;
+}
+
 async function house([verb, argument]: string[]): Promise<string> {
   if (verb === undefined || verb === '--help') {
     return [USAGE, `git push [commit]: ${GIT_HELP}`, ...(await tools()).map((tool) => `${tool.name}: ${tool.description}`)].join('\n');
   }
   if (argument === '--help') {
     const tool = (await tools()).find((listed) => listed.name === verb);
-    if (tool === undefined) throw new Error(`House has no tool ${verb}`);
+    if (tool === undefined) throw new Error(`${verb} is no Tool; house find_command '{"query":"${verb}"}' finds Commands`);
     return `${tool.description}\n${JSON.stringify(tool.inputSchema, null, 2)}`;
   }
-  const args = (argument === undefined ? {} : JSON.parse(argument)) as Record<string, unknown>;
-  if (verb === 'upload_attachment') return upload(String(args.path), args.room_ref);
+  const args = argumentsOf(argument);
+  if (verb === 'upload_attachment') return upload(args.path, args.room_ref, 'upload_attachment needs "path", a local file');
   if (verb === 'append_record' && Array.isArray(args.attachments)) {
     const attachments: string[] = [];
     for (const path of args.attachments) {
-      attachments.push((JSON.parse(await upload(String(path), args.room_ref)) as { attachment: string }).attachment);
+      const uploaded = await upload(path, args.room_ref, 'each attachments entry is the path of a local file');
+      attachments.push((JSON.parse(uploaded) as { attachment: string }).attachment);
     }
     args.attachments = attachments;
   }
   const result = await mcp<ToolResult>('tools/call', { name: verb, arguments: args });
   const text = result.content.map((content) => content.text).join('\n');
-  if (result.isError === true) throw new Error(text);
+  if (result.isError === true) throw new Error(text.replace(/\n+$/, ''));
   return text;
 }
 

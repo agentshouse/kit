@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import type { Bridge } from './bridge.ts';
 import { KIT_VERSION } from './clis.ts';
-import { refusalCode } from './copies.ts';
 import { kitHome, readConfiguration, readHome, writeHome } from './home.ts';
+import { refusalOf } from './refusals.ts';
 
 interface Installed {
   version?: string;
@@ -81,7 +81,7 @@ export async function createHowWeWork(bridge: Bridge): Promise<void> {
   const created = await bridge.tool('edit', { changes: [{ op: 'create', path: HOW_WE_WORK, content: HOW_WE_WORK_TEXT }] });
   if (created.isError === true) {
     const text = created.content.map((content) => content.text).join('\n');
-    const code = refusalCode(text);
+    const code = refusalOf(text)?.code ?? '';
     if (UNWRITABLE.has(code)) return;
     if (code !== 'edit_conflict' || !documentPresent(text)) throw new Error(text);
   }
