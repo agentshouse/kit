@@ -194,9 +194,9 @@ it('sets an option on the running process and relays the commands and options th
   const current = (frame: Record<string, unknown>) =>
     Object.fromEntries((frame.options as { id: string; currentValue: string }[]).map((option) => [option.id, option.currentValue]));
   expect(hosted.socket.frames.filter(options).map(current)).toEqual([
-    { model: 'route-model', effort: 'route-effort' },
-    { model: 'other-model', effort: 'route-effort' },
-    { model: 'other-model', effort: 'from-cli' },
+    { mode: 'agent', collaboration_mode: 'default', model: 'route-model', reasoning_effort: 'route-effort' },
+    { mode: 'agent', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'route-effort' },
+    { mode: 'agent', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'from-cli' },
   ]);
   expect(hosted.socket.frames.filter((frame) => frame.type === 'commands')).toEqual([
     {

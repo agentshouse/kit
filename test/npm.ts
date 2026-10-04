@@ -37,6 +37,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const at = spec.lastIndexOf('@');
   const name = spec.slice(0, at);
   while (existsSync(join(home, 'npm-hold'))) await new Promise((resolve) => setTimeout(resolve, 50));
+  const muted = join(home, 'npm-mute');
+  if (existsSync(muted) && readFileSync(muted, 'utf8').includes(name)) process.exit(1);
   const failing = join(home, 'npm-fail');
   if (existsSync(failing) && readFileSync(failing, 'utf8').includes(name)) {
     process.stderr.write(`npm error 404 Not Found - ${name}\n`);

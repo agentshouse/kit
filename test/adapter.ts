@@ -1,10 +1,11 @@
-import { agent, ndJsonStream, RequestError, type AgentContext, type SessionConfigOption } from '@agentclientprotocol/sdk';
+import { agent, ndJsonStream, RequestError, type AgentContext } from '@agentclientprotocol/sdk';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { MODELS, SESSION_OPTIONS, type CliModel } from './fixtures/clis/session-options.ts';
 import { recordStart } from './started.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
@@ -21,14 +22,11 @@ if (process.argv.includes('status')) {
   process.exit(signedIn() ? 0 : 1);
 }
 
-const options = (model: string, effort: string): SessionConfigOption[] => [
-  { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model, options: [] },
-  ...(model === 'effortless'
-    ? []
-    : [{ id: 'effort', name: 'Effort', category: 'thought_level', type: 'select' as const, currentValue: effort, options: [] }]),
-];
-let model = 'default-model';
-let effort = 'default-effort';
+const offered = join(home, 'models', kind);
+const models = existsSync(offered) ? (JSON.parse(readFileSync(offered, 'utf8')) as CliModel[]) : MODELS[kind]!;
+let model = models[0]!.id;
+let effort = 'medium';
+const options = () => SESSION_OPTIONS[kind]!(models, model, effort);
 const cancelled = new Map<string, () => void>();
 
 const JOB =
@@ -247,7 +245,7 @@ async function directive(
     effort = 'from-cli';
     await client.notify('session/update', {
       sessionId,
-      update: { sessionUpdate: 'config_option_update', configOptions: options(model, effort) },
+      update: { sessionUpdate: 'config_option_update', configOptions: options() },
     });
   }
   if (name === 'job' && kind === 'grok-build') {
@@ -287,6 +285,7 @@ async function directive(
 const app = agent({ name: 'adapter-double' })
   .onRequest('initialize', ({ params }) => {
     log({ method: 'initialize', params, env: process.env, argv: process.argv });
+    if (existsSync(join(home, 'refuse-initialize'))) throw new RequestError(-32603, 'the CLI did not initialize');
     return {
       protocolVersion: params.protocolVersion,
       agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
@@ -297,27 +296,31 @@ const app = agent({ name: 'adapter-double' })
   .onRequest('session/new', async ({ params }) => {
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
+    if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
     if (existsSync(join(home, 'hold-open'))) {
       spawnJob();
       await new Promise(() => undefined);
     }
-    return { sessionId, configOptions: options(model, effort) };
+    return { sessionId, configOptions: options() };
   })
   .onRequest('session/resume', ({ params }) => {
     log({ method: 'session/resume', params });
     if (existsSync(join(home, 'refuse-resume'))) {
       throw new RequestError(-32002, 'the session cannot be resumed');
     }
-    return { configOptions: options(model, effort) };
+    return { configOptions: options() };
   })
   .onRequest('session/set_config_option', ({ params }) => {
     log({ method: 'session/set_config_option', params });
-    if (!options(model, effort).some((option) => option.id === params.configId)) {
-      throw new RequestError(-32602, `Unknown config option: ${params.configId}`);
+    const option = options().find((candidate) => candidate.id === params.configId);
+    if (option === undefined) throw new RequestError(-32602, `Unknown config option: ${params.configId}`);
+    const refused = join(home, 'refuse-model');
+    if (option.category === 'model' && existsSync(refused) && readFileSync(refused, 'utf8') === params.value) {
+      throw new RequestError(-32603, `Model switch blocked by a PreModelSwitch hook: ${params.value} is not allowed`);
     }
-    if (params.configId === 'model') model = String(params.value);
-    if (params.configId === 'effort') effort = String(params.value);
-    return { configOptions: options(model, effort) };
+    if (option.category === 'model') model = String(params.value);
+    if (option.category === 'thought_level') effort = String(params.value);
+    return { configOptions: options() };
   })
   .onNotification('session/cancel', ({ params }) => {
     log({ method: 'session/cancel', params });

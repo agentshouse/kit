@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
+import { placeHostKey } from './kit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -24,14 +25,14 @@ it('opens the provider session in the launch directory with the route settings a
   expect(opened.params).toMatchObject({ cwd: hosted.workingDirectory });
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     { sessionId: opened.sessionId, configId: 'model', value: 'gpt-route' },
-    { sessionId: opened.sessionId, configId: 'effort', value: 'high' },
+    { sessionId: opened.sessionId, configId: 'reasoning_effort', value: 'high' },
   ]);
   expect(new Set(log.map((entry) => entry.pid)).size).toBe(1);
   expect(hosted.socket.frames).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
 });
 
 it("refuses the open with the CLI's cause when the CLI does not take the route's effort", async () => {
-  const hosted = await hostKit([{ model: 'effortless', effort: 'high' }]);
+  const hosted = await hostKit([{ model: 'codex-instant', effort: 'high' }]);
 
   hosted.input({ kind: 'open' });
 
@@ -140,6 +141,7 @@ async function reportHeld(hosted: Hosted): Promise<void> {
     await held;
     return { body: {} };
   });
+  await placeHostKey(hosted.home);
   hosted.socket.send({ type: 'work_available', subject: 'agents' });
   await until(() => reporting);
 }
