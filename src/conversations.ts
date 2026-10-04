@@ -472,7 +472,10 @@ export class Conversations {
 
   private finish(conversation: Conversation, turn: Turn): void {
     if (turn.ended) return;
-    this.close(conversation, turn, false);
+    const segment = turn.segment;
+    turn.segment = null;
+    if (segment?.phase === 'note') this.note(conversation, turn, segment.text);
+    else if (segment !== null) this.answer(conversation, turn, segment.text);
     this.end(conversation, turn, { text: turn.text });
   }
 
@@ -602,13 +605,14 @@ export class Conversations {
       this.chunk(conversation, this.started(conversation), update, update.content.text);
     } else if (update.sessionUpdate === 'plan') {
       const turn = this.started(conversation);
-      this.close(conversation, turn, true);
+      this.close(conversation, turn);
       turn.entries = update.entries;
       this.plan(conversation, turn);
     } else if (update.sessionUpdate === 'tool_call') {
-      this.close(conversation, this.started(conversation), true);
+      this.close(conversation, this.started(conversation));
     } else if (update.sessionUpdate === 'agent_thought_chunk') {
-      this.started(conversation);
+      const turn = this.started(conversation);
+      if (turn.segment?.messageId !== (update.messageId ?? null)) this.close(conversation, turn);
     } else if (update.sessionUpdate === 'available_commands_update') {
       this.commands(conversation, update.availableCommands);
     } else if (update.sessionUpdate === 'config_option_update') {
@@ -625,9 +629,7 @@ export class Conversations {
   private chunk(conversation: Conversation, turn: Turn, chunk: ContentChunk, text: string): void {
     const phase = conversation.running?.phase(chunk) ?? null;
     const messageId = chunk.messageId ?? null;
-    if (turn.segment !== null && (turn.segment.messageId !== messageId || turn.segment.phase !== phase)) {
-      this.close(conversation, turn, false);
-    }
+    if (turn.segment?.messageId !== messageId || turn.segment.phase !== phase) this.close(conversation, turn);
     if (phase === 'answer') {
       this.answer(conversation, turn, text);
       return;
@@ -636,12 +638,11 @@ export class Conversations {
     turn.segment.text += text;
   }
 
-  private close(conversation: Conversation, turn: Turn, acted: boolean): void {
+  private close(conversation: Conversation, turn: Turn): void {
     const segment = turn.segment;
     if (segment === null) return;
     turn.segment = null;
-    if (segment.phase === 'note' || acted) this.note(conversation, turn, segment.text);
-    else this.answer(conversation, turn, segment.text);
+    this.note(conversation, turn, segment.text);
   }
 
   private note(conversation: Conversation, turn: Turn, text: string): void {

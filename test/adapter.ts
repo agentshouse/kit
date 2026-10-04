@@ -130,11 +130,14 @@ async function directive(
   if (name === 'note') await note(client, sessionId, argument);
   if (name === 'tool') await tool(client, sessionId, argument);
   if (name === 'think') {
+    const messageId =
+      kind === 'codex-acp' ? `item-reasoning-${++items}` : kind === 'claude-agent-acp' ? `msg_${apiMessages}` : undefined;
     await client.notify('session/update', {
       sessionId,
-      update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: argument } },
+      update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: argument }, messageId },
     });
   }
+  if (name === 'hidden') apiMessages++;
   if (name === 'started') await turnStarted(client, sessionId);
   if (name === 'ended') await turnEnded(client, sessionId);
   if (name === 'fail') throw new RequestError(-32603, argument);
