@@ -167,16 +167,24 @@ export async function openBridge(
     return { url: held.url, operation: held.operation, bytes: bytes.length, sha256 };
   };
 
+  let mutations: Promise<ReadonlySet<string>> | null = null;
+  const writes = async (tool: string): Promise<boolean> => {
+    mutations ??= house
+      .post<{ tools: { name: string; writes: boolean }[] }>('/kit/tools/mutations', {}, closed.signal)
+      .then(({ tools }) => new Set(tools.filter((listed) => listed.writes).map((listed) => listed.name)));
+    try {
+      return (await mutations).has(tool);
+    } catch (error) {
+      mutations = null;
+      throw error;
+    }
+  };
+
   const forward = async (path: string, text: string): Promise<Forwarded> => {
     if (path === '/') {
       const message = JSON.parse(text) as Message;
       const tool = message.method === 'tools/call' ? String(message.params?.name) : null;
-      const writes =
-        tool !== null &&
-        (
-          await house.post<{ tools: { name: string; writes: boolean }[] }>('/kit/tools/mutations', {}, closed.signal)
-        ).tools.some((listed) => listed.name === tool && listed.writes);
-      return send(message, writes ? operationId() : null);
+      return send(message, tool !== null && (await writes(tool)) ? operationId() : null);
     }
     const answer = await fetch(new URL(path, origin), {
       method: 'POST',

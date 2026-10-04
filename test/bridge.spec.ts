@@ -85,6 +85,22 @@ it('attaches a fresh operation id to each mutation and none to a read', async ()
   expect(operations[0]).not.toBe(operations[1]);
 });
 
+it('asks House which tools write once per conversation, however many calls it forwards', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  const record = '{"room_ref":"r_room","source_ref":"s_source","body":"hello"}';
+
+  directed(hosted, `@house search {"query":"one"}\n@house append_record ${record}\n@house search {"query":"two"}`);
+
+  await runs(hosted, 3);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/tools/mutations')).toHaveLength(1);
+  expect(hosted.mcp.map((received) => called(received).params._meta[OPERATION])).toEqual([
+    undefined,
+    expect.stringMatching(UUID_V7),
+    undefined,
+  ]);
+});
+
 it('uploads a local file through the attachments route and its transfer before upload_attachment answers', async () => {
   const hosted = await hostKit();
   const content = Buffer.from('quarterly numbers\n');
