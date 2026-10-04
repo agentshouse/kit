@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir } from 'node:fs/promises';
-import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -47,6 +47,23 @@ async function received(request: IncomingMessage): Promise<string> {
   request.setEncoding('utf8');
   for await (const chunk of request) text += chunk;
   return text;
+}
+
+function relay(request: IncomingMessage, response: ServerResponse, target: URL, authorization?: string): void {
+  const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
+  const forwarded = send(
+    target,
+    {
+      method: request.method,
+      headers: { ...request.headers, host: target.host, ...(authorization === undefined ? {} : { authorization }) },
+    },
+    (answer) => {
+      response.writeHead(answer.statusCode!, answer.headers);
+      answer.pipe(response);
+    },
+  );
+  forwarded.on('error', () => response.destroy());
+  request.pipe(forwarded);
 }
 
 export async function openBridge(house: House, conversationId: string, signal: AbortSignal): Promise<Bridge> {
@@ -105,6 +122,10 @@ export async function openBridge(house: House, conversationId: string, signal: A
   const bridge = createServer(async (request, response) => {
     try {
       const path = request.url ?? '';
+      if (URL.canParse(path)) {
+        relay(request, response, new URL(path));
+        return;
+      }
       const forwarded = FORWARDED.has(path) ? await forward(path, await received(request)) : { status: 404, text: '' };
       response.writeHead(forwarded.status, { 'content-type': 'application/json' }).end(forwarded.text);
     } catch (error) {
@@ -122,17 +143,7 @@ export async function openBridge(house: House, conversationId: string, signal: A
       response.writeHead(404).end();
       return;
     }
-    const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
-    const forwarded = send(
-      target,
-      { method: request.method, headers: { ...request.headers, host: target.host, authorization } },
-      (answer) => {
-        response.writeHead(answer.statusCode!, answer.headers);
-        answer.pipe(response);
-      },
-    );
-    forwarded.on('error', () => response.destroy());
-    request.pipe(forwarded);
+    relay(request, response, target, authorization);
   });
   git.listen(0, '127.0.0.1');
   await once(git, 'listening');

@@ -41,6 +41,7 @@ type Ack = { provider_session_id: string } | { refused: string } | Record<string
 type Outcome = { text: string } | { failed: string };
 
 const LAUNCH_BASE = '/agents/house';
+const PROXY = /^https?_proxy$/i;
 const KILLED = 'the conversation was killed';
 
 function causeOf(error: unknown): string {
@@ -328,7 +329,7 @@ export class Conversations {
         route.working_directory,
         app,
         (job) => this.job(conversation, job),
-        { ...process.env, ...bridge.env },
+        { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !PROXY.test(name))), ...bridge.env },
       );
       void adapter.exited.then(() => bridge.close());
       const agent = adapter.connection.agent;

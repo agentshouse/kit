@@ -18,24 +18,25 @@ interface Declared {
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
 const socketPath = process.env.HOUSE_BRIDGE;
 
-function bridged(path: string, body: unknown): Promise<string> {
+function bridged(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = { 'content-type': 'application/json' },
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const sent = request(
-      { socketPath, path, method: 'POST', headers: { 'content-type': 'application/json' } },
-      (answer) => {
-        let text = '';
-        answer.setEncoding('utf8');
-        answer.on('data', (chunk: string) => {
-          text += chunk;
-        });
-        answer.on('end', () => {
-          if (answer.statusCode === 200) resolve(text);
-          else reject(new Error(`${path} answered ${answer.statusCode}: ${text}`));
-        });
-      },
-    );
+    const sent = request({ socketPath, path, method: 'POST', headers }, (answer) => {
+      let text = '';
+      answer.setEncoding('utf8');
+      answer.on('data', (chunk: string) => {
+        text += chunk;
+      });
+      answer.on('end', () => {
+        if (answer.statusCode === 200) resolve(text);
+        else reject(new Error(`${path} answered ${answer.statusCode}: ${text}`));
+      });
+    });
     sent.on('error', reject);
-    sent.end(JSON.stringify(body));
+    sent.end(body instanceof Buffer ? body : JSON.stringify(body));
   });
 }
 
@@ -63,14 +64,10 @@ async function upload(path: string, roomRef: unknown): Promise<string> {
       sha256: createHash('sha256').update(bytes).digest('hex'),
     }),
   ) as Declared;
-  const answer = await fetch(declared.upload.url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/octet-stream', 'x-house-byte-operation': declared.upload.operation },
-    body: bytes,
+  return bridged(declared.upload.url, bytes, {
+    'content-type': 'application/octet-stream',
+    'x-house-byte-operation': declared.upload.operation,
   });
-  const text = await answer.text();
-  if (!answer.ok) throw new Error(`House refused the bytes of ${path} with ${answer.status}: ${text}`);
-  return text;
 }
 
 async function house([verb, argument]: string[]): Promise<string> {
