@@ -63,4 +63,10 @@ jobs:
               exit 1
             fi
           done
-          gh release create "v$version" --target "$GITHUB_SHA" --title "House Kit v$version" --notes "Image: ghcr.io/agentshouse/kit@$digest"
+          mkdir -p tmp/release
+          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_VERSION__/$version/" bin/connect-linux.sh > tmp/release/connect-linux.sh
+          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" bin/connect-windows.ps1 > tmp/release/connect-windows.ps1
+          cp dist/bootstrap.json tmp/release/bootstrap.json
+          gh release create "v$version" tmp/release/* --target "$GITHUB_SHA" --title "House Kit v$version" --notes "Image: ghcr.io/agentshouse/kit@$digest"
+          gh release download "v$version" --dir tmp/release-readback
+          diff -r tmp/release tmp/release-readback

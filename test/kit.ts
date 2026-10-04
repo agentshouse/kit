@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import type { Writable } from 'node:stream';
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +11,7 @@ const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 
 export interface KitRun {
   pid: number;
+  input: Writable;
   stdout(): string;
   stderr(): string;
   exited: Promise<number | null>;
@@ -39,7 +41,7 @@ export function runKit(argv: string[], environment: Record<string, string>): Kit
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await exited;
   });
-  return { pid: child.pid!, stdout: () => stdout, stderr: () => stderr, exited };
+  return { pid: child.pid!, input: child.stdin, stdout: () => stdout, stderr: () => stderr, exited };
 }
 
 export async function fakeBin(home: string): Promise<string> {

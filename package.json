@@ -12,11 +12,14 @@
     "kit": "dist/kit-main.js",
     "house": "dist/house-main.js"
   },
+  "exports": {
+    "./bootstrap": "./dist/bootstrap.json"
+  },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/bootstrap-manifest.mjs",
     "test": "tsc -p tsconfig.json && vitest run"
   },
   "dependencies": {

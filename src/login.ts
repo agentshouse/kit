@@ -40,8 +40,9 @@ function listen(): Promise<Callback> {
       server.close();
       server.closeAllConnections();
     };
+    const port = Number(process.env.HOUSE_KIT_LOGIN_PORT ?? 0);
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(port, port === 0 ? '127.0.0.1' : '0.0.0.0', () => {
       const address = server.address();
       if (address === null || typeof address === 'string') {
         reject(new Error('the login callback has no port'));
@@ -64,8 +65,11 @@ function listen(): Promise<Callback> {
 
 async function typed(question: string): Promise<string> {
   const reader = createInterface({ input: process.stdin, output: process.stdout });
+  const closed = new Promise<never>((_, reject) => {
+    reader.once('close', () => reject(new Error('no code was typed')));
+  });
   try {
-    return (await reader.question(question)).trim();
+    return (await Promise.race([reader.question(question), closed])).trim();
   } finally {
     reader.close();
   }

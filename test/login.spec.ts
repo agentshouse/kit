@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
-import { get } from 'node:http';
+import { once } from 'node:events';
+import { createServer, get } from 'node:http';
 import { access, readFile } from 'node:fs/promises';
+import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
@@ -118,4 +120,39 @@ it('finishes and keeps the credential when the browser disconnects before its an
 
   expect(await login.exited).toBe(0);
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
+});
+
+it('takes the browser return on the published callback port from beyond the loopback interface', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  const probe = createServer().listen(0);
+  await once(probe, 'listening');
+  const port = (probe.address() as { port: number }).port;
+  probe.close();
+  const outside = Object.values(networkInterfaces())
+    .flat()
+    .find((address) => address?.family === 'IPv4' && !address.internal)!.address;
+
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home, HOUSE_KIT_LOGIN_PORT: String(port) });
+  const started = await until(() => house.requests.find((request) => request.path === '/kit'));
+  const browser = await (await fetch(`http://${outside}:${port}/callback?code=ahk_code_one`)).text();
+
+  expect((started.body as { loopback_uri: string }).loopback_uri).toBe(`http://127.0.0.1:${port}/callback`);
+  expect(browser).toContain('This Environment is connected');
+  expect(await login.exited).toBe(0);
+});
+
+it('ends without a credential when the code it asks for never comes', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const login = runKit(['login', '--house', house.origin, '--manual'], { HOUSE_KIT_HOME: home });
+  await until(() => login.stdout().includes('Code: '));
+  login.input.end();
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toContain('no code was typed');
+  await expect(access(join(home, 'credential.json'))).rejects.toThrow();
 });
