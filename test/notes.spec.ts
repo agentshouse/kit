@@ -111,6 +111,15 @@ it("sends each message Codex marks as commentary as a note of its own, with no a
   expect(notes(hosted)).toEqual([note('First look'), note('Second look')]);
 });
 
+it.each(['claude-agent-acp', 'grok-build'])('sends the text %s writes before a plan update as a working note', async (kind) => {
+  const hosted = await opened(kind);
+
+  hosted.input({ kind: 'message', text: '@note Let me plan this\n@plan read|fix\n@say Done', files: [], first: true });
+
+  expect(await ends(hosted, 1)).toEqual([{ text: 'Done' }]);
+  expect(notes(hosted)).toEqual([note('Let me plan this')]);
+});
+
 it.each(['claude-agent-acp', 'grok-build'])('keeps the text %s writes with no action after it as the answer', async (kind) => {
   const hosted = await opened(kind);
 
