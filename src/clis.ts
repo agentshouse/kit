@@ -1,3 +1,4 @@
+import type { ContentChunk } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -24,6 +25,8 @@ export interface Job {
   running: boolean;
 }
 
+export type Phase = 'note' | 'answer';
+
 export interface Cli {
   package: string;
   bin: string;
@@ -34,6 +37,7 @@ export interface Cli {
   turnStarted(notice: Notice): boolean;
   turnEnded(notice: Notice): boolean;
   job(notice: Notice): Job | null;
+  phase(chunk: ContentChunk): Phase | null;
 }
 
 const RUNNING_JOB = new Set(['running', 'paused']);
@@ -53,6 +57,13 @@ function asyncTask({ method, params }: Notice): Job | null {
   return null;
 }
 
+function airPhase({ _meta }: ContentChunk): Phase | null {
+  const phase = (_meta?.jetbrains as { air?: { phase?: unknown } } | undefined)?.air?.phase;
+  if (phase === 'commentary') return 'note';
+  if (phase === 'final_answer') return 'answer';
+  return null;
+}
+
 export const CLIS: Record<string, Cli> = {
   'codex-acp': {
     package: '@agentclientprotocol/codex-acp',
@@ -64,6 +75,7 @@ export const CLIS: Record<string, Cli> = {
     turnStarted: (notice) => threadStatus(notice) === 'active',
     turnEnded: (notice) => threadStatus(notice) === 'idle',
     job: asyncTask,
+    phase: airPhase,
   },
   'claude-agent-acp': {
     package: '@agentclientprotocol/claude-agent-acp',
@@ -78,6 +90,7 @@ export const CLIS: Record<string, Cli> = {
       params?.update?.sessionUpdate === 'usage_update' &&
       params.update._meta?.['_claude/origin'] !== undefined,
     job: asyncTask,
+    phase: () => null,
   },
   'grok-build': {
     package: '@xai-official/grok',
@@ -94,6 +107,7 @@ export const CLIS: Record<string, Cli> = {
       if (method === '_x.ai/task_completed') return { id: params!.update!.task_snapshot!.task_id!, running: false };
       return null;
     },
+    phase: () => null,
   },
 };
 

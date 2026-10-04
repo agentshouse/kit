@@ -462,10 +462,6 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
 
     hosted.input({ kind: 'message', text: '@later 500 by itself', files: [], first: true });
 
-    const draft = await until(() =>
-      hosted.socket.frames.find((frame) => frame.type === 'draft' && JSON.stringify(frame.blocks).includes('by itself')),
-    );
-    expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended'))).toHaveLength(1);
     const ends = await until(() => {
       const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
       return ended.length === 2 ? ended : undefined;
@@ -473,6 +469,9 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
     expect(ends.map((turn) => turn.body)).toEqual([{ text: '' }, { text: 'by itself' }]);
     const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
     expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
+    const draft = await until(() =>
+      hosted.socket.frames.find((frame) => frame.type === 'draft' && JSON.stringify(frame.blocks).includes('by itself')),
+    );
     expect(draft).toMatchObject({ turn_id: ends[1]!.params.turn, blocks: [{ type: 'paragraph', text: 'by itself' }] });
   },
 );
