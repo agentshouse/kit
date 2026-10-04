@@ -1,8 +1,8 @@
-import { client } from '@agentclientprotocol/sdk';
+import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
 import { readFile } from 'node:fs/promises';
-import { startAdapter } from './acp.ts';
+import { killTree, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
-import { CLIS, KIT_VERSION, cliCommand, install, run } from './clis.ts';
+import { CLIS, KIT_VERSION, cliCommand, install, run, type Installed } from './clis.ts';
 import { kitHome } from './home.ts';
 
 export interface Route {
@@ -19,24 +19,66 @@ export interface Desired {
   routes: Route[];
 }
 
-export interface Reported {
-  kind: string;
-  release: string | null;
-  signed_in: boolean;
+interface Model {
+  model: string;
+  efforts: string[];
 }
 
-async function signedIn(kind: string): Promise<boolean> {
-  const probe = CLIS[kind]!.signedIn;
-  if ('command' in probe) {
-    return (await run(cliCommand(kind), probe.command, 30_000)).status === 0;
+interface Offer {
+  signed_in: boolean;
+  models: Model[];
+}
+
+interface Reported extends Installed, Offer {
+  kind: string;
+}
+
+const SIGNED_OUT: Offer = { signed_in: false, models: [] };
+
+function select(options: SessionConfigOption[], category: string) {
+  const option = options.find((candidate) => candidate.category === category);
+  return option?.type === 'select' ? option : undefined;
+}
+
+function values(options: SessionConfigSelectOptions): string[] {
+  return options.flatMap((entry) => ('group' in entry ? entry.options : [entry])).map((entry) => entry.value);
+}
+
+async function models(adapter: Adapter): Promise<Model[]> {
+  const agent = adapter.connection.agent;
+  const opened = await agent.request('session/new', { cwd: kitHome(), mcpServers: [] });
+  let options = opened.configOptions ?? [];
+  const model = select(options, 'model');
+  if (model === undefined) return [];
+  const offered: Model[] = [];
+  for (const value of values(model.options)) {
+    if (select(options, 'model')?.currentValue !== value) {
+      options = (
+        await agent.request('session/set_config_option', { sessionId: opened.sessionId, configId: model.id, value })
+      ).configOptions;
+    }
+    const effort = select(options, 'thought_level');
+    offered.push({ model: value, efforts: effort === undefined ? [] : values(effort.options) });
   }
+  return offered;
+}
+
+async function offer(kind: string): Promise<Offer> {
+  const probe = CLIS[kind]!.signedIn;
+  if ('command' in probe && (await run(cliCommand(kind), probe.command, 30_000)).status !== 0) return SIGNED_OUT;
+  let adapter: Adapter | undefined;
   try {
-    const adapter = await startAdapter(kind, kitHome(), client({ name: '@agentshouse/kit' }));
-    adapter.child.kill('SIGKILL');
-    const method = adapter.initialized._meta?.[probe.initializeMeta];
-    return typeof method === 'string' && method.length > 0;
-  } catch {
-    return false;
+    adapter = await startAdapter(kind, kitHome(), client({ name: '@agentshouse/kit' }));
+    if ('initializeMeta' in probe) {
+      const method = adapter.initialized._meta?.[probe.initializeMeta];
+      if (typeof method !== 'string' || method.length === 0) return SIGNED_OUT;
+    }
+    return { signed_in: true, models: await models(adapter) };
+  } catch (error) {
+    process.stderr.write(`kit: ${kind} did not offer its models: ${error instanceof Error ? error.message : String(error)}\n`);
+    return { signed_in: adapter !== undefined || 'command' in probe, models: [] };
+  } finally {
+    if (adapter !== undefined) killTree(adapter.child);
   }
 }
 
@@ -55,9 +97,11 @@ export class Agents {
   private readonly house: House;
   private reading: Promise<unknown> = Promise.resolve();
   private installing: Promise<void> = Promise.resolve();
-  private releases = new Map<string, string | null>();
+  private installs = new Map<string, Installed>();
   private reporting: Promise<void> | null = null;
   private again = false;
+  private sending: Promise<void> = Promise.resolve();
+  private sent: string | null = null;
 
   constructor(house: House) {
     this.house = house;
@@ -93,24 +137,34 @@ export class Agents {
     return Promise.all([installing, this.reporting]).then(() => undefined);
   }
 
-  async report(): Promise<void> {
+  report(): Promise<void> {
+    const sending = this.sending.catch(() => undefined).then(() => this.send());
+    this.sending = sending;
+    return sending;
+  }
+
+  private async send(): Promise<void> {
     const agents: Reported[] = [];
-    for (const [kind, release] of this.releases) {
-      agents.push({ kind, release, signed_in: release !== null && (await signedIn(kind)) });
+    for (const [kind, installed] of this.installs) {
+      agents.push({ kind, ...installed, ...(installed.release === null ? SIGNED_OUT : await offer(kind)) });
     }
     const hostKey = await sshHostKey();
-    await this.house.deliver('/kit/agents/report', {
+    const body = {
       os: await operatingSystem(),
       kit_version: KIT_VERSION,
       agents,
       ...(hostKey === null ? {} : { ssh_host_key: hostKey }),
-    });
+    };
+    const state = JSON.stringify(body);
+    if (state === this.sent) return;
+    await this.house.deliver('/kit/agents/report', body);
+    this.sent = state;
   }
 
   private async install(kinds: string[]): Promise<void> {
-    const releases = new Map<string, string | null>();
-    for (const kind of kinds) releases.set(kind, await install(kind));
-    this.releases = releases;
+    const installs = new Map<string, Installed>();
+    for (const kind of kinds) installs.set(kind, await install(kind));
+    this.installs = installs;
   }
 
   private async reports(): Promise<void> {

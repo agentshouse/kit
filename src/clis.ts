@@ -165,17 +165,23 @@ export function run(command: string, args: string[], timeoutMs: number): Promise
   });
 }
 
-export async function install(kind: string): Promise<string | null> {
+export interface Installed {
+  release: string | null;
+  failure: string | null;
+}
+
+export async function install(kind: string): Promise<Installed> {
   const release = pinned(kind);
-  if ((await installedRelease(kind)) === release) return release;
+  if ((await installedRelease(kind)) === release) return { release, failure: null };
   const ran = await run(
     'npm',
     ['install', '--prefix', prefix(kind), '--no-save', '--no-audit', '--no-fund', `${CLIS[kind]!.package}@${release}`],
     15 * 60_000,
   );
   if (ran.status !== 0) {
-    process.stderr.write(`kit: ${kind} did not install: ${ran.output.trim()}\n`);
-    return null;
+    const failure = ran.output.trim();
+    process.stderr.write(`kit: ${kind} did not install: ${failure}\n`);
+    return { release: null, failure };
   }
-  return installedRelease(kind);
+  return { release: await installedRelease(kind), failure: null };
 }
