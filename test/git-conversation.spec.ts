@@ -13,6 +13,8 @@ interface Shelled {
   stderr: string;
 }
 
+const EXPIRED = 'operation_expired: this operation is over 7 days old and its outcome is gone; read the current files and send again\n';
+
 async function shell(hosted: Hosted, command: string, conversation = 'conversation-1', agent = 'agent-1'): Promise<Shelled> {
   const before = (await hosted.adapterLog()).filter((entry) => 'sh' in entry).length;
   hosted.input({ kind: 'message', conversation_id: conversation, agent_id: agent, text: `@sh ${command}`, files: [], first: false });
@@ -139,19 +141,16 @@ it("names each working copy in a conversation's first prompt", async () => {
   ]);
 });
 
-it('sends a change set above the MCP bound as one prepared upload under the push operation, and resends that upload after a lost answer', async () => {
+it('sends a change set above the MCP bound as one prepared upload under the push operation, and resends that edit when its answer is lost', async () => {
   const { hosted, rooms, room, edits } = await copied();
   const big = '\u0001'.repeat(800_000);
   await writeFile(join(room.repository, 'library/big.md'), big);
   commitAll(room.repository, 'big');
   rooms.dropsEdits = 1;
 
-  const lost = await shell(hosted, `cd ${room.repository} && house git push`);
-  const recovered = await shell(hosted, `cd ${room.repository} && house git push`);
+  const pushed = await shell(hosted, `cd ${room.repository} && house git push`);
 
-  expect(lost.status).toBe(1);
-  expect(lost.stderr).toContain('did not arrive');
-  expect(recovered).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  expect(pushed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
   const bytes = Buffer.from(JSON.stringify({ changes: [{ op: 'create', path: '/rooms/notes/library/big.md', content: big }] }));
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   expect(rooms.prepared).toEqual([{ paths: ['/rooms/notes/library/big.md'], bytes: bytes.length, sha256 }]);
@@ -214,15 +213,15 @@ it("prints House's refusal of a push as House words it, keeps its delay, and the
 it('drops an expired rename House never applied when another writer took both of its paths', async () => {
   const { hosted, room } = await copied();
   let calls = 0;
-  hosted.tools.edit = () =>
-    ++calls === 1 ? null : { isError: true, content: [{ type: 'text', text: 'operation_expired: this operation is over 7 days old and its outcome is gone; read the current files and send again\n' }] };
+  hosted.tools.edit = () => {
+    if (++calls > 1) return { isError: true, content: [{ type: 'text', text: EXPIRED }] };
+    room.remove('library/a.md');
+    room.put('library/b.md', 'Another writer\n');
+    return null;
+  };
 
-  const lost = await shell(hosted, `cd ${room.repository} && git mv library/a.md library/b.md && git commit -qm move && house git push`);
-  room.remove('library/a.md');
-  room.put('library/b.md', 'Another writer\n');
-  const expired = await shell(hosted, `cd ${room.repository} && house git push`);
+  const expired = await shell(hosted, `cd ${room.repository} && git mv library/a.md library/b.md && git commit -qm move && house git push`);
 
-  expect(lost.stderr).toContain('did not arrive');
   expect(expired.status).toBe(1);
   expect(expired.stderr).toContain('House does not hold');
   expect(git(room.repository, 'show', 'refs/house/received:library/b.md')).toBe('Another writer\n');
@@ -258,12 +257,13 @@ it('names the copies of a selection still being read in a first prompt that arri
 it("brings House's reference rewrites home when it finishes an expired rename House applied", async () => {
   const { hosted, rooms, room } = await copied();
   rooms.dropsEdits = 1;
-  const lost = await shell(hosted, `cd ${room.repository} && git mv library/a.md library/b.md && git commit -qm move && house git push`);
-  hosted.tools.edit = () => ({ isError: true, content: [{ type: 'text', text: 'operation_expired: this operation is over 7 days old and its outcome is gone; read the current files and send again\n' }] });
+  const edit = hosted.tools.edit!;
+  let calls = 0;
+  hosted.tools.edit = (args, request) =>
+    ++calls === 1 ? edit(args, request) : { isError: true, content: [{ type: 'text', text: EXPIRED }] };
 
-  const finished = await shell(hosted, `cd ${room.repository} && house git push`);
+  const finished = await shell(hosted, `cd ${room.repository} && git mv library/a.md library/b.md && git commit -qm move && house git push`);
 
-  expect(lost.stderr).toContain('did not arrive');
   expect(finished).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}; main is at [0-9a-f]{12}\.\n$/) });
   expect(room.batches).toHaveLength(1);
   expect(await readFile(join(room.repository, 'library/index.md'), 'utf8')).toBe('See [alpha](b.md).\n');

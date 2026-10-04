@@ -14,7 +14,13 @@ interface Tool {
 }
 
 interface Declared {
-  upload: { url: string; operation: string };
+  attachment: string;
+  upload?: { url: string; operation: string };
+}
+
+interface Saved {
+  attachment: string;
+  upload_failure?: string;
 }
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
@@ -88,16 +94,20 @@ async function upload(path: unknown, roomRef: unknown, missing: string): Promise
   const declared = JSON.parse(
     await bridged('/kit/attachments/upload', {
       ...(roomRef === undefined ? {} : { room_ref: roomRef }),
-      version: randomUUID(),
       name: basename(path),
       bytes: bytes.length,
       sha256: createHash('sha256').update(bytes).digest('hex'),
     }),
   ) as Declared;
-  return bridged(declared.upload.url, bytes, {
-    'content-type': 'application/octet-stream',
-    'x-house-byte-operation': declared.upload.operation,
-  });
+  if (declared.upload === undefined) return declared.attachment;
+  const saved = JSON.parse(
+    await bridged(declared.upload.url, bytes, {
+      'content-type': 'application/octet-stream',
+      'x-house-byte-operation': declared.upload.operation,
+    }),
+  ) as Saved;
+  if (saved.upload_failure !== undefined) throw new Error(`${path} was not saved: ${saved.upload_failure}; call again later`);
+  return saved.attachment;
 }
 
 async function gitPush(args: string[]): Promise<string> {
@@ -136,12 +146,13 @@ async function house([verb, argument]: string[]): Promise<string> {
     return `${tool.description}\n${JSON.stringify(tool.inputSchema, null, 2)}`;
   }
   const args = argumentsOf(argument);
-  if (verb === 'upload_attachment') return upload(args.path, args.room_ref, 'upload_attachment needs "path", a local file');
+  if (verb === 'upload_attachment') {
+    return JSON.stringify({ attachment: await upload(args.path, args.room_ref, 'upload_attachment needs "path", a local file') });
+  }
   if (verb === 'append_record' && Array.isArray(args.attachments)) {
     const attachments: string[] = [];
     for (const path of args.attachments) {
-      const uploaded = await upload(path, args.room_ref, 'each attachments entry is the path of a local file');
-      attachments.push((JSON.parse(uploaded) as { attachment: string }).attachment);
+      attachments.push(await upload(path, args.room_ref, 'each attachments entry is the path of a local file'));
     }
     args.attachments = attachments;
   }

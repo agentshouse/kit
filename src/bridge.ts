@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { mkdir } from 'node:fs/promises';
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { delimiter, join } from 'node:path';
 import { parse } from 'yaml';
-import { HouseRefusal, type House } from './api.ts';
+import { HouseRefusal, retryDelay, type House } from './api.ts';
 import { KIT_VERSION } from './clis.ts';
 import {
   changedPaths,
@@ -17,7 +18,7 @@ import {
   type WorkingCopies,
 } from './copies.ts';
 import { kitHome, readEnrolment } from './home.ts';
-import { operationId } from './operation.ts';
+import { operationId, uuidOf } from './operation.ts';
 import { refusalOf, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
 
@@ -44,7 +45,7 @@ interface Forwarded {
 
 const MCP_PROTOCOL_VERSION = '2026-07-28';
 const MCP_REQUEST_BYTES = 4 * 1024 * 1024;
-const FORWARDED = new Set(['/', '/kit/attachments/upload']);
+const ATTACHMENTS = '/kit/attachments/upload';
 
 export async function received(request: IncomingMessage): Promise<string> {
   let text = '';
@@ -83,6 +84,29 @@ function answered(forwarded: Forwarded): { text: string } | { refused: Refusal }
   if (answer.error !== undefined) return { refused: refusalIn(answer.error.message, forwarded.status) };
   const text = answer.result!.content.map((content) => content.text).join('\n');
   return answer.result!.isError === true ? { refused: refusalIn(text, forwarded.status) } : { text };
+}
+
+function pendingSeconds(forwarded: Forwarded): number | null {
+  if (forwarded.status !== 200) return null;
+  const { result } = JSON.parse(forwarded.text) as { result?: ToolResult };
+  if (result === undefined || result.isError === true) return null;
+  const text = result.content.map((content) => content.text).join('\n');
+  if (!text.startsWith('{"pending":')) return null;
+  const seconds = (JSON.parse(text) as { pending: { retry_after?: unknown } }).pending.retry_after;
+  return typeof seconds === 'number' ? seconds : null;
+}
+
+function resendAfter(forwarded: Forwarded | null, attempt: number): number | null {
+  if (forwarded === null) return retryDelay(attempt);
+  if (forwarded.status >= 500) return refusalOf(forwarded.text) === null ? retryDelay(attempt) : null;
+  const seconds = pendingSeconds(forwarded);
+  return seconds === null ? null : seconds * 1000;
+}
+
+function versioned(conversationId: string, text: string): string {
+  const file = JSON.parse(text) as { room_ref?: string; name: string; sha256: string };
+  const identity = JSON.stringify([conversationId, file.room_ref ?? null, file.name, file.sha256]);
+  return JSON.stringify({ ...file, version: uuidOf(createHash('sha256').update(identity).digest(), 8) });
 }
 
 function editAnswer(forwarded: Forwarded): Submitted {
@@ -125,7 +149,7 @@ export async function openBridge(
       },
     });
 
-  const send = async (message: Message, operation: string | null): Promise<Forwarded> => {
+  const sent = async (message: Message, operation: string | null): Promise<Forwarded> => {
     const tool = message.method === 'tools/call' ? String(message.params?.name) : null;
     const answer = await fetch(new URL('/', origin), {
       method: 'POST',
@@ -141,6 +165,19 @@ export async function openBridge(
       signal: closed.signal,
     });
     return { status: answer.status, text: await answer.text() };
+  };
+
+  const send = async (message: Message, operation: string | null): Promise<Forwarded> => {
+    if (operation === null) return sent(message, null);
+    for (let attempt = 0; ; attempt++) {
+      const forwarded = await sent(message, operation).catch((error: unknown) => {
+        if (closed.signal.aborted) throw error;
+        return null;
+      });
+      const after = resendAfter(forwarded, attempt);
+      if (after === null) return forwarded!;
+      await delay(after, undefined, { signal: closed.signal });
+    }
   };
 
   const call = (name: string, args: Record<string, unknown>): Message =>
@@ -195,7 +232,7 @@ export async function openBridge(
     const answer = await fetch(new URL(path, origin), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
-      body: text,
+      body: versioned(conversationId, text),
       signal: closed.signal,
     });
     return { status: answer.status, text: await answer.text() };
@@ -227,7 +264,7 @@ export async function openBridge(
       await copies.observed(JSON.parse(text) as Observed);
       return { status: 200, text: '{}' };
     }
-    return FORWARDED.has(path) ? forward(path, text) : { status: 404, text: '' };
+    return path === '/' || path === ATTACHMENTS ? forward(path, text) : { status: 404, text: '' };
   };
 
   const sockets = join(kitHome(), 'bridges');
