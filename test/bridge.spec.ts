@@ -5,34 +5,21 @@ import { request } from 'node:http';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
-import { conversationCredential, hostKit, lastInput, LISTING, type Hosted, type McpCall } from './environment.ts';
+import {
+  appRemote,
+  attachmentDouble,
+  conversationCredential,
+  directed,
+  hostKit,
+  lastInput,
+  LISTING,
+  opened,
+  runs,
+  type McpCall,
+} from './environment.ts';
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const OPERATION = 'agents.house/agent-operation';
-
-interface Ran {
-  house?: string[];
-  git?: string[];
-  status: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function opened(hosted: Hosted, conversation = 'conversation-1', agent = 'agent-1'): Promise<void> {
-  hosted.input({ kind: 'open', conversation_id: conversation, agent_id: agent });
-  await hosted.ack(lastInput());
-}
-
-function directed(hosted: Hosted, text: string, conversation = 'conversation-1', agent = 'agent-1'): void {
-  hosted.input({ kind: 'message', conversation_id: conversation, agent_id: agent, text, files: [], first: false });
-}
-
-async function runs(hosted: Hosted, count: number): Promise<Ran[]> {
-  return until(async () => {
-    const ran = (await hosted.adapterLog()).filter((entry) => 'house' in entry || 'git' in entry);
-    return ran.length >= count ? (ran as unknown as Ran[]) : undefined;
-  });
-}
 
 const called = (received: Received) => received.body as McpCall;
 
@@ -144,25 +131,7 @@ it("uploads append_record's attachments and sends their references", async () =>
 it('carries the credential on a Git call to a House App source remote', async () => {
   const hosted = await hostKit();
   const commit = 'a'.repeat(40);
-  const credentials: string[] = [];
-  hosted.house.route('GET', '/app/:app/info/refs', (received) => {
-    const basic = /^Basic (.+)$/.exec(received.headers.authorization ?? '')?.[1];
-    const presented = Buffer.from(basic ?? '', 'base64').toString('utf8');
-    credentials.push(presented.slice(presented.indexOf(':') + 1));
-    if (basic === undefined) return { status: 401, bytes: { type: 'text/plain', content: 'authentication required\n' } };
-    return {
-      bytes: {
-        type: 'application/x-git-upload-pack-advertisement',
-        content: [
-          line('# service=git-upload-pack\n'),
-          '0000',
-          line(`${commit} HEAD\0side-band-64k\n`),
-          line(`${commit} refs/heads/main\n`),
-          '0000',
-        ].join(''),
-      },
-    };
-  });
+  const credentials = appRemote(hosted, commit);
   await opened(hosted);
 
   directed(hosted, `@git ls-remote ${hosted.house.origin}/app/a_app.git`);
@@ -191,10 +160,6 @@ it("closes the process's socket and Git proxy when the process exits", async () 
   await expect(fetch(`${proxy}/app/a_app.git/info/refs`)).rejects.toThrow();
 });
 
-function line(text: string): string {
-  return `${(Buffer.byteLength(text) + 4).toString(16).padStart(4, '0')}${text}`;
-}
-
 function answers(socketPath: string): Promise<boolean> {
   return new Promise((resolve) => {
     const sent = request({ socketPath, path: '/', method: 'POST', headers: { 'content-type': 'application/json' } }, (answer) => {
@@ -204,35 +169,4 @@ function answers(socketPath: string): Promise<boolean> {
     sent.on('error', () => resolve(false));
     sent.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }));
   });
-}
-
-async function attachmentDouble(
-  hosted: Hosted,
-): Promise<{ operation: unknown; authorization: unknown; bytes: Buffer }[]> {
-  const transfers: { operation: unknown; authorization: unknown; bytes: Buffer }[] = [];
-  let declared = 0;
-  hosted.house.route('POST', '/kit/attachments/upload', () => {
-    declared++;
-    return {
-      body: {
-        attachment: `at_${declared}`,
-        save: { status: 'pending' },
-        upload: {
-          method: 'POST',
-          operation: `operation-${declared}`,
-          url: `${hosted.house.origin}/bytes/upload-${declared}`,
-          expires_at: '2026-10-03T12:00:00Z',
-        },
-      },
-    };
-  });
-  hosted.house.route('POST', '/bytes/:grant', (received) => {
-    transfers.push({
-      operation: received.headers['x-house-byte-operation'],
-      authorization: received.headers.authorization,
-      bytes: received.body as Buffer,
-    });
-    return { body: { attachment: `at_${received.params.grant!.slice('upload-'.length)}`, save: { status: 'saved' } } };
-  });
-  return transfers;
 }

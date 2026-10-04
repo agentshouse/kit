@@ -1,8 +1,14 @@
 #!/usr/bin/env node
+import { setGlobalProxyFromEnv } from 'node:http';
 import { login } from './login.ts';
 import { resident } from './resident.ts';
 
+declare module 'node:http' {
+  function setGlobalProxyFromEnv(proxyEnv?: NodeJS.ProcessEnv): () => void;
+}
+
 const [command, ...argv] = process.argv.slice(2);
+setGlobalProxyFromEnv();
 
 async function run(): Promise<void> {
   if (command === 'login') return login(argv);

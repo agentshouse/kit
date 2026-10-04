@@ -2,6 +2,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFi
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLIS } from '../src/clis.ts';
+import { recordStart } from './started.ts';
 
 const ADAPTER = fileURLToPath(new URL('./adapter.ts', import.meta.url));
 const DEVICE_LOGIN = fileURLToPath(new URL('./device-login.ts', import.meta.url));
@@ -27,6 +28,7 @@ export function placeCli(prefix: string, kind: string, version: string): void {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  recordStart('npm');
   const argv = process.argv.slice(2);
   const home = process.env.HOUSE_KIT_HOME!;
   appendFileSync(join(home, 'npm.log'), `${JSON.stringify(argv)}\n`);

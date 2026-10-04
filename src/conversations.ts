@@ -328,7 +328,7 @@ export class Conversations {
         route.working_directory,
         app,
         (job) => this.job(conversation, job),
-        { ...process.env, ...bridge.env },
+        bridge.env,
       );
       void adapter.exited.then(() => bridge.close());
       const agent = adapter.connection.agent;

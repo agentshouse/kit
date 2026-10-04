@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { recordStart } from './started.ts';
 
 export interface DeviceLogin {
   argv: string[];
@@ -67,6 +68,7 @@ export const DEVICE_LOGINS: Record<string, DeviceLogin> = {
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  recordStart('device-login');
   const kind = process.env.ADAPTER_KIND!;
   const home = process.env.HOUSE_KIT_HOME!;
   const argv = process.argv.slice(2);

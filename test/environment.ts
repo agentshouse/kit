@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { onTestFinished } from 'vitest';
-import { startHouse, until, type House, type KitSocket, type Received } from './double.ts';
+import { certificate, startHouse, until, type House, type KitSocket, type Received } from './double.ts';
 import { fakeNpm, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeCli } from './npm.ts';
 
@@ -81,6 +81,11 @@ export interface RouteOverrides {
   effort?: string | null;
 }
 
+export interface Hosting {
+  tls?: boolean;
+  environment?: Record<string, string>;
+}
+
 export interface Hosted {
   house: House;
   home: string;
@@ -100,8 +105,8 @@ export interface Hosted {
 
 let inputs = 0;
 
-export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> {
-  const house = await startHouse();
+export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): Promise<Hosted> {
+  const house = await startHouse(hosting.tls ? certificate() : undefined);
   const home = await temporaryHome();
   onTestFinished(async () => {
     for (const log of ['adapter.log', 'login.log']) {
@@ -175,7 +180,12 @@ export async function hostKit(routes: RouteOverrides[] = [{}]): Promise<Hosted> 
     idles.push(request);
     return { body: {} };
   });
-  const kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeNpm(home) });
+  const kit = runKit(['resident'], {
+    HOUSE_KIT_HOME: home,
+    PATH: await fakeNpm(home),
+    ...(hosting.tls ? { NODE_EXTRA_CA_CERTS: certificate().path } : {}),
+    ...hosting.environment,
+  });
   const socket = await until(() => house.sockets[0]);
   return {
     house,
@@ -239,4 +249,86 @@ export async function installHeld(hosted: Hosted): Promise<string> {
     (await readFile(join(hosted.home, 'npm.log'), 'utf8').catch(() => '')).includes(PACKAGES['claude-agent-acp']!),
   );
   return hold;
+}
+
+export interface Ran {
+  house?: string[];
+  git?: string[];
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+export async function opened(hosted: Hosted, conversation = 'conversation-1', agent = 'agent-1'): Promise<void> {
+  hosted.input({ kind: 'open', conversation_id: conversation, agent_id: agent });
+  await hosted.ack(lastInput());
+}
+
+export function directed(hosted: Hosted, text: string, conversation = 'conversation-1', agent = 'agent-1'): void {
+  hosted.input({ kind: 'message', conversation_id: conversation, agent_id: agent, text, files: [], first: false });
+}
+
+export async function runs(hosted: Hosted, count: number): Promise<Ran[]> {
+  return until(async () => {
+    const ran = (await hosted.adapterLog()).filter((entry) => 'house' in entry || 'git' in entry);
+    return ran.length >= count ? (ran as unknown as Ran[]) : undefined;
+  });
+}
+
+function line(text: string): string {
+  return `${(Buffer.byteLength(text) + 4).toString(16).padStart(4, '0')}${text}`;
+}
+
+export function appRemote(hosted: Hosted, commit: string): string[] {
+  const credentials: string[] = [];
+  hosted.house.route('GET', '/app/:app/info/refs', (received) => {
+    const basic = /^Basic (.+)$/.exec(received.headers.authorization ?? '')?.[1];
+    const presented = Buffer.from(basic ?? '', 'base64').toString('utf8');
+    credentials.push(presented.slice(presented.indexOf(':') + 1));
+    if (basic === undefined) return { status: 401, bytes: { type: 'text/plain', content: 'authentication required\n' } };
+    return {
+      bytes: {
+        type: 'application/x-git-upload-pack-advertisement',
+        content: [
+          line('# service=git-upload-pack\n'),
+          '0000',
+          line(`${commit} HEAD\0side-band-64k\n`),
+          line(`${commit} refs/heads/main\n`),
+          '0000',
+        ].join(''),
+      },
+    };
+  });
+  return credentials;
+}
+
+export async function attachmentDouble(
+  hosted: Hosted,
+): Promise<{ operation: unknown; authorization: unknown; bytes: Buffer }[]> {
+  const transfers: { operation: unknown; authorization: unknown; bytes: Buffer }[] = [];
+  let declared = 0;
+  hosted.house.route('POST', '/kit/attachments/upload', () => {
+    declared++;
+    return {
+      body: {
+        attachment: `at_${declared}`,
+        save: { status: 'pending' },
+        upload: {
+          method: 'POST',
+          operation: `operation-${declared}`,
+          url: `${hosted.house.origin}/bytes/upload-${declared}`,
+          expires_at: '2026-10-03T12:00:00Z',
+        },
+      },
+    };
+  });
+  hosted.house.route('POST', '/bytes/:grant', (received) => {
+    transfers.push({
+      operation: received.headers['x-house-byte-operation'],
+      authorization: received.headers.authorization,
+      bytes: received.body as Buffer,
+    });
+    return { body: { attachment: `at_${received.params.grant!.slice('upload-'.length)}`, save: { status: 'saved' } } };
+  });
+  return transfers;
 }
