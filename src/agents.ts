@@ -44,7 +44,11 @@ function values(options: SessionConfigSelectOptions): string[] {
   return options.flatMap((entry) => ('group' in entry ? entry.options : [entry])).map((entry) => entry.value);
 }
 
-async function models(adapter: Adapter): Promise<Model[]> {
+function causeOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function models(kind: string, adapter: Adapter): Promise<Model[]> {
   const agent = adapter.connection.agent;
   const opened = await agent.request('session/new', { cwd: kitHome(), mcpServers: [] });
   let options = opened.configOptions ?? [];
@@ -53,9 +57,14 @@ async function models(adapter: Adapter): Promise<Model[]> {
   const offered: Model[] = [];
   for (const value of values(model.options)) {
     if (select(options, 'model')?.currentValue !== value) {
-      options = (
-        await agent.request('session/set_config_option', { sessionId: opened.sessionId, configId: model.id, value })
-      ).configOptions;
+      try {
+        options = (
+          await agent.request('session/set_config_option', { sessionId: opened.sessionId, configId: model.id, value })
+        ).configOptions;
+      } catch (error) {
+        process.stderr.write(`kit: ${kind} refused its model ${value}: ${causeOf(error)}\n`);
+        continue;
+      }
     }
     const effort = select(options, 'thought_level');
     offered.push({ model: value, efforts: effort === undefined ? [] : values(effort.options) });
@@ -73,9 +82,9 @@ async function offer(kind: string): Promise<Offer> {
       const method = adapter.initialized._meta?.[probe.initializeMeta];
       if (typeof method !== 'string' || method.length === 0) return SIGNED_OUT;
     }
-    return { signed_in: true, models: await models(adapter) };
+    return { signed_in: true, models: await models(kind, adapter) };
   } catch (error) {
-    process.stderr.write(`kit: ${kind} did not offer its models: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
     return { signed_in: adapter !== undefined || 'command' in probe, models: [] };
   } finally {
     if (adapter !== undefined) killTree(adapter.child);

@@ -179,7 +179,7 @@ export async function install(kind: string): Promise<Installed> {
     15 * 60_000,
   );
   if (ran.status !== 0) {
-    const failure = ran.output.trim();
+    const failure = ran.output.trim() || `npm exited with ${ran.status ?? 'a signal'}`;
     process.stderr.write(`kit: ${kind} did not install: ${failure}\n`);
     return { release: null, failure };
   }

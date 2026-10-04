@@ -5,7 +5,7 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { MODELS, SESSION_OPTIONS, type CliModel } from './session-options.ts';
+import { MODELS, SESSION_OPTIONS, type CliModel } from './fixtures/clis/session-options.ts';
 import { recordStart } from './started.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
@@ -312,6 +312,10 @@ const app = agent({ name: 'adapter-double' })
     log({ method: 'session/set_config_option', params });
     const option = options().find((candidate) => candidate.id === params.configId);
     if (option === undefined) throw new RequestError(-32602, `Unknown config option: ${params.configId}`);
+    const refused = join(home, 'refuse-model');
+    if (option.category === 'model' && existsSync(refused) && readFileSync(refused, 'utf8') === params.value) {
+      throw new RequestError(-32603, `Model switch blocked by a PreModelSwitch hook: ${params.value} is not allowed`);
+    }
     if (option.category === 'model') model = String(params.value);
     if (option.category === 'thought_level') effort = String(params.value);
     return { configOptions: options() };

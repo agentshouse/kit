@@ -1,5 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
 import { HOST_KEY, fakeBin, placeHostKey, runKit, temporaryHome, type KitRun } from './kit.ts';
@@ -9,6 +10,7 @@ const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.
   peerDependencies: Record<string, string>;
 };
 const PINNED = KIT_PACKAGE.peerDependencies;
+const FAST_INTERVALS = ['--import', fileURLToPath(new URL('./fast-intervals.ts', import.meta.url))];
 
 let house: House;
 let kit: KitRun | undefined;
@@ -39,10 +41,10 @@ async function installs(): Promise<string[]> {
     .map((line) => (JSON.parse(line) as string[]).at(-1)!);
 }
 
-async function start(prepare?: () => Promise<void>) {
+async function start(prepare?: () => Promise<void>, node: string[] = []) {
   const path = await fakeBin(home);
   await prepare?.();
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path });
+  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path }, node);
 }
 
 it('installs exactly the named CLIs at their pinned versions and adds one a later work frame names', async () => {
@@ -162,6 +164,73 @@ it('reports a CLI that failed to install with no release and the cause its log s
       models: [],
     },
   ]);
+});
+
+it("names npm's exit status as the cause of an install that failed without output", async () => {
+  desired = ['claude-agent-acp'];
+  await writeFile(join(home, 'npm-mute'), '@agentclientprotocol/claude-agent-acp');
+  await start();
+
+  const report = await until(() => reports[0]);
+
+  expect(report.agents).toEqual([
+    { kind: 'claude-agent-acp', release: null, failure: 'npm exited with 1', signed_in: false, models: [] },
+  ]);
+  expect(kit!.stderr()).toContain('claude-agent-acp did not install: npm exited with 1');
+});
+
+it('leaves out a model its CLI refuses to select and reports the others', async () => {
+  desired = ['claude-agent-acp'];
+  await signIn('claude-agent-acp');
+  await writeFile(join(home, 'refuse-model'), 'sonnet');
+  await start();
+
+  const report = await until(() => reports[0]);
+
+  expect(report.agents).toEqual([
+    {
+      kind: 'claude-agent-acp',
+      release: PINNED['@agentclientprotocol/claude-agent-acp'],
+      failure: null,
+      signed_in: true,
+      models: [
+        { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
+        { model: 'haiku', efforts: [] },
+      ],
+    },
+  ]);
+  expect(kit!.stderr()).toContain('claude-agent-acp refused its model sonnet: Model switch blocked by a PreModelSwitch hook');
+});
+
+it('reads its CLIs again on its own, so a recovered install and changed efforts reach House without a work frame', async () => {
+  desired = ['codex-acp', 'claude-agent-acp'];
+  await signIn('codex-acp');
+  await writeFile(join(home, 'npm-fail'), '@agentclientprotocol/claude-agent-acp');
+  await start(undefined, FAST_INTERVALS);
+  await until(() => reports[0]);
+
+  await rm(join(home, 'npm-fail'));
+  await mkdir(join(home, 'models'));
+  await writeFile(join(home, 'models', 'codex-acp'), JSON.stringify([{ id: 'gpt-5.5', name: '5.5', efforts: ['high'] }]));
+
+  await expect
+    .poll(() => reports.at(-1)?.agents, { timeout: 15_000 })
+    .toEqual([
+      {
+        kind: 'codex-acp',
+        release: PINNED['@agentclientprotocol/codex-acp'],
+        failure: null,
+        signed_in: true,
+        models: [{ model: 'gpt-5.5', efforts: ['high'] }],
+      },
+      {
+        kind: 'claude-agent-acp',
+        release: PINNED['@agentclientprotocol/claude-agent-acp'],
+        failure: null,
+        signed_in: false,
+        models: [],
+      },
+    ]);
 });
 
 it("sends a new report when a CLI's efforts change and none while nothing changed", async () => {

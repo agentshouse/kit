@@ -23,8 +23,8 @@ export async function temporaryHome(): Promise<string> {
   return home;
 }
 
-export function runKit(argv: string[], environment: Record<string, string>): KitRun {
-  const child = spawn(process.execPath, [KIT, ...argv], {
+export function runKit(argv: string[], environment: Record<string, string>, node: string[] = []): KitRun {
+  const child = spawn(process.execPath, [...node, KIT, ...argv], {
     env: { ...process.env, HOME: environment.HOUSE_KIT_HOME ?? process.env.HOME, ...environment },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
