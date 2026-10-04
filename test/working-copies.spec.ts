@@ -153,7 +153,7 @@ it('keeps a copy where it is through a handle change, stops it on deselection an
   expect(await readFile(join(room.repository, 'library/draft.md'), 'utf8')).toBe('draft\n');
   expect(await house(hosted, room.repository, 'git', 'push', '--owner')).toMatchObject({
     status: 1,
-    stderr: 'house: /rooms/renamed-notes is no longer kept in this Environment\n',
+    stderr: 'house: /rooms/renamed-notes is no longer synced to this Environment, so House takes no push from it\n',
   });
 
   const before = received(room);

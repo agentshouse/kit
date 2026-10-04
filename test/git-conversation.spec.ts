@@ -61,7 +61,7 @@ it("pushes from a Conversation process under that conversation's own credential 
   expect(first).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
   expect(second.status).toBe(1);
   expect(second.stderr).toContain('operation_denied');
-  expect(owner).toMatchObject({ status: 1, stderr: 'house: house git push --owner runs outside an Agent conversation\n' });
+  expect(owner).toMatchObject({ status: 1, stderr: 'house: --owner is not for Agent conversations; run house git push without it\n' });
   expect(edits().map((received) => received.headers.authorization)).toEqual([
     `Bearer ${conversationCredential('conversation-1')}`,
     `Bearer ${conversationCredential('conversation-2')}`,
@@ -170,11 +170,52 @@ it('sends a change set above the MCP bound as one prepared upload under the push
   expect(room.files.get('library/big.md')!.content).toBe(big);
 });
 
+it("prints the byte origin's refusal of a prepared upload as House words it, with its delay", async () => {
+  const { hosted, rooms, room } = await copied();
+  await writeFile(join(room.repository, 'library/big.md'), '\u0001'.repeat(800_000));
+  commitAll(room.repository, 'big');
+  rooms.overloadsUploads = 1;
+
+  const refused = await shell(hosted, `cd ${room.repository} && house git push`);
+  const landed = await shell(hosted, `cd ${room.repository} && house git push`);
+
+  expect(refused).toMatchObject({ status: 1, stderr: 'house: house_overloaded: House is busy; call again in 5 s\n' });
+  expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+});
+
+it("prints House's refusal of a push as House words it, keeps its delay, and the next push lands it", async () => {
+  const { hosted, room } = await copied();
+  let overloaded = false;
+  hosted.house.route('POST', '/', (request) => {
+    hosted.mcp.push(request);
+    const message = request.body as { id: string; params: { name: string; arguments: Record<string, unknown> } };
+    if (!overloaded) {
+      overloaded = true;
+      return {
+        status: 503,
+        body: {
+          jsonrpc: '2.0',
+          id: message.id,
+          error: { code: -32000, message: 'house_overloaded: House is busy; call again in 5 s', data: { code: 'house_overloaded' } },
+        },
+      };
+    }
+    return { body: { jsonrpc: '2.0', id: message.id, result: hosted.tools.edit!(message.params.arguments, request) } };
+  });
+
+  const refused = await shell(hosted, `cd ${room.repository} && echo two >> library/plan.md && git commit -qam two && house git push`);
+  const landed = await shell(hosted, `cd ${room.repository} && house git push`);
+
+  expect(refused).toMatchObject({ status: 1, stderr: 'house: house_overloaded: House is busy; call again in 5 s\n' });
+  expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  expect(room.files.get('library/plan.md')!.content).toBe('one\ntwo\n');
+});
+
 it('drops an expired rename House never applied when another writer took both of its paths', async () => {
   const { hosted, room } = await copied();
   let calls = 0;
   hosted.tools.edit = () =>
-    ++calls === 1 ? null : { isError: true, content: [{ type: 'text', text: 'operation_expired: you cannot get around this.\n' }] };
+    ++calls === 1 ? null : { isError: true, content: [{ type: 'text', text: 'operation_expired: this operation is over 7 days old and its outcome is gone; read the current files and send again\n' }] };
 
   const lost = await shell(hosted, `cd ${room.repository} && git mv library/a.md library/b.md && git commit -qm move && house git push`);
   room.remove('library/a.md');
@@ -218,7 +259,7 @@ it("brings House's reference rewrites home when it finishes an expired rename Ho
   const { hosted, rooms, room } = await copied();
   rooms.dropsEdits = 1;
   const lost = await shell(hosted, `cd ${room.repository} && git mv library/a.md library/b.md && git commit -qm move && house git push`);
-  hosted.tools.edit = () => ({ isError: true, content: [{ type: 'text', text: 'operation_expired: you cannot get around this.\n' }] });
+  hosted.tools.edit = () => ({ isError: true, content: [{ type: 'text', text: 'operation_expired: this operation is over 7 days old and its outcome is gone; read the current files and send again\n' }] });
 
   const finished = await shell(hosted, `cd ${room.repository} && house git push`);
 

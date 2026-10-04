@@ -17,6 +17,7 @@ import {
   runs,
   type McpCall,
 } from './environment.ts';
+import { OVERLOADED } from './rooms.ts';
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const OPERATION = 'agents.house/agent-operation';
@@ -127,6 +128,120 @@ it("uploads append_record's attachments and sends their references", async () =>
     { room_ref: 'r_room', source_ref: 's_source', body: 'see', attachments: ['at_1', 'at_2'] },
   ]);
   expect(called(hosted.mcp[0]!).params._meta[OPERATION]).toMatch(UUID_V7);
+});
+
+it("prints House's own line for a refused call, and no route, status or body", async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
+  hosted.tools.search = () => ({
+    isError: true,
+    content: [{ type: 'text', text: 'room_not_found: you have no Room with that room_ref; pass an r_… ref from list_rooms, not a handle\n' }],
+  });
+  await opened(hosted);
+  hosted.house.route('POST', '/', (request) => {
+    const message = request.body as McpCall & { id: string };
+    if (message.params.name !== 'inspect') {
+      return { body: { jsonrpc: '2.0', id: message.id, result: hosted.tools.search!(message.params.arguments ?? {}, request) } };
+    }
+    return {
+      status: 503,
+      body: {
+        jsonrpc: '2.0',
+        id: message.id,
+        error: { code: -32000, message: 'house_overloaded: House is busy; call again in 5 s', data: { code: 'house_overloaded' } },
+      },
+    };
+  });
+  hosted.house.route('POST', '/kit/attachments/upload', () => ({
+    status: 409,
+    body: {
+      error: {
+        code: 'room_archived',
+        message: 'room_archived: this Room is archived and read-only; its owner can unarchive it at /rooms/<room>/settings',
+      },
+    },
+  }));
+
+  directed(
+    hosted,
+    '@house search {"query":"one"}\n@house inspect {"path":"/private"}\n@house upload_attachment {"path":"report.txt"}',
+  );
+
+  expect((await runs(hosted, 3)).map((ran) => [ran.status, ran.stderr])).toEqual([
+    [1, 'house: room_not_found: you have no Room with that room_ref; pass an r_… ref from list_rooms, not a handle\n'],
+    [1, 'house: house_overloaded: House is busy; call again in 5 s\n'],
+    [1, 'house: room_archived: this Room is archived and read-only; its owner can unarchive it at /rooms/<room>/settings\n'],
+  ]);
+});
+
+it("prints the byte origin's refusal of an upload as House words it, with its delay", async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
+  await attachmentDouble(hosted);
+  hosted.house.route('POST', '/bytes/:grant', () => ({ status: 503, body: OVERLOADED }));
+  await opened(hosted);
+
+  directed(hosted, '@house upload_attachment {"path":"report.txt"}');
+
+  expect((await runs(hosted, 1))[0]).toMatchObject({
+    status: 1,
+    stderr: 'house: house_overloaded: House is busy; call again in 5 s\n',
+  });
+});
+
+it('says a refused upload transfer failed without its capability address', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
+  await attachmentDouble(hosted);
+  hosted.house.route('POST', '/bytes/:grant', () => ({ status: 404 }));
+  await opened(hosted);
+
+  directed(hosted, '@house upload_attachment {"path":"report.txt"}');
+
+  expect((await runs(hosted, 1))[0]).toMatchObject({
+    status: 1,
+    stderr: 'house: the upload answered 404; upload the file again\n',
+  });
+});
+
+it('refuses arguments that are no JSON object and a file it cannot read in one line each', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+
+  directed(
+    hosted,
+    [
+      '@house search invoice',
+      '@house search ["invoice"]',
+      '@house upload_attachment {}',
+      '@house upload_attachment {"path":"absent.txt"}',
+      '@house upload_attachment {"path":"."}',
+      '@house list_agents --help',
+    ].join('\n'),
+  );
+
+  const form = `house: the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'\n`;
+  expect((await runs(hosted, 6)).map((ran) => ran.stderr)).toEqual([
+    form,
+    form,
+    'house: upload_attachment needs "path", a local file\n',
+    'house: absent.txt is not a readable file\n',
+    'house: . is a folder; upload one file at a time\n',
+    `house: list_agents is no Tool; house find_command '{"query":"list_agents"}' finds Commands\n`,
+  ]);
+  expect(hosted.mcp.filter((received) => called(received).method === 'tools/call')).toEqual([]);
+});
+
+it('gives every call it sends its own request id', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+
+  directed(hosted, '@house search {"query":"one"}\n@house search {"query":"two"}\n@house --help');
+
+  await runs(hosted, 3);
+  const ids = hosted.mcp.map((received) => (received.body as { id: unknown }).id);
+  expect(ids).toHaveLength(3);
+  expect(new Set(ids).size).toBe(ids.length);
 });
 
 it('carries the credential on a Git call to a House App source remote', async () => {

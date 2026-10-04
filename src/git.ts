@@ -68,7 +68,7 @@ export async function blobText(repository: string, object: string, path: string)
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
-    throw new Error(`${path} is not UTF-8 text`);
+    throw new Error(`${path} is binary and House stores only text; remove it from the commit`);
   }
 }
 
