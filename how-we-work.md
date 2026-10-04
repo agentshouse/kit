@@ -2,7 +2,7 @@
 
 A Room is where information people share is kept; it is not the place for
 private information. Work goes into the Room it belongs to, or the First Room
-when none is named. Read and write Rooms with the `house` CLI.
+when none is named.
 
 The skills are already set up; never run `setup-matt-pocock-skills`.
 
@@ -20,6 +20,4 @@ The skills are already set up; never run `setup-matt-pocock-skills`.
 - Research: `library/research/<slug>.md`
 - Questionnaires: `library/questionnaires/<slug>.md`
 - Learning: `library/learning/<topic>/`
-- Files a person should open, such as HTML pages, are uploaded to the Room and
-  linked from the document they belong to; a prototype is one HTML file with
-  every variant on one page.
+- Prototype: one HTML file with every variant on one page.

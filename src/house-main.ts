@@ -24,8 +24,7 @@ interface Saved {
 }
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
-const GIT_HELP = 'Submit a Room commit to House; default HEAD. Use --owner only outside an Agent conversation. Native git push is not a House remote.';
-const GIT_USAGE = `usage: house git push [commit] [--owner]\n${GIT_HELP}`;
+const GIT_USAGE = 'usage: house git push [commit] [--owner]';
 const ARGUMENTS = `the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'`;
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
@@ -138,12 +137,12 @@ function argumentsOf(argument: string | undefined): Record<string, unknown> {
 
 async function house([verb, argument]: string[]): Promise<string> {
   if (verb === undefined || verb === '--help') {
-    return [USAGE, `git push [commit]: ${GIT_HELP}`, ...(await tools()).map((tool) => `${tool.name}: ${tool.description}`)].join('\n');
+    return [USAGE, 'git push [commit]', ...(await tools()).map((tool) => `${tool.name}: ${tool.description}`)].join('\n');
   }
   if (argument === '--help') {
     const tool = (await tools()).find((listed) => listed.name === verb);
     if (tool === undefined) throw new Error(`${verb} is no Tool; house find_command '{"query":"${verb}"}' finds Commands`);
-    return `${tool.description}\n${JSON.stringify(tool.inputSchema, null, 2)}`;
+    return `${tool.description}\n${JSON.stringify(tool.inputSchema)}`;
   }
   const args = argumentsOf(argument);
   if (verb === 'upload_attachment') {
