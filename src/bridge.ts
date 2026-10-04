@@ -88,11 +88,11 @@ function answered(forwarded: Forwarded): { text: string } | { refused: Refusal }
 function editAnswer(forwarded: Forwarded): Submitted {
   const answer = answered(forwarded);
   if ('refused' in answer) return answer;
-  const { results } = parse(answer.text) as { results: { path: string; op: string; revision: string; from?: string }[] };
+  const { results } = parse(answer.text) as { results: { path: string; revision?: string; from?: string }[] };
   return {
     accepted: results.flatMap((result) => [
       ...(result.from === undefined ? [] : [{ path: result.from, revision: null, content: null }]),
-      { path: result.path, revision: result.op === 'remove' ? null : result.revision },
+      { path: result.path, revision: result.revision ?? null },
     ]),
   };
 }

@@ -411,24 +411,14 @@ export function serveRooms(hosted: Hosted): Rooms {
     if ('refusal' in outcome) {
       return { isError: true, content: [{ type: 'text', text: `${said(outcome.refusal)}\n` }] } satisfies ToolResult;
     }
-    const room = roomOf(changes[0]!.path);
     return {
       content: [
         {
           type: 'text',
           text: stringify({
-            protocol: 'render=edit/1',
-            mount: 'room',
-            room_ref: room.ref,
-            room_handle: room.handle,
             results: answered(outcome.writes).map((write) => ({
               path: write.path,
-              op: write.op,
-              revision: write.revision ?? 'rev-removed',
-              bytes: write.content?.length ?? 0,
-              lines: 0,
-              diff: [],
-              truncated: false,
+              ...(write.op === 'remove' || write.revision === null ? {} : { revision: write.revision }),
               ...(write.from === undefined ? {} : { from: write.from }),
             })),
           }),
