@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 import { killTree } from './acp.ts';
 import type { Agents } from './agents.ts';
 import type { House } from './api.ts';
-import { CLIS, cliCommand } from './clis.ts';
+import { CLIS, cliCommand, withoutProxy } from './clis.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 
 export interface SignIn {
@@ -52,7 +52,11 @@ export class SignIns {
   private async login(input: SignIn): Promise<void> {
     await this.agents.installed();
     const login = CLIS[input.cli]!.login;
-    const child = spawn(cliCommand(input.cli), login.args, { stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    const child = spawn(cliCommand(input.cli), login.args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+      env: withoutProxy(),
+    });
     const running = () => child.exitCode === null && child.signalCode === null;
     let link: string | undefined;
     let code: string | undefined;

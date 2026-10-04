@@ -8,7 +8,7 @@ import {
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_VERSION, cliCommand, type Job, type Notice } from './clis.ts';
+import { CLIS, KIT_VERSION, cliCommand, withoutProxy, type Job, type Notice } from './clis.ts';
 
 export interface Adapter {
   child: ChildProcess;
@@ -25,11 +25,11 @@ export async function startAdapter(
   cwd: string,
   app: ClientApp,
   jobs: (job: Job) => void = () => undefined,
-  env: NodeJS.ProcessEnv = process.env,
+  added: Record<string, string> = {},
 ): Promise<Adapter> {
   const child = spawn(cliCommand(kind), CLIS[kind]!.args, {
     cwd,
-    env,
+    env: { ...withoutProxy(), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });

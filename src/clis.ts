@@ -104,6 +104,8 @@ const KIT_PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.me
 
 export const KIT_VERSION = KIT_PACKAGE.version;
 
+const PROXY = /^https?_proxy$/i;
+
 export function pinned(kind: string): string {
   return KIT_PACKAGE.peerDependencies[CLIS[kind]!.package]!;
 }
@@ -130,9 +132,13 @@ export interface Ran {
   output: string;
 }
 
+export function withoutProxy(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !PROXY.test(name)));
+}
+
 export function run(command: string, args: string[], timeoutMs: number): Promise<Ran> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs });
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, env: withoutProxy() });
     let output = '';
     child.stdout.on('data', (chunk: Buffer) => {
       output += chunk.toString('utf8');

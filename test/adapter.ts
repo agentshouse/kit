@@ -5,11 +5,13 @@ import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { recordStart } from './started.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const kind = process.env.ADAPTER_KIND ?? 'codex-acp';
 const home = process.env.HOUSE_KIT_HOME ?? '/tmp';
 const signedIn = () => existsSync(join(home, 'signed-in', kind));
+recordStart('adapter');
 
 function log(entry: Record<string, unknown>): void {
   appendFileSync(join(home, 'adapter.log'), `${JSON.stringify({ kind, pid: process.pid, ...entry })}\n`);
