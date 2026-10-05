@@ -104,6 +104,18 @@ it('signs Claude Code in with the code the page collects and keeps the code nowh
   expect(JSON.stringify(hosted.house.requests)).not.toContain(code);
 });
 
+it('ends a Claude Code sign-in whose pasted code Claude rejects, names the cause in the log and acknowledges the input', async () => {
+  const { hosted, input } = await signingIn('claude-agent-acp', (hold) =>
+    hold === 1 ? HELD : { outcome: 'collected', content: { code: 'pasted-claude-code' } },
+  );
+
+  expect(await hosted.ack(input)).toEqual({});
+
+  const [login] = await logins(hosted);
+  await until(() => !alive(login!.pid as number));
+  expect(hosted.kit.stderr()).toContain('Invalid code. Please make sure the full code was copied.');
+});
+
 it('acknowledges a sign-in whose login fails and names the cause in the log', async () => {
   const { hosted, holds, input } = await signingIn('codex-acp');
   await until(() => holds[0]);

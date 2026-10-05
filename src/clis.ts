@@ -35,7 +35,7 @@ export interface Cli {
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
   signedIn: { command: string[] } | { initializeMeta: string };
-  login: { args: string[]; code: 'show' | 'collect' };
+  login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
   queues: boolean;
   turnStarted(notice: Notice): boolean;
   turnEnded(notice: Notice): boolean;
@@ -94,7 +94,7 @@ export const CLIS: Record<string, Cli> = {
     },
     args: [],
     signedIn: { command: ['auth', 'status'] },
-    login: { args: ['auth', 'login', '--claudeai'], code: 'collect' },
+    login: { args: ['auth', 'login', '--claudeai'], code: 'collect', rejected: 'Invalid code' },
     queues: false,
     turnStarted: () => false,
     turnEnded: ({ method, params }) =>

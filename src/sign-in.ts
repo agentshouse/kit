@@ -76,6 +76,7 @@ export class SignIns {
       const plain = line.replace(ESCAPE, '').trim();
       if (plain === '') return;
       last = plain;
+      if (login.code === 'collect' && plain.includes(login.rejected)) killTree(child);
       link ??= LINK.exec(plain)?.[0];
       if (CODE.test(plain)) code ??= plain;
       const step: Step | undefined =
