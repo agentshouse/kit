@@ -187,12 +187,10 @@ async function updatingClis(flag: 0 | 1, terminal: boolean, answers = '') {
   const log = join(home, 'updates.log');
   const script = `set -u
 UPDATE_CLIS=${flag}
-CLIS_UPDATED=0
 ${await steps('update_clis')}
 listing() { printf '%s\\n' ${LISTED.map((line) => `'${line.join('\t')}'`).join(' ')}; }
 updating() { printf '%s\\n' "$1" >> ${log}; [ "$1" != /home/u/.grok/bin/grok ]; }
 update_clis listing updating
-printf 'updated=%s\\n' "$CLIS_UPDATED"
 `;
   await writeFile(join(home, 'run.sh'), script);
   const command = terminal ? ['script', ['-qec', `bash ${join(home, 'run.sh')}`, '/dev/null']] as const : ['bash', [join(home, 'run.sh')]] as const;
@@ -214,7 +212,6 @@ it('asks once for each CLI below its minimum, updates one on Enter, leaves one i
   expect(output).toContain('claude 2.1.200 is older than 2.1.286, the oldest this House Kit runs. Update it? [Y/n]');
   expect(output).not.toContain('grok 1.0.50 is older');
   expect(updated).toEqual(['/home/u/.local/bin/codex']);
-  expect(output).toContain('updated=1');
 });
 
 it('updates every chosen CLI without asking when --update-clis is given, and names one whose update failed', async () => {
@@ -229,7 +226,7 @@ it('updates nothing and asks nothing without a terminal and without --update-cli
   const { output, updated } = await updatingClis(0, false, '\n\n');
 
   expect(updated).toEqual([]);
-  expect(output).toBe('updated=0\n');
+  expect(output).toBe('');
 });
 
 it("runs a CLI's own update command in place natively without the proxy variables, and in a container of the installed image", async () => {
@@ -264,7 +261,7 @@ container_cli_update /kit-home/.local/bin/codex </dev/null`,
   ]);
 });
 
-it('restarts a running container Kit after it updated a CLI', async () => {
+it('leaves a running container Kit and its conversations running after it updated a CLI', async () => {
   const home = await temporaryHome();
   const ran = spawnSync(
     'bash',
@@ -273,18 +270,21 @@ it('restarts a running container Kit after it updated a CLI', async () => {
       `set -u
 NAME=house-kit
 CONFIGURED=''
-CLIS_UPDATED=1
+UPDATE_CLIS=1
 kit_running() { true; }
 enrolled() { printf environment-one; }
 docker() { printf 'docker %s\\n' "$*" >&2; }
-${await steps('resume_kit')}
+listing() { printf 'codex\\t/kit-home/.local/bin/codex\\t0.150.0\\t0.159.1\\told\\n'; }
+updating() { printf 'updated %s\\n' "$1" >&2; }
+${await steps('update_clis', 'resume_kit')}
+update_clis listing updating
 resume_kit`,
     ],
     { encoding: 'utf8', cwd: home },
   );
 
-  expect(ran.stderr).toBe('docker restart house-kit\n');
-  expect(ran.stdout).toBe('House Kit restarted for Environment environment-one.\n');
+  expect(ran.stderr).toBe('updated /kit-home/.local/bin/codex\n');
+  expect(ran.stdout).toBe('Updating codex 0.150.0.\nHouse Kit is already running for Environment environment-one.\n');
 });
 
 it('names each chosen CLI the login shell finds with its path, its release, its minimum and whether it is below that minimum', async () => {

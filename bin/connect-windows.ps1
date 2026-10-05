@@ -248,9 +248,8 @@ function Update-Clis {
   $listed = @(& docker run --rm @Network --entrypoint node @Common $ClisMain)
   if ($LASTEXITCODE -ne 0) {
     [Console]::Error.WriteLine('House Kit could not read the agent CLIs, so it updates none.')
-    return $false
+    return
   }
-  $updated = $false
   foreach ($line in $listed) {
     $name, $path, $release, $minimum, $state = "$line".Split("`t")
     if (-not $UpdateClis) {
@@ -262,13 +261,8 @@ function Update-Clis {
     $terminal = @()
     if ($Interactive) { $terminal = @('-t') }
     & docker run -i @terminal --rm @Network --entrypoint $path @Common update | Out-Host
-    if ($LASTEXITCODE -eq 0) {
-      $updated = $true
-    } else {
-      [Console]::Error.WriteLine("$name could not be updated; it stays at $release.")
-    }
+    if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("$name could not be updated; it stays at $release.") }
   }
-  $updated
 }
 
 function Start-Resident {
@@ -408,7 +402,7 @@ function Connect-Kit {
     }
     Test-Authority
     $configured = Set-Configuration
-    $updated = Update-Clis
+    Update-Clis
     if ($installed -cne $Image) {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
@@ -418,7 +412,7 @@ function Connect-Kit {
     if ((Read-Inspect '{{.State.Running}}') -cne 'true') {
       Invoke-Docker start $Name | Out-Null
       Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
-    } elseif ($configured -or $updated) {
+    } elseif ($configured) {
       Invoke-Docker restart $Name | Out-Null
       Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
     } else {
@@ -438,7 +432,7 @@ function Connect-Kit {
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
   }
   [void](Set-Configuration)
-  [void](Update-Clis)
+  Update-Clis
   Start-Resident
   Write-Host "House Kit connected for Environment $($enrolment['environment'])."
 }

@@ -20,7 +20,6 @@ FORWARD=()
 NO_SKILLS=()
 CONFIGURED=''
 UPDATE_CLIS=0
-CLIS_UPDATED=0
 UBUNTU_RELEASES=(jammy noble resolute)
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 CONFLICTING_PACKAGES=(docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc)
@@ -124,11 +123,7 @@ update_clis() {
       [[ -z "$answer" || "$answer" == [Yy]* ]] || continue
     fi
     printf 'Updating %s %s.\n' "$name" "$release"
-    if "$2" "$path"; then
-      CLIS_UPDATED=1
-    else
-      printf '%s could not be updated; it stays at %s.\n' "$name" "$release" >&2
-    fi
+    "$2" "$path" || printf '%s could not be updated; it stays at %s.\n' "$name" "$release" >&2
   done 3<<< "$listed"
 }
 
@@ -386,7 +381,7 @@ connect_native() {
     return
   fi
   start_native_service
-  if [[ "$connected" == running ]] && { [[ -n "$CONFIGURED" ]] || ((CLIS_UPDATED)); }; then
+  if [[ "$connected" == running && -n "$CONFIGURED" ]]; then
     elevated systemctl restart "$NATIVE_SERVICE" || refuse 'the House Kit service could not be restarted'
     connected=restarted
   fi
@@ -463,7 +458,7 @@ update_kit() {
 resume_kit() {
   if ! kit_running; then
     docker start "$NAME" >/dev/null
-  elif [[ -n "$CONFIGURED" ]] || ((CLIS_UPDATED)); then
+  elif [[ -n "$CONFIGURED" ]]; then
     docker restart "$NAME" >/dev/null
   else
     printf 'House Kit is already running for Environment %s.\n' "$(enrolled environment)"

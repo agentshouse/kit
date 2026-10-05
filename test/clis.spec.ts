@@ -1,5 +1,5 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { join, relative } from 'node:path';
 import { expect, it } from 'vitest';
 import { CLIS } from '../src/clis.ts';
 import { RELEASES, placeUserCli } from './cli.ts';
@@ -122,9 +122,10 @@ it('reports a CLI below its minimum, starts no conversation of that kind but one
   expect(current.find((agent) => agent.kind === 'codex-acp')).not.toHaveProperty('minimum');
 });
 
-it("reads the models each session it opens offers, the efforts of the session's model, and reports them only when they change", async () => {
-  const hosted = await hostKit([{ kind: 'codex-acp' }], { prepare: (home) => signIn(home, 'codex-acp') });
-  const known = await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
+it('reads the CLI again at every Conversation process start, its sign-in and every model with its efforts, and reports it only when it changed', async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }]);
+  const [signedOut] = await report(hosted, (agents) => agents.length === 1);
+  await signIn(hosted.home, 'codex-acp');
   await mkdir(join(hosted.home, 'models'));
   await writeFile(
     join(hosted.home, 'models', 'codex-acp'),
@@ -136,21 +137,47 @@ it("reads the models each session it opens offers, the efforts of the session's 
 
   await open(hosted, 'conversation-1');
 
-  const read = await report(hosted, (agents) => (agents[0]!.models as unknown[]).length === 2);
-  expect(read).toEqual([
+  await reportOf(hosted, [
     {
-      ...known[0],
+      ...signedOut,
+      signed_in: true,
       models: [
         { model: 'gpt-6', efforts: ['high', 'max'] },
-        { model: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'] },
+        { model: 'gpt-5.5', efforts: ['medium'] },
       ],
     },
   ]);
   const count = reported(hosted).length;
   await open(hosted, 'conversation-2');
+  await until(async () => (await probes(hosted)) === 2);
   await settle();
   expect(reported(hosted)).toHaveLength(count);
-  expect(await probes(hosted)).toBe(1);
+});
+
+it('hands a conversation the binary its CLI link resolves to, so an update that moves the link leaves that conversation on its own binary', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
+    prepare: async (home) => {
+      const binary = placeUserCli(join(home, 'versions', RELEASES['claude-agent-acp']!), 'claude-agent-acp');
+      await rm(join(userBin(home), 'claude'));
+      await symlink(binary, join(userBin(home), 'claude'));
+    },
+  });
+
+  await open(hosted, 'conversation-1');
+
+  const [entry] = await initialized(hosted);
+  expect((entry!.env as Record<string, string>).CLAUDE_CODE_EXECUTABLE).toBe(
+    join(hosted.home, 'versions', RELEASES['claude-agent-acp']!, 'claude'),
+  );
+});
+
+it('runs a CLI the login shell finds through a relative PATH entry from any working directory', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], {
+    prepare: (home) => writeFile(join(home, '.profile'), `PATH="${relative(process.cwd(), userBin(home))}:$PATH"\n`),
+  });
+
+  expect(await open(hosted, 'conversation-1')).toEqual({ provider_session_id: expect.any(String) });
+  expect(hosted.workingDirectory).not.toBe(process.cwd());
 });
 
 it('reads a CLI a conversation finds at a new version again, its sign-in and every model with its efforts', async () => {

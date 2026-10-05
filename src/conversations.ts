@@ -364,9 +364,7 @@ export class Conversations {
         queues: CLIS[route.kind]!.queues,
         phase: CLIS[route.kind]!.phase,
       };
-      this.kit.agents.offered(route.kind, opened.configOptions ?? []);
       const options = await this.launchSettings(running, route, opened.configOptions ?? []);
-      this.kit.agents.offered(route.kind, options);
       conversation.running = running;
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
       if (conversation.commands !== null) this.commands(conversation, conversation.commands);

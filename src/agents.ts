@@ -1,5 +1,5 @@
 import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { killTree, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_VERSION, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
@@ -98,21 +98,6 @@ async function offer(kind: string, cli: string, known: Offer): Promise<Offer> {
   }
 }
 
-function sessionModels(options: SessionConfigOption[], known: Model[]): Model[] | null {
-  const model = select(options, 'model');
-  if (model === undefined) return null;
-  const effort = select(options, 'thought_level');
-  return values(model.options).map((value) => ({
-    model: value,
-    efforts:
-      value === model.currentValue
-        ? effort === undefined
-          ? []
-          : values(effort.options)
-        : (known.find((entry) => entry.model === value)?.efforts ?? []),
-  }));
-}
-
 function reported(kind: string, reading: Reading) {
   return {
     kind,
@@ -186,16 +171,16 @@ export class Agents {
       }
       const { cli, release } = resolved;
       const known = this.readings.get(kind);
+      const kept = known?.release === null || known?.minimum !== undefined ? SIGNED_OUT : (known ?? SIGNED_OUT);
       if (known?.release !== release || known.minimum !== undefined) {
-        const kept = known?.minimum === undefined ? (known ?? SIGNED_OUT) : SIGNED_OUT;
         this.update(kind, { release, failure: null, signed_in: kept.signed_in, models: kept.models });
-        offer(kind, cli, kept)
-          .then((offered) => {
-            const current = this.readings.get(kind);
-            if (current?.release === release) this.update(kind, { ...current, ...offered });
-          })
-          .catch(logged);
       }
+      offer(kind, cli, kept)
+        .then((offered) => {
+          const current = this.readings.get(kind);
+          if (current?.release === release) this.update(kind, { ...current, ...offered });
+        })
+        .catch(logged);
       return cli;
     });
   }
@@ -209,13 +194,6 @@ export class Agents {
       this.readings.set(kind, await this.examine(kind, this.readings.get(kind) ?? SIGNED_OUT));
     });
     await this.report();
-  }
-
-  offered(kind: string, options: SessionConfigOption[]): void {
-    const reading = this.readings.get(kind);
-    if (reading === undefined) return;
-    const models = sessionModels(options, reading.models);
-    if (models !== null) this.update(kind, { ...reading, models });
   }
 
   report(): Promise<void> {
@@ -255,7 +233,7 @@ export class Agents {
   private async resolve(kind: string): Promise<{ cli: string; release: string } | Reading> {
     let cli: string;
     try {
-      cli = await this.ensure(kind);
+      cli = await realpath(await this.ensure(kind));
     } catch (error) {
       const failure = causeOf(error);
       process.stderr.write(`kit: ${kind} did not install: ${failure}\n`);

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { constants, readFileSync } from 'node:fs';
 import { access, readFile, stat } from 'node:fs/promises';
 import { userInfo } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { kitHome } from './home.ts';
 
 export interface Notice {
@@ -234,7 +234,7 @@ async function executable(path: string): Promise<boolean> {
 
 export async function locate(kind: string): Promise<string | null> {
   for (const directory of await loginPath()) {
-    const candidate = join(directory, CLIS[kind]!.bin);
+    const candidate = resolve(directory, CLIS[kind]!.bin);
     if (await executable(candidate)) return candidate;
   }
   return null;

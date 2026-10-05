@@ -35,27 +35,26 @@ function Read-Host([string] $Prompt) {
 $ClisMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js'
 $Network = @('--network', 'host')
 $Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
-function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected, [bool] $Changed) {
+function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected) {
   $script:UpdateClis = $Flag
   $script:Interactive = $Terminal
   $script:Answers = $Given
   $script:Prompts = @()
   $script:Ran = @()
-  $updated = Update-Clis
+  Update-Clis
   $updates = @($script:Ran | Where-Object { $_.EndsWith(' update') })
   if ($script:Ran[0] -ne "run --rm --network host --entrypoint node --hostname pc --mount home --mount workspace image $ClisMain") { "Update-Clis read the CLIs with: $($script:Ran[0])" }
   if ($script:Prompts.Count -ne $Asked) { "Update-Clis asked $($script:Prompts.Count) times, not $Asked" }
   if (($updates -join '|') -ne ($Expected -join '|')) { "Update-Clis ran: $($updates -join '|')" }
-  if ($updated -ne $Changed) { "Update-Clis answered $updated" }
 }
 $UpdateClis = $false
 $Interactive = $false
-$findings += @(Test-Updates $false $true @('', 'n') 2 @('run -i -t --rm --network host --entrypoint /kit-home/.local/bin/codex --hostname pc --mount home --mount workspace image update') $true)
+$findings += @(Test-Updates $false $true @('', 'n') 2 @('run -i -t --rm --network host --entrypoint /kit-home/.local/bin/codex --hostname pc --mount home --mount workspace image update'))
 $findings += @(Test-Updates $true $false @() 0 @(
   'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --hostname pc --mount home --mount workspace image update',
   'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --hostname pc --mount home --mount workspace image update',
   'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --hostname pc --mount home --mount workspace image update'
-) $true)
-$findings += @(Test-Updates $false $false @('') 0 @() $false)
+))
+$findings += @(Test-Updates $false $false @('') 0 @())
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }
