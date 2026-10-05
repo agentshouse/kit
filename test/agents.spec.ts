@@ -25,7 +25,6 @@ beforeEach(async () => {
     join(home, 'credential.json'),
     JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }),
   );
-  await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false }));
   reports.length = 0;
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: desired, routes: [] } }));
   house.route('POST', '/kit/agents/report', ({ body }) => {

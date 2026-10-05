@@ -5,12 +5,11 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Bridge } from './bridge.ts';
 import { KIT_VERSION } from './clis.ts';
-import { agentBase, kitHome, readConfiguration, readHome, writeHome } from './home.ts';
+import { kitHome, readConfiguration, readHome, writeHome } from './home.ts';
 import { refusalOf } from './refusals.ts';
 
 interface Installed {
   version?: string;
-  workspace?: string;
   names: string[];
 }
 
@@ -22,12 +21,12 @@ const RECORD = 'skill-set.json';
 const CREATED = 'how-we-work-created';
 const UNWRITABLE = new Set(['room_not_found', 'operation_denied']);
 
-function skillsDirectory(root: string): string {
-  return join(root, '.agents', 'skills');
+function skillsDirectory(): string {
+  return join(homedir(), '.agents', 'skills');
 }
 
-function claudeDirectory(root: string): string {
-  return join(root, '.claude', 'skills');
+function claudeDirectory(): string {
+  return join(homedir(), '.claude', 'skills');
 }
 
 async function present(path: string): Promise<boolean> {
@@ -40,36 +39,34 @@ async function present(path: string): Promise<boolean> {
   }
 }
 
-async function install(workspace: string): Promise<void> {
+async function install(): Promise<void> {
   const names: string[] = [];
   for (const name of (await readdir(SKILL_SET)).sort()) {
-    if (!(await present(join(skillsDirectory(workspace), name))) && !(await present(join(claudeDirectory(workspace), name)))) {
+    if (!(await present(join(skillsDirectory(), name))) && !(await present(join(claudeDirectory(), name)))) {
       names.push(name);
     }
   }
-  await writeHome(RECORD, { workspace, names } satisfies Installed);
-  await mkdir(skillsDirectory(workspace), { recursive: true });
-  await mkdir(claudeDirectory(workspace), { recursive: true });
-  const skills = await realpath(skillsDirectory(workspace));
-  const claude = await realpath(claudeDirectory(workspace));
+  await writeHome(RECORD, { names } satisfies Installed);
+  await mkdir(skillsDirectory(), { recursive: true });
+  await mkdir(claudeDirectory(), { recursive: true });
+  const skills = await realpath(skillsDirectory());
+  const claude = await realpath(claudeDirectory());
   for (const name of names) {
-    await cp(join(SKILL_SET, name), join(skillsDirectory(workspace), name), { recursive: true });
-    if (claude !== skills) await symlink(relative(claude, join(skills, name)), join(claudeDirectory(workspace), name));
+    await cp(join(SKILL_SET, name), join(skillsDirectory(), name), { recursive: true });
+    if (claude !== skills) await symlink(relative(claude, join(skills, name)), join(claudeDirectory(), name));
   }
-  await writeHome(RECORD, { version: KIT_VERSION, workspace, names } satisfies Installed);
+  await writeHome(RECORD, { version: KIT_VERSION, names } satisfies Installed);
 }
 
 export async function placeSkillSet(): Promise<void> {
   const accepted = (await readConfiguration()).skills;
   const installed = await readHome<Installed>(RECORD);
-  const workspace = agentBase();
-  if (accepted && installed?.version === KIT_VERSION && installed.workspace === workspace) return;
-  const placed = installed?.workspace ?? homedir();
+  if (accepted && installed?.version === KIT_VERSION) return;
   for (const name of installed?.names ?? []) {
-    await rm(join(claudeDirectory(placed), name), { recursive: true, force: true });
-    await rm(join(skillsDirectory(placed), name), { recursive: true, force: true });
+    await rm(join(claudeDirectory(), name), { recursive: true, force: true });
+    await rm(join(skillsDirectory(), name), { recursive: true, force: true });
   }
-  if (accepted) await install(workspace);
+  if (accepted) await install();
   else await rm(join(kitHome(), RECORD), { force: true });
 }
 

@@ -22,10 +22,9 @@ On your own Ubuntu 26.04 server, run the Linux command with `--linux` to
 install House Kit natively, with its workspace at `/agents/house`; `kit` and
 `house` are then on the server's `PATH`.
 
-House Kit also puts a set of agent skills in the workspace's `.agents/skills`
-and `.claude/skills`, where every Agent and any agent you open in the
-workspace finds them. Add `--no-skills` to the command to leave them out;
-running it again without the flag brings them back.
+House Kit also gives every Agent on the Environment a set of agent skills. Add
+`--no-skills` to the command to leave them out; running it again without the
+flag brings them back.
 
 ## Commands
 
