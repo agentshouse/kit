@@ -6,10 +6,10 @@ WHISPER_COMMIT=927cfce34f31707e17f2bff35c349632fb9e2c3a
 FFMPEG_VERSION=9.0.2
 FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 
+mkdir -p "$1"
 out=$(realpath "$1")
 arch=$(uname -m)
 work=$(mktemp -d)
-mkdir -p "$out"
 
 apk add --no-cache build-base cmake curl git linux-headers xz >/dev/null
 
