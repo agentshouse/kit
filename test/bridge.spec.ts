@@ -76,7 +76,8 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       ...LISTING.map((tool) => `${tool.name}: ${tool.description}`),
     ].join('\n') + '\n',
   );
-  expect(toolHelp!.stdout).toBe(`${LISTING[1]!.description}\n${JSON.stringify(LISTING[1]!.inputSchema)}\n`);
+  const inspect = LISTING.find((tool) => tool.name === 'inspect')!;
+  expect(toolHelp!.stdout).toBe(`${inspect.description}\n${JSON.stringify(inspect.inputSchema)}\n`);
   expect(search!.stdout).toBe('search answered\n');
   expect(hosted.mcp.map((received) => [received.headers['mcp-method'], called(received).params.name])).toEqual([
     ['tools/list', undefined],
@@ -90,12 +91,22 @@ it('attaches a fresh operation id to each mutation and none to a read', async ()
   await opened(hosted);
   const record = '{"room_ref":"r_room","source_ref":"s_source","body":"hello"}';
 
-  directed(hosted, `@house append_record ${record}\n@house append_record ${record}\n@house search {"query":"hello"}`);
+  const command = '{"command":"create_room","arguments":{"name":"Notes"}}';
 
-  await runs(hosted, 3);
+  directed(
+    hosted,
+    `@house append_record ${record}\n@house append_record ${record}\n@house run_command ${command}\n@house search {"query":"hello"}`,
+  );
+
+  await runs(hosted, 4);
   const operations = hosted.mcp.map((received) => called(received).params._meta[OPERATION]);
-  expect(operations).toEqual([expect.stringMatching(UUID_V7), expect.stringMatching(UUID_V7), undefined]);
-  expect(operations[0]).not.toBe(operations[1]);
+  expect(operations).toEqual([
+    expect.stringMatching(UUID_V7),
+    expect.stringMatching(UUID_V7),
+    expect.stringMatching(UUID_V7),
+    undefined,
+  ]);
+  expect(new Set(operations.slice(0, 3)).size).toBe(3);
 });
 
 it('resends a write House answers pending, and one whose answer is lost, as the same request until its outcome arrives', async () => {

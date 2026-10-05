@@ -51,9 +51,19 @@ export const LISTING = [
     inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
   },
   {
+    name: 'shell',
+    description: 'Read-only shell over `/rooms/<handle>` and `/private`.',
+    inputSchema: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' } } },
+  },
+  {
     name: 'inspect',
-    description: 'Open a file or `ref` with its provenance and revisions.',
+    description: 'Provenance and revisions; `shell` reads current file text.',
     inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+  },
+  {
+    name: 'edit',
+    description: 'Edit files atomically within one Room or `/private`.',
+    inputSchema: { type: 'object', properties: { changes: { type: 'array' } } },
   },
   {
     name: 'append_record',
@@ -62,17 +72,32 @@ export const LISTING = [
   },
   {
     name: 'upload_attachment',
-    description: 'Store a file to link from a document.',
+    description: 'Store a file to link from a document or an answer.',
     inputSchema: { type: 'object', properties: { path: { type: 'string' }, room_ref: { type: 'string' } } },
   },
   {
-    name: 'edit',
-    description: 'Create or change files in a Room or `/private`.',
-    inputSchema: { type: 'object', properties: { changes: { type: 'array' } } },
+    name: 'list_rooms',
+    description: 'Your Rooms and what you may do in each.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'find_command',
+    description: 'Find the Command, House page, or document for anything else.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+  },
+  {
+    name: 'run_command',
+    description: 'Run a Command.',
+    inputSchema: { type: 'object', properties: { command: { type: 'string' }, arguments: { type: 'object' } } },
+  },
+  {
+    name: 'get_started',
+    description: 'What House does and how to connect.',
+    inputSchema: { type: 'object', properties: {} },
   },
 ];
 
-const WRITES = new Set(['append_record', 'upload_attachment', 'edit']);
+const WRITES = new Set(['edit', 'append_record', 'upload_attachment', 'run_command']);
 
 export function conversationCredential(conversation: string): string {
   return `ahc_${conversation}`;
