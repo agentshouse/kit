@@ -19,8 +19,12 @@ export function kitHome(): string {
   return process.env.HOUSE_KIT_HOME ?? join(homedir(), '.house-kit');
 }
 
-export function agentBase(): string {
+export function workspaceRoot(): string {
   return process.env.HOUSE_KIT_WORKSPACE ?? '/agents/house';
+}
+
+export function agentBase(): string {
+  return join(workspaceRoot(), 'agents');
 }
 
 export async function readHome<T>(name: string): Promise<T | null> {
