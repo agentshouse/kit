@@ -258,6 +258,16 @@ it('refuses a Linux architecture Node.js is not built for before installing anyt
   await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+it.each([['--container'], ['--linux']])(
+  'refuses %s on a Linux architecture only the native desktop placement takes, before touching the host',
+  async (choice) => {
+    const host = await fakeHost({ system: 'Linux', machine: 's390x' });
+
+    expect(host.run([choice])).toEqual({ status: 1, stdout: '', stderr: 'kit_bootstrap_refused: unsupported Linux architecture s390x\n' });
+    expect([...host.calls('sudo'), ...host.calls('docker'), ...host.calls('curl')]).toEqual([]);
+  },
+);
+
 it('installs the container exactly as before only with the container choice', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   const image = `ghcr.io/agentshouse/kit@sha256:${'a'.repeat(64)}`;

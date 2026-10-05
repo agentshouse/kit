@@ -712,6 +712,7 @@ case "$(uname -s)" in
         ;;
       *) refuse "unsupported Linux architecture $(uname -m)" ;;
     esac
+    [[ "$ARCH" == amd64 || "$ARCH" == arm64 ]] || ((NATIVE == 0 && CONTAINER == 0)) || refuse "unsupported Linux architecture $(uname -m)"
     ;;
   Darwin)
     ((NATIVE == 0)) || refuse "--linux runs only on Ubuntu $NATIVE_RELEASE LTS on $NATIVE_ARCHITECTURE, not macOS"
