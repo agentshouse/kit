@@ -84,6 +84,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (login.code === null) {
     const pasted = await new Promise<string>((resolve) => createInterface({ input: process.stdin }).once('line', resolve));
     log({ pasted: createHash('sha256').update(pasted).digest('hex') });
+    if (!pasted.includes('#')) {
+      process.stdout.write('Invalid code. Please make sure the full code was copied.\n');
+      await new Promise(() => setInterval(() => undefined, 60_000));
+    }
   } else {
     const finished = join(home, 'device-login', kind);
     while (!existsSync(finished)) await new Promise((resolve) => setTimeout(resolve, 50));
