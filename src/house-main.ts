@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { request } from 'node:http';
+import { request, setGlobalProxyFromEnv } from 'node:http';
 import { basename, join } from 'node:path';
 import type { ToolResult } from './bridge.ts';
-import { kitHome } from './home.ts';
+import { kitHome, readOwnAgent } from './home.ts';
+import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 
 interface Tool {
@@ -28,6 +29,8 @@ const GIT_USAGE = 'usage: house git push [commit] [--owner]';
 const ARGUMENTS = `the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'`;
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
+const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
+const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
 const socketPath = process.env.HOUSE_BRIDGE;
 
 function refused(path: string, status: number, text: string): string {
@@ -62,8 +65,20 @@ function bridged(
   });
 }
 
-async function mcp<T>(method: string, params: object): Promise<T> {
-  const answer = JSON.parse(await bridged('/', { jsonrpc: '2.0', id: randomUUID(), method, params })) as {
+async function direct(message: Message): Promise<string> {
+  const ownAgent = await readOwnAgent();
+  if (ownAgent === null) throw new Error(UNCONNECTED);
+  setGlobalProxyFromEnv();
+  const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
+    throw new Error(UNREACHABLE);
+  });
+  if (answer.status === 200) return answer.text;
+  throw new Error(answer.status === 401 ? DISCONNECTED : (refusalOf(answer.text)?.text ?? `House answered ${answer.status}`));
+}
+
+async function mcp<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  const message = rpc(method, params);
+  const answer = JSON.parse(socketPath === undefined ? await direct(message) : await bridged('/', message)) as {
     result?: T;
     error?: { message: string };
   };
@@ -145,10 +160,10 @@ async function house([verb, argument]: string[]): Promise<string> {
     return `${tool.description}\n${JSON.stringify(tool.inputSchema)}`;
   }
   const args = argumentsOf(argument);
-  if (verb === 'upload_attachment') {
+  if (socketPath !== undefined && verb === 'upload_attachment') {
     return JSON.stringify({ attachment: await upload(args.path, args.room_ref, 'upload_attachment needs "path", a local file') });
   }
-  if (verb === 'append_record' && Array.isArray(args.attachments)) {
+  if (socketPath !== undefined && verb === 'append_record' && Array.isArray(args.attachments)) {
     const attachments: string[] = [];
     for (const path of args.attachments) {
       attachments.push(await upload(path, args.room_ref, 'each attachments entry is the path of a local file'));
@@ -162,17 +177,12 @@ async function house([verb, argument]: string[]): Promise<string> {
 }
 
 const argv = process.argv.slice(2);
-if (argv[0] !== 'git' && socketPath === undefined) {
-  process.stderr.write('house: house runs inside an Agent conversation\n');
-  process.exitCode = 1;
-} else {
-  (argv[0] === 'git' ? gitPush(argv.slice(1)) : house(argv)).then(
-    (text) => {
-      process.stdout.write(`${text}\n`);
-    },
-    (error: unknown) => {
-      process.stderr.write(`house: ${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    },
-  );
-}
+(argv[0] === 'git' ? gitPush(argv.slice(1)) : house(argv)).then(
+  (text) => {
+    process.stdout.write(`${text}\n`);
+  },
+  (error: unknown) => {
+    process.stderr.write(`house: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  },
+);

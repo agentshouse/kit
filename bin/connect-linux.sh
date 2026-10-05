@@ -650,12 +650,20 @@ check_installation() {
   [[ "$(docker inspect --format '{{index .Config.Labels "agentshouse.house"}}' "$NAME")" == "$HOUSE" ]] || refuse 'the installed Kit uses another House origin'
 }
 
+house_workdir() {
+  local here
+  here=$(pwd -P)
+  if [[ "$here" == "$WORKSPACE" || "$here" == "$WORKSPACE"/* ]]; then
+    printf '/agents/house%s' "${here#"$WORKSPACE"}"
+  else
+    printf /agents/house
+  fi
+}
+
 forward_kit() {
-  local placed=() entry=() terminal=() here
+  local placed=() entry=() terminal=()
   if [[ "$FORWARDED" == house ]]; then
-    here=$(pwd -P)
-    [[ "$here" == "$WORKSPACE" || "$here" == "$WORKSPACE"/* ]] || refuse "the current directory is outside the workspace $WORKSPACE"
-    placed=(--workdir "/agents/house${here#"$WORKSPACE"}")
+    placed=(--workdir "$(house_workdir)")
     entry=(--entrypoint house)
   fi
   if [[ -t 0 && -t 1 ]]; then terminal=(-t); fi

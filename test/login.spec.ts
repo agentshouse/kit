@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, get } from 'node:http';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, stat, writeFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
 import { runKit, temporaryHome } from './kit.ts';
 
-function serveLogin(house: House, environment: string, credential: string) {
+function serveLogin(house: House, environment: string, credential: string, own?: string) {
   let challenge = '';
   house.route('POST', '/kit', ({ body }) => {
     challenge = (body as { code_challenge: string }).code_challenge;
@@ -20,8 +20,22 @@ function serveLogin(house: House, environment: string, credential: string) {
     if (code !== 'ahk_code_one' || !proved) {
       return { status: 400, body: { error: { code: 'kit_login_rejected' } } };
     }
-    return { body: { credential, environment, user: 'user-one' } };
+    return {
+      body: { credential, environment, user: 'user-one', ...(own === undefined ? {} : { headless_credential: own }) },
+    };
   });
+}
+
+function answerOwnAgent(house: House, live: string) {
+  house.route('POST', '/', ({ headers }) =>
+    headers.authorization === `Bearer ${live}`
+      ? { body: { jsonrpc: '2.0', id: 1, result: { tools: [] } } }
+      : { status: 401, body: {} },
+  );
+}
+
+async function ownAgent(home: string): Promise<unknown> {
+  return JSON.parse(await readFile(join(home, 'own-agent.json'), 'utf8'));
 }
 
 async function confirm(house: House, home: string, environment: Record<string, string> = {}) {
@@ -174,4 +188,89 @@ it('ends without a credential when the code it asks for never comes', async () =
   expect(await login.exited).toBe(1);
   expect(login.stderr()).toContain('no code was typed');
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
+});
+
+it("asks for the User's own agent's connection when Kit holds none and keeps it owner-only beside the Kit credential", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first', 'ahp_own');
+
+  const { started, exit } = await confirm(house, home);
+
+  expect(exit).toBe(0);
+  expect(started.headless).toBe(true);
+  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_own' });
+  expect((await stat(join(home, 'own-agent.json'))).mode & 0o777).toBe(0o600);
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
+});
+
+it("asks for no connection while House accepts the User's own agent's one Kit holds", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const held = { house: house.origin, user: 'user-one', credential: 'ahp_live' };
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify(held));
+  answerOwnAgent(house, 'ahp_live');
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const { started, exit } = await confirm(house, home);
+
+  expect(exit).toBe(0);
+  expect(started).not.toHaveProperty('headless');
+  expect(await ownAgent(home)).toEqual(held);
+});
+
+it("asks again when House answers the User's own agent's connection as revoked, and keeps the new one", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_revoked' }));
+  answerOwnAgent(house, 'ahp_other');
+  serveLogin(house, 'environment-one', 'ahk_first', 'ahp_new');
+
+  const { started, exit } = await confirm(house, home);
+
+  expect(exit).toBe(0);
+  expect(started.headless).toBe(true);
+  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_new' });
+});
+
+it("never sends the User's own agent's connection to another House, and asks that House for one of its own", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: 'https://elsewhere.example', user: 'user-one', credential: 'ahp_elsewhere' }));
+  serveLogin(house, 'environment-one', 'ahk_first', 'ahp_here');
+
+  const { started, exit } = await confirm(house, home);
+
+  expect(exit).toBe(0);
+  expect(started.headless).toBe(true);
+  expect(JSON.stringify(house.requests.map((request) => request.headers))).not.toContain('ahp_elsewhere');
+  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_here' });
+});
+
+it("drops the User's own agent's connection when another User confirms the login, and says to log in again", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-two', credential: 'ahp_two' }));
+  answerOwnAgent(house, 'ahp_two');
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const { exit, login } = await confirm(house, home);
+
+  expect(exit).toBe(0);
+  expect(login.stdout()).toMatch(/kit login/);
+  await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it("stops with House's answer when House cannot say whether the User's own agent's connection still stands", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_held' }));
+  house.route('POST', '/', () => ({ status: 503, body: { error: { code: 'house_unavailable' } } }));
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toContain('503');
+  expect(house.requests.map((request) => request.path)).toEqual(['/']);
 });

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,8 +12,15 @@ export interface Configuration {
   skills: boolean;
 }
 
+export interface OwnAgent {
+  house: string;
+  user: string;
+  credential: string;
+}
+
 const ENROLMENT = 'credential.json';
 const CONFIGURATION = 'kit.json';
+const OWN_AGENT = 'own-agent.json';
 
 export function kitHome(): string {
   return process.env.HOUSE_KIT_HOME ?? join(homedir(), '.house-kit');
@@ -50,6 +57,18 @@ export function readEnrolment(): Promise<Enrolment | null> {
 
 export function writeEnrolment(enrolment: Enrolment): Promise<void> {
   return writeHome(ENROLMENT, enrolment);
+}
+
+export function readOwnAgent(): Promise<OwnAgent | null> {
+  return readHome<OwnAgent>(OWN_AGENT);
+}
+
+export function writeOwnAgent(ownAgent: OwnAgent): Promise<void> {
+  return writeHome(OWN_AGENT, ownAgent);
+}
+
+export function forgetOwnAgent(): Promise<void> {
+  return rm(join(kitHome(), OWN_AGENT), { force: true });
 }
 
 export async function readConfiguration(): Promise<Configuration> {
