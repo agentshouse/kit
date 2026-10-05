@@ -1,0 +1,44 @@
+name: Build the transcription engine
+
+on:
+  push:
+    tags:
+      - 'engine-*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker run --rm -v "$PWD:/kit" -w /kit alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 sh scripts/engine.sh tmp/engine
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.runner }}
+          path: tmp/engine/
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: tmp/engine
+          merge-multiple: true
+      - name: Publish the engine release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd tmp/engine
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" ./* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+            --title "Transcription engine $GITHUB_REF_NAME" \
+            --notes "parakeet-cli from whisper.cpp v1.9.4 (MIT) and FFmpeg 9.0.2 (LGPL-2.1-or-later, source https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz), built as static binaries by scripts/engine.sh at $GITHUB_SHA."
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir ../readback
+          diff -r . ../readback
