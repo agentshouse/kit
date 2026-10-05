@@ -709,14 +709,17 @@ it.each(KINDS)('sends each working note %s writes between actions as one complet
 
 it('grows the draft from the answer chunks alone while Codex writes notes between them', async () => {
   const hosted = await opened('codex-acp');
+  const admit = startHeld(hosted);
 
   hosted.input({ kind: 'message', text: '@note Reading it\n@tool Read the file\n@say one\n@say  two', files: [], first: true });
 
-  expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
+  await until(() => drafts(hosted)[1]);
   expect(drafts(hosted).map((frame) => frame.blocks)).toEqual([
     [{ type: 'paragraph', text: 'one' }],
     [{ type: 'paragraph', text: 'one two' }],
   ]);
+  admit();
+  expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
   expect(notes(hosted)).toEqual([note('Reading it')]);
 });
 
