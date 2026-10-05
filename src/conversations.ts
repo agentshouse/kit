@@ -19,6 +19,7 @@ import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS, type Cli, type Job, type Phase } from './clis.ts';
 import type { WorkingCopies } from './copies.ts';
 import { placeFiles, type MessageFile } from './files.ts';
+import { agentBase } from './home.ts';
 import { instructions } from './instructions.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 import { createHowWeWork } from './skills.ts';
@@ -44,7 +45,6 @@ export interface Input {
 type Ack = { provider_session_id: string } | { refused: string } | Record<string, never>;
 type Outcome = { text: string } | { failed: string };
 
-const LAUNCH_BASE = '/agents/house';
 const KILLED = 'the conversation was killed';
 
 function causeOf(error: unknown): string {
@@ -315,7 +315,7 @@ export class Conversations {
     if (this.kit.agents.route(agentId) === undefined) await unlessKilled(this.kit.agents.refresh(), signal);
     const route = this.kit.agents.route(agentId);
     if (route === undefined) throw new Error(`this Environment hosts no Agent ${agentId}`);
-    if (route.working_directory === join(LAUNCH_BASE, route.agent_id)) {
+    if (route.working_directory === join(agentBase(), route.agent_id)) {
       await mkdir(route.working_directory, { recursive: true });
     }
     return route;
