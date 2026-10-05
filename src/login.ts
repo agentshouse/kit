@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { post } from './api.ts';
-import { readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
+import { forgetOwnAgent, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
 
 const DEFAULT_HOUSE = 'https://agents.house';
@@ -12,6 +12,7 @@ const DEFAULT_HOUSE = 'https://agents.house';
 interface Exchanged {
   credential: string;
   environment: string;
+  user: string;
   headless_credential?: string;
 }
 
@@ -65,6 +66,13 @@ function listen(): Promise<Callback> {
   });
 }
 
+async function accepted(house: string, credential: string): Promise<boolean> {
+  const checked = await callHouse(house, credential, rpc('tools/list', {}));
+  if (checked.status === 200) return true;
+  if (checked.status === 401) return false;
+  throw new Error(`House answered ${checked.status} when Kit checked this computer's own agent's connection: ${checked.text}`);
+}
+
 async function typed(question: string): Promise<string> {
   const reader = createInterface({ input: process.stdin, output: process.stdout });
   const closed = new Promise<never>((_, reject) => {
@@ -92,9 +100,7 @@ export async function login(argv: string[]): Promise<void> {
   const environment =
     replaces === undefined ? (values.environment ?? (enrolled?.house === house ? enrolled.environment : undefined)) : undefined;
   const ownAgent = await readOwnAgent();
-  const held =
-    ownAgent !== null &&
-    (await callHouse(house, ownAgent.credential, rpc('tools/list', {}))).status !== 401;
+  const held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
   const verifier = randomBytes(32).toString('base64url');
   const started = {
     ...(environment === undefined
@@ -107,8 +113,13 @@ export async function login(argv: string[]): Promise<void> {
   const exchange = async (code: string) => {
     const exchanged = await post<Exchanged>(house, '/kit/token', { code, code_verifier: verifier });
     await writeEnrolment({ house, environment: exchanged.environment, credential: exchanged.credential });
-    if (exchanged.headless_credential !== undefined) await writeOwnAgent({ credential: exchanged.headless_credential });
     process.stdout.write(`Environment ${exchanged.environment} is connected to ${house}.\n`);
+    if (exchanged.headless_credential !== undefined) {
+      await writeOwnAgent({ house, user: exchanged.user, credential: exchanged.headless_credential });
+    } else if (held && ownAgent.user !== exchanged.user) {
+      await forgetOwnAgent();
+      process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
+    }
   };
 
   if (values.manual) {

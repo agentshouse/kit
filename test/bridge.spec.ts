@@ -51,7 +51,7 @@ it("reaches House with each process's own conversation credential and never show
 });
 
 it("keeps a conversation's house on its bridge credential while Kit home holds the User's own agent's connection", async () => {
-  const hosted = await hostKit([{}], { prepare: (home) => writeFile(join(home, 'own-agent.json'), JSON.stringify({ credential: 'ahp_own' })) });
+  const hosted = await hostKit([{}], { prepare: (home) => writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: 'http://127.0.0.1:9', user: 'user-one', credential: 'ahp_own' })) });
   await opened(hosted);
 
   directed(hosted, '@house search {"query":"one"}');

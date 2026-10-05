@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,8 @@ export interface Configuration {
 }
 
 export interface OwnAgent {
+  house: string;
+  user: string;
   credential: string;
 }
 
@@ -63,6 +65,10 @@ export function readOwnAgent(): Promise<OwnAgent | null> {
 
 export function writeOwnAgent(ownAgent: OwnAgent): Promise<void> {
   return writeHome(OWN_AGENT, ownAgent);
+}
+
+export function forgetOwnAgent(): Promise<void> {
+  return rm(join(kitHome(), OWN_AGENT), { force: true });
 }
 
 export async function readConfiguration(): Promise<Configuration> {

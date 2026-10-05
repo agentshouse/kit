@@ -30,7 +30,7 @@ function runHouse(
 async function connected(house: House, own: boolean): Promise<string> {
   const home = await temporaryHome();
   await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_kit' }));
-  if (own) await writeFile(join(home, 'own-agent.json'), JSON.stringify({ credential: 'ahp_own' }));
+  if (own) await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_own' }));
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
     const result = message.method === 'tools/list' ? { tools: LISTING } : shelled(`found for ${String(message.params.arguments?.query)}`);

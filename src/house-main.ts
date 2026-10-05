@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { request, setGlobalProxyFromEnv } from 'node:http';
 import { basename, join } from 'node:path';
 import type { ToolResult } from './bridge.ts';
-import { kitHome, readEnrolment, readOwnAgent } from './home.ts';
+import { kitHome, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 
@@ -66,10 +66,10 @@ function bridged(
 }
 
 async function direct(message: Message): Promise<string> {
-  const [enrolment, ownAgent] = await Promise.all([readEnrolment(), readOwnAgent()]);
-  if (enrolment === null || ownAgent === null) throw new Error(UNCONNECTED);
+  const ownAgent = await readOwnAgent();
+  if (ownAgent === null) throw new Error(UNCONNECTED);
   setGlobalProxyFromEnv();
-  const answer = await callHouse(enrolment.house, ownAgent.credential, message).catch(() => {
+  const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
     throw new Error(UNREACHABLE);
   });
   if (answer.status === 200) return answer.text;
