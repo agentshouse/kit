@@ -135,7 +135,7 @@ it("names each working copy in a conversation's first prompt", async () => {
     (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
   );
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block.slice(2)).toEqual([
+  expect(block.slice(3)).toEqual([
     'House working copies; commit, then `house git push`:',
     `/rooms/notes: ${room.repository}`,
   ]);
@@ -251,7 +251,7 @@ it('names the copies of a selection still being read in a first prompt that arri
 
   const prompt = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block.slice(3)).toEqual([`/rooms/notes: ${room.repository}`]);
+  expect(block.slice(4)).toEqual([`/rooms/notes: ${room.repository}`]);
 });
 
 it("brings House's reference rewrites home when it finishes an expired rename House applied", async () => {
