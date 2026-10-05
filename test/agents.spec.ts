@@ -182,6 +182,20 @@ it("reports a CLI whose official install failed with no release and the installe
   ]);
 });
 
+it("keeps the end of a long installer output as the cause, so it stays within what House takes", async () => {
+  desired = ['grok-build'];
+  await start(async () => {
+    await rm(join(userBin(home), 'grok'));
+    await writeFile(join(home, 'install-fail'), 'grok-build\n');
+    await writeFile(join(home, 'install-output'), `${'Downloading Grok Build\n'.repeat(400)}`);
+  });
+
+  const [grok] = (await until(() => reports[0])).agents as { failure: string }[];
+
+  expect(grok!.failure).toHaveLength(4000);
+  expect(grok!.failure.endsWith('Downloading Grok Build\nChecksum verification failed')).toBe(true);
+});
+
 it("reports a CLI whose adapter failed to install with no release and npm's cause", async () => {
   desired = ['claude-agent-acp'];
   await start(() => writeFile(join(home, 'npm-fail'), '@agentclientprotocol/claude-agent-acp'));

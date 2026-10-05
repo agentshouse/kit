@@ -19,7 +19,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const kind = Object.keys(CLIS).find((candidate) => CLIS[candidate]!.install.includes(` ${url} `))!;
   process.stdout.write(
     [
-      'if grep -qx ' + kind + ' "$HOUSE_KIT_HOME/install-fail" 2>/dev/null; then echo "Checksum verification failed" >&2; exit 1; fi',
+      `if grep -qx ${kind} "$HOUSE_KIT_HOME/install-fail" 2>/dev/null; then cat "$HOUSE_KIT_HOME/install-output" 2>/dev/null; echo "Checksum verification failed" >&2; exit 1; fi`,
       `${process.execPath} ${CLI} ${kind} "$HOME/${LOCATIONS[kind]}"`,
       `printf '%s\\n' 'PATH="$HOME/${LOCATIONS[kind]}:$PATH"' >> "$HOME/.profile"`,
       '',

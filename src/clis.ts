@@ -135,6 +135,7 @@ const PROXY = /^https?_proxy$/i;
 const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/;
 const INSTALL_MS = 15 * 60_000;
 const READ_MS = 30_000;
+const CAUSE_CHARACTERS = 4000;
 
 function prefix(kind: string): string {
   return join(kitHome(), 'agents', kind);
@@ -186,7 +187,7 @@ export function run(command: string, args: string[], timeoutMs: number, detached
 }
 
 function failureOf(ran: Ran, program: string): string {
-  return ran.output.trim() || `${program} exited with ${ran.status ?? 'a signal'}`;
+  return ran.output.trim().slice(-CAUSE_CHARACTERS) || `${program} exited with ${ran.status ?? 'a signal'}`;
 }
 
 export async function installAdapter(kind: string): Promise<string | null> {
