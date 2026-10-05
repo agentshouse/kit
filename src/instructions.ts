@@ -3,6 +3,7 @@ import { HOW_WE_WORK } from './skills.ts';
 
 const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
 const FILE_LINE = 'To give the User a file or a page, upload it with `house upload_attachment` and link it; never start a server.';
+const READ_LINE = 'Before working in a Room, read `/private/rooms/<handle>/AGENTS.md`, and before editing its Wiki, `/rooms/<handle>/library/wiki/RULES.md`.';
 const COPIES_LINE = 'House working copies; commit, then `house git push`:';
 const UNREADABLE = /^(?:\S+: )?(?:path_not_found|room_not_found|operation_denied)\b/;
 const FAILED = /^exit: [1-9]\d*$/;
@@ -32,6 +33,6 @@ async function howWeWork(bridge: Bridge): Promise<string> {
 }
 
 export async function instructions(bridge: Bridge, base: string, copies: string[]): Promise<string> {
-  const lines = [HOUSE_LINE, FILE_LINE, ...(copies.length === 0 ? [] : [COPIES_LINE, ...copies])];
+  const lines = [HOUSE_LINE, FILE_LINE, READ_LINE, ...(copies.length === 0 ? [] : [COPIES_LINE, ...copies])];
   return [lines.join('\n'), base, await howWeWork(bridge)].filter((part) => part !== '').join('\n\n');
 }
