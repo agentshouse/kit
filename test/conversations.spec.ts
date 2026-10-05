@@ -75,7 +75,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
   const hosted = await hostKit();
   const hold = await installHeld(hosted);
   const agentId = `agent-${randomUUID()}`;
-  const directory = `/agents/house/${agentId}`;
+  const directory = `/agents/house/agents/${agentId}`;
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   const route = {
     agent_id: agentId,
@@ -180,9 +180,9 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   expect(settings.map((entry) => entry.params)).toEqual([expect.objectContaining({ configId: 'model', value: 'changed-model' })]);
 });
 
-it('creates an absent default launch directory before it opens the session there', async () => {
+it('creates an absent default launch directory beneath /agents/house/agents before it opens the session there', async () => {
   const agentId = `agent-${randomUUID()}`;
-  const directory = `/agents/house/${agentId}`;
+  const directory = `/agents/house/agents/${agentId}`;
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   const hosted = await hostKit([{ agent_id: agentId, working_directory: directory }]);
 
@@ -194,26 +194,26 @@ it('creates an absent default launch directory before it opens the session there
   expect(opened.params).toMatchObject({ cwd: directory });
 });
 
-it('creates an absent default launch directory beneath the native workspace root and none under /agents/house', async () => {
+it('creates an absent default launch directory beneath the native workspace root\'s agents folder and none directly in the root', async () => {
   const workspace = await temporaryHome();
-  const [agentId, serverAgentId] = [`agent-${randomUUID()}`, `agent-${randomUUID()}`];
+  const [agentId, rootAgentId] = [`agent-${randomUUID()}`, `agent-${randomUUID()}`];
   const hosted = await hostKit(
     [
-      { agent_id: agentId, working_directory: join(workspace, agentId) },
-      { agent_id: serverAgentId, working_directory: `/agents/house/${serverAgentId}` },
+      { agent_id: agentId, working_directory: join(workspace, 'agents', agentId) },
+      { agent_id: rootAgentId, working_directory: join(workspace, rootAgentId) },
     ],
     { environment: { HOUSE_KIT_WORKSPACE: workspace } },
   );
 
   hosted.input({ kind: 'open', agent_id: agentId });
   expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
-  hosted.input({ kind: 'open', agent_id: serverAgentId, conversation_id: 'conversation-2' });
+  hosted.input({ kind: 'open', agent_id: rootAgentId, conversation_id: 'conversation-2' });
   expect(await hosted.ack(lastInput())).toEqual({ refused: expect.any(String) });
 
-  expect((await stat(join(workspace, agentId))).isDirectory()).toBe(true);
-  await expect(stat(`/agents/house/${serverAgentId}`)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await stat(join(workspace, 'agents', agentId))).isDirectory()).toBe(true);
+  await expect(stat(join(workspace, rootAgentId))).rejects.toMatchObject({ code: 'ENOENT' });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new').map((entry) => entry.params)).toEqual([
-    expect.objectContaining({ cwd: join(workspace, agentId) }),
+    expect.objectContaining({ cwd: join(workspace, 'agents', agentId) }),
   ]);
 });
 

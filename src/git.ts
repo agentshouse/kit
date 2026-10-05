@@ -2,10 +2,10 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { withoutProxy } from './clis.ts';
-import { agentBase } from './home.ts';
+import { workspaceRoot } from './home.ts';
 
 export function workingCopies(): string {
-  return join(agentBase(), 'working-copies');
+  return join(workspaceRoot(), 'working-copies');
 }
 
 export const HOUSE_REF = 'refs/house/received';
