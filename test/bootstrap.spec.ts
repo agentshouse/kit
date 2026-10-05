@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
+import { chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -286,27 +287,55 @@ resume_kit`,
   expect(ran.stdout).toBe('Updating codex 0.150.0.\nHouse Kit is already running for Environment environment-one.\n');
 });
 
-function listClis(home: string, cwd: string): Promise<{ status: number | null; stdout: string }> {
+function listClis(home: string, cwd: string): Promise<{ status: number | null; listed: string[][] }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CLIS_MAIN], { cwd, env: { ...process.env, HOME: home, HOUSE_KIT_HOME: home, ...LOGIN_SHELL } });
     let stdout = '';
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
-    child.on('close', (status) => resolve({ status, stdout }));
+    child.on('close', (status) =>
+      resolve({
+        status,
+        listed: stdout
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => line.split('\t'))
+          .map(([name, path, ...rest]) => [name!, realpathSync(path!), ...rest]),
+      }),
+    );
   });
 }
 
-it("finds a CLI through an empty PATH entry in the directory the login shell ends its profile in, as that shell does", async () => {
+async function desiredGrok(home: string): Promise<void> {
   const house = await startHouse();
-  const home = await temporaryHome();
   await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }));
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['grok-build'], routes: [] } }));
+}
+
+it('finds the CLI the login shell runs through a relative entry from a linked directory, with no env on its PATH', async () => {
+  const home = await temporaryHome();
+  await desiredGrok(home);
+  await mkdir(join(home, 'physical', 'work'), { recursive: true });
+  await symlink(join(home, 'physical', 'work'), join(home, 'link'));
+  placeUserCli(join(home, 'bin'), 'grok-build', '1.0.49');
+  placeUserCli(join(home, 'physical', 'bin'), 'grok-build', '1.0.50');
+  await writeFile(join(home, '.profile'), 'cd "$HOME/link"\nPATH="../bin"\n');
+
+  expect(await listClis(home, home)).toEqual({
+    status: 0,
+    listed: [['grok', join(home, 'physical', 'bin', 'grok'), '1.0.50', '1.0.46', 'current']],
+  });
+});
+
+it("finds a CLI through an empty PATH entry in the directory the login shell ends its profile in, as that shell does", async () => {
+  const home = await temporaryHome();
+  await desiredGrok(home);
   await writeFile(join(home, '.profile'), 'cd "$HOME/there"\nPATH=":$PATH"\n');
   const here = join(home, 'here');
   const there = join(home, 'there');
   placeUserCli(here, 'grok-build', '1.0.49');
   placeUserCli(there, 'grok-build', '1.0.50');
 
-  expect(await listClis(home, here)).toEqual({ status: 0, stdout: `grok\t${join(there, 'grok')}\t1.0.50\t1.0.46\tcurrent\n` });
+  expect(await listClis(home, here)).toEqual({ status: 0, listed: [['grok', join(there, 'grok'), '1.0.50', '1.0.46', 'current']] });
 });
 
 it('names each chosen CLI the login shell finds, even through a relative PATH entry, with its absolute path, its release, its minimum and whether it is below that minimum', async () => {
@@ -323,10 +352,10 @@ it('names each chosen CLI the login shell finds, even through a relative PATH en
 
   expect(listed).toEqual({
     status: 0,
-    stdout: [
-      `codex\t${join(userBin(home), 'codex')}\t0.150.0\t0.159.1\told\n`,
-      `grok\t${join(userBin(home), 'grok')}\t1.0.47\t1.0.46\tcurrent\n`,
-    ].join(''),
+    listed: [
+      ['codex', join(userBin(home), 'codex'), '0.150.0', '0.159.1', 'old'],
+      ['grok', join(userBin(home), 'grok'), '1.0.47', '1.0.46', 'current'],
+    ],
   });
   expect(house.requests.map((request) => [request.path, request.headers.authorization])).toEqual([
     ['/kit/agents/desired', 'Bearer ahk_held'],

@@ -1,9 +1,9 @@
 import type { ContentChunk } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
-import { constants, readFileSync } from 'node:fs';
-import { access, readFile, stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { kitHome } from './home.ts';
 
 export interface Notice {
@@ -212,36 +212,12 @@ function loginShell(): string {
   return process.env.SHELL || userInfo().shell!;
 }
 
-const SHELL_DIRECTORY = 'HOUSE_KIT_SHELL_DIRECTORY=';
-
-async function loginPath(): Promise<string[]> {
-  const shell = loginShell();
-  const ran = await run(shell, ['-l', '-i', '-c', `printf '%s%s\\n' ${SHELL_DIRECTORY} "$PWD"; env`], READ_MS, true);
-  const lines = ran.stdout.split('\n');
-  const named = (prefix: string) => lines.findLast((line) => line.startsWith(prefix))?.slice(prefix.length);
-  const path = named('PATH=');
-  const directory = named(SHELL_DIRECTORY);
-  if (path === undefined || directory === undefined) {
-    throw new Error(`the login shell ${shell} named no PATH: ${failureOf(ran, shell)}`);
-  }
-  return path.split(delimiter).map((entry) => resolve(directory, entry));
-}
-
-async function executable(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.X_OK);
-    return (await stat(path)).isFile();
-  } catch {
-    return false;
-  }
-}
+const LOOKUP = 'found=$(command -v "$1") || exit 0; case $found in /*) printf "%s\\n" "$found" ;; *) printf "%s/%s\\n" "$(pwd -P)" "$found" ;; esac';
 
 export async function locate(kind: string): Promise<string | null> {
-  for (const directory of await loginPath()) {
-    const candidate = join(directory, CLIS[kind]!.bin);
-    if (await executable(candidate)) return candidate;
-  }
-  return null;
+  const ran = await run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${LOOKUP}' sh ${CLIS[kind]!.bin}`], READ_MS, true);
+  const found = ran.stdout.trim().split('\n').at(-1)!;
+  return found.startsWith('/') ? found : null;
 }
 
 export async function versionOf(path: string): Promise<string | null> {
