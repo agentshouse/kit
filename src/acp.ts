@@ -31,7 +31,7 @@ export async function startAdapter(
   const adapter = CLIS[kind]!.adapter;
   const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args, {
     cwd,
-    env: { ...withoutProxy(), ...(adapter === null ? {} : { [adapter.executable]: cli }), ...added },
+    env: { ...withoutProxy(), ...(adapter === null ? {} : { ...adapter.env, [adapter.executable]: cli }), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
