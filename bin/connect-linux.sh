@@ -429,13 +429,21 @@ define() {
   fi
 }
 
+xml_text() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+unit_text() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g'
+}
+
 define_desktop_service() {
   if ((MACOS)); then
-    define "$LAUNCH_AGENT" "$(printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>%s</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s/kit</string>\n\t\t<string>resident</string>\n\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>HOUSE_KIT_WORKSPACE</key>\n\t\t<string>%s</string>\n\t</dict>\n\t<key>WorkingDirectory</key>\n\t<string>%s</string>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\t<key>StandardErrorPath</key>\n\t<string>%s/kit.log</string>\n</dict>\n</plist>\n' \
-      "$SERVICE" "$NATIVE_BIN" "$WORKSPACE" "$WORKSPACE" "$KIT_HOME")"
+    define "$LAUNCH_AGENT" "$(printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>%s</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s/kit</string>\n\t\t<string>resident</string>\n\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>HOUSE_KIT_WORKSPACE</key>\n\t\t<string>%s</string>\n\t</dict>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\t<key>StandardErrorPath</key>\n\t<string>%s/kit.log</string>\n</dict>\n</plist>\n' \
+      "$SERVICE" "$(xml_text "$NATIVE_BIN")" "$(xml_text "$WORKSPACE")" "$(xml_text "$KIT_HOME")")"
   else
-    define "$USER_UNIT" "$(printf '[Unit]\nDescription=House Kit\n\n[Service]\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nWorkingDirectory=%s\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n' \
-      "$WORKSPACE" "$WORKSPACE" "$NATIVE_BIN")"
+    define "$USER_UNIT" "$(printf '[Unit]\nDescription=House Kit\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n' \
+      "$(unit_text "$WORKSPACE")" "$(unit_text "$NATIVE_BIN")")"
   fi
 }
 
@@ -481,7 +489,11 @@ add_path_line() {
   local profile="$HOME/.profile" line="export PATH=\"$NATIVE_BIN:\$PATH\""
   case "${SHELL##*/}" in
     zsh) profile="$HOME/.zprofile" ;;
-    bash) [[ ! -f "$HOME/.bash_profile" ]] || profile="$HOME/.bash_profile" ;;
+    bash)
+      for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+        [[ ! -f "$profile" ]] || break
+      done
+      ;;
   esac
   grep -Fqx "$line" "$profile" 2>/dev/null && return
   if [[ -s "$profile" && -n "$(tail -c 1 "$profile")" ]]; then printf '\n' >> "$profile"; fi

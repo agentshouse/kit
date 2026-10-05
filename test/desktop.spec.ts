@@ -4,10 +4,10 @@ import { expect, it } from 'vitest';
 import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, type Host } from './host.ts';
 
 const UNSUPPORTED = 'it installs without that guarantee.';
-const SYSTEMD = '--user is-active --quiet house-kit.service';
+const UID = process.getuid!();
 
-function launchd(): string {
-  return `print gui/${process.getuid!()}/house-kit`;
+function acts(host: Host): string[] {
+  return [...host.calls('systemctl'), ...host.calls('launchctl')].filter((call) => !/^(--user is-active|print) /.test(call));
 }
 
 function notices(stdout: string): string[] {
@@ -31,16 +31,17 @@ async function installed(host: Host): Promise<void> {
 function userUnit(home: string, workspace = join(home, 'AgentsHouse')): string {
   return `[Unit]
 Description=House Kit
+PartOf=graphical-session.target
+After=graphical-session.target
 
 [Service]
 Environment="HOUSE_KIT_WORKSPACE=${workspace}"
-WorkingDirectory=${workspace}
 ExecStart="${home}/.local/bin/kit" resident
 Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 `;
 }
 
@@ -61,8 +62,6 @@ function launchAgent(home: string, workspace = join(home, 'AgentsHouse')): strin
 \t\t<key>HOUSE_KIT_WORKSPACE</key>
 \t\t<string>${workspace}</string>
 \t</dict>
-\t<key>WorkingDirectory</key>
-\t<string>${workspace}</string>
 \t<key>RunAtLoad</key>
 \t<true/>
 \t<key>KeepAlive</key>
@@ -95,7 +94,7 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
   expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${host.home}/.house-kit`]);
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
   expect(host.calls('node')).toEqual(['configure-main.js']);
-  expect(host.calls('systemctl')).toEqual([SYSTEMD, SYSTEMD, '--user daemon-reload', '--user --quiet enable --now house-kit.service']);
+  expect(acts(host)).toEqual(['--user daemon-reload', '--user --quiet enable --now house-kit.service']);
   expect(await readFile(join(host.home, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8')).toBe(userUnit(host.home));
   expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
 });
@@ -113,22 +112,17 @@ it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, w
   expect(host.calls('shasum')).toEqual(['-a 256 --check']);
   expect(host.calls('sudo')).toEqual([]);
   expect(host.calls('open')).toEqual([LOGIN_LINK]);
-  expect(host.calls('launchctl')).toEqual([
-    launchd(),
-    launchd(),
-    `enable gui/${process.getuid!()}/house-kit`,
-    `bootstrap gui/${process.getuid!()} ${host.home}/Library/LaunchAgents/house-kit.plist`,
-  ]);
+  expect(acts(host)).toEqual([`enable gui/${UID}/house-kit`, `bootstrap gui/${UID} ${host.home}/Library/LaunchAgents/house-kit.plist`]);
   expect(await readFile(join(host.home, 'Library', 'LaunchAgents', 'house-kit.plist'), 'utf8')).toBe(launchAgent(host.home));
   expect(await readFile(join(host.home, '.zprofile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
 });
 
 it.each([
-  ['Linux', { system: 'Linux', machine: 'x86_64' }, SYSTEMD],
-  ['macOS', { system: 'Darwin', machine: 'arm64' }, launchd()],
+  ['Linux', { system: 'Linux', machine: 'x86_64' }],
+  ['macOS', { system: 'Darwin', machine: 'arm64' }],
 ] as const)(
   'keeps Kit home, the workspace and the enrolment on a %s rerun, and starts no second service and adds no second path line',
-  async (_name, platform, probe) => {
+  async (_name, platform) => {
     const host = await fakeHost(platform);
     await writeFile(join(host.home, '.profile'), '# the owner\'s profile');
     expect(host.run()).toMatchObject({ status: 0 });
@@ -144,7 +138,7 @@ it.each([
     expect(host.calls('curl')).toEqual([]);
     expect(host.calls('kit')).toEqual([]);
     expect(host.calls('node')).toEqual(['authority-main.js', 'configure-main.js']);
-    expect([...host.calls('systemctl'), ...host.calls('launchctl')]).toEqual([probe, probe]);
+    expect(acts(host)).toEqual([]);
     expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe(
       `# the owner's profile\nexport PATH="${host.home}/.local/bin:$PATH"\n`,
     );
@@ -156,15 +150,7 @@ it.each([
 
 it.each([
   ['Linux', { system: 'Linux', machine: 'x86_64' }, ['--user daemon-reload', '--user restart house-kit.service']],
-  [
-    'macOS',
-    { system: 'Darwin', machine: 'arm64' },
-    [
-      `bootout gui/${process.getuid!()}/house-kit`,
-      `enable gui/${process.getuid!()}/house-kit`,
-      expect.stringMatching(/^bootstrap /),
-    ],
-  ],
+  ['macOS', { system: 'Darwin', machine: 'arm64' }, [`bootout gui/${UID}/house-kit`, `enable gui/${UID}/house-kit`, expect.stringMatching(/^bootstrap /)]],
 ] as const)('restarts the %s service in place when a rerun moves the workspace root', async (_name, platform, restart) => {
   const host = await fakeHost(platform);
   expect(host.run()).toMatchObject({ status: 0 });
@@ -174,7 +160,7 @@ it.each([
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout).toContain('House Kit restarted for Environment environment-one.\n');
-  expect([...host.calls('systemctl'), ...host.calls('launchctl')].slice(2)).toEqual(restart);
+  expect(acts(host)).toEqual(restart);
   const definition =
     platform.system === 'Linux'
       ? await readFile(join(host.home, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8')
@@ -182,6 +168,30 @@ it.each([
   expect(definition).toBe(
     platform.system === 'Linux' ? userUnit(host.home, join(host.home, 'Agents')) : launchAgent(host.home, join(host.home, 'Agents')),
   );
+});
+
+it.each([
+  ['LaunchAgent', { system: 'Darwin', machine: 'arm64' }, 'Library/LaunchAgents/house-kit.plist', '<string>~/R&amp;D &lt;50%&gt;</string>'],
+  ['systemd unit', { system: 'Linux', machine: 'x86_64' }, '.config/systemd/user/house-kit.service', 'Environment="HOUSE_KIT_WORKSPACE=~/R&D <50%%>"'],
+] as const)('writes a workspace path with markup or specifier characters into the %s as text', async (_name, platform, definition, line) => {
+  const host = await fakeHost(platform);
+
+  expect(host.run(['--workspace', join(host.home, 'R&D <50%>')])).toMatchObject({ status: 0, stderr: '' });
+
+  expect((await readFile(join(host.home, definition), 'utf8')).split('\n')).toContain(
+    line.replace('~', host.home).replace(/^/, platform.system === 'Darwin' ? '\t\t' : ''),
+  );
+});
+
+it('adds the path line to the login file bash reads when there is a .bash_login and no .bash_profile', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  await writeFile(join(host.home, '.bash_login'), '');
+  await writeFile(join(host.home, '.profile'), '');
+
+  expect(host.run()).toMatchObject({ status: 0 });
+
+  expect(await readFile(join(host.home, '.bash_login'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
+  expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe('');
 });
 
 it('restarts the running service when a rerun changes the Kit configuration', async () => {
@@ -193,7 +203,7 @@ it('restarts the running service when a rerun changes the Kit configuration', as
   const ran = host.run(['--no-skills']);
 
   expect(ran.stdout).toContain('House Kit restarted for Environment environment-one.\n');
-  expect(host.calls('systemctl')).toEqual([SYSTEMD, SYSTEMD, '--user restart house-kit.service']);
+  expect(acts(host)).toEqual(['--user restart house-kit.service']);
 });
 
 it.each([
