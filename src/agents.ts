@@ -98,6 +98,7 @@ async function sshHostKey(): Promise<string | null> {
 }
 
 async function operatingSystem(): Promise<string> {
+  if (process.platform === 'darwin') return `macOS ${(await run('sw_vers', ['-productVersion'], 10_000)).output.trim()}`;
   const release = await readFile('/etc/os-release', 'utf8');
   return /^PRETTY_NAME="?([^"\n]*)"?$/m.exec(release)?.[1] ?? release;
 }
