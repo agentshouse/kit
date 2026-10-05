@@ -2,7 +2,6 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it } from 'vitest';
-import { CLIS } from '../src/clis.ts';
 import { RELEASES, placeUserCli } from './cli.ts';
 import { startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
@@ -238,7 +237,7 @@ it('reports a CLI below its minimum with the version found and the minimum, and 
     {
       kind: 'codex-acp',
       release: '0.150.0',
-      minimum: CLIS['codex-acp']!.minimum,
+      minimum: '0.159.1',
       failure: null,
       signed_in: false,
       models: [],

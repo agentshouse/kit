@@ -3,7 +3,6 @@ import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { CLIS } from '../src/clis.ts';
 import { placeUserCli } from './cli.ts';
 import { startHouse } from './double.ts';
 import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
@@ -287,6 +286,27 @@ resume_kit`,
   expect(ran.stdout).toBe('Updating codex 0.150.0.\nHouse Kit is already running for Environment environment-one.\n');
 });
 
+function listClis(home: string, cwd: string): Promise<{ status: number | null; stdout: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLIS_MAIN], { cwd, env: { ...process.env, HOME: home, HOUSE_KIT_HOME: home, ...LOGIN_SHELL } });
+    let stdout = '';
+    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
+    child.on('close', (status) => resolve({ status, stdout }));
+  });
+}
+
+it('finds a CLI in the current directory through an empty PATH entry, as the login shell does', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }));
+  house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['grok-build'], routes: [] } }));
+  await writeFile(join(home, '.profile'), 'PATH=":$PATH"\n');
+  const here = join(home, 'here');
+  placeUserCli(here, 'grok-build', '1.0.49');
+
+  expect(await listClis(home, here)).toEqual({ status: 0, stdout: `grok\t${join(here, 'grok')}\t1.0.49\t1.0.46\tcurrent\n` });
+});
+
 it('names each chosen CLI the login shell finds, even through a relative PATH entry, with its absolute path, its release, its minimum and whether it is below that minimum', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
@@ -297,18 +317,13 @@ it('names each chosen CLI the login shell finds, even through a relative PATH en
   await rm(join(userBin(home), 'claude'));
   await writeFile(join(home, '.profile'), `PATH="${relative(process.cwd(), userBin(home))}:$PATH"\n`);
 
-  const listed = await new Promise<{ status: number | null; stdout: string }>((resolve) => {
-    const child = spawn(process.execPath, [CLIS_MAIN], { env: { ...process.env, HOME: home, HOUSE_KIT_HOME: home, ...LOGIN_SHELL } });
-    let stdout = '';
-    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
-    child.on('close', (status) => resolve({ status, stdout }));
-  });
+  const listed = await listClis(home, process.cwd());
 
   expect(listed).toEqual({
     status: 0,
     stdout: [
-      `codex\t${join(userBin(home), 'codex')}\t0.150.0\t${CLIS['codex-acp']!.minimum}\told\n`,
-      `grok\t${join(userBin(home), 'grok')}\t1.0.47\t${CLIS['grok-build']!.minimum}\tcurrent\n`,
+      `codex\t${join(userBin(home), 'codex')}\t0.150.0\t0.159.1\told\n`,
+      `grok\t${join(userBin(home), 'grok')}\t1.0.47\t1.0.46\tcurrent\n`,
     ].join(''),
   });
   expect(house.requests.map((request) => [request.path, request.headers.authorization])).toEqual([

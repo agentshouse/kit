@@ -220,7 +220,7 @@ async function loginPath(): Promise<string[]> {
     .findLast((line) => line.startsWith('PATH='))
     ?.slice('PATH='.length);
   if (path === undefined) throw new Error(`the login shell ${shell} named no PATH: ${failureOf(ran, shell)}`);
-  return path.split(delimiter).filter((directory) => directory !== '');
+  return path.split(delimiter).map((directory) => directory || '.');
 }
 
 async function executable(path: string): Promise<boolean> {

@@ -1,12 +1,12 @@
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { expect, it } from 'vitest';
-import { CLIS } from '../src/clis.ts';
-import { RELEASES, placeUserCli } from './cli.ts';
+import { BINS, RELEASES, placeUserCli } from './cli.ts';
 import { until } from './double.ts';
 import { hostKit, lastInput, userBin, type Hosted } from './environment.ts';
 
-const KINDS = Object.keys(CLIS);
+const KINDS = Object.keys(BINS);
+const EXECUTABLES: Record<string, string> = { 'codex-acp': 'CODEX_PATH', 'claude-agent-acp': 'CLAUDE_CODE_EXECUTABLE' };
 
 function reported(hosted: Hosted): Record<string, unknown>[] {
   return hosted.house.requests.filter((request) => request.path === '/kit/agents/report').map((request) => request.body as Record<string, unknown>);
@@ -57,15 +57,15 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
   expect(await open(hosted, 'conversation-1')).toEqual({ provider_session_id: expect.any(String) });
 
   const [entry] = await initialized(hosted);
-  const cli = join(userBin(hosted.home), CLIS[kind]!.bin);
+  const cli = join(userBin(hosted.home), BINS[kind]!);
   const env = entry!.env as Record<string, string | undefined>;
   expect(entry!.cli).toEqual({ path: cli, release: RELEASES[kind] });
-  const adapter = CLIS[kind]!.adapter;
-  if (adapter === null) {
+  const executable = EXECUTABLES[kind];
+  if (executable === undefined) {
     expect(env.CLI_PATH).toBe(cli);
     expect((entry!.argv as string[]).slice(2)).toEqual(['agent', '--no-leader', 'stdio']);
   } else {
-    expect(env[adapter.executable]).toBe(cli);
+    expect(env[executable]).toBe(cli);
     expect(env.CLI_PATH).toBeUndefined();
   }
   expect(env.HOME).toBe(hosted.home);
@@ -77,7 +77,7 @@ it.each([
   ['grok-build', '1.0.48'],
 ])('runs a %s replaced between two conversations at its new version in the second while the first keeps its own', async (kind, next) => {
   const hosted = await hostKit([{ kind }]);
-  const cli = join(userBin(hosted.home), CLIS[kind]!.bin);
+  const cli = join(userBin(hosted.home), BINS[kind]!);
   await open(hosted, 'conversation-1');
 
   placeUserCli(userBin(hosted.home), kind, next);
@@ -99,7 +99,7 @@ it('runs a CLI it installed through the official route from its ordinary place b
 });
 
 it('reports a CLI below its minimum, starts no conversation of that kind but one of another, and starts it once the login shell finds a newer one', async () => {
-  const minimum = CLIS['codex-acp']!.minimum;
+  const minimum = '0.159.1';
   const hosted = await hostKit([{ kind: 'codex-acp' }, { kind: 'grok-build' }], {
     prepare: async (home) => {
       placeUserCli(userBin(home), 'codex-acp', '0.150.0');

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { onTestFinished } from 'vitest';
 import { CLIS } from '../src/clis.ts';
-import { placeUserCli } from './cli.ts';
+import { BINS, placeUserCli } from './cli.ts';
 import { certificate, startHouse, until, type House, type KitSocket, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './npm.ts';
@@ -19,7 +19,7 @@ export function userBin(home: string): string {
 }
 
 export async function placeUserClis(home: string): Promise<void> {
-  for (const kind of Object.keys(CLIS)) placeUserCli(userBin(home), kind);
+  for (const kind of Object.keys(BINS)) placeUserCli(userBin(home), kind);
   await writeFile(join(home, '.profile'), 'PATH="$HOME/user-bin:$PATH"\n');
 }
 

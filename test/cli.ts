@@ -1,10 +1,15 @@
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CLIS } from '../src/clis.ts';
 
 const ADAPTER = fileURLToPath(new URL('./adapter.ts', import.meta.url));
 const DEVICE_LOGIN = fileURLToPath(new URL('./device-login.ts', import.meta.url));
+
+export const BINS: Record<string, string> = {
+  'codex-acp': 'codex',
+  'claude-agent-acp': 'claude',
+  'grok-build': 'grok',
+};
 
 export const RELEASES: Record<string, string> = {
   'codex-acp': '0.160.0',
@@ -20,7 +25,7 @@ const VERSION_LINES: Record<string, (release: string) => string> = {
 
 export function placeUserCli(directory: string, kind: string, release = RELEASES[kind]!): string {
   mkdirSync(directory, { recursive: true });
-  const path = join(directory, CLIS[kind]!.bin);
+  const path = join(directory, BINS[kind]!);
   const staged = `${path}.${process.pid}`;
   writeFileSync(
     staged,
