@@ -5,9 +5,10 @@ import { mkdir } from 'node:fs/promises';
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { parse } from 'yaml';
 import { HouseRefusal, retryDelay, type House } from './api.ts';
+import { loginPath } from './clis.ts';
 import {
   changedPaths,
   type Caller,
@@ -114,6 +115,7 @@ export async function openBridge(
   conversationId: string,
   signal: AbortSignal,
 ): Promise<Bridge> {
+  const path = [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter);
   const origin = (await readEnrolment())!.house;
   const { credential } = await house.post<{ credential: string }>(
     `/kit/conversations/${conversationId}/credential`,
@@ -264,7 +266,7 @@ export async function openBridge(
   return {
     env: {
       HOUSE_BRIDGE: socketPath,
-      PATH: `${join(kitHome(), 'shim')}${delimiter}${process.env.PATH ?? ''}`,
+      PATH: path,
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: `url.${proxy}/app/.insteadOf`,
       GIT_CONFIG_VALUE_0: app,

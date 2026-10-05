@@ -32,7 +32,7 @@ export interface Cli {
   bin: string;
   minimum: string;
   install: string;
-  adapter: { package: string; bin: string; executable: string } | null;
+  adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' | 'collect' };
@@ -72,7 +72,7 @@ export const CLIS: Record<string, Cli> = {
     bin: 'codex',
     minimum: '0.159.1',
     install: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
-    adapter: { package: '@agentclientprotocol/codex-acp', bin: 'codex-acp', executable: 'CODEX_PATH' },
+    adapter: { package: '@agentclientprotocol/codex-acp', bin: 'codex-acp', executable: 'CODEX_PATH', env: {} },
     args: [],
     signedIn: { command: ['login', 'status'] },
     login: { args: ['login', '--device-auth'], code: 'show' },
@@ -90,6 +90,7 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/claude-agent-acp',
       bin: 'claude-agent-acp',
       executable: 'CLAUDE_CODE_EXECUTABLE',
+      env: { CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp' },
     },
     args: [],
     signedIn: { command: ['auth', 'status'] },
@@ -218,6 +219,12 @@ const LOOKUP = `found=$(command -v "$1") || exit 0; case $found in /*) ;; *) fou
 export async function locate(kind: string): Promise<string | null> {
   const ran = await run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${LOOKUP}' sh ${CLIS[kind]!.bin}`], READ_MS, true);
   return ran.stdout.split('\n').findLast((line) => line.startsWith(FOUND))?.slice(FOUND.length) ?? null;
+}
+
+export async function loginPath(): Promise<string> {
+  const marker = 'house-kit-path ';
+  const ran = await run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c 'printf "${marker}%s\\n" "$PATH"'`], READ_MS, true);
+  return ran.stdout.split('\n').findLast((line) => line.startsWith(marker))!.slice(marker.length);
 }
 
 export async function versionOf(path: string): Promise<string | null> {

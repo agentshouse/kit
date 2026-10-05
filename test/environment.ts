@@ -20,7 +20,7 @@ export function userBin(home: string): string {
 
 export async function placeUserClis(home: string): Promise<void> {
   for (const kind of Object.keys(BINS)) placeUserCli(userBin(home), kind);
-  await writeFile(join(home, '.profile'), 'PATH="$HOME/user-bin:$PATH"\n');
+  await writeFile(join(home, '.profile'), 'PATH="$HOME/user-bin:$HOME/bin:$PATH"\n');
 }
 
 export function placePinnedAdapter(home: string, kind: string): void {

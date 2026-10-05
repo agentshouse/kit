@@ -1,5 +1,5 @@
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { chmod, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 import { expect, it } from 'vitest';
 import { BINS, RELEASES, placeUserCli } from './cli.ts';
 import { until } from './double.ts';
@@ -68,8 +68,60 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
     expect(env[executable]).toBe(cli);
     expect(env.CLI_PATH).toBeUndefined();
   }
+  expect(env.CLAUDE_CODE_ENTRYPOINT).toBe(kind === 'claude-agent-acp' ? 'claude-agent-acp' : undefined);
   expect(env.HOME).toBe(hosted.home);
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GROK_HOME']) expect(env[variable]).toBeUndefined();
+});
+
+it('opens and resumes Claude sessions under the adapter entrypoint instead of an inherited SDK entrypoint', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
+    environment: { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' },
+  });
+  const opened = (await open(hosted, 'conversation-1')) as { provider_session_id: string };
+  hosted.input({ kind: 'kill' });
+  await hosted.ack(lastInput());
+
+  hosted.input({ kind: 'message', provider_session_id: opened.provider_session_id, text: '@say resumed', files: [], first: false });
+  await hosted.ack(lastInput());
+
+  const entries = await initialized(hosted);
+  expect(entries).toHaveLength(2);
+  expect(entries.map((entry) => (entry.env as Record<string, string>).CLAUDE_CODE_ENTRYPOINT)).toEqual([
+    'claude-agent-acp',
+    'claude-agent-acp',
+  ]);
+  expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/resume')!.params).toMatchObject({
+    sessionId: opened.provider_session_id,
+  });
+});
+
+it.each(KINDS)('gives a %s conversation its login shell PATH with Kit shims and binaries first', async (kind) => {
+  const hosted = await hostKit([{ kind }], {
+    prepare: async (home) => {
+      const bin = userBin(home);
+      await writeFile(join(bin, 'user-tool'), '#!/bin/sh\necho from-login-shell\n');
+      await chmod(join(bin, 'user-tool'), 0o755);
+      await writeFile(join(home, '.profile'), `echo login-startup\nPATH="${bin}:/usr/bin:/bin"\n`);
+    },
+  });
+
+  expect(await open(hosted, 'conversation-1')).toEqual({ provider_session_id: expect.any(String) });
+  await answer(hosted, 'conversation-1', `@sh command -v ${BINS[kind]}; user-tool`);
+  const ran = (await hosted.adapterLog()).find((entry) => 'sh' in entry);
+  expect(ran).toMatchObject({
+    status: 0,
+    stdout: `${join(userBin(hosted.home), BINS[kind]!)}\nfrom-login-shell\n`,
+    stderr: '',
+  });
+
+  const entry = (await initialized(hosted)).find((entry) => (entry.env as Record<string, string>).HOUSE_BRIDGE !== undefined)!;
+  expect((entry.env as Record<string, string>).PATH.split(':')).toEqual([
+    join(hosted.home, 'shim'),
+    dirname(process.execPath),
+    userBin(hosted.home),
+    '/usr/bin',
+    '/bin',
+  ]);
 });
 
 it.each([
