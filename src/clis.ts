@@ -215,15 +215,20 @@ function loginShell(): string {
 
 const FOUND = 'house-kit-cli ';
 const LOOKUP = `found=$(command -v "$1") || exit 0; case $found in /*) ;; *) found=$(pwd -P)/$found ;; esac; printf "${FOUND}%s\\n" "$found"`;
+const USER_BIN = 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin" ;; esac; export PATH';
+
+function inLoginShell(script: string, argument = ''): Promise<Ran> {
+  return run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${USER_BIN}; ${script}' sh ${argument}`], READ_MS, true);
+}
 
 export async function locate(kind: string): Promise<string | null> {
-  const ran = await run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${LOOKUP}' sh ${CLIS[kind]!.bin}`], READ_MS, true);
+  const ran = await inLoginShell(LOOKUP, CLIS[kind]!.bin);
   return ran.stdout.split('\n').findLast((line) => line.startsWith(FOUND))?.slice(FOUND.length) ?? null;
 }
 
 export async function loginPath(): Promise<string> {
   const marker = 'house-kit-path ';
-  const ran = await run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c 'printf "${marker}%s\\n" "$PATH"'`], READ_MS, true);
+  const ran = await inLoginShell(`printf "${marker}%s\\n" "$PATH"`);
   return ran.stdout.split('\n').findLast((line) => line.startsWith(marker))!.slice(marker.length);
 }
 

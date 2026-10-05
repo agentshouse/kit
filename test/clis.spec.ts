@@ -2,6 +2,7 @@ import { chmod, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { expect, it } from 'vitest';
 import { BINS, RELEASES, placeUserCli } from './cli.ts';
+import { LOCATIONS } from './curl.ts';
 import { until } from './double.ts';
 import { hostKit, lastInput, userBin, type Hosted } from './environment.ts';
 
@@ -52,7 +53,11 @@ async function initialized(hosted: Hosted): Promise<Record<string, unknown>[]> {
 }
 
 it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself, with no home or configuration variable of its own', async (kind) => {
-  const hosted = await hostKit([{ kind }]);
+  const hosted = await hostKit([{ kind }], {
+    prepare: async (home) => {
+      placeUserCli(join(home, '.local', 'bin'), kind, '0.0.1');
+    },
+  });
 
   expect(await open(hosted, 'conversation-1')).toEqual({ provider_session_id: expect.any(String) });
 
@@ -121,6 +126,7 @@ it.each(KINDS)('gives a %s conversation its login shell PATH with Kit shims and 
     userBin(hosted.home),
     '/usr/bin',
     '/bin',
+    join(hosted.home, '.local', 'bin'),
   ]);
 });
 
@@ -139,15 +145,26 @@ it.each([
   expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
 });
 
-it('runs a CLI it installed through the official route from its ordinary place beneath the home', async () => {
-  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
-    prepare: (home) => rm(join(userBin(home), 'claude')),
+it.each(KINDS)('runs a %s its official installer placed beneath the home when the login profile lacks a user binary directory', async (kind) => {
+  const hosted = await hostKit([{ kind }], {
+    prepare: async (home) => {
+      await rm(join(userBin(home), BINS[kind]!));
+      await writeFile(join(home, '.profile'), 'PATH="$HOME/bin:/usr/bin:/bin"\n');
+    },
   });
 
   expect(await open(hosted, 'conversation-1')).toEqual({ provider_session_id: expect.any(String) });
+  await answer(hosted, 'conversation-1', `@sh command -v ${BINS[kind]}; ${BINS[kind]} --version`);
 
-  const [entry] = await initialized(hosted);
-  expect(entry!.cli).toEqual({ path: join(hosted.home, '.local', 'bin', 'claude'), release: RELEASES['claude-agent-acp'] });
+  const entry = (await initialized(hosted)).find((entry) => (entry.env as Record<string, string>).HOUSE_BRIDGE !== undefined)!;
+  const cli = join(hosted.home, LOCATIONS[kind]!, BINS[kind]!);
+  expect(entry.cli).toEqual({ path: cli, release: RELEASES[kind] });
+  expect((await hosted.adapterLog()).find((entry) => 'sh' in entry)).toMatchObject({
+    status: 0,
+    stdout: expect.stringContaining(`${cli}\n`),
+    stderr: '',
+  });
+  expect((entry.env as Record<string, string>).PATH.split(':').filter((path) => path === join(hosted.home, '.local', 'bin'))).toHaveLength(1);
 });
 
 it('reports a CLI below its minimum, starts no conversation of that kind but one of another, and starts it once the login shell finds a newer one', async () => {
