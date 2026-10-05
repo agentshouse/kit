@@ -1,12 +1,17 @@
-import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
+import { CLIS } from '../src/clis.ts';
+import { placeUserCli } from './cli.ts';
+import { startHouse } from './double.ts';
+import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
 import { temporaryHome } from './kit.ts';
 
 const LINUX = fileURLToPath(new URL('../bin/connect-linux.sh', import.meta.url));
 const WINDOWS = fileURLToPath(new URL('../bin/connect-windows.ps1', import.meta.url));
+const CLIS_MAIN = fileURLToPath(new URL('../src/clis-main.ts', import.meta.url));
 
 async function published(): Promise<string> {
   const home = await temporaryHome();
@@ -58,6 +63,13 @@ it('enrolls with a credential only on a server', async () => {
 
 it('takes --no-skills as a bootstrap option', async () => {
   expect(bootstrap(await published(), ['--no-skills', '--enroll', 'environment-one'])).toMatchObject({
+    status: 1,
+    stderr: 'kit_bootstrap_refused: --enroll enrolls a server; add --linux\n',
+  });
+});
+
+it('takes --update-clis as a bootstrap option', async () => {
+  expect(bootstrap(await published(), ['--update-clis', '--enroll', 'environment-one'])).toMatchObject({
     status: 1,
     stderr: 'kit_bootstrap_refused: --enroll enrolls a server; add --linux\n',
   });
@@ -157,4 +169,148 @@ stage_native_kit`,
   expect((await readFile(join(home, 'downloads.log'), 'utf8')).split('\n').filter(Boolean).sort()).toEqual(
     ['apt-get ', 'apt-get ', 'curl ', 'npm '],
   );
+});
+
+async function steps(...names: string[]): Promise<string> {
+  const linux = await readFile(LINUX, 'utf8');
+  return names.map((name) => new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0]).join('');
+}
+
+const LISTED = [
+  ['codex', '/home/u/.local/bin/codex', '0.150.0', '0.159.1', 'old'],
+  ['claude', '/home/u/.local/bin/claude', '2.1.200', '2.1.286', 'old'],
+  ['grok', '/home/u/.grok/bin/grok', '1.0.50', '1.0.46', 'current'],
+];
+
+async function updatingClis(flag: 0 | 1, terminal: boolean, answers = '') {
+  const home = await temporaryHome();
+  const log = join(home, 'updates.log');
+  const script = `set -u
+UPDATE_CLIS=${flag}
+CLIS_UPDATED=0
+${await steps('update_clis')}
+listing() { printf '%s\\n' ${LISTED.map((line) => `'${line.join('\t')}'`).join(' ')}; }
+updating() { printf '%s\\n' "$1" >> ${log}; [ "$1" != /home/u/.grok/bin/grok ]; }
+update_clis listing updating
+printf 'updated=%s\\n' "$CLIS_UPDATED"
+`;
+  await writeFile(join(home, 'run.sh'), script);
+  const command = terminal ? ['script', ['-qec', `bash ${join(home, 'run.sh')}`, '/dev/null']] as const : ['bash', [join(home, 'run.sh')]] as const;
+  const child = spawn(command[0], [...command[1]], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let output = '';
+  child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
+  child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
+  child.stdin.end(answers);
+  await new Promise((resolve) => child.on('close', resolve));
+  const updated = (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+  return { output: output.replaceAll('\r', ''), updated };
+}
+
+it('asks once for each CLI below its minimum, updates one on Enter, leaves one it is refused and asks nothing about a current one', async () => {
+  const { output, updated } = await updatingClis(0, true, '\nn\n');
+
+  expect(output.match(/Update it\? \[Y\/n\]/g)).toHaveLength(2);
+  expect(output).toContain('codex 0.150.0 is older than 0.159.1, the oldest this House Kit runs. Update it? [Y/n]');
+  expect(output).toContain('claude 2.1.200 is older than 2.1.286, the oldest this House Kit runs. Update it? [Y/n]');
+  expect(output).not.toContain('grok 1.0.50 is older');
+  expect(updated).toEqual(['/home/u/.local/bin/codex']);
+  expect(output).toContain('updated=1');
+});
+
+it('updates every chosen CLI without asking when --update-clis is given, and names one whose update failed', async () => {
+  const { output, updated } = await updatingClis(1, false);
+
+  expect(updated).toEqual(LISTED.map((line) => line[1]));
+  expect(output).not.toContain('Update it?');
+  expect(output).toContain('grok could not be updated; it stays at 1.0.50.');
+});
+
+it('updates nothing and asks nothing without a terminal and without --update-clis', async () => {
+  const { output, updated } = await updatingClis(0, false, '\n\n');
+
+  expect(updated).toEqual([]);
+  expect(output).toBe('updated=0\n');
+});
+
+it("runs a CLI's own update command in place natively without the proxy variables, and in a container of the installed image", async () => {
+  const home = await temporaryHome();
+  const bin = join(home, 'bin');
+  await mkdir(bin);
+  await writeFile(join(bin, 'docker'), '#!/bin/sh\nprintf \'docker %s\\n\' "$*"\n');
+  await writeFile(join(bin, 'codex'), '#!/bin/sh\nprintf \'codex %s %s\\n\' "$*" "${HTTPS_PROXY-}${https_proxy-}"\n');
+  for (const tool of ['docker', 'codex']) await chmod(join(bin, tool), 0o755);
+  const linux = await readFile(LINUX, 'utf8');
+  const ran = spawnSync(
+    'bash',
+    [
+      '-c',
+      `set -u
+${/^DIRECT=.*$/m.exec(linux)![0]}
+${/^IMAGE_PACKAGE=.*$/m.exec(linux)![0]}
+DOCKER_RUN=(docker run --rm --user 1:1 --mount kit-home --mount workspace image)
+${await steps('native_cli_update', 'container_clis', 'container_cli_update')}
+native_cli_update ${bin}/codex
+container_clis
+container_cli_update /kit-home/.local/bin/codex </dev/null`,
+    ],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HTTPS_PROXY: 'http://forwarder:3128' } },
+  );
+
+  expect(ran.stderr).toBe('');
+  expect(ran.stdout.split('\n').filter(Boolean)).toEqual([
+    'codex update ',
+    'docker run --entrypoint node --rm --user 1:1 --mount kit-home --mount workspace image /usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js',
+    'docker run -i --entrypoint /kit-home/.local/bin/codex --rm --user 1:1 --mount kit-home --mount workspace image update',
+  ]);
+});
+
+it('restarts a running container Kit after it updated a CLI', async () => {
+  const home = await temporaryHome();
+  const ran = spawnSync(
+    'bash',
+    [
+      '-c',
+      `set -u
+NAME=house-kit
+CONFIGURED=''
+CLIS_UPDATED=1
+kit_running() { true; }
+enrolled() { printf environment-one; }
+docker() { printf 'docker %s\\n' "$*" >&2; }
+${await steps('resume_kit')}
+resume_kit`,
+    ],
+    { encoding: 'utf8', cwd: home },
+  );
+
+  expect(ran.stderr).toBe('docker restart house-kit\n');
+  expect(ran.stdout).toBe('House Kit restarted for Environment environment-one.\n');
+});
+
+it('names each chosen CLI the login shell finds with its path, its release, its minimum and whether it is below that minimum', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }));
+  house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['codex-acp', 'claude-agent-acp', 'grok-build'], routes: [] } }));
+  await placeUserClis(home);
+  placeUserCli(userBin(home), 'codex-acp', '0.150.0');
+  await rm(join(userBin(home), 'claude'));
+
+  const listed = await new Promise<{ status: number | null; stdout: string }>((resolve) => {
+    const child = spawn(process.execPath, [CLIS_MAIN], { env: { ...process.env, HOME: home, HOUSE_KIT_HOME: home, ...LOGIN_SHELL } });
+    let stdout = '';
+    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
+    child.on('close', (status) => resolve({ status, stdout }));
+  });
+
+  expect(listed).toEqual({
+    status: 0,
+    stdout: [
+      `codex\t${join(userBin(home), 'codex')}\t0.150.0\t${CLIS['codex-acp']!.minimum}\told\n`,
+      `grok\t${join(userBin(home), 'grok')}\t1.0.47\t${CLIS['grok-build']!.minimum}\tcurrent\n`,
+    ].join(''),
+  });
+  expect(house.requests.map((request) => [request.path, request.headers.authorization])).toEqual([
+    ['/kit/agents/desired', 'Bearer ahk_held'],
+  ]);
 });

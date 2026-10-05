@@ -19,7 +19,7 @@ const CLAUDE_LINK =
 
 export const DEVICE_LOGINS: Record<string, DeviceLogin> = {
   'codex-acp': {
-    argv: ['cli', 'login', '--device-auth'],
+    argv: ['login', '--device-auth'],
     link: 'https://auth.openai.com/codex/device',
     code: 'C3P4-RMXOG',
     output: [
@@ -40,7 +40,7 @@ export const DEVICE_LOGINS: Record<string, DeviceLogin> = {
     ].join('\n'),
   },
   'claude-agent-acp': {
-    argv: ['--cli', 'auth', 'login', '--claudeai'],
+    argv: ['auth', 'login', '--claudeai'],
     link: CLAUDE_LINK,
     code: null,
     output: `If the browser didn't open, visit: ${CLAUDE_LINK}\nPaste code here if prompted > `,

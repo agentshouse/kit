@@ -5,25 +5,15 @@ import { CLIS } from '../src/clis.ts';
 import { recordStart } from './started.ts';
 
 const ADAPTER = fileURLToPath(new URL('./adapter.ts', import.meta.url));
-const DEVICE_LOGIN = fileURLToPath(new URL('./device-login.ts', import.meta.url));
 
-export function placeCli(prefix: string, kind: string, version: string): void {
-  const cli = CLIS[kind]!;
-  const manifest = join(prefix, 'node_modules', cli.package);
+export function placeAdapter(prefix: string, kind: string, version: string): void {
+  const adapter = CLIS[kind]!.adapter!;
+  const manifest = join(prefix, 'node_modules', adapter.package);
   mkdirSync(manifest, { recursive: true });
-  writeFileSync(join(manifest, 'package.json'), JSON.stringify({ name: cli.package, version }));
+  writeFileSync(join(manifest, 'package.json'), JSON.stringify({ name: adapter.package, version }));
   mkdirSync(join(prefix, 'node_modules', '.bin'), { recursive: true });
-  const bin = join(prefix, 'node_modules', '.bin', cli.bin);
-  writeFileSync(
-    bin,
-    [
-      '#!/bin/sh',
-      `export ADAPTER_KIND=${kind}`,
-      `case " $* " in *" --device-auth "*|*" --claudeai "*) exec ${process.execPath} ${DEVICE_LOGIN} "$@" ;; esac`,
-      `exec ${process.execPath} ${ADAPTER} "$@"`,
-      '',
-    ].join('\n'),
-  );
+  const bin = join(prefix, 'node_modules', '.bin', adapter.bin);
+  writeFileSync(bin, ['#!/bin/sh', `export ADAPTER_KIND=${kind}`, `exec ${process.execPath} ${ADAPTER} "$@"`, ''].join('\n'));
   chmodSync(bin, 0o755);
 }
 
@@ -44,6 +34,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.stderr.write(`npm error 404 Not Found - ${name}\n`);
     process.exit(1);
   }
-  const kind = Object.keys(CLIS).find((candidate) => CLIS[candidate]!.package === name)!;
-  placeCli(prefix, kind, spec.slice(at + 1));
+  const kind = Object.keys(CLIS).find((candidate) => CLIS[candidate]!.adapter?.package === name)!;
+  placeAdapter(prefix, kind, spec.slice(at + 1));
 }

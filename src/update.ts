@@ -11,11 +11,12 @@ export interface Update {
   input_id: string;
   bootstrap: string;
   sha256: string;
+  update_clis?: boolean;
 }
 
 type Ack = Record<string, never> | { refused: string };
 
-const RECORD = 'bash "$0" --linux; printf %s "$?" > "$1"; systemctl start house-kit.service';
+const RECORD = 'outcome=$1; shift; bash "$0" --linux "$@"; printf %s "$?" > "$outcome"; systemctl start house-kit.service';
 
 function logged(error: unknown): void {
   process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -62,7 +63,7 @@ async function finished(inputId: string): Promise<Ack> {
   }
 }
 
-function rerun(script: string, inputId: string): Promise<Ack | null> {
+function rerun(script: string, inputId: string, flags: string[]): Promise<Ack | null> {
   return new Promise((resolve) => {
     const child = spawn(
       'systemd-run',
@@ -77,6 +78,7 @@ function rerun(script: string, inputId: string): Promise<Ack | null> {
         RECORD,
         script,
         outcome(),
+        ...flags,
       ],
       { stdio: ['ignore', 'ignore', 'inherit'] },
     );
@@ -123,7 +125,7 @@ export class Updates {
     await writeFile(path, script, { mode: 0o700 });
     await rm(outcome(), { force: true });
     await writeFile(pending(), `${JSON.stringify({ input_id: input.input_id })}\n`, { mode: 0o600 });
-    return (await rerun(path, input.input_id)) ?? (await recorded()) ?? {
+    return (await rerun(path, input.input_id, input.update_clis ? ['--update-clis'] : [])) ?? (await recorded()) ?? {
       refused: 'the Kit bootstrap did not finish',
     };
   }

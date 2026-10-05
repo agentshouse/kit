@@ -47,9 +47,10 @@ export function runKit(argv: string[], environment: Record<string, string>, node
 export async function fakeBin(home: string): Promise<string> {
   const bin = join(home, 'bin');
   await mkdir(bin, { recursive: true });
-  const npm = join(bin, 'npm');
-  await writeFile(npm, `#!/bin/sh\nexec ${process.execPath} ${fileURLToPath(new URL('./npm.ts', import.meta.url))} "$@"\n`);
-  await chmod(npm, 0o755);
+  for (const tool of ['npm', 'curl']) {
+    await writeFile(join(bin, tool), `#!/bin/sh\nexec ${process.execPath} ${fileURLToPath(new URL(`./${tool}.ts`, import.meta.url))} "$@"\n`);
+    await chmod(join(bin, tool), 0o755);
+  }
   await writeFile(join(bin, 'house'), `#!/bin/sh\nexec ${process.execPath} ${HOUSE} "$@"\n`);
   await chmod(join(bin, 'house'), 0o755);
   return `${bin}:${process.env.PATH}`;

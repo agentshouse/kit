@@ -332,7 +332,7 @@ export class Conversations {
       .onRequest('elicitation/create', ({ params, signal }) =>
         this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       );
-    await unlessKilled(this.kit.agents.installed(), conversation.killed.signal);
+    const cli = await unlessKilled(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridge = await openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal);
     if (conversation.kills > 0) {
       bridge.close();
@@ -343,6 +343,7 @@ export class Conversations {
       await unlessKilled(createHowWeWork(bridge), conversation.killed.signal);
       const adapter = await startAdapter(
         route.kind,
+        cli,
         route.working_directory,
         app,
         (job) => this.job(conversation, job),
@@ -363,7 +364,9 @@ export class Conversations {
         queues: CLIS[route.kind]!.queues,
         phase: CLIS[route.kind]!.phase,
       };
+      this.kit.agents.offered(route.kind, opened.configOptions ?? []);
       const options = await this.launchSettings(running, route, opened.configOptions ?? []);
+      this.kit.agents.offered(route.kind, options);
       conversation.running = running;
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
       if (conversation.commands !== null) this.commands(conversation, conversation.commands);

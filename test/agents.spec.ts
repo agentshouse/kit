@@ -2,11 +2,15 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it } from 'vitest';
+import { CLIS } from '../src/clis.ts';
+import { RELEASES, placeUserCli } from './cli.ts';
 import { startHouse, until, type House } from './double.ts';
+import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
 import { HOST_KEY, fakeBin, placeHostKey, runKit, temporaryHome, type KitRun } from './kit.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
+  dependencies: Record<string, string>;
   peerDependencies: Record<string, string>;
 };
 const PINNED = KIT_PACKAGE.peerDependencies;
@@ -33,39 +37,21 @@ beforeEach(async () => {
   });
 });
 
-async function installs(): Promise<string[]> {
-  const log = await readFile(join(home, 'npm.log'), 'utf8');
-  return log
-    .trim()
-    .split('\n')
-    .map((line) => (JSON.parse(line) as string[]).at(-1)!);
+async function logged(name: string): Promise<string[]> {
+  const log = await readFile(join(home, name), 'utf8').catch(() => '');
+  return log.split('\n').filter((line) => line !== '');
+}
+
+async function adapterInstalls(): Promise<string[]> {
+  return (await logged('npm.log')).map((line) => (JSON.parse(line) as string[]).at(-1)!);
 }
 
 async function start(prepare?: () => Promise<void>, node: string[] = []) {
   const path = await fakeBin(home);
+  await placeUserClis(home);
   await prepare?.();
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path }, node);
+  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path, ...LOGIN_SHELL }, node);
 }
-
-it('installs exactly the named CLIs at their pinned versions and adds one a later work frame names', async () => {
-  desired = ['codex-acp', 'grok-build'];
-  await start();
-
-  await until(() => reports[0]);
-  expect(await installs()).toEqual([
-    `@agentclientprotocol/codex-acp@${PINNED['@agentclientprotocol/codex-acp']}`,
-    `@xai-official/grok@${PINNED['@xai-official/grok']}`,
-  ]);
-
-  desired = ['codex-acp', 'claude-agent-acp'];
-  const socket = await until(() => house.sockets[0]);
-  socket.send({ type: 'work_available', subject: 'agents' });
-
-  await until(() => reports[1]);
-  expect((await installs()).slice(2)).toEqual([
-    `@agentclientprotocol/claude-agent-acp@${PINNED['@agentclientprotocol/claude-agent-acp']}`,
-  ]);
-});
 
 async function signIn(...kinds: string[]): Promise<void> {
   await mkdir(join(home, 'signed-in'), { recursive: true });
@@ -73,11 +59,33 @@ async function signIn(...kinds: string[]): Promise<void> {
 }
 
 async function probes(): Promise<number> {
-  const log = await readFile(join(home, 'adapter.log'), 'utf8').catch(() => '');
-  return log.split('\n').filter((line) => line.includes('"method":"session/new"')).length;
+  return (await logged('adapter.log')).filter((line) => line.includes('"method":"session/new"')).length;
 }
 
-it('reports each CLI release, sign-in state and the models with the efforts its session options name, with the operating system and the Kit version', async () => {
+it('pins in its package only the Codex and Claude Code adapters, no CLI and no Grok Build package', () => {
+  expect(Object.keys(PINNED).sort()).toEqual(['@agentclientprotocol/claude-agent-acp', '@agentclientprotocol/codex-acp']);
+  expect(Object.keys({ ...KIT_PACKAGE.dependencies, ...PINNED }).join(' ')).not.toMatch(/grok|@openai\/codex|claude-code/);
+});
+
+it('installs the pinned adapter of each named CLI that has one, and of one a later work frame names', async () => {
+  desired = ['codex-acp', 'grok-build'];
+  await start();
+
+  await until(() => reports[0]);
+  expect(await adapterInstalls()).toEqual([`@agentclientprotocol/codex-acp@${PINNED['@agentclientprotocol/codex-acp']}`]);
+
+  desired = ['codex-acp', 'claude-agent-acp'];
+  const socket = await until(() => house.sockets[0]);
+  socket.send({ type: 'work_available', subject: 'agents' });
+
+  await until(() => reports[1]);
+  expect((await adapterInstalls()).slice(1)).toEqual([
+    `@agentclientprotocol/claude-agent-acp@${PINNED['@agentclientprotocol/claude-agent-acp']}`,
+  ]);
+  expect(await logged('curl.log')).toEqual([]);
+});
+
+it('reports the release of each CLI the login shell finds, its sign-in state and the models with the efforts its session options name, with the operating system and the Kit version', async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -90,7 +98,7 @@ it('reports each CLI release, sign-in state and the models with the efforts its 
     agents: [
       {
         kind: 'codex-acp',
-        release: PINNED['@agentclientprotocol/codex-acp'],
+        release: RELEASES['codex-acp'],
         failure: null,
         signed_in: true,
         models: [
@@ -101,7 +109,7 @@ it('reports each CLI release, sign-in state and the models with the efforts its 
       },
       {
         kind: 'claude-agent-acp',
-        release: PINNED['@agentclientprotocol/claude-agent-acp'],
+        release: RELEASES['claude-agent-acp'],
         failure: null,
         signed_in: true,
         models: [
@@ -112,7 +120,7 @@ it('reports each CLI release, sign-in state and the models with the efforts its 
       },
       {
         kind: 'grok-build',
-        release: PINNED['@xai-official/grok'],
+        release: RELEASES['grok-build'],
         failure: null,
         signed_in: true,
         models: [
@@ -124,22 +132,63 @@ it('reports each CLI release, sign-in state and the models with the efforts its 
   });
 });
 
-it('reports a CLI that failed to install with no release and the cause its log shows, and its release once a later install succeeds', async () => {
+it('installs each chosen CLI the login shell does not find through its official route into its ordinary place beneath the home, where a later Kit finds it', async () => {
+  desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
+  await start(() => rm(userBin(home), { recursive: true }));
+
+  const report = await until(() => reports[0]);
+
+  expect(report.agents).toEqual(desired.map((kind) => expect.objectContaining({ kind, release: RELEASES[kind], failure: null })));
+  expect((await logged('curl.log')).sort()).toEqual([
+    'https://chatgpt.com/codex/install.sh',
+    'https://claude.ai/install.sh',
+    'https://x.ai/cli/install.sh',
+  ]);
+  for (const place of ['.local/bin/codex', '.local/bin/claude', '.grok/bin/grok']) {
+    expect(await readFile(join(home, place), 'utf8')).toContain('CLI_RELEASE');
+  }
+
+  process.kill(kit!.pid, 'SIGKILL');
+  await kit!.exited;
+  reports.length = 0;
+  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeBin(home), ...LOGIN_SHELL });
+
+  expect((await until(() => reports[0])).agents).toEqual(report.agents);
+  expect(await logged('curl.log')).toHaveLength(3);
+});
+
+it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work frame", async () => {
   desired = ['codex-acp', 'claude-agent-acp'];
-  await writeFile(join(home, 'npm-fail'), '@agentclientprotocol/claude-agent-acp');
-  await start();
+  await start(async () => {
+    await rm(join(userBin(home), 'claude'));
+    await writeFile(join(home, 'install-fail'), 'claude-agent-acp\n');
+  });
 
   const failed = await until(() => reports[0]);
 
-  const codex = {
-    kind: 'codex-acp',
-    release: PINNED['@agentclientprotocol/codex-acp'],
-    failure: null,
-    signed_in: false,
-    models: [],
-  };
   expect(failed.agents).toEqual([
-    codex,
+    expect.objectContaining({ kind: 'codex-acp', release: RELEASES['codex-acp'] }),
+    { kind: 'claude-agent-acp', release: null, failure: 'Checksum verification failed', signed_in: false, models: [] },
+  ]);
+  expect(kit!.stderr()).toContain('claude-agent-acp did not install: Checksum verification failed');
+
+  await rm(join(home, 'install-fail'));
+  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+
+  const recovered = await until(() => reports[1]);
+  expect(recovered.agents).toEqual([
+    expect.objectContaining({ kind: 'codex-acp', release: RELEASES['codex-acp'] }),
+    { kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'], failure: null, signed_in: false, models: [] },
+  ]);
+});
+
+it("reports a CLI whose adapter failed to install with no release and npm's cause", async () => {
+  desired = ['claude-agent-acp'];
+  await start(() => writeFile(join(home, 'npm-fail'), '@agentclientprotocol/claude-agent-acp'));
+
+  const report = await until(() => reports[0]);
+
+  expect(report.agents).toEqual([
     {
       kind: 'claude-agent-acp',
       release: null,
@@ -149,174 +198,77 @@ it('reports a CLI that failed to install with no release and the cause its log s
     },
   ]);
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: npm error 404 Not Found - @agentclientprotocol/claude-agent-acp');
-
-  await rm(join(home, 'npm-fail'));
-  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
-
-  const recovered = await until(() => reports[1]);
-  expect(recovered.agents).toEqual([
-    codex,
-    {
-      kind: 'claude-agent-acp',
-      release: PINNED['@agentclientprotocol/claude-agent-acp'],
-      failure: null,
-      signed_in: false,
-      models: [],
-    },
-  ]);
 });
 
-it("names npm's exit status as the cause of an install that failed without output", async () => {
+it("names npm's exit status as the cause of an adapter install that failed without output", async () => {
   desired = ['claude-agent-acp'];
-  await writeFile(join(home, 'npm-mute'), '@agentclientprotocol/claude-agent-acp');
-  await start();
+  await start(() => writeFile(join(home, 'npm-mute'), '@agentclientprotocol/claude-agent-acp'));
 
   const report = await until(() => reports[0]);
 
   expect(report.agents).toEqual([
     { kind: 'claude-agent-acp', release: null, failure: 'npm exited with 1', signed_in: false, models: [] },
   ]);
-  expect(kit!.stderr()).toContain('claude-agent-acp did not install: npm exited with 1');
 });
 
-it('reports a model its CLI refuses to select with the efforts the Kit last read for it, none before it read any', async () => {
-  desired = ['claude-agent-acp'];
-  await signIn('claude-agent-acp');
-  await writeFile(join(home, 'refuse-model'), 'sonnet');
-  await start();
-  const claude = (models: { model: string; efforts: string[] }[]) => [
-    {
-      kind: 'claude-agent-acp',
-      release: PINNED['@agentclientprotocol/claude-agent-acp'],
-      failure: null,
-      signed_in: true,
-      models,
-    },
-  ];
-
-  const refused = await until(() => reports[0]);
-  expect(refused.agents).toEqual(
-    claude([
-      { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
-      { model: 'sonnet', efforts: [] },
-      { model: 'haiku', efforts: [] },
-    ]),
-  );
-  expect(kit!.stderr()).toContain('claude-agent-acp refused its model sonnet: Model switch blocked by a PreModelSwitch hook');
-
-  await rm(join(home, 'refuse-model'));
-  const socket = await until(() => house.sockets[0]);
-  socket.send({ type: 'work_available', subject: 'agents' });
-  const selected = await until(() => reports[1]);
-  expect(selected.agents).toEqual(
-    claude([
-      { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
-      { model: 'sonnet', efforts: ['default', 'low', 'medium', 'high', 'max'] },
-      { model: 'haiku', efforts: [] },
-    ]),
-  );
-
-  await writeFile(join(home, 'refuse-model'), 'sonnet');
-  await mkdir(join(home, 'models'));
-  await writeFile(
-    join(home, 'models', 'claude-agent-acp'),
-    JSON.stringify([
-      { id: 'default', name: 'Default (recommended)', efforts: ['high'] },
-      { id: 'sonnet', name: 'Sonnet', efforts: ['low'] },
-    ]),
-  );
-  socket.send({ type: 'work_available', subject: 'agents' });
-  const again = await until(() => reports[2]);
-  expect(again.agents).toEqual(
-    claude([
-      { model: 'default', efforts: ['default', 'high'] },
-      { model: 'sonnet', efforts: ['default', 'low', 'medium', 'high', 'max'] },
-    ]),
-  );
-});
-
-it.each([
-  ['its CLI session does not open', 'refuse-new', 'the session did not open'],
-  ['its CLI does not initialize', 'refuse-initialize', 'the CLI did not initialize'],
-])('keeps reporting the sign-in and models the Kit last read while %s', async (_, refusal, cause) => {
-  desired = ['grok-build'];
-  await signIn('grok-build');
-  await start();
-  const read = await until(() => reports[0]);
-
-  await writeFile(join(home, refusal), '');
-  await placeHostKey(home);
-  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
-
-  const kept = await until(() => reports[1]);
-  expect(kept).toEqual({ ...read, ssh_host_key: HOST_KEY });
-  expect(kit!.stderr()).toContain(`grok-build did not offer its models: ${cause}`);
-});
-
-it('reads its CLIs again on its own, so a recovered install and changed efforts reach House without a work frame', async () => {
-  desired = ['codex-acp', 'claude-agent-acp'];
-  await signIn('codex-acp');
-  await writeFile(join(home, 'npm-fail'), '@agentclientprotocol/claude-agent-acp');
-  await start(undefined, FAST_INTERVALS);
-  await until(() => reports[0]);
-
-  await rm(join(home, 'npm-fail'));
-  await mkdir(join(home, 'models'));
-  await writeFile(join(home, 'models', 'codex-acp'), JSON.stringify([{ id: 'gpt-5.5', name: '5.5', efforts: ['high'] }]));
-
-  await expect
-    .poll(() => reports.at(-1)?.agents, { timeout: 15_000 })
-    .toEqual([
-      {
-        kind: 'codex-acp',
-        release: PINNED['@agentclientprotocol/codex-acp'],
-        failure: null,
-        signed_in: true,
-        models: [{ model: 'gpt-5.5', efforts: ['high'] }],
-      },
-      {
-        kind: 'claude-agent-acp',
-        release: PINNED['@agentclientprotocol/claude-agent-acp'],
-        failure: null,
-        signed_in: false,
-        models: [],
-      },
-    ]);
-});
-
-it("sends a new report when a CLI's efforts change and none while nothing changed", async () => {
+it('reports a CLI below its minimum with the version found and the minimum, and reads no models from it', async () => {
   desired = ['codex-acp'];
   await signIn('codex-acp');
-  await start();
-  await until(() => reports[0]);
-  const socket = await until(() => house.sockets[0]);
+  await start(async () => {
+    placeUserCli(userBin(home), 'codex-acp', '0.150.0');
+  });
 
-  socket.send({ type: 'work_available', subject: 'agents' });
-  await until(async () => (await probes()) === 2);
-  await mkdir(join(home, 'models'));
-  await writeFile(
-    join(home, 'models', 'codex-acp'),
-    JSON.stringify([
-      { id: 'gpt-5.5', name: '5.5', efforts: ['medium', 'high'] },
-      { id: 'codex-instant', name: 'codex-instant', efforts: [] },
-    ]),
-  );
-  socket.send({ type: 'work_available', subject: 'agents' });
+  const report = await until(() => reports[0]);
 
-  const changed = await until(() => reports[1]);
-  expect(changed.agents).toEqual([
+  expect(report.agents).toEqual([
     {
       kind: 'codex-acp',
-      release: PINNED['@agentclientprotocol/codex-acp'],
+      release: '0.150.0',
+      minimum: CLIS['codex-acp']!.minimum,
+      failure: null,
+      signed_in: false,
+      models: [],
+    },
+  ]);
+  expect(await probes()).toBe(0);
+});
+
+it('reports a model its CLI refuses to select with no efforts before the Kit read any for it', async () => {
+  desired = ['claude-agent-acp'];
+  await signIn('claude-agent-acp');
+  await start(() => writeFile(join(home, 'refuse-model'), 'sonnet'));
+
+  const report = await until(() => reports[0]);
+
+  expect(report.agents).toEqual([
+    {
+      kind: 'claude-agent-acp',
+      release: RELEASES['claude-agent-acp'],
       failure: null,
       signed_in: true,
       models: [
-        { model: 'gpt-5.5', efforts: ['medium', 'high'] },
-        { model: 'codex-instant', efforts: [] },
+        { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
+        { model: 'sonnet', efforts: [] },
+        { model: 'haiku', efforts: [] },
       ],
     },
   ]);
-  expect(reports).toHaveLength(2);
+  expect(kit!.stderr()).toContain('claude-agent-acp refused its model sonnet: Model switch blocked by a PreModelSwitch hook');
+});
+
+it('reads the models when it starts and on no timer after it, though House names its Agents again', async () => {
+  desired = ['codex-acp'];
+  await signIn('codex-acp');
+  await start(undefined, FAST_INTERVALS);
+  await until(() => reports[0]);
+  await mkdir(join(home, 'models'));
+  await writeFile(join(home, 'models', 'codex-acp'), JSON.stringify([{ id: 'gpt-5.5', name: '5.5', efforts: ['high'] }]));
+
+  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  expect(await probes()).toBe(1);
+  expect(reports).toHaveLength(1);
 });
 
 it('reports the SHA256 fingerprint of the host SSH key when the host has one', async () => {

@@ -8,7 +8,7 @@ import {
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_VERSION, cliCommand, withoutProxy, type Job, type Notice } from './clis.ts';
+import { CLIS, KIT_VERSION, adapterCommand, withoutProxy, type Job, type Notice } from './clis.ts';
 
 export interface Adapter {
   child: ChildProcess;
@@ -22,14 +22,16 @@ export const TURN_ENDED = 'kit/turn_ended';
 
 export async function startAdapter(
   kind: string,
+  cli: string,
   cwd: string,
   app: ClientApp,
   jobs: (job: Job) => void = () => undefined,
   added: Record<string, string> = {},
 ): Promise<Adapter> {
-  const child = spawn(cliCommand(kind), CLIS[kind]!.args, {
+  const adapter = CLIS[kind]!.adapter;
+  const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args, {
     cwd,
-    env: { ...withoutProxy(), ...added },
+    env: { ...withoutProxy(), ...(adapter === null ? {} : { [adapter.executable]: cli }), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });

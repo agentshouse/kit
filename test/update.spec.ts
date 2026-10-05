@@ -27,7 +27,7 @@ async function serve(hosted: Hosted, script: string): Promise<{ bootstrap: strin
   };
 }
 
-function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string }): void {
+function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string; update_clis?: boolean }): void {
   hosted.socket.send({
     type: 'input',
     input_id: id,
@@ -51,8 +51,21 @@ it('reruns the verified bootstrap with --linux outside its own service and ackno
   expect(await ran(hosted)).toBe('--linux\n');
   const launched = await readFile(join(hosted.home, 'systemd-run.log'), 'utf8');
   expect(launched).toMatch(
-    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ \/bin\/sh -c bash "\$0" --linux; printf %s "\$\?" > "\$1"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome\n$/,
+    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" --linux "\$@"; printf %s "\$\?" > "\$outcome"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome\n$/,
   );
+});
+
+it.each([
+  [true, '--linux --update-clis\n'],
+  [false, '--linux\n'],
+])('reruns the bootstrap with --update-clis only when the update input carries the flag (%s)', async (flag, argv) => {
+  const hosted = await hostKit();
+  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
+
+  update(hosted, `update-flag-${flag}`, { ...pin, update_clis: flag });
+
+  expect(await hosted.ack(`update-flag-${flag}`)).toEqual({});
+  expect(await ran(hosted)).toBe(argv);
 });
 
 it('refuses a bootstrap that does not match its sha256 and runs nothing', async () => {

@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 import { killTree } from './acp.ts';
 import type { Agents } from './agents.ts';
 import type { House } from './api.ts';
-import { CLIS, cliCommand, withoutProxy } from './clis.ts';
+import { CLIS, withoutProxy } from './clis.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 
 export interface SignIn {
@@ -15,8 +15,12 @@ const ESCAPE = /\u001b\[[\d;]*m/g;
 const LINK = /https:\/\/\S+/;
 const CODE = /^[A-Z0-9]+-[A-Z0-9]+$/;
 
+function causeOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function logged(error: unknown): void {
-  process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
 export class SignIns {
@@ -40,7 +44,7 @@ export class SignIns {
     this.running.add(input.input_id);
     this.changed();
     this.login(input)
-      .then(() => this.agents.report())
+      .then(() => this.agents.reread(input.cli))
       .then(() => this.house.deliver(`/kit/inputs/${input.input_id}/ack`, {}))
       .catch(logged)
       .finally(() => {
@@ -50,9 +54,15 @@ export class SignIns {
   }
 
   private async login(input: SignIn): Promise<void> {
-    await this.agents.installed();
+    let cli: string;
+    try {
+      cli = await this.agents.located(input.cli);
+    } catch (error) {
+      process.stderr.write(`kit: the ${input.cli} sign-in failed: ${causeOf(error)}\n`);
+      return;
+    }
     const login = CLIS[input.cli]!.login;
-    const child = spawn(cliCommand(input.cli), login.args, {
+    const child = spawn(cli, login.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
       env: withoutProxy(),

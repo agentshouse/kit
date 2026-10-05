@@ -19,6 +19,8 @@ FORWARDED=kit
 FORWARD=()
 NO_SKILLS=()
 CONFIGURED=''
+UPDATE_CLIS=0
+CLIS_UPDATED=0
 UBUNTU_RELEASES=(jammy noble resolute)
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 CONFLICTING_PACKAGES=(docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc)
@@ -109,6 +111,25 @@ check_authority() {
 
 configure_kit() {
   CONFIGURED=$(HOUSE_KIT_HOME="$KIT_HOME" "$@" ${NO_SKILLS[@]+"${NO_SKILLS[@]}"}) || refuse 'the Kit configuration could not be written'
+}
+
+update_clis() {
+  local listed name path release minimum state answer
+  listed=$("$1") || { printf 'House Kit could not read the agent CLIs, so it updates none.\n' >&2; return 0; }
+  [[ -n "$listed" ]] || return 0
+  while IFS=$'\t' read -r -u 3 name path release minimum state; do
+    if ((UPDATE_CLIS == 0)); then
+      [[ "$state" == old && -t 0 ]] || continue
+      read -r -p "$name $release is older than $minimum, the oldest this House Kit runs. Update it? [Y/n] " answer || answer=n
+      [[ -z "$answer" || "$answer" == [Yy]* ]] || continue
+    fi
+    printf 'Updating %s %s.\n' "$name" "$release"
+    if "$2" "$path"; then
+      CLIS_UPDATED=1
+    else
+      printf '%s could not be updated; it stays at %s.\n' "$name" "$release" >&2
+    fi
+  done 3<<< "$listed"
 }
 
 elevated() {
@@ -294,6 +315,14 @@ enroll_kit() {
     refuse 'the Kit credential could not be stored'
 }
 
+native_clis() {
+  HOUSE_KIT_HOME="$KIT_HOME" "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/clis-main.js"
+}
+
+native_cli_update() {
+  "${DIRECT[@]}" "$1" update
+}
+
 start_native_service() {
   printf '[Unit]\nDescription=House Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' \
     "$(id -un)" "$NATIVE_WORKSPACE" "$NATIVE_BIN" | elevated tee "$NATIVE_UNIT" >/dev/null &&
@@ -350,13 +379,14 @@ connect_native() {
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
   configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
+  update_clis native_clis native_cli_update
   if ! service_manager; then
     printf 'House Kit %s is installed for Environment %s; no service manager runs on this host, so start it with: %s/kit resident\n' \
       "$VERSION" "$(enrolled environment)" "$NATIVE_BIN"
     return
   fi
   start_native_service
-  if [[ "$connected" == running && -n "$CONFIGURED" ]]; then
+  if [[ "$connected" == running ]] && { [[ -n "$CONFIGURED" ]] || ((CLIS_UPDATED)); }; then
     elevated systemctl restart "$NATIVE_SERVICE" || refuse 'the House Kit service could not be restarted'
     connected=restarted
   fi
@@ -407,6 +437,16 @@ forward_kit() {
   fi
 }
 
+container_clis() {
+  "${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/clis-main.js"
+}
+
+container_cli_update() {
+  local terminal=()
+  if [[ -t 0 && -t 1 ]]; then terminal=(-t); fi
+  "${DOCKER_RUN[@]:0:2}" -i ${terminal[@]+"${terminal[@]}"} --entrypoint "$1" "${DOCKER_RUN[@]:2}" update
+}
+
 start_resident() {
   local network=()
   [[ "$HOUSE" == https://* ]] || network=(--network host)
@@ -423,7 +463,7 @@ update_kit() {
 resume_kit() {
   if ! kit_running; then
     docker start "$NAME" >/dev/null
-  elif [[ -n "$CONFIGURED" ]]; then
+  elif [[ -n "$CONFIGURED" ]] || ((CLIS_UPDATED)); then
     docker restart "$NAME" >/dev/null
   else
     printf 'House Kit is already running for Environment %s.\n' "$(enrolled environment)"
@@ -440,6 +480,7 @@ connect_kit() {
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
   configure_kit "${CONFIGURE[@]}"
+  update_clis container_clis container_cli_update
   start_resident
   printf 'House Kit connected for Environment %s.\n' "$(enrolled environment)"
 }
@@ -483,6 +524,10 @@ while (($#)); do
       ;;
     --no-skills)
       NO_SKILLS=(--no-skills)
+      shift
+      ;;
+    --update-clis)
+      UPDATE_CLIS=1
       shift
       ;;
     *) refuse "unknown argument $1" ;;
@@ -583,6 +628,7 @@ if kit_installed; then
   fi
   check_authority "${AUTHORITY[@]}"
   configure_kit "${CONFIGURE[@]}"
+  update_clis container_clis container_cli_update
   if [[ "$(docker inspect --format '{{.Config.Image}}' "$NAME")" != "$IMAGE" ]]; then
     update_kit
   else

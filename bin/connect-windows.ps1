@@ -8,6 +8,7 @@ $KitHomeMount = "type=volume,src=$KitHome,dst=/kit-home"
 $Link = 'Open this link and confirm: '
 $AuthorityMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/authority-main.js'
 $ConfigureMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js'
+$ClisMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js'
 $EnrolmentReader = "try{const e=JSON.parse(require('fs').readFileSync('/kit-home/credential.json','utf8'));console.log('house',e.house);console.log('environment',e.environment)}catch(e){if(e.code!=='ENOENT')throw e}"
 $BootstrapArguments = @($args | ForEach-Object { [string]$_ })
 $MinimumBuild = 22631
@@ -242,6 +243,34 @@ function Set-Configuration {
   $output -contains 'changed'
 }
 
+function Update-Clis {
+  $ErrorActionPreference = 'Continue'
+  $listed = @(& docker run --rm @Network --entrypoint node @Common $ClisMain)
+  if ($LASTEXITCODE -ne 0) {
+    [Console]::Error.WriteLine('House Kit could not read the agent CLIs, so it updates none.')
+    return $false
+  }
+  $updated = $false
+  foreach ($line in $listed) {
+    $name, $path, $release, $minimum, $state = "$line".Split("`t")
+    if (-not $UpdateClis) {
+      if ($state -cne 'old' -or -not $Interactive) { continue }
+      $answer = Read-Host "$name $release is older than $minimum, the oldest this House Kit runs. Update it? [Y/n]"
+      if ($answer -and $answer -notmatch '^[Yy]') { continue }
+    }
+    Write-Host "Updating $name $release."
+    $terminal = @()
+    if ($Interactive) { $terminal = @('-t') }
+    & docker run -i @terminal --rm @Network --entrypoint $path @Common update | Out-Host
+    if ($LASTEXITCODE -eq 0) {
+      $updated = $true
+    } else {
+      [Console]::Error.WriteLine("$name could not be updated; it stays at $release.")
+    }
+  }
+  $updated
+}
+
 function Start-Resident {
   $resident = @()
   if (-not $House.StartsWith('https://')) { $resident = @('--network', 'host') }
@@ -258,6 +287,8 @@ function Connect-Kit {
   $Forwarded = 'kit'
   $Forward = @()
   $NoSkills = @()
+  $UpdateClis = $false
+  $Interactive = -not [Console]::IsInputRedirected
   $Arguments = $BootstrapArguments
   for ($index = 0; $index -lt $Arguments.Count; $index++) {
     $argument = $Arguments[$index]
@@ -282,6 +313,8 @@ function Connect-Kit {
       $Manual = $true
     } elseif ($argument -ceq '--no-skills') {
       $NoSkills = @('--no-skills')
+    } elseif ($argument -ceq '--update-clis') {
+      $UpdateClis = $true
     } else {
       Stop-Bootstrap "unknown argument $argument"
     }
@@ -375,6 +408,7 @@ function Connect-Kit {
     }
     Test-Authority
     $configured = Set-Configuration
+    $updated = Update-Clis
     if ($installed -cne $Image) {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
@@ -384,7 +418,7 @@ function Connect-Kit {
     if ((Read-Inspect '{{.State.Running}}') -cne 'true') {
       Invoke-Docker start $Name | Out-Null
       Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
-    } elseif ($configured) {
+    } elseif ($configured -or $updated) {
       Invoke-Docker restart $Name | Out-Null
       Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
     } else {
@@ -404,6 +438,7 @@ function Connect-Kit {
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
   }
   [void](Set-Configuration)
+  [void](Update-Clis)
   Start-Resident
   Write-Host "House Kit connected for Environment $($enrolment['environment'])."
 }
