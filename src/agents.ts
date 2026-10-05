@@ -131,6 +131,7 @@ export class Agents {
   private readonly queues = new Map<string, Promise<unknown>>();
   private installing: Promise<unknown> = Promise.resolve();
   private readonly readings = new Map<string, Reading>();
+  private readonly reads = new Map<string, number>();
   private sending: Promise<void> = Promise.resolve();
   private sent: string | null = null;
 
@@ -175,10 +176,11 @@ export class Agents {
       if (known?.release !== release || known.minimum !== undefined) {
         this.update(kind, { release, failure: null, signed_in: kept.signed_in, models: kept.models });
       }
+      const read = this.nextRead(kind);
       offer(kind, cli, kept)
         .then((offered) => {
           const current = this.readings.get(kind);
-          if (current?.release === release) this.update(kind, { ...current, ...offered });
+          if (this.reads.get(kind) === read && current?.release === release) this.update(kind, { ...current, ...offered });
         })
         .catch(logged);
       return cli;
@@ -191,6 +193,7 @@ export class Agents {
 
   async reread(kind: string): Promise<void> {
     await this.queue(kind, async () => {
+      this.nextRead(kind);
       this.readings.set(kind, await this.examine(kind, this.readings.get(kind) ?? SIGNED_OUT));
     });
     await this.report();
@@ -200,6 +203,12 @@ export class Agents {
     const sending = this.sending.catch(() => undefined).then(() => this.send());
     this.sending = sending;
     return sending;
+  }
+
+  private nextRead(kind: string): number {
+    const read = (this.reads.get(kind) ?? 0) + 1;
+    this.reads.set(kind, read);
+    return read;
   }
 
   private update(kind: string, reading: Reading): void {
@@ -255,6 +264,7 @@ export class Agents {
   private async load(kind: string): Promise<void> {
     const known = this.readings.get(kind);
     if (known !== undefined && known.failure === null) return;
+    this.nextRead(kind);
     this.readings.set(kind, await this.examine(kind, SIGNED_OUT));
   }
 

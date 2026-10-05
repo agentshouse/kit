@@ -154,6 +154,27 @@ it('reads the CLI again at every Conversation process start, its sign-in and eve
   expect(reported(hosted)).toHaveLength(count);
 });
 
+it('reports the read of the latest Conversation process start when an earlier read of the same CLI ends after it', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => signIn(home, 'grok-build') });
+  await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
+  const offer = async (model: string) =>
+    writeFile(join(hosted.home, 'models', 'grok-build'), JSON.stringify([{ id: model, name: model, efforts: ['high'] }]));
+  await mkdir(join(hosted.home, 'models'));
+  await offer('grok-older');
+  await writeFile(join(hosted.home, 'probe-hold'), 'grok-older');
+  await open(hosted, 'conversation-1');
+  await until(async () => (await hosted.adapterLog()).some((entry) => entry.heldProbe === 'grok-older'));
+
+  await offer('grok-newer');
+  await open(hosted, 'conversation-2');
+  await report(hosted, (agents) => (agents[0]!.models as { model: string }[])[0]!.model === 'grok-newer');
+  await rm(join(hosted.home, 'probe-hold'));
+  await until(async () => (await hosted.adapterLog()).some((entry) => entry.releasedProbe === 'grok-older'));
+  await settle();
+
+  expect((reported(hosted).at(-1)!.agents as { models: unknown[] }[])[0]!.models).toEqual([{ model: 'grok-newer', efforts: ['high'] }]);
+});
+
 it('hands a conversation the binary its CLI link resolves to, so an update that moves the link leaves that conversation on its own binary', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
     prepare: async (home) => {

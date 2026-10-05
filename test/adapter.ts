@@ -306,6 +306,12 @@ const app = agent({ name: 'adapter-double' })
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
     if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
+    const probeHold = join(home, 'probe-hold');
+    if (params.cwd === home && existsSync(probeHold) && readFileSync(probeHold, 'utf8') === models[0]!.id) {
+      log({ heldProbe: models[0]!.id });
+      while (existsSync(probeHold)) await new Promise((resolve) => setTimeout(resolve, 20));
+      log({ releasedProbe: models[0]!.id });
+    }
     if (existsSync(join(home, 'hold-open'))) {
       spawnJob();
       await new Promise(() => undefined);

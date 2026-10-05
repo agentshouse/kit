@@ -212,15 +212,19 @@ function loginShell(): string {
   return process.env.SHELL || userInfo().shell!;
 }
 
+const SHELL_DIRECTORY = 'HOUSE_KIT_SHELL_DIRECTORY=';
+
 async function loginPath(): Promise<string[]> {
   const shell = loginShell();
-  const ran = await run(shell, ['-l', '-i', '-c', 'env'], READ_MS, true);
-  const path = ran.stdout
-    .split('\n')
-    .findLast((line) => line.startsWith('PATH='))
-    ?.slice('PATH='.length);
-  if (path === undefined) throw new Error(`the login shell ${shell} named no PATH: ${failureOf(ran, shell)}`);
-  return path.split(delimiter).map((directory) => directory || '.');
+  const ran = await run(shell, ['-l', '-i', '-c', `printf '%s%s\\n' ${SHELL_DIRECTORY} "$PWD"; env`], READ_MS, true);
+  const lines = ran.stdout.split('\n');
+  const named = (prefix: string) => lines.findLast((line) => line.startsWith(prefix))?.slice(prefix.length);
+  const path = named('PATH=');
+  const directory = named(SHELL_DIRECTORY);
+  if (path === undefined || directory === undefined) {
+    throw new Error(`the login shell ${shell} named no PATH: ${failureOf(ran, shell)}`);
+  }
+  return path.split(delimiter).map((entry) => resolve(directory, entry));
 }
 
 async function executable(path: string): Promise<boolean> {
@@ -234,7 +238,7 @@ async function executable(path: string): Promise<boolean> {
 
 export async function locate(kind: string): Promise<string | null> {
   for (const directory of await loginPath()) {
-    const candidate = resolve(directory, CLIS[kind]!.bin);
+    const candidate = join(directory, CLIS[kind]!.bin);
     if (await executable(candidate)) return candidate;
   }
   return null;

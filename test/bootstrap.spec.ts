@@ -295,16 +295,18 @@ function listClis(home: string, cwd: string): Promise<{ status: number | null; s
   });
 }
 
-it('finds a CLI in the current directory through an empty PATH entry, as the login shell does', async () => {
+it("finds a CLI through an empty PATH entry in the directory the login shell ends its profile in, as that shell does", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }));
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['grok-build'], routes: [] } }));
-  await writeFile(join(home, '.profile'), 'PATH=":$PATH"\n');
+  await writeFile(join(home, '.profile'), 'cd "$HOME/there"\nPATH=":$PATH"\n');
   const here = join(home, 'here');
+  const there = join(home, 'there');
   placeUserCli(here, 'grok-build', '1.0.49');
+  placeUserCli(there, 'grok-build', '1.0.50');
 
-  expect(await listClis(home, here)).toEqual({ status: 0, stdout: `grok\t${join(here, 'grok')}\t1.0.49\t1.0.46\tcurrent\n` });
+  expect(await listClis(home, here)).toEqual({ status: 0, stdout: `grok\t${join(there, 'grok')}\t1.0.50\t1.0.46\tcurrent\n` });
 });
 
 it('names each chosen CLI the login shell finds, even through a relative PATH entry, with its absolute path, its release, its minimum and whether it is below that minimum', async () => {
