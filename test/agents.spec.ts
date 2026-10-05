@@ -157,6 +157,19 @@ it('installs each chosen CLI the login shell does not find through its official 
   expect(await logged('curl.log')).toHaveLength(3);
 });
 
+it('installs a chosen CLI the login shell does not find though its profile prints a path', async () => {
+  desired = ['claude-agent-acp'];
+  await start(async () => {
+    await rm(join(userBin(home), 'claude'));
+    await writeFile(join(home, '.profile'), `echo "$HOME"\n${await readFile(join(home, '.profile'), 'utf8')}`);
+  });
+
+  const report = await until(() => reports[0]);
+
+  expect(report.agents).toEqual([expect.objectContaining({ kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'], failure: null })]);
+  expect(await logged('curl.log')).toEqual(['https://claude.ai/install.sh']);
+});
+
 it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work frame", async () => {
   desired = ['codex-acp', 'claude-agent-acp'];
   await start(async () => {

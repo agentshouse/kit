@@ -212,12 +212,12 @@ function loginShell(): string {
   return process.env.SHELL || userInfo().shell!;
 }
 
-const LOOKUP = 'found=$(command -v "$1") || exit 0; case $found in /*) printf "%s\\n" "$found" ;; *) printf "%s/%s\\n" "$(pwd -P)" "$found" ;; esac';
+const FOUND = 'house-kit-cli ';
+const LOOKUP = `found=$(command -v "$1") || exit 0; case $found in /*) ;; *) found=$(pwd -P)/$found ;; esac; printf "${FOUND}%s\\n" "$found"`;
 
 export async function locate(kind: string): Promise<string | null> {
   const ran = await run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${LOOKUP}' sh ${CLIS[kind]!.bin}`], READ_MS, true);
-  const found = ran.stdout.trim().split('\n').at(-1)!;
-  return found.startsWith('/') ? found : null;
+  return ran.stdout.split('\n').findLast((line) => line.startsWith(FOUND))?.slice(FOUND.length) ?? null;
 }
 
 export async function versionOf(path: string): Promise<string | null> {
