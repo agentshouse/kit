@@ -2,6 +2,7 @@ import { access, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, type Host } from './host.ts';
+import { temporaryHome } from './kit.ts';
 
 const UNSUPPORTED = 'it installs without that guarantee.';
 const UID = process.getuid!();
@@ -18,9 +19,8 @@ async function installed(host: Host): Promise<void> {
   const prefix = join(host.home, '.local', 'share', 'house-kit');
   expect(await readFile(join(prefix, 'release'), 'utf8')).toBe(`@agentshouse/kit@${PUBLISHED_VERSION} node@24.21.0\n`);
   for (const command of ['kit', 'house']) {
-    const wrapper = join(host.home, '.local', 'bin', command);
-    expect(await readFile(wrapper, 'utf8')).toBe(`#!/bin/sh\nPATH="${prefix}/bin:$PATH" exec "${prefix}/bin/${command}" "$@"\n`);
-    expect((await stat(wrapper)).mode & 0o777).toBe(0o755);
+    expect(host.command(command, ['--help'])).toMatchObject({ status: 0 });
+    expect(host.calls(command).at(-1)).toMatch(/^--help /);
   }
   expect((await stat(join(host.home, 'AgentsHouse'))).isDirectory()).toBe(true);
   expect(JSON.parse(await readFile(join(host.home, '.house-kit', 'credential.json'), 'utf8'))).toMatchObject({
@@ -85,7 +85,6 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout).toContain('House Kit connected for Environment environment-one.\n');
-  await installed(host);
   expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.21\.0\/node-v24\.21\.0-linux-x64\.tar\.gz$/)]);
   expect(host.calls('sha256sum')).toEqual(['--check']);
   expect(host.calls('npm')).toEqual([expect.stringMatching(/ @agentshouse\/kit@0\.2\.1-alpha\.1$/)]);
@@ -97,6 +96,7 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
   expect(acts(host)).toEqual(['--user daemon-reload', '--user --quiet enable --now house-kit.service']);
   expect(await readFile(join(host.home, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8')).toBe(userUnit(host.home));
   expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
+  await installed(host);
 });
 
 it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, without elevation, and enrols through kit login", async () => {
@@ -107,7 +107,6 @@ it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, w
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout).toContain('House Kit connected for Environment environment-one.\n');
   expect(notices(ran.stdout)).toEqual([]);
-  await installed(host);
   expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.21\.0\/node-v24\.21\.0-darwin-arm64\.tar\.gz$/)]);
   expect(host.calls('shasum')).toEqual(['-a 256 --check']);
   expect(host.calls('sudo')).toEqual([]);
@@ -115,6 +114,7 @@ it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, w
   expect(acts(host)).toEqual([`enable gui/${UID}/house-kit`, `bootstrap gui/${UID} ${host.home}/Library/LaunchAgents/house-kit.plist`]);
   expect(await readFile(join(host.home, 'Library', 'LaunchAgents', 'house-kit.plist'), 'utf8')).toBe(launchAgent(host.home));
   expect(await readFile(join(host.home, '.zprofile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
+  await installed(host);
 });
 
 it.each([
@@ -192,6 +192,27 @@ it('adds the path line to the login file bash reads when there is a .bash_login 
 
   expect(await readFile(join(host.home, '.bash_login'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
   expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe('');
+});
+
+it('adds the path line to the .zprofile in ZDOTDIR when zsh has one', async () => {
+  const zdotdir = await temporaryHome();
+  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', shell: '/bin/zsh', environment: { ZDOTDIR: zdotdir } });
+
+  expect(host.run()).toMatchObject({ status: 0 });
+  expect(host.run()).toMatchObject({ status: 0 });
+
+  expect(await readFile(join(zdotdir, '.zprofile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
+  await expect(access(join(host.home, '.zprofile'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it("adds the path line to fish's config.fish when fish is the login shell", async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', shell: '/usr/bin/fish' });
+
+  expect(host.run()).toMatchObject({ status: 0 });
+  expect(host.run()).toMatchObject({ status: 0 });
+
+  expect(await readFile(join(host.home, '.config', 'fish', 'config.fish'), 'utf8')).toBe(`set -gx PATH "${host.home}/.local/bin" $PATH\n`);
+  await expect(access(join(host.home, '.profile'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 it('restarts the running service when a rerun changes the Kit configuration', async () => {

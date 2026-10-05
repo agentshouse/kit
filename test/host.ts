@@ -26,6 +26,7 @@ export interface Platform {
   appleSilicon?: boolean;
   macos?: string;
   shell?: string;
+  environment?: Record<string, string>;
 }
 
 export interface Ran {
@@ -37,6 +38,7 @@ export interface Ran {
 export interface Host {
   home: string;
   run(argv?: string[]): Ran;
+  command(name: string, argv: string[]): Ran;
   calls(tool: string): string[];
   mark(name: 'changed' | 'container'): Promise<void>;
   forget(): Promise<void>;
@@ -114,24 +116,25 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   await script(join(fake, unpacked, 'bin', 'npm'), NPM);
   spawnSync('tar', ['-czf', join(fake, 'node.tar.gz'), '-C', fake, unpacked]);
   const bootstrap = await published();
+  const environment = {
+    HOME: home,
+    SHELL: platform.shell ?? '/bin/bash',
+    PATH: `${bin}:/usr/bin:/bin`,
+    FAKE: fake,
+    FAKE_SYSTEM: platform.system,
+    FAKE_MACHINE: platform.machine,
+    FAKE_ARM64: platform.appleSilicon === false ? '0' : '1',
+    FAKE_MACOS: platform.macos ?? '27.0.1',
+    ...platform.environment,
+  };
+  const ran = (command: string, argv: string[]): Ran => {
+    const finished = spawnSync(command, argv, { encoding: 'utf8', env: environment });
+    return { status: finished.status, stdout: finished.stdout, stderr: finished.stderr };
+  };
   return {
     home,
-    run: (argv = []) => {
-      const ran = spawnSync('bash', [bootstrap, ...argv], {
-        encoding: 'utf8',
-        env: {
-          HOME: home,
-          SHELL: platform.shell ?? '/bin/bash',
-          PATH: `${bin}:/usr/bin:/bin`,
-          FAKE: fake,
-          FAKE_SYSTEM: platform.system,
-          FAKE_MACHINE: platform.machine,
-          FAKE_ARM64: platform.appleSilicon === false ? '0' : '1',
-          FAKE_MACOS: platform.macos ?? '27.0.1',
-        },
-      });
-      return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
-    },
+    run: (argv = []) => ran('bash', [bootstrap, ...argv]),
+    command: (name, argv) => ran(join(home, '.local', 'bin', name), argv),
     calls: (tool) =>
       readFileSync(join(fake, 'log'), { encoding: 'utf8', flag: 'a+' })
         .split('\n')

@@ -488,16 +488,20 @@ restart_desktop_service() {
 add_path_line() {
   local profile="$HOME/.profile" line="export PATH=\"$NATIVE_BIN:\$PATH\""
   case "${SHELL##*/}" in
-    zsh) profile="$HOME/.zprofile" ;;
+    zsh) profile="${ZDOTDIR:-$HOME}/.zprofile" ;;
     bash)
       for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
         [[ ! -f "$profile" ]] || break
       done
       ;;
+    fish)
+      profile="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+      line="set -gx PATH \"$NATIVE_BIN\" \$PATH"
+      ;;
   esac
   grep -Fqx "$line" "$profile" 2>/dev/null && return
   if [[ -s "$profile" && -n "$(tail -c 1 "$profile")" ]]; then printf '\n' >> "$profile"; fi
-  printf '%s\n' "$line" >> "$profile" || refuse "$profile could not be written"
+  mkdir -p "${profile%/*}" && printf '%s\n' "$line" >> "$profile" || refuse "$profile could not be written"
   printf 'Added %s to the path in %s; new terminals find kit and house.\n' "$NATIVE_BIN" "$profile"
 }
 
