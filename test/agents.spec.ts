@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it } from 'vitest';
@@ -94,7 +94,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state and
   expect(report).toEqual({
     os: expect.stringMatching(/\S/),
     kit_version: KIT_PACKAGE.version,
-    agent_base: '/agents/house',
+    agent_base: '/agents/house/agents',
     agents: [
       {
         kind: 'codex-acp',
@@ -307,12 +307,13 @@ it('reports the SHA256 fingerprint of the host SSH key when the host has one', a
   expect(report.ssh_host_key).toBe(HOST_KEY);
 });
 
-it('reports the native workspace root as its Agent base', async () => {
+it('creates and reports the agents folder of the native workspace root as its Agent base', async () => {
   desired = [];
   const workspace = await temporaryHome();
   await start(undefined, [], { HOUSE_KIT_WORKSPACE: workspace });
 
   const report = await until(() => reports[0]);
 
-  expect(report.agent_base).toBe(workspace);
+  expect(report.agent_base).toBe(join(workspace, 'agents'));
+  expect((await stat(join(workspace, 'agents'))).isDirectory()).toBe(true);
 });

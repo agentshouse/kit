@@ -17,6 +17,8 @@ Add `--container` to run House Kit in one Docker container instead, with your
 workspace mounted at `/agents/house`; your Agents then reach only that
 workspace. On Windows 11 the container is the one choice. Append a `kit` or
 `house` command to the container's command to run it in that container.
+Running the command for the other choice on a connected computer asks you to
+confirm, then replaces its Environment, whose Agents end, with a new one.
 
 On your own Ubuntu 26.04 server, run the Linux command with `--linux` to
 install House Kit natively, with its workspace at `/agents/house`; `kit` and

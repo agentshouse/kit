@@ -38,9 +38,9 @@ async function ownAgent(home: string): Promise<unknown> {
   return JSON.parse(await readFile(join(home, 'own-agent.json'), 'utf8'));
 }
 
-async function confirm(house: House, home: string) {
+async function confirm(house: House, home: string, environment: Record<string, string> = {}) {
   house.requests.length = 0;
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home, ...environment });
   const started = await until(() => house.requests.find((request) => request.path === '/kit'));
   await until(() => login.stdout().includes(`${house.origin}/kit/ahk_login_one`));
   const { loopback_uri } = started.body as { loopback_uri: string };
@@ -86,6 +86,25 @@ it('reconnects the same Environment on a second login', async () => {
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,
     environment: 'environment-one',
+    credential: 'ahk_second',
+  });
+});
+
+it('enrols a new Environment naming the stored one it replaces, and keeps only the new enrolment', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  await confirm(house, home);
+  serveLogin(house, 'environment-two', 'ahk_second');
+
+  const { started, exit } = await confirm(house, home, { HOUSE_KIT_REPLACES: 'environment-one' });
+
+  expect(exit).toBe(0);
+  expect(started).toMatchObject({ act: 'new_environment', replaces: 'environment-one', label: expect.any(String) });
+  expect(started).not.toHaveProperty('environment_id');
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
+    house: house.origin,
+    environment: 'environment-two',
     credential: 'ahk_second',
   });
 });

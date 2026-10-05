@@ -9,7 +9,7 @@ import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations, type Input } from './conversations.ts';
 import { WorkingCopies } from './copies.ts';
-import { kitHome, readEnrolment } from './home.ts';
+import { agentBase, kitHome, readEnrolment } from './home.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
 import { holdStream, type Frame, type Stream } from './stream.ts';
@@ -62,6 +62,7 @@ export async function resident(): Promise<void> {
     return;
   }
   await placeSkillSet();
+  await mkdir(agentBase(), { recursive: true });
   process.env.HOUSE_KIT_RESIDENT = String(process.pid);
   const agents = new Agents(house);
   const copies = new WorkingCopies(house);
