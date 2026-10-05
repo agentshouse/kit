@@ -164,7 +164,9 @@ it('installs every skill at the native workspace root with a relative Claude lin
 });
 
 it('installs every skill at /agents/house in the container and on a server', async () => {
-  onTestFinished(() => Promise.all([skills(SERVER_WORKSPACE), claude(SERVER_WORKSPACE)].map((path) => rm(path, { recursive: true, force: true }))));
+  onTestFinished(async () => {
+    for (const path of [skills(SERVER_WORKSPACE), claude(SERVER_WORKSPACE)]) await rm(path, { recursive: true, force: true });
+  });
   const hosted = await hostKit([{}], { skills: true });
 
   const vendored = await names();
