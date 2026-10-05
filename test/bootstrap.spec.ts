@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { CLIS } from '../src/clis.ts';
@@ -287,7 +287,7 @@ resume_kit`,
   expect(ran.stdout).toBe('Updating codex 0.150.0.\nHouse Kit is already running for Environment environment-one.\n');
 });
 
-it('names each chosen CLI the login shell finds with its path, its release, its minimum and whether it is below that minimum', async () => {
+it('names each chosen CLI the login shell finds, even through a relative PATH entry, with its absolute path, its release, its minimum and whether it is below that minimum', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }));
@@ -295,6 +295,7 @@ it('names each chosen CLI the login shell finds with its path, its release, its 
   await placeUserClis(home);
   placeUserCli(userBin(home), 'codex-acp', '0.150.0');
   await rm(join(userBin(home), 'claude'));
+  await writeFile(join(home, '.profile'), `PATH="${relative(process.cwd(), userBin(home))}:$PATH"\n`);
 
   const listed = await new Promise<{ status: number | null; stdout: string }>((resolve) => {
     const child = spawn(process.execPath, [CLIS_MAIN], { env: { ...process.env, HOME: home, HOUSE_KIT_HOME: home, ...LOGIN_SHELL } });
