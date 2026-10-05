@@ -12,6 +12,14 @@ const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const kind = process.env.ADAPTER_KIND ?? 'codex-acp';
 const home = process.env.HOUSE_KIT_HOME ?? '/tmp';
 const signedIn = () => existsSync(join(home, 'signed-in', kind));
+const executable = process.env.CODEX_PATH ?? process.env.CLAUDE_CODE_EXECUTABLE;
+const cli =
+  executable === undefined
+    ? { path: process.env.CLI_PATH, release: process.env.CLI_RELEASE }
+    : {
+        path: executable,
+        release: /\d+\.\d+\.\d+/.exec(spawnSync(executable, ['--version'], { encoding: 'utf8' }).stdout)?.[0],
+      };
 recordStart('adapter');
 
 function log(entry: Record<string, unknown>): void {
@@ -125,6 +133,7 @@ async function directive(
   const [name, ...rest] = line.slice(1).split(' ');
   const argument = rest.join(' ');
   if (name === 'say') await say(client, sessionId, argument.replaceAll('\\n', '\n'));
+  if (name === 'version') await say(client, sessionId, `${cli.path} ${cli.release}`);
   if (name === 'note') await note(client, sessionId, argument);
   if (name === 'tool') await tool(client, sessionId, argument);
   if (name === 'think') {
@@ -284,7 +293,7 @@ async function directive(
 
 const app = agent({ name: 'adapter-double' })
   .onRequest('initialize', ({ params }) => {
-    log({ method: 'initialize', params, env: process.env, argv: process.argv });
+    log({ method: 'initialize', params, env: process.env, argv: process.argv, cli });
     if (existsSync(join(home, 'refuse-initialize'))) throw new RequestError(-32603, 'the CLI did not initialize');
     return {
       protocolVersion: params.protocolVersion,
@@ -297,6 +306,12 @@ const app = agent({ name: 'adapter-double' })
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
     if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
+    const probeHold = join(home, 'probe-hold');
+    if (params.cwd === home && existsSync(probeHold) && readFileSync(probeHold, 'utf8') === models[0]!.id) {
+      log({ heldProbe: models[0]!.id });
+      while (existsSync(probeHold)) await new Promise((resolve) => setTimeout(resolve, 20));
+      log({ releasedProbe: models[0]!.id });
+    }
     if (existsSync(join(home, 'hold-open'))) {
       spawnJob();
       await new Promise(() => undefined);

@@ -24,6 +24,11 @@ On your own Ubuntu 26.04 server, run the Linux command with `--linux` to
 install House Kit natively, with its workspace at `/agents/house`; `kit` and
 `house` are then on the server's `PATH`.
 
+House Kit runs the agent CLIs your login shell finds and installs a missing
+one through that CLI's own installer. Running the command again offers to
+update each CLI older than House Kit needs; add `--update-clis` to update every
+one to its latest release without asking.
+
 House Kit also gives every Agent on the Environment a set of agent skills. Add
 `--no-skills` to the command to leave them out; running it again without the
 flag brings them back.

@@ -15,8 +15,6 @@ import { placeSkillSet } from './skills.ts';
 import { holdStream, type Frame, type Stream } from './stream.ts';
 import { Updates, type Update } from './update.ts';
 
-const AGENTS_REREAD_MS = 60 * 60_000;
-
 function report(error: unknown): void {
   process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
 }
@@ -101,7 +99,6 @@ export async function resident(): Promise<void> {
   await house.deliver('/kit/restarted', {}).catch(report);
   await updates.resumed().catch(report);
   logged(agents.refresh());
-  setInterval(() => logged(agents.refresh()), AGENTS_REREAD_MS);
   stream = holdStream({
     opened: () => {
       conversations.opened();

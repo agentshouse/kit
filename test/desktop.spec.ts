@@ -235,6 +235,23 @@ it('restarts the running service when a rerun changes the Kit configuration', as
   expect(acts(host)).toEqual(['--user restart house-kit.service']);
 });
 
+it("updates every chosen CLI the native placement's Kit names with its own update command under --update-clis, and leaves the running service alone", async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run()).toMatchObject({ status: 0 });
+  const codex = join(host.home, 'codex');
+  await writeFile(codex, '#!/bin/sh\nprintf \'codex %s\\n\' "$*" >> "$FAKE/log"\n', { mode: 0o755 });
+  await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.160.0\t0.159.1\tcurrent\n`);
+  await host.forget();
+
+  const ran = host.run(['--update-clis']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout).toContain('Updating codex 0.160.0.\n');
+  expect(host.calls('node')).toContain('clis-main.js');
+  expect(host.calls('codex')).toEqual(['update']);
+  expect(acts(host)).toEqual([]);
+});
+
 it.each([
   ['an earlier macOS', { system: 'Darwin', machine: 'arm64', macos: '26.7.1' }, 'macOS 27 on Apple silicon, not macOS 26.7.1 on Apple silicon', 'darwin-arm64'],
   ['an Intel Mac', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, 'macOS 27 on Apple silicon, not macOS 27.0.1 on an Intel chip', 'darwin-x64'],
@@ -287,6 +304,7 @@ it('installs the container exactly as before only with the container choice', as
     `pull --quiet --platform linux/amd64 ${image}`,
     `run --rm --network host --user ${uid} ${mounts} ${image} login`,
     `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,
+    `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js`,
     `run -d --name house-kit --restart unless-stopped --user ${uid} ${mounts} --label agentshouse.house=https://agents.house ${image} resident`,
   ]);
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);

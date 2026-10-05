@@ -97,6 +97,7 @@ esac\n`,
 
 const NODE = `printf 'node %s\\n' "\${1##*/}" >> "$FAKE/log"
 [ "\${1##*/}" != configure-main.js ] || [ ! -e "$FAKE/changed" ] || echo changed
+[ "\${1##*/}" != clis-main.js ] || [ ! -e "$HOME/.clis" ] || cat "$HOME/.clis"
 `;
 
 const NPM = `${LOGGED}while [ $# -gt 0 ]; do [ "$1" != --prefix ] || prefix=$2; shift; done

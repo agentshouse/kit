@@ -1,19 +1,32 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { onTestFinished } from 'vitest';
+import { CLIS } from '../src/clis.ts';
+import { BINS, placeUserCli } from './cli.ts';
 import { certificate, startHouse, until, type House, type KitSocket, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
-import { placeCli } from './npm.ts';
+import { placeAdapter } from './npm.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   peerDependencies: Record<string, string>;
 };
-const PACKAGES: Record<string, string> = {
-  'codex-acp': '@agentclientprotocol/codex-acp',
-  'claude-agent-acp': '@agentclientprotocol/claude-agent-acp',
-  'grok-build': '@xai-official/grok',
-};
+
+export const LOGIN_SHELL = { SHELL: '/bin/sh' };
+
+export function userBin(home: string): string {
+  return join(home, 'user-bin');
+}
+
+export async function placeUserClis(home: string): Promise<void> {
+  for (const kind of Object.keys(BINS)) placeUserCli(userBin(home), kind);
+  await writeFile(join(home, '.profile'), 'PATH="$HOME/user-bin:$PATH"\n');
+}
+
+export function placePinnedAdapter(home: string, kind: string): void {
+  const adapter = CLIS[kind]!.adapter;
+  if (adapter !== null) placeAdapter(join(home, 'agents', kind), kind, KIT_PACKAGE.peerDependencies[adapter.package]!);
+}
 
 export interface ToolResult {
   content: { type: 'text'; text: string }[];
@@ -84,6 +97,7 @@ export interface Hosting {
   environment?: Record<string, string>;
   home?: string;
   skills?: boolean;
+  prepare?: (home: string) => Promise<void>;
 }
 
 export interface Hosted {
@@ -143,10 +157,9 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     ...route,
   }));
   const kinds = [...new Set(resolved.map((route) => route.kind))];
-  for (const kind of kinds) {
-    await mkdir(join(home, 'agents', kind), { recursive: true });
-    placeCli(join(home, 'agents', kind), kind, KIT_PACKAGE.peerDependencies[PACKAGES[kind]!]!);
-  }
+  for (const kind of kinds) placePinnedAdapter(home, kind);
+  await placeUserClis(home);
+  await hosting.prepare?.(home);
   const acks: Received[] = [];
   const turns: Received[] = [];
   const interactions: Received[] = [];
@@ -194,6 +207,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const kit = runKit(['resident'], {
     HOUSE_KIT_HOME: home,
     PATH: await fakeBin(home),
+    ...LOGIN_SHELL,
     ...GIT_IDENTITY,
     ...(hosting.tls ? { NODE_EXTRA_CA_CERTS: certificate().path } : {}),
     ...hosting.environment,
@@ -258,7 +272,9 @@ export async function installHeld(hosted: Hosted): Promise<string> {
   }));
   hosted.socket.send({ type: 'work_available', subject: 'agents' });
   await until(async () =>
-    (await readFile(join(hosted.home, 'npm.log'), 'utf8').catch(() => '')).includes(PACKAGES['claude-agent-acp']!),
+    (await readFile(join(hosted.home, 'npm.log'), 'utf8').catch(() => '')).includes(
+      CLIS['claude-agent-acp']!.adapter!.package,
+    ),
   );
   return hold;
 }

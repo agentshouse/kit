@@ -2,6 +2,7 @@ import type { ContentChunk } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { kitHome } from './home.ts';
 
@@ -28,8 +29,10 @@ export interface Job {
 export type Phase = 'note' | 'answer';
 
 export interface Cli {
-  package: string;
   bin: string;
+  minimum: string;
+  install: string;
+  adapter: { package: string; bin: string; executable: string } | null;
   args: string[];
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' | 'collect' };
@@ -66,11 +69,13 @@ function airPhase({ _meta }: ContentChunk): Phase | null {
 
 export const CLIS: Record<string, Cli> = {
   'codex-acp': {
-    package: '@agentclientprotocol/codex-acp',
-    bin: 'codex-acp',
+    bin: 'codex',
+    minimum: '0.159.1',
+    install: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+    adapter: { package: '@agentclientprotocol/codex-acp', bin: 'codex-acp', executable: 'CODEX_PATH' },
     args: [],
-    signedIn: { command: ['cli', 'login', 'status'] },
-    login: { args: ['cli', 'login', '--device-auth'], code: 'show' },
+    signedIn: { command: ['login', 'status'] },
+    login: { args: ['login', '--device-auth'], code: 'show' },
     queues: false,
     turnStarted: (notice) => threadStatus(notice) === 'active',
     turnEnded: (notice) => threadStatus(notice) === 'idle',
@@ -78,11 +83,17 @@ export const CLIS: Record<string, Cli> = {
     phase: airPhase,
   },
   'claude-agent-acp': {
-    package: '@agentclientprotocol/claude-agent-acp',
-    bin: 'claude-agent-acp',
+    bin: 'claude',
+    minimum: '2.1.286',
+    install: 'curl -fsSL https://claude.ai/install.sh | bash',
+    adapter: {
+      package: '@agentclientprotocol/claude-agent-acp',
+      bin: 'claude-agent-acp',
+      executable: 'CLAUDE_CODE_EXECUTABLE',
+    },
     args: [],
-    signedIn: { command: ['--cli', 'auth', 'status'] },
-    login: { args: ['--cli', 'auth', 'login', '--claudeai'], code: 'collect' },
+    signedIn: { command: ['auth', 'status'] },
+    login: { args: ['auth', 'login', '--claudeai'], code: 'collect' },
     queues: false,
     turnStarted: () => false,
     turnEnded: ({ method, params }) =>
@@ -93,8 +104,10 @@ export const CLIS: Record<string, Cli> = {
     phase: () => null,
   },
   'grok-build': {
-    package: '@xai-official/grok',
     bin: 'grok',
+    minimum: '1.0.46',
+    install: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+    adapter: null,
     args: ['agent', '--no-leader', 'stdio'],
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },
@@ -119,22 +132,22 @@ const KIT_PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.me
 export const KIT_VERSION = KIT_PACKAGE.version;
 
 const PROXY = /^https?_proxy$/i;
-
-export function pinned(kind: string): string {
-  return KIT_PACKAGE.peerDependencies[CLIS[kind]!.package]!;
-}
+const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/;
+const INSTALL_MS = 15 * 60_000;
+const READ_MS = 30_000;
+const CAUSE_CHARACTERS = 4000;
 
 function prefix(kind: string): string {
   return join(kitHome(), 'agents', kind);
 }
 
-export function cliCommand(kind: string): string {
-  return join(prefix(kind), 'node_modules', '.bin', CLIS[kind]!.bin);
+export function adapterCommand(kind: string): string {
+  return join(prefix(kind), 'node_modules', '.bin', CLIS[kind]!.adapter!.bin);
 }
 
-export async function installedRelease(kind: string): Promise<string | null> {
+async function installedAdapter(kind: string): Promise<string | null> {
   try {
-    const manifest = join(prefix(kind), 'node_modules', CLIS[kind]!.package, 'package.json');
+    const manifest = join(prefix(kind), 'node_modules', CLIS[kind]!.adapter!.package, 'package.json');
     return (JSON.parse(await readFile(manifest, 'utf8')) as { version: string }).version;
   } catch {
     return null;
@@ -143,6 +156,7 @@ export async function installedRelease(kind: string): Promise<string | null> {
 
 export interface Ran {
   status: number | null;
+  stdout: string;
   output: string;
 }
 
@@ -150,38 +164,74 @@ export function withoutProxy(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([name]) => !PROXY.test(name)));
 }
 
-export function run(command: string, args: string[], timeoutMs: number): Promise<Ran> {
+export function run(command: string, args: string[], timeoutMs: number, detached = false): Promise<Ran> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, env: withoutProxy() });
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: timeoutMs,
+      env: withoutProxy(),
+      detached,
+    });
+    let stdout = '';
     let output = '';
     child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
       output += chunk.toString('utf8');
     });
     child.stderr.on('data', (chunk: Buffer) => {
       output += chunk.toString('utf8');
     });
-    child.on('error', (error) => resolve({ status: null, output: error.message }));
-    child.on('close', (status) => resolve({ status, output }));
+    child.on('error', (error) => resolve({ status: null, stdout, output: error.message }));
+    child.on('close', (status) => resolve({ status, stdout, output }));
   });
 }
 
-export interface Installed {
-  release: string | null;
-  failure: string | null;
+function failureOf(ran: Ran, program: string): string {
+  return ran.output.trim().slice(-CAUSE_CHARACTERS) || `${program} exited with ${ran.status ?? 'a signal'}`;
 }
 
-export async function install(kind: string): Promise<Installed> {
-  const release = pinned(kind);
-  if ((await installedRelease(kind)) === release) return { release, failure: null };
+export async function installAdapter(kind: string): Promise<string | null> {
+  const adapter = CLIS[kind]!.adapter;
+  if (adapter === null) return null;
+  const release = KIT_PACKAGE.peerDependencies[adapter.package]!;
+  if ((await installedAdapter(kind)) === release) return null;
   const ran = await run(
     'npm',
-    ['install', '--prefix', prefix(kind), '--no-save', '--no-audit', '--no-fund', `${CLIS[kind]!.package}@${release}`],
-    15 * 60_000,
+    ['install', '--prefix', prefix(kind), '--no-save', '--no-audit', '--no-fund', '--omit=optional', `${adapter.package}@${release}`],
+    INSTALL_MS,
   );
-  if (ran.status !== 0) {
-    const failure = ran.output.trim() || `npm exited with ${ran.status ?? 'a signal'}`;
-    process.stderr.write(`kit: ${kind} did not install: ${failure}\n`);
-    return { release: null, failure };
+  return ran.status === 0 ? null : failureOf(ran, 'npm');
+}
+
+export async function installCli(kind: string): Promise<string | null> {
+  const ran = await run('bash', ['-o', 'pipefail', '-c', CLIS[kind]!.install], INSTALL_MS, true);
+  return ran.status === 0 ? null : failureOf(ran, 'the install');
+}
+
+function loginShell(): string {
+  return process.env.SHELL || userInfo().shell!;
+}
+
+const FOUND = 'house-kit-cli ';
+const LOOKUP = `found=$(command -v "$1") || exit 0; case $found in /*) ;; *) found=$(pwd -P)/$found ;; esac; printf "${FOUND}%s\\n" "$found"`;
+
+export async function locate(kind: string): Promise<string | null> {
+  const ran = await run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${LOOKUP}' sh ${CLIS[kind]!.bin}`], READ_MS, true);
+  return ran.stdout.split('\n').findLast((line) => line.startsWith(FOUND))?.slice(FOUND.length) ?? null;
+}
+
+export async function versionOf(path: string): Promise<string | null> {
+  return VERSION.exec((await run(path, ['--version'], READ_MS)).stdout)?.[0] ?? null;
+}
+
+function numbers(version: string): number[] {
+  return version.split(/[.-]/, 3).map(Number);
+}
+
+export function below(found: string, minimum: string): boolean {
+  const [have, need] = [numbers(found), numbers(minimum)];
+  for (let index = 0; index < 3; index++) {
+    if (have[index] !== need[index]) return have[index]! < need[index]!;
   }
-  return { release: await installedRelease(kind), failure: null };
+  return found.includes('-') && !minimum.includes('-');
 }

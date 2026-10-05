@@ -332,7 +332,7 @@ export class Conversations {
       .onRequest('elicitation/create', ({ params, signal }) =>
         this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       );
-    await unlessKilled(this.kit.agents.installed(), conversation.killed.signal);
+    const cli = await unlessKilled(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridge = await openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal);
     if (conversation.kills > 0) {
       bridge.close();
@@ -343,6 +343,7 @@ export class Conversations {
       await unlessKilled(createHowWeWork(bridge), conversation.killed.signal);
       const adapter = await startAdapter(
         route.kind,
+        cli,
         route.working_directory,
         app,
         (job) => this.job(conversation, job),
