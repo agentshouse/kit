@@ -36,7 +36,9 @@ flag brings them back.
 `kit login` opens a link you confirm in your browser and keeps the
 Environment's credential in `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is
 set. Pass `--manual` to paste the code by hand on a machine without a browser,
-and `--environment <id>` to reconnect an Environment you already have.
+and `--environment <id>` to reconnect an Environment you already have. It also
+connects your own agent: `house <tool>` run outside an Agent conversation calls
+House as you, until you revoke that connection on Connections.
 
 `kit resident` keeps the Environment connected, and keeps the Rooms you chose
 for this Environment as Git repositories under `working-copies` in the

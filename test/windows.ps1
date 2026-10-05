@@ -56,5 +56,17 @@ $findings += @(Test-Updates $true $false @() 0 @(
   'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --hostname pc --mount home --mount workspace image update'
 ))
 $findings += @(Test-Updates $false $false @('') 0 @())
+$workdir = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-HouseWorkdir' }, $true)
+. ([scriptblock]::Create($workdir.Extent.Text))
+foreach ($case in @(
+  @('C:\Users\u\AgentsHouse', '/agents/house'),
+  @('C:\Users\u\AgentsHouse\notes\2026', '/agents/house/notes/2026'),
+  @('c:\users\u\agentshouse\notes', '/agents/house/notes'),
+  @('C:\Users\u\Desktop', '/agents/house'),
+  @('C:\Users\u\AgentsHouse2', '/agents/house')
+)) {
+  $mapped = Get-HouseWorkdir $case[0] 'C:\Users\u\AgentsHouse'
+  if ($mapped -cne $case[1]) { $findings += "Get-HouseWorkdir mapped $($case[0]) to $mapped, not $($case[1])" }
+}
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }

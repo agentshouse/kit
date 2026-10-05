@@ -12,8 +12,13 @@ export interface Configuration {
   skills: boolean;
 }
 
+export interface OwnAgent {
+  credential: string;
+}
+
 const ENROLMENT = 'credential.json';
 const CONFIGURATION = 'kit.json';
+const OWN_AGENT = 'own-agent.json';
 
 export function kitHome(): string {
   return process.env.HOUSE_KIT_HOME ?? join(homedir(), '.house-kit');
@@ -46,6 +51,14 @@ export function readEnrolment(): Promise<Enrolment | null> {
 
 export function writeEnrolment(enrolment: Enrolment): Promise<void> {
   return writeHome(ENROLMENT, enrolment);
+}
+
+export function readOwnAgent(): Promise<OwnAgent | null> {
+  return readHome<OwnAgent>(OWN_AGENT);
+}
+
+export function writeOwnAgent(ownAgent: OwnAgent): Promise<void> {
+  return writeHome(OWN_AGENT, ownAgent);
 }
 
 export async function readConfiguration(): Promise<Configuration> {

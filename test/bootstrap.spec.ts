@@ -377,3 +377,21 @@ it('names the container choice beside the workspace argument for the linux host 
   });
   expect(hosts.windows).not.toHaveProperty('container');
 });
+
+it.each([
+  ['the workspace root', '', '/agents/house'],
+  ['a directory beneath the workspace', '/notes/2026', '/agents/house/notes/2026'],
+  ['a directory outside the workspace', '/../elsewhere', '/agents/house'],
+  ['a sibling whose name starts like the workspace', '/../AgentsHouse2', '/agents/house'],
+])("runs the host's house from %s at its place in the container", async (_name, below, expected) => {
+  const home = await temporaryHome();
+  const workspace = join(home, 'AgentsHouse');
+  const here = join(workspace, below);
+  await mkdir(here, { recursive: true });
+  const ran = spawnSync('bash', ['-c', `set -u\nWORKSPACE="$0"\n${await steps('house_workdir')}house_workdir`, workspace], {
+    encoding: 'utf8',
+    cwd: here,
+  });
+
+  expect(ran).toMatchObject({ status: 0, stdout: expected, stderr: '' });
+});

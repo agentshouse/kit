@@ -4,13 +4,15 @@ import { hostname } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { post } from './api.ts';
-import { readEnrolment, writeEnrolment } from './home.ts';
+import { readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
+import { callHouse } from './mcp.ts';
 
 const DEFAULT_HOUSE = 'https://agents.house';
 
 interface Exchanged {
   credential: string;
   environment: string;
+  headless_credential?: string;
 }
 
 interface Callback {
@@ -88,17 +90,23 @@ export async function login(argv: string[]): Promise<void> {
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
   const environment =
     values.environment ?? (enrolled?.house === house ? enrolled.environment : undefined);
+  const ownAgent = await readOwnAgent();
+  const held =
+    ownAgent !== null &&
+    (await callHouse(house, ownAgent.credential, { method: 'tools/list', params: {} })).status !== 401;
   const verifier = randomBytes(32).toString('base64url');
   const started = {
     ...(environment === undefined
       ? { act: 'new_environment', label: hostname() }
       : { act: 'existing_environment', environment_id: environment }),
     code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+    ...(held ? {} : { headless: true }),
   };
 
   const exchange = async (code: string) => {
     const exchanged = await post<Exchanged>(house, '/kit/token', { code, code_verifier: verifier });
     await writeEnrolment({ house, environment: exchanged.environment, credential: exchanged.credential });
+    if (exchanged.headless_credential !== undefined) await writeOwnAgent({ credential: exchanged.headless_credential });
     process.stdout.write(`Environment ${exchanged.environment} is connected to ${house}.\n`);
   };
 

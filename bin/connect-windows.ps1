@@ -265,6 +265,13 @@ function Update-Clis {
   }
 }
 
+function Get-HouseWorkdir([string] $Here, [string] $Root) {
+  if ($Here -ieq $Root -or $Here.StartsWith("$Root\", [StringComparison]::OrdinalIgnoreCase)) {
+    return "/agents/house$($Here.Substring($Root.Length).Replace('\', '/'))"
+  }
+  '/agents/house'
+}
+
 function Start-Resident {
   $resident = @()
   if (-not $House.StartsWith('https://')) { $resident = @('--network', 'host') }
@@ -384,11 +391,7 @@ function Connect-Kit {
       $placed = @()
       $entry = @()
       if ($Forwarded -ceq 'house') {
-        $here = (Get-Location).ProviderPath.TrimEnd('\')
-        if ($here -ine $Workspace -and -not $here.StartsWith("$Workspace\", [StringComparison]::OrdinalIgnoreCase)) {
-          Stop-Bootstrap "the current directory is outside the workspace $Workspace"
-        }
-        $placed = @('--workdir', "/agents/house$($here.Substring($Workspace.Length).Replace('\', '/'))")
+        $placed = @('--workdir', (Get-HouseWorkdir (Get-Location).ProviderPath.TrimEnd('\') $Workspace))
         $entry = @('--entrypoint', 'house')
       }
       $terminal = @()

@@ -50,6 +50,18 @@ it("reaches House with each process's own conversation credential and never show
   expect(seen).not.toContain(conversationCredential('conversation-2'));
 });
 
+it("keeps a conversation's house on its bridge credential while Kit home holds the User's own agent's connection", async () => {
+  const hosted = await hostKit([{}], { prepare: (home) => writeFile(join(home, 'own-agent.json'), JSON.stringify({ credential: 'ahp_own' })) });
+  await opened(hosted);
+
+  directed(hosted, '@house search {"query":"one"}');
+
+  expect((await runs(hosted, 1)).map((ran) => ran.status)).toEqual([0]);
+  expect(hosted.mcp.map((received) => received.headers.authorization)).toEqual([
+    `Bearer ${conversationCredential('conversation-1')}`,
+  ]);
+});
+
 it("serves House's listed tools as the house verbs with House's help", async () => {
   const hosted = await hostKit();
   await opened(hosted);

@@ -8,7 +8,6 @@ import type { AddressInfo } from 'node:net';
 import { delimiter, join } from 'node:path';
 import { parse } from 'yaml';
 import { HouseRefusal, retryDelay, type House } from './api.ts';
-import { KIT_VERSION } from './clis.ts';
 import {
   changedPaths,
   type Caller,
@@ -18,6 +17,7 @@ import {
   type WorkingCopies,
 } from './copies.ts';
 import { kitHome, readEnrolment } from './home.ts';
+import { callHouse, mcpBody, UNREACHABLE, type Forwarded, type Message } from './mcp.ts';
 import { operationId, uuidOf } from './operation.ts';
 import { refusalOf, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
@@ -33,17 +33,6 @@ export interface Bridge {
   close(): void;
 }
 
-interface Message {
-  method: string;
-  params?: Record<string, unknown>;
-}
-
-interface Forwarded {
-  status: number;
-  text: string;
-}
-
-const MCP_PROTOCOL_VERSION = '2026-07-28';
 const MCP_REQUEST_BYTES = 4 * 1024 * 1024;
 const ATTACHMENTS = '/kit/attachments/upload';
 
@@ -70,8 +59,6 @@ function relay(request: IncomingMessage, response: ServerResponse, target: URL, 
   forwarded.on('error', () => response.destroy());
   request.pipe(forwarded);
 }
-
-const UNREACHABLE = 'House is unreachable; call again in a minute';
 
 function refusalIn(text: string, status: number): Refusal {
   return refusalOf(text) ?? { code: '', text: text === '' ? `House refused it with ${status}` : text, conflicts: [] };
@@ -135,37 +122,8 @@ export async function openBridge(
   );
 
   const closed = new AbortController();
-  const body = (message: Message, operation: string | null): string =>
-    JSON.stringify({
-      ...message,
-      params: {
-        ...message.params,
-        _meta: {
-          'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
-          'io.modelcontextprotocol/clientInfo': { name: '@agentshouse/kit', version: KIT_VERSION },
-          'io.modelcontextprotocol/clientCapabilities': {},
-          ...(operation === null ? {} : { 'agents.house/agent-operation': operation }),
-        },
-      },
-    });
-
-  const sent = async (message: Message, operation: string | null): Promise<Forwarded> => {
-    const tool = message.method === 'tools/call' ? String(message.params?.name) : null;
-    const answer = await fetch(new URL('/', origin), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${credential}`,
-        accept: 'application/json, text/event-stream',
-        'mcp-protocol-version': MCP_PROTOCOL_VERSION,
-        'mcp-method': message.method,
-        ...(tool === null ? {} : { 'mcp-name': tool }),
-      },
-      body: body(message, operation),
-      signal: closed.signal,
-    });
-    return { status: answer.status, text: await answer.text() };
-  };
+  const sent = (message: Message, operation: string | null): Promise<Forwarded> =>
+    callHouse(origin, credential, message, operation, closed.signal);
 
   const send = async (message: Message, operation: string | null): Promise<Forwarded> => {
     if (operation === null) return sent(message, null);
@@ -243,7 +201,7 @@ export async function openBridge(
     submit: async (operation, changes, held, retain) => {
       const inline = call('edit', { changes });
       let upload = held;
-      if (upload === undefined && Buffer.byteLength(body(inline, operation)) > MCP_REQUEST_BYTES) {
+      if (upload === undefined && Buffer.byteLength(mcpBody(inline, operation)) > MCP_REQUEST_BYTES) {
         const prepared = await staged(operation, changes);
         if ('refused' in prepared) return prepared;
         upload = prepared;
