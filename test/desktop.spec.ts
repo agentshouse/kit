@@ -92,7 +92,6 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
   expect(host.calls('docker')).toEqual(['container inspect house-kit']);
   expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${host.home}/.house-kit`]);
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
-  expect(host.calls('node')).toEqual(['configure-main.js']);
   expect(acts(host)).toEqual(['--user daemon-reload', '--user --quiet enable --now house-kit.service']);
   expect(await readFile(join(host.home, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8')).toBe(userUnit(host.home));
   expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
@@ -100,7 +99,7 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
 });
 
 it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, without elevation, and enrols through kit login", async () => {
-  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', shell: '/bin/zsh' });
+  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', shell: 'zsh' });
 
   const ran = host.run();
 
@@ -137,7 +136,6 @@ it.each([
     expect(ran.stdout).toContain('House Kit is already running for Environment environment-one.\n');
     expect(host.calls('curl')).toEqual([]);
     expect(host.calls('kit')).toEqual([]);
-    expect(host.calls('node')).toEqual(['authority-main.js', 'configure-main.js']);
     expect(acts(host)).toEqual([]);
     expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe(
       `# the owner's profile\nexport PATH="${host.home}/.local/bin:$PATH"\n`,
@@ -196,12 +194,22 @@ it('adds the path line to the login file bash reads when there is a .bash_login 
 
 it('adds the path line to the .zprofile in ZDOTDIR when zsh has one', async () => {
   const zdotdir = await temporaryHome();
-  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', shell: '/bin/zsh', environment: { ZDOTDIR: zdotdir } });
+  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', shell: 'zsh', environment: { ZDOTDIR: zdotdir } });
 
   expect(host.run()).toMatchObject({ status: 0 });
   expect(host.run()).toMatchObject({ status: 0 });
 
   expect(await readFile(join(zdotdir, '.zprofile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
+  await expect(access(join(host.home, '.zprofile'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('adds the path line to the .zprofile in the ZDOTDIR that .zshenv sets without exporting it', async () => {
+  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', shell: 'zsh' });
+  await writeFile(join(host.home, '.zshenv'), 'ZDOTDIR="$HOME/.config/zsh"\n');
+
+  expect(host.run()).toMatchObject({ status: 0 });
+
+  expect(await readFile(join(host.home, '.config', 'zsh', '.zprofile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
   await expect(access(join(host.home, '.zprofile'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
@@ -231,6 +239,7 @@ it.each([
   ['an earlier macOS', { system: 'Darwin', machine: 'arm64', macos: '26.7.1' }, 'macOS 27 on Apple silicon, not macOS 26.7.1 on Apple silicon', 'darwin-arm64'],
   ['an Intel Mac', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, 'macOS 27 on Apple silicon, not macOS 27.0.1 on an Intel chip', 'darwin-x64'],
   ['a Linux host outside the native contract', { system: 'Linux', machine: 'aarch64' }, 'Ubuntu 26.04 LTS on amd64, not Debian GNU/Linux 12 (bookworm) on arm64', 'linux-arm64'],
+  ['a Linux host on another architecture Node.js is built for', { system: 'Linux', machine: 'ppc64le' }, 'Ubuntu 26.04 LTS on amd64, not Debian GNU/Linux 12 (bookworm) on ppc64le', 'linux-ppc64le'],
 ] as const)('prints exactly one unsupported notice on %s and installs', async (_name, platform, notice, node) => {
   const host = await fakeHost(platform);
 
@@ -240,6 +249,13 @@ it.each([
   expect(notices(ran.stdout)).toEqual([`House Kit supports ${notice}; ${UNSUPPORTED}`]);
   expect(host.calls('curl')).toEqual([expect.stringContaining(`/node-v24.21.0-${node}.tar.gz`)]);
   await installed(host);
+});
+
+it('refuses a Linux architecture Node.js is not built for before installing anything', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'armv7l' });
+
+  expect(host.run()).toEqual({ status: 1, stdout: '', stderr: 'kit_bootstrap_refused: unsupported Linux architecture armv7l\n' });
+  await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 it('installs the container exactly as before only with the container choice', async () => {

@@ -488,7 +488,7 @@ restart_desktop_service() {
 add_path_line() {
   local profile="$HOME/.profile" line="export PATH=\"$NATIVE_BIN:\$PATH\""
   case "${SHELL##*/}" in
-    zsh) profile="${ZDOTDIR:-$HOME}/.zprofile" ;;
+    zsh) profile="$("$SHELL" -c 'printf "\n%s" "${ZDOTDIR:-$HOME}"' | tail -n 1)/.zprofile" ;;
     bash)
       for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
         [[ ! -f "$profile" ]] || break
@@ -699,6 +699,16 @@ case "$(uname -s)" in
         ARCH=arm64
         NODE_PLATFORM=linux-arm64
         NODE_SHA256=724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5
+        ;;
+      ppc64le)
+        ARCH=ppc64le
+        NODE_PLATFORM=linux-ppc64le
+        NODE_SHA256=51c5d53066ee92920b61783b03b06ecb99f3661160f7b15ca77e8474115a67bc
+        ;;
+      s390x)
+        ARCH=s390x
+        NODE_PLATFORM=linux-s390x
+        NODE_SHA256=5f2fa37422e0c75de35c1686fe51d78324f2c2a8fe2cc239a41d9c000a29d938
         ;;
       *) refuse "unsupported Linux architecture $(uname -m)" ;;
     esac

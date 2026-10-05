@@ -81,6 +81,7 @@ esac\n`,
   sudo: `${LOGGED}exit 1\n`,
   'xdg-open': LOGGED,
   open: LOGGED,
+  zsh: '[ ! -f "${ZDOTDIR:-$HOME}/.zshenv" ] || . "${ZDOTDIR:-$HOME}/.zshenv"\n[ "$1" != -c ] || eval "$2"\n',
 };
 
 const NODE = `printf 'node %s\\n' "\${1##*/}" >> "$FAKE/log"
@@ -118,7 +119,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   const bootstrap = await published();
   const environment = {
     HOME: home,
-    SHELL: platform.shell ?? '/bin/bash',
+    SHELL: platform.shell === 'zsh' ? join(bin, 'zsh') : (platform.shell ?? '/bin/bash'),
     PATH: `${bin}:/usr/bin:/bin`,
     FAKE: fake,
     FAKE_SYSTEM: platform.system,
