@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { temporaryHome } from './kit.ts';
@@ -38,16 +38,21 @@ export interface Ran {
 export interface Host {
   home: string;
   run(argv?: string[]): Ran;
+  terminal(argv: string[], typed: string): Ran;
   command(name: string, argv: string[]): Ran;
   calls(tool: string): string[];
-  mark(name: 'changed' | 'container'): Promise<void>;
+  mark(name: Mark): Promise<void>;
+  clear(name: Mark): Promise<void>;
   forget(): Promise<void>;
 }
 
+type Mark = 'changed' | 'container' | 'docker-down' | 'login-fails';
+
 const LOGGED = 'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n';
 
-const LOGIN = `printf 'Open this link and confirm: ${LOGIN_LINK}\\n'
-printf '{"house":"https://agents.house","environment":"environment-one","credential":"ahk_one"}' > "$1/credential.json"
+const LOGIN = `[ ! -e "$FAKE/login-fails" ] || exit 1
+printf 'Open this link and confirm: ${LOGIN_LINK}\\n'
+printf '{"house":"https://agents.house","environment":"%s","credential":"ahk_one"}' "\${2:-environment-one}" > "$1/credential.json"
 `;
 
 const TOOLS: Record<string, string> = {
@@ -67,15 +72,21 @@ esac\n`,
   bootstrap) [ ! -e "$FAKE/loaded" ] && touch "$FAKE/loaded" ;;
   bootout) rm "$FAKE/loaded" ;;
 esac\n`,
-  docker: `${LOGGED}case "$1" in
+  docker: `${LOGGED}[ ! -e "$FAKE/docker-down" ] || exit 1
+case "$1" in
   info) case "$3" in *OperatingSystem*) echo 'Docker Desktop' ;; *) echo linux/x86_64 ;; esac ;;
   container) [ -e "$FAKE/container" ] ;;
+  rm) rm "$FAKE/container" ;;
   run)
     for argument; do
-      case "$argument" in *dst=/kit-home) home=\${argument#*src=}; home=\${home%%\\",dst=*} ;; esac
+      case "$argument" in
+        *dst=/kit-home) home=\${argument#*src=}; home=\${home%%\\",dst=*} ;;
+        HOUSE_KIT_REPLACES=*) replacing=environment-two ;;
+        -d) touch "$FAKE/container" ;;
+      esac
       last=$argument
     done
-    if [ "$last" = login ]; then set -- "$home"; ${LOGIN.replaceAll('\n', '\n    ')}fi
+    if [ "$last" = login ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
     ;;
 esac\n`,
   sudo: `${LOGGED}exit 1\n`,
@@ -94,8 +105,8 @@ cp "$FAKE/kit" "$prefix/bin/kit"
 cp "$FAKE/kit" "$prefix/bin/house"
 `;
 
-const KIT = `printf '%s %s HOUSE_KIT_HOME=%s\\n' "\${0##*/}" "$*" "$HOUSE_KIT_HOME" >> "$FAKE/log"
-if [ "$1" = login ]; then set -- "$HOUSE_KIT_HOME"; ${LOGIN}fi
+const KIT = `printf '%s %s HOUSE_KIT_HOME=%s%s\\n' "\${0##*/}" "$*" "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+ HOUSE_KIT_REPLACES=$HOUSE_KIT_REPLACES}" >> "$FAKE/log"
+if [ "$1" = login ]; then set -- "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+environment-two}"; ${LOGIN}fi
 `;
 
 async function script(path: string, body: string): Promise<void> {
@@ -135,6 +146,11 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   return {
     home,
     run: (argv = []) => ran('bash', [bootstrap, ...argv]),
+    terminal: (argv, typed) => {
+      const line = ['bash', bootstrap, ...argv].map((word) => `'${word.replaceAll("'", `'\\''`)}'`).join(' ');
+      const finished = spawnSync('script', ['-qec', line, '/dev/null'], { encoding: 'utf8', env: environment, input: typed });
+      return { status: finished.status, stdout: finished.stdout.replaceAll('\r\n', '\n'), stderr: finished.stderr };
+    },
     command: (name, argv) => ran(join(home, '.local', 'bin', name), argv),
     calls: (tool) =>
       readFileSync(join(fake, 'log'), { encoding: 'utf8', flag: 'a+' })
@@ -142,6 +158,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
         .filter((line) => line.startsWith(`${tool} `))
         .map((line) => line.slice(tool.length + 1)),
     mark: (name) => writeFile(join(fake, name), ''),
+    clear: (name) => rm(join(fake, name), { force: true }),
     forget: () => writeFile(join(fake, 'log'), ''),
   };
 }
