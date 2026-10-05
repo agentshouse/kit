@@ -5,7 +5,7 @@ import {
   type ClientConnection,
   type InitializeResponse,
 } from '@agentclientprotocol/sdk';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
 import { CLIS, KIT_VERSION, adapterCommand, withoutProxy, type Job, type Notice } from './clis.ts';
@@ -84,14 +84,29 @@ export async function startAdapter(
   }
 }
 
+const LISTING_BYTES = 1 << 28;
+
+function listed(options: string): [number, number, string][] {
+  return execFileSync('ps', [options, '-o', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: LISTING_BYTES })
+    .split('\n')
+    .flatMap((line) => {
+      const fields = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(line);
+      return fields === null ? [] : [[Number(fields[1]), Number(fields[2]), fields[3]!] as [number, number, string]];
+    });
+}
+
 function parents(): Map<number, number[]> {
   const children = new Map<number, number[]>();
+  const adopt = (pid: number, parent: number) => children.set(parent, [...(children.get(parent) ?? []), pid]);
+  if (process.platform === 'darwin') {
+    for (const [pid, parent] of listed('-Aww')) adopt(pid, parent);
+    return children;
+  }
   for (const entry of readdirSync('/proc')) {
     if (!/^\d+$/.test(entry)) continue;
     try {
       const stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
-      const parent = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
-      children.set(parent, [...(children.get(parent) ?? []), Number(entry)]);
+      adopt(Number(entry), Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]));
     } catch {}
   }
   return children;
@@ -120,6 +135,11 @@ function killAll(pids: number[]): void {
 }
 
 function marked(marker: string): number[] {
+  if (process.platform === 'darwin') {
+    return listed('-AEww')
+      .filter(([, , command]) => ` ${command} `.includes(` ${marker} `))
+      .map(([pid]) => pid);
+  }
   return readdirSync('/proc')
     .filter((entry) => {
       try {

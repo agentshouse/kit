@@ -7,21 +7,13 @@ import { expect, it } from 'vitest';
 import { placeUserCli } from './cli.ts';
 import { startHouse } from './double.ts';
 import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
+import { published } from './host.ts';
 import { temporaryHome } from './kit.ts';
 
 const LINUX = fileURLToPath(new URL('../bin/connect-linux.sh', import.meta.url));
 const WINDOWS = fileURLToPath(new URL('../bin/connect-windows.ps1', import.meta.url));
 const CLIS_MAIN = fileURLToPath(new URL('../src/clis-main.ts', import.meta.url));
-
-async function published(): Promise<string> {
-  const home = await temporaryHome();
-  const script = join(home, 'connect-linux.sh');
-  await writeFile(
-    script,
-    (await readFile(LINUX, 'utf8')).replace('__IMAGE_DIGEST__', 'a'.repeat(64)).replace('__KIT_VERSION__', '0.2.1-alpha.1'),
-  );
-  return script;
-}
+const MANIFEST = fileURLToPath(new URL('../scripts/bootstrap-manifest.mjs', import.meta.url));
 
 function bootstrap(script: string, argv: string[]) {
   const ran = spawnSync('bash', [script, ...argv], { encoding: 'utf8', env: { ...process.env, HOME: '/nonexistent' } });
@@ -104,6 +96,9 @@ refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
 NATIVE_PREFIX="$0/opt/house-kit"
 NATIVE_STAGE="$0/stage"
 NATIVE_BIN="$0/bin"
+PLACING=(elevated)
+PLACING_OWNER=root:root
+PLACING_NOTE=''
 mkdir -p "$NATIVE_PREFIX" "$NATIVE_BIN" "$NATIVE_STAGE"
 printf old > "$NATIVE_PREFIX/release"
 ${placement}
@@ -145,7 +140,9 @@ ${/^DIRECT=.*$/m.exec(linux)![0]}
 NATIVE_PACKAGES=(ca-certificates curl git)
 VERSION=0.2.1-alpha.1
 NODE_VERSION=24.21.0
+NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
+CHECKSUM=(sha256sum)
 RELEASE=release
 ${steps.join('')}
 establish_native_packages
@@ -360,4 +357,23 @@ it('names each chosen CLI the login shell finds, even through a relative PATH en
   expect(house.requests.map((request) => [request.path, request.headers.authorization])).toEqual([
     ['/kit/agents/desired', 'Bearer ahk_held'],
   ]);
+});
+
+it('names the container choice beside the workspace argument for the linux host alone', async () => {
+  const root = await temporaryHome();
+  await mkdir(join(root, 'scripts'));
+  await mkdir(join(root, 'dist'));
+  await writeFile(join(root, 'package.json'), JSON.stringify({ version: '0.2.1-alpha.1' }));
+  await writeFile(join(root, 'scripts', 'bootstrap-manifest.mjs'), await readFile(MANIFEST, 'utf8'));
+
+  expect(spawnSync(process.execPath, [join(root, 'scripts', 'bootstrap-manifest.mjs')]).status).toBe(0);
+
+  const { hosts } = JSON.parse(await readFile(join(root, 'dist', 'bootstrap.json'), 'utf8')) as {
+    hosts: Record<string, Record<string, unknown>>;
+  };
+  expect(hosts.linux).toMatchObject({
+    workspace: { argument: '--workspace', quoting: 'posix' },
+    container: { argument: '--container' },
+  });
+  expect(hosts.windows).not.toHaveProperty('container');
 });

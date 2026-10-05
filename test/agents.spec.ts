@@ -45,11 +45,11 @@ async function adapterInstalls(): Promise<string[]> {
   return (await logged('npm.log')).map((line) => (JSON.parse(line) as string[]).at(-1)!);
 }
 
-async function start(prepare?: () => Promise<void>, node: string[] = []) {
+async function start(prepare?: () => Promise<void>, node: string[] = [], environment: Record<string, string> = {}) {
   const path = await fakeBin(home);
   await placeUserClis(home);
   await prepare?.();
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path, ...LOGIN_SHELL }, node);
+  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path, ...LOGIN_SHELL, ...environment }, node);
 }
 
 async function signIn(...kinds: string[]): Promise<void> {
@@ -94,6 +94,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state and
   expect(report).toEqual({
     os: expect.stringMatching(/\S/),
     kit_version: KIT_PACKAGE.version,
+    agent_base: '/agents/house',
     agents: [
       {
         kind: 'codex-acp',
@@ -291,4 +292,14 @@ it('reports the SHA256 fingerprint of the host SSH key when the host has one', a
   const report = await until(() => reports[0]);
 
   expect(report.ssh_host_key).toBe(HOST_KEY);
+});
+
+it('reports the native workspace root as its Agent base', async () => {
+  desired = [];
+  const workspace = await temporaryHome();
+  await start(undefined, [], { HOUSE_KIT_WORKSPACE: workspace });
+
+  const report = await until(() => reports[0]);
+
+  expect(report.agent_base).toBe(workspace);
 });
