@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { request, setGlobalProxyFromEnv } from 'node:http';
 import { basename, join } from 'node:path';
 import type { ToolResult } from './bridge.ts';
 import { kitHome, readEnrolment, readOwnAgent } from './home.ts';
-import { callHouse, UNREACHABLE, type Message } from './mcp.ts';
+import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 
 interface Tool {
@@ -76,9 +76,9 @@ async function direct(message: Message): Promise<string> {
   throw new Error(answer.status === 401 ? DISCONNECTED : (refusalOf(answer.text)?.text ?? `House answered ${answer.status}`));
 }
 
-async function mcp<T>(method: string, params: object): Promise<T> {
-  const message = { jsonrpc: '2.0', id: randomUUID(), method, params };
-  const answer = JSON.parse(socketPath === undefined ? await direct(message as Message) : await bridged('/', message)) as {
+async function mcp<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  const message = rpc(method, params);
+  const answer = JSON.parse(socketPath === undefined ? await direct(message) : await bridged('/', message)) as {
     result?: T;
     error?: { message: string };
   };

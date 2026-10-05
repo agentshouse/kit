@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { KIT_VERSION } from './clis.ts';
 
 export interface Message {
+  jsonrpc: '2.0';
+  id: string;
   method: string;
-  params?: Record<string, unknown>;
+  params: Record<string, unknown>;
 }
 
 export interface Forwarded {
@@ -13,6 +16,10 @@ export interface Forwarded {
 const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 export const UNREACHABLE = 'House is unreachable; call again in a minute';
+
+export function rpc(method: string, params: Record<string, unknown>): Message {
+  return { jsonrpc: '2.0', id: randomUUID(), method, params };
+}
 
 export function mcpBody(message: Message, operation: string | null): string {
   return JSON.stringify({
@@ -36,7 +43,7 @@ export async function callHouse(
   operation: string | null = null,
   signal?: AbortSignal,
 ): Promise<Forwarded> {
-  const tool = message.method === 'tools/call' ? String(message.params?.name) : null;
+  const tool = message.method === 'tools/call' ? String(message.params.name) : null;
   const answer = await fetch(new URL('/', origin), {
     method: 'POST',
     headers: {

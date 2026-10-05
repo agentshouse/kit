@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { post } from './api.ts';
 import { readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
-import { callHouse } from './mcp.ts';
+import { callHouse, rpc } from './mcp.ts';
 
 const DEFAULT_HOUSE = 'https://agents.house';
 
@@ -94,7 +94,7 @@ export async function login(argv: string[]): Promise<void> {
   const ownAgent = await readOwnAgent();
   const held =
     ownAgent !== null &&
-    (await callHouse(house, ownAgent.credential, { method: 'tools/list', params: {} })).status !== 401;
+    (await callHouse(house, ownAgent.credential, rpc('tools/list', {}))).status !== 401;
   const verifier = randomBytes(32).toString('base64url');
   const started = {
     ...(environment === undefined

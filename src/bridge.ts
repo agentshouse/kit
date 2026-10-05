@@ -17,7 +17,7 @@ import {
   type WorkingCopies,
 } from './copies.ts';
 import { kitHome, readEnrolment } from './home.ts';
-import { callHouse, mcpBody, UNREACHABLE, type Forwarded, type Message } from './mcp.ts';
+import { callHouse, mcpBody, rpc, UNREACHABLE, type Forwarded, type Message } from './mcp.ts';
 import { operationId, uuidOf } from './operation.ts';
 import { refusalOf, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
@@ -138,8 +138,7 @@ export async function openBridge(
     }
   };
 
-  const call = (name: string, args: Record<string, unknown>): Message =>
-    ({ jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: args } }) as Message;
+  const call = (name: string, args: Record<string, unknown>): Message => rpc('tools/call', { name, arguments: args });
 
   const staged = async (operation: string, changes: Edit[]): Promise<Upload | { refused: Refusal }> => {
     const bytes = Buffer.from(JSON.stringify({ changes }));
@@ -184,7 +183,7 @@ export async function openBridge(
   const forward = async (path: string, text: string): Promise<Forwarded> => {
     if (path === '/') {
       const message = JSON.parse(text) as Message;
-      const tool = message.method === 'tools/call' ? String(message.params?.name) : null;
+      const tool = message.method === 'tools/call' ? String(message.params.name) : null;
       return send(message, tool !== null && (await writes(tool)) ? operationId() : null);
     }
     const answer = await fetch(new URL(path, origin), {
@@ -273,7 +272,7 @@ export async function openBridge(
     tool: async (name, args) => {
       const forwarded = await forward(
         '/',
-        JSON.stringify({ jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: args } }),
+        JSON.stringify(call(name, args)),
       );
       if (forwarded.status !== 200) throw new Error(`House refused ${name} with ${forwarded.status}: ${forwarded.text}`);
       const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
