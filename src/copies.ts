@@ -13,7 +13,7 @@ import {
   run,
   succeeded,
   tree,
-  WORKING_COPIES,
+  workingCopies,
 } from './git.ts';
 import { kitHome } from './home.ts';
 import { operationId } from './operation.ts';
@@ -540,7 +540,7 @@ export class WorkingCopies {
       logged(`House serves nothing of ${rootOf({ private: scope.private, room_handle: scope.handle })} to copy`);
       return;
     }
-    const repository = scope.private ? join(WORKING_COPIES, 'private') : join(WORKING_COPIES, 'rooms', read.anchor);
+    const repository = scope.private ? join(workingCopies(), 'private') : join(workingCopies(), 'rooms', read.anchor);
     if (await exists(repository)) {
       logged(`${repository} already exists and House Kit leaves it as it is`);
       return;

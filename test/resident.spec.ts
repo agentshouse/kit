@@ -9,6 +9,7 @@ async function enrol(house: House, home: string, credential: string) {
     join(home, 'credential.json'),
     JSON.stringify({ house: house.origin, environment: 'environment-one', credential }),
   );
+  await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false }));
 }
 
 it('holds the control stream with its credential and opens a new socket after every close', async () => {

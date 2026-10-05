@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { killTree, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_VERSION, cliCommand, install, run, type Installed } from './clis.ts';
-import { kitHome } from './home.ts';
+import { agentBase, kitHome } from './home.ts';
 
 export interface Route {
   agent_id: string;
@@ -165,6 +165,7 @@ export class Agents {
     const body = {
       os: await operatingSystem(),
       kit_version: KIT_VERSION,
+      agent_base: agentBase(),
       agents,
       ...(hostKey === null ? {} : { ssh_host_key: hostKey }),
     };

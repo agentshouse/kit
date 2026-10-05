@@ -1,8 +1,12 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { withoutProxy } from './clis.ts';
+import { agentBase } from './home.ts';
 
-export const WORKING_COPIES = '/agents/house/working-copies';
+export function workingCopies(): string {
+  return join(agentBase(), 'working-copies');
+}
 export const HOUSE_REF = 'refs/house/received';
 
 const COMMITTER = 'House Kit <house-kit@localhost>';

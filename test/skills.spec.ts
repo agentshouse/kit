@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import { conversationCredential, hostKit, lastInput, opened, type Hosted, type Hosting, type McpCall, type ToolResult } from './environment.ts';
 import { temporaryHome } from './kit.ts';
@@ -15,6 +15,7 @@ const { version: KIT_VERSION } = JSON.parse(await readFile(new URL('../package.j
 const LEFT_OUT = ['setup-matt-pocock-skills', 'triage', 'wizard'];
 const PROVENANCE = /^<!-- Vendored from mattpocock\/skills at commit ([0-9a-f]{40}) \(/m;
 const RECORD = 'skill-set.json';
+const SERVER_WORKSPACE = '/agents/house';
 const DOCUMENT = '/private/library/how-we-work.md';
 
 async function tree(root: string): Promise<string[]> {
@@ -64,12 +65,16 @@ async function restart(hosted: Hosted, hosting: Hosting): Promise<Hosted> {
   return hostKit([{}], { ...hosting, home: hosted.home });
 }
 
-function skills(home: string, name = ''): string {
-  return join(home, '.agents', 'skills', name);
+function native(workspace: string, hosting: Hosting = {}): Hosting {
+  return { ...hosting, environment: { HOUSE_KIT_WORKSPACE: workspace } };
 }
 
-function claude(home: string, name = ''): string {
-  return join(home, '.claude', 'skills', name);
+function skills(root: string, name = ''): string {
+  return join(root, '.agents', 'skills', name);
+}
+
+function claude(root: string, name = ''): string {
+  return join(root, '.claude', 'skills', name);
 }
 
 function edits(hosted: Hosted): McpCall[] {
@@ -138,135 +143,182 @@ it('vendors every skill the pinned upstream plugin manifest names but three, byt
   }
 });
 
-it('installs every skill for the home it launches agent CLIs with, with a relative Claude link resolving to it', async () => {
+it('installs every skill at the native workspace root with a relative Claude link resolving to it, and none in the user-level directories', async () => {
+  const workspace = await temporaryHome();
+  const hosted = await hostKit([{}], native(workspace, { skills: true }));
+
+  const vendored = await names();
+  expect((await readdir(skills(workspace))).sort()).toEqual(vendored);
+  expect((await readdir(claude(workspace))).sort()).toEqual(vendored);
+  for (const name of vendored) {
+    expect(await readlink(claude(workspace, name))).toBe(join('..', '..', '.agents', 'skills', name));
+    expect(await realpath(claude(workspace, name))).toBe(await realpath(skills(workspace, name)));
+    expect(await tree(skills(workspace, name))).toEqual(await tree(join(SKILL_SET, name)));
+    for (const file of await tree(join(SKILL_SET, name))) {
+      expect(await readFile(join(skills(workspace, name), file), 'utf8')).toBe(await readFile(join(SKILL_SET, name, file), 'utf8'));
+    }
+  }
+  await absent(join(hosted.home, '.agents'));
+  await absent(join(hosted.home, '.claude'));
+  expect(await recorded(hosted.home)).toEqual({ version: KIT_VERSION, workspace, names: vendored });
+});
+
+it('installs every skill at /agents/house in the container and on a server', async () => {
+  onTestFinished(() => Promise.all([skills(SERVER_WORKSPACE), claude(SERVER_WORKSPACE)].map((path) => rm(path, { recursive: true, force: true }))));
   const hosted = await hostKit([{}], { skills: true });
 
   const vendored = await names();
-  expect((await readdir(skills(hosted.home))).sort()).toEqual(vendored);
-  expect((await readdir(claude(hosted.home))).sort()).toEqual(vendored);
+  expect((await readdir(skills(SERVER_WORKSPACE))).sort()).toEqual(vendored);
   for (const name of vendored) {
-    expect(await readlink(claude(hosted.home, name))).toBe(join('..', '..', '.agents', 'skills', name));
-    expect(await realpath(claude(hosted.home, name))).toBe(await realpath(skills(hosted.home, name)));
-    expect(await tree(skills(hosted.home, name))).toEqual(await tree(join(SKILL_SET, name)));
-    for (const file of await tree(join(SKILL_SET, name))) {
-      expect(await readFile(join(skills(hosted.home, name), file), 'utf8')).toBe(await readFile(join(SKILL_SET, name, file), 'utf8'));
-    }
+    expect(await readlink(claude(SERVER_WORKSPACE, name))).toBe(join('..', '..', '.agents', 'skills', name));
   }
-  expect(await recorded(hosted.home)).toEqual({ version: KIT_VERSION, names: vendored });
+  await absent(join(hosted.home, '.agents'));
+  expect(await recorded(hosted.home)).toEqual({ version: KIT_VERSION, workspace: SERVER_WORKSPACE, names: vendored });
+});
+
+it('moves the skills an earlier Kit recorded in the user-level directories to the workspace root and leaves the unrecorded ones there', async () => {
+  const home = await temporaryHome();
+  const workspace = await temporaryHome();
+  const vendored = await names();
+  for (const name of vendored) {
+    await mkdir(skills(home, name), { recursive: true });
+    await writeFile(join(skills(home, name), 'SKILL.md'), 'an earlier release\n');
+    await mkdir(claude(home), { recursive: true });
+    await symlink(join('..', '..', '.agents', 'skills', name), claude(home, name));
+  }
+  await mkdir(skills(home, 'my-skill'));
+  await mkdir(join(home, 'elsewhere'));
+  await symlink(join(home, 'elsewhere'), claude(home, 'my-link'));
+  await writeFile(join(home, RECORD), JSON.stringify({ version: '0.2.1-alpha.0', names: vendored }));
+
+  await hostKit([{}], native(workspace, { home, skills: true }));
+
+  expect(await readdir(skills(home))).toEqual(['my-skill']);
+  expect(await readdir(claude(home))).toEqual(['my-link']);
+  expect((await readdir(skills(workspace))).sort()).toEqual(vendored);
+  expect(await readFile(join(skills(workspace, 'tdd'), 'SKILL.md'), 'utf8')).toBe(await readFile(join(SKILL_SET, 'tdd', 'SKILL.md'), 'utf8'));
+  expect(await recorded(home)).toEqual({ version: KIT_VERSION, workspace, names: vendored });
 });
 
 it('links each skill so it resolves when the Claude skill directory is redirected elsewhere', async () => {
-  const home = await temporaryHome();
-  await mkdir(join(home, 'claude-skills'));
-  await mkdir(join(home, '.claude'));
-  await symlink(join(home, 'claude-skills'), claude(home));
+  const workspace = await temporaryHome();
+  await mkdir(join(workspace, 'claude-skills'));
+  await mkdir(join(workspace, '.claude'));
+  await symlink(join(workspace, 'claude-skills'), claude(workspace));
 
-  await hostKit([{}], { home, skills: true });
+  await hostKit([{}], native(workspace, { skills: true }));
 
   for (const name of await names()) {
-    expect(await readlink(claude(home, name))).toBe(join('..', '.agents', 'skills', name));
-    expect(await realpath(claude(home, name))).toBe(await realpath(skills(home, name)));
+    expect(await readlink(claude(workspace, name))).toBe(join('..', '.agents', 'skills', name));
+    expect(await realpath(claude(workspace, name))).toBe(await realpath(skills(workspace, name)));
   }
 });
 
 it('makes no per-skill link when the Claude skill directory already resolves to the shared one', async () => {
-  const home = await temporaryHome();
-  await mkdir(skills(home), { recursive: true });
-  await mkdir(join(home, '.claude'));
-  await symlink(join('..', '.agents', 'skills'), claude(home));
+  const workspace = await temporaryHome();
+  await mkdir(skills(workspace), { recursive: true });
+  await mkdir(join(workspace, '.claude'));
+  await symlink(join('..', '.agents', 'skills'), claude(workspace));
 
-  await hostKit([{}], { home, skills: true });
+  const hosted = await hostKit([{}], native(workspace, { skills: true }));
 
-  expect(await readlink(claude(home))).toBe(join('..', '.agents', 'skills'));
+  expect(await readlink(claude(workspace))).toBe(join('..', '.agents', 'skills'));
   for (const name of await names()) {
-    expect((await lstat(skills(home, name))).isDirectory()).toBe(true);
+    expect((await lstat(skills(workspace, name))).isDirectory()).toBe(true);
   }
-  expect(await recorded(home)).toEqual({ version: KIT_VERSION, names: await names() });
+  expect(await recorded(hosted.home)).toEqual({ version: KIT_VERSION, workspace, names: await names() });
 });
 
 it('leaves a skill directory or link the record does not name untouched and installs nothing under its name', async () => {
-  const home = await temporaryHome();
-  await mkdir(skills(home, 'tdd'), { recursive: true });
-  await writeFile(join(skills(home, 'tdd'), 'SKILL.md'), "the owner's tdd\n");
-  await mkdir(claude(home), { recursive: true });
-  await mkdir(join(home, 'elsewhere'));
-  await symlink(join(home, 'elsewhere'), claude(home, 'grilling'));
+  const workspace = await temporaryHome();
+  await mkdir(skills(workspace, 'tdd'), { recursive: true });
+  await writeFile(join(skills(workspace, 'tdd'), 'SKILL.md'), "the owner's tdd\n");
+  await mkdir(claude(workspace), { recursive: true });
+  await mkdir(join(workspace, 'elsewhere'));
+  await symlink(join(workspace, 'elsewhere'), claude(workspace, 'grilling'));
 
-  await hostKit([{}], { home, skills: true });
+  const hosted = await hostKit([{}], native(workspace, { skills: true }));
 
-  expect(await readFile(join(skills(home, 'tdd'), 'SKILL.md'), 'utf8')).toBe("the owner's tdd\n");
-  await absent(claude(home, 'tdd'));
-  expect(await readlink(claude(home, 'grilling'))).toBe(join(home, 'elsewhere'));
-  await absent(skills(home, 'grilling'));
-  expect(await recorded(home)).toEqual({
+  expect(await readFile(join(skills(workspace, 'tdd'), 'SKILL.md'), 'utf8')).toBe("the owner's tdd\n");
+  await absent(claude(workspace, 'tdd'));
+  expect(await readlink(claude(workspace, 'grilling'))).toBe(join(workspace, 'elsewhere'));
+  await absent(skills(workspace, 'grilling'));
+  expect(await recorded(hosted.home)).toEqual({
     version: KIT_VERSION,
+    workspace,
     names: (await names()).filter((name) => name !== 'tdd' && name !== 'grilling'),
   });
 });
 
 it('keeps an installed skill as the owner edited it while the Kit version is the same', async () => {
-  const hosted = await hostKit([{}], { skills: true });
-  await writeFile(join(skills(hosted.home, 'tdd'), 'SKILL.md'), "the owner's own tdd\n");
+  const workspace = await temporaryHome();
+  const hosted = await hostKit([{}], native(workspace, { skills: true }));
+  await writeFile(join(skills(workspace, 'tdd'), 'SKILL.md'), "the owner's own tdd\n");
 
-  await restart(hosted, { skills: true });
+  await restart(hosted, native(workspace, { skills: true }));
 
-  expect(await readFile(join(skills(hosted.home, 'tdd'), 'SKILL.md'), 'utf8')).toBe("the owner's own tdd\n");
+  expect(await readFile(join(skills(workspace, 'tdd'), 'SKILL.md'), 'utf8')).toBe("the owner's own tdd\n");
 });
 
 it('replaces only the names an earlier Kit version recorded when a new version starts', async () => {
-  const hosted = await hostKit([{}], { skills: true });
-  const home = hosted.home;
-  await writeFile(join(skills(home, 'tdd'), 'SKILL.md'), "the owner's own tdd\n");
-  await writeFile(join(skills(home, 'tdd'), 'notes.md'), 'an added file\n');
-  await rm(claude(home, 'grilling'));
-  await mkdir(skills(home, 'retired'));
-  await symlink(join('..', '..', '.agents', 'skills', 'retired'), claude(home, 'retired'));
-  await mkdir(skills(home, 'my-tdd'));
-  await writeFile(join(skills(home, 'my-tdd'), 'SKILL.md'), 'my copy\n');
-  await writeFile(join(home, RECORD), JSON.stringify({ version: '0.2.1-alpha.0', names: [...(await names()), 'retired'] }));
+  const workspace = await temporaryHome();
+  const hosted = await hostKit([{}], native(workspace, { skills: true }));
+  await writeFile(join(skills(workspace, 'tdd'), 'SKILL.md'), "the owner's own tdd\n");
+  await writeFile(join(skills(workspace, 'tdd'), 'notes.md'), 'an added file\n');
+  await rm(claude(workspace, 'grilling'));
+  await mkdir(skills(workspace, 'retired'));
+  await symlink(join('..', '..', '.agents', 'skills', 'retired'), claude(workspace, 'retired'));
+  await mkdir(skills(workspace, 'my-tdd'));
+  await writeFile(join(skills(workspace, 'my-tdd'), 'SKILL.md'), 'my copy\n');
+  await writeFile(
+    join(hosted.home, RECORD),
+    JSON.stringify({ version: '0.2.1-alpha.0', workspace, names: [...(await names()), 'retired'] }),
+  );
 
-  await restart(hosted, { skills: true });
+  await restart(hosted, native(workspace, { skills: true }));
 
-  expect(await readFile(join(skills(home, 'tdd'), 'SKILL.md'), 'utf8')).toBe(await readFile(join(SKILL_SET, 'tdd', 'SKILL.md'), 'utf8'));
-  await absent(join(skills(home, 'tdd'), 'notes.md'));
-  expect(await readlink(claude(home, 'grilling'))).toBe(join('..', '..', '.agents', 'skills', 'grilling'));
-  await absent(skills(home, 'retired'));
-  await absent(claude(home, 'retired'));
-  expect(await readFile(join(skills(home, 'my-tdd'), 'SKILL.md'), 'utf8')).toBe('my copy\n');
-  expect(await recorded(home)).toEqual({ version: KIT_VERSION, names: await names() });
+  expect(await readFile(join(skills(workspace, 'tdd'), 'SKILL.md'), 'utf8')).toBe(await readFile(join(SKILL_SET, 'tdd', 'SKILL.md'), 'utf8'));
+  await absent(join(skills(workspace, 'tdd'), 'notes.md'));
+  expect(await readlink(claude(workspace, 'grilling'))).toBe(join('..', '..', '.agents', 'skills', 'grilling'));
+  await absent(skills(workspace, 'retired'));
+  await absent(claude(workspace, 'retired'));
+  expect(await readFile(join(skills(workspace, 'my-tdd'), 'SKILL.md'), 'utf8')).toBe('my copy\n');
+  expect(await recorded(hosted.home)).toEqual({ version: KIT_VERSION, workspace, names: await names() });
 });
 
-it('removes every recorded skill and the record and installs nothing when the Skill set is declined', async () => {
-  const hosted = await hostKit([{}], { skills: true });
-  await mkdir(skills(hosted.home, 'my-skill'));
-  await writeFile(claude(hosted.home, 'my-note'), "the owner's\n");
+it('removes every recorded skill from the workspace root and the record and installs nothing when the Skill set is declined', async () => {
+  const workspace = await temporaryHome();
+  const hosted = await hostKit([{}], native(workspace, { skills: true }));
+  await mkdir(skills(workspace, 'my-skill'));
+  await writeFile(claude(workspace, 'my-note'), "the owner's\n");
 
-  await restart(hosted, { skills: false });
+  await restart(hosted, native(workspace, { skills: false }));
 
-  expect(await readdir(skills(hosted.home))).toEqual(['my-skill']);
-  expect(await readdir(claude(hosted.home))).toEqual(['my-note']);
+  expect(await readdir(skills(workspace))).toEqual(['my-skill']);
+  expect(await readdir(claude(workspace))).toEqual(['my-note']);
   expect(await recorded(hosted.home)).toBeNull();
 });
 
 it('keeps the bootstrap choice in Kit configuration, says when a run changed it, and the next start honors it', async () => {
   const home = await temporaryHome();
+  const workspace = await temporaryHome();
 
   expect(configure(home, [])).toEqual({ status: 0, stdout: '', stderr: '' });
-  let hosted = await hostKit([{}], { home });
-  expect((await readdir(skills(home))).sort()).toEqual(await names());
+  let hosted = await hostKit([{}], native(workspace, { home }));
+  expect((await readdir(skills(workspace))).sort()).toEqual(await names());
 
   expect(configure(home, ['--no-skills'])).toEqual({ status: 0, stdout: 'changed\n', stderr: '' });
   expect(configure(home, ['--no-skills'])).toEqual({ status: 0, stdout: '', stderr: '' });
-  hosted = await restart(hosted, {});
-  expect(await readdir(skills(home))).toEqual([]);
+  hosted = await restart(hosted, native(workspace));
+  expect(await readdir(skills(workspace))).toEqual([]);
 
   expect(configure(home, [])).toEqual({ status: 0, stdout: 'changed\n', stderr: '' });
-  await restart(hosted, {});
-  expect((await readdir(skills(home))).sort()).toEqual(await names());
+  await restart(hosted, native(workspace));
+  expect((await readdir(skills(workspace))).sort()).toEqual(await names());
 });
 
 it('creates the How-we-work document over the first conversation bridge after the Skill set is installed, once', async () => {
-  const hosted = await hostKit([{}], { skills: true });
+  const hosted = await hostKit([{}], native(await temporaryHome(), { skills: true }));
 
   await opened(hosted, 'conversation-1');
   await opened(hosted, 'conversation-2');
@@ -288,7 +340,7 @@ it('creates the How-we-work document over the first conversation bridge after th
 it.each(['operation_denied', 'room_not_found'])(
   'leaves the document to the next conversation when %s refuses the Profile ceiling',
   async (code) => {
-    const hosted = await hostKit([{}], { skills: true });
+    const hosted = await hostKit([{}], native(await temporaryHome(), { skills: true }));
     hosted.tools.edit = (_args, request) =>
       request.headers.authorization === `Bearer ${conversationCredential('conversation-1')}`
         ? refused(code)
@@ -304,7 +356,7 @@ it.each(['operation_denied', 'room_not_found'])(
 );
 
 it('keeps a present document as it is and never creates it again', async () => {
-  const hosted = await hostKit([{}], { skills: true });
+  const hosted = await hostKit([{}], native(await temporaryHome(), { skills: true }));
   hosted.tools.edit = () => conflicted('path_exists');
 
   await opened(hosted, 'conversation-1');
@@ -314,7 +366,7 @@ it('keeps a present document as it is and never creates it again', async () => {
 });
 
 it("refuses to open a conversation with House's answer when another refusal stops the document, and tries again at the next", async () => {
-  const hosted = await hostKit([{}], { skills: true });
+  const hosted = await hostKit([{}], native(await temporaryHome(), { skills: true }));
   hosted.tools.edit = () => refused('invalid_library');
 
   hosted.input({ kind: 'open', conversation_id: 'conversation-1' });
@@ -327,7 +379,7 @@ it("refuses to open a conversation with House's answer when another refusal stop
 });
 
 it('refuses to open a conversation while another path blocks the absent document, and creates it once the path is free', async () => {
-  const hosted = await hostKit([{}], { skills: true });
+  const hosted = await hostKit([{}], native(await temporaryHome(), { skills: true }));
   hosted.tools.edit = () => conflicted('ancestor_conflict');
 
   hosted.input({ kind: 'open', conversation_id: 'conversation-1' });
@@ -340,19 +392,20 @@ it('refuses to open a conversation while another path blocks the absent document
 });
 
 it('creates no document without an installed Skill set, nor again after a release, a decline or a later acceptance', async () => {
-  let hosted = await hostKit([{}], { skills: false });
+  const workspace = await temporaryHome();
+  let hosted = await hostKit([{}], native(workspace, { skills: false }));
   await opened(hosted, 'conversation-1');
   expect(edits(hosted)).toEqual([]);
 
-  hosted = await restart(hosted, { skills: true });
+  hosted = await restart(hosted, native(workspace, { skills: true }));
   await opened(hosted, 'conversation-2');
   expect(edits(hosted)).toHaveLength(1);
 
-  await writeFile(join(hosted.home, RECORD), JSON.stringify({ version: '0.2.1-alpha.0', names: await names() }));
+  await writeFile(join(hosted.home, RECORD), JSON.stringify({ version: '0.2.1-alpha.0', workspace, names: await names() }));
   for (const [index, accepted] of [true, false, true].entries()) {
-    hosted = await restart(hosted, { skills: accepted });
+    hosted = await restart(hosted, native(workspace, { skills: accepted }));
     await opened(hosted, `conversation-${index + 3}`);
     expect(edits(hosted)).toEqual([]);
   }
-  expect((await readdir(skills(hosted.home))).sort()).toEqual(await names());
+  expect((await readdir(skills(workspace))).sort()).toEqual(await names());
 });

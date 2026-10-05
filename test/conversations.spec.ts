@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
-import { placeHostKey } from './kit.ts';
+import { placeHostKey, temporaryHome } from './kit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -192,6 +192,29 @@ it('creates an absent default launch directory before it opens the session there
   expect((await stat(directory)).isDirectory()).toBe(true);
   const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
   expect(opened.params).toMatchObject({ cwd: directory });
+});
+
+it('creates an absent default launch directory beneath the native workspace root and none under /agents/house', async () => {
+  const workspace = await temporaryHome();
+  const [agentId, serverAgentId] = [`agent-${randomUUID()}`, `agent-${randomUUID()}`];
+  const hosted = await hostKit(
+    [
+      { agent_id: agentId, working_directory: join(workspace, agentId) },
+      { agent_id: serverAgentId, working_directory: `/agents/house/${serverAgentId}` },
+    ],
+    { environment: { HOUSE_KIT_WORKSPACE: workspace } },
+  );
+
+  hosted.input({ kind: 'open', agent_id: agentId });
+  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  hosted.input({ kind: 'open', agent_id: serverAgentId, conversation_id: 'conversation-2' });
+  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.any(String) });
+
+  expect((await stat(join(workspace, agentId))).isDirectory()).toBe(true);
+  await expect(stat(`/agents/house/${serverAgentId}`)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new').map((entry) => entry.params)).toEqual([
+    expect.objectContaining({ cwd: join(workspace, agentId) }),
+  ]);
 });
 
 it('resumes the stored provider session for a message with no process and prompts it', async () => {

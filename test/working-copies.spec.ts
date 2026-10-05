@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, type Hosted } from './environment.ts';
+import { temporaryHome } from './kit.ts';
 import { COPIES, commitAll, git, house, serveRooms, type Room } from './rooms.ts';
 
 const PRIVATE = join(COPIES, 'private');
@@ -71,6 +72,21 @@ it('keeps each selected Room as its own Git repository with its readable tree, t
   expect(ignored).toEqual(expect.arrayContaining(['/capture', '/collaboration', '/library/archive/old.md']));
   expect(searched).toEqual(expect.arrayContaining(['!/capture', '!/collaboration', '!/library/archive/old.md', '!_provenance']));
   expect(existsSync(PRIVATE)).toBe(false);
+});
+
+it('keeps the selected Rooms beneath the native workspace root and nothing under /agents/house', async () => {
+  const workspace = await temporaryHome();
+  const hosted = await hostKit([{}], { environment: { HOUSE_KIT_WORKSPACE: workspace } });
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  notes.put('library/plan.md', 'plan\n');
+
+  await rooms.select([notes]);
+
+  const repository = join(workspace, 'working-copies', 'rooms', notes.ref);
+  await until(() => existsSync(join(repository, 'library', 'plan.md')));
+  expect(git(repository, 'ls-files').trim()).toBe('library/plan.md');
+  expect(existsSync(notes.repository)).toBe(false);
 });
 
 it('copies /private only through its own choice', async () => {
