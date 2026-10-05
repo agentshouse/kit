@@ -7,6 +7,7 @@ import { agentBase } from './home.ts';
 export function workingCopies(): string {
   return join(agentBase(), 'working-copies');
 }
+
 export const HOUSE_REF = 'refs/house/received';
 
 const COMMITTER = 'House Kit <house-kit@localhost>';

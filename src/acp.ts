@@ -82,10 +82,10 @@ export async function startAdapter(
   }
 }
 
-const LISTED = 1 << 28;
+const LISTING_BYTES = 1 << 28;
 
 function listed(options: string): [number, number, string][] {
-  return execFileSync('ps', [options, '-o', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: LISTED })
+  return execFileSync('ps', [options, '-o', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: LISTING_BYTES })
     .split('\n')
     .flatMap((line) => {
       const fields = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(line);
