@@ -294,31 +294,6 @@ it('installs the container exactly as before only with the container choice', as
   await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('leaves a computer whose Kit runs in the container to the container choice', async () => {
-  const host = await fakeHost({ system: 'Darwin', machine: 'arm64' });
-  await host.mark('container');
-
-  expect(host.run()).toEqual({
-    status: 1,
-    stdout: '',
-    stderr: 'kit_bootstrap_refused: House Kit runs in the container house-kit on this computer; rerun this bootstrap with --container\n',
-  });
-  await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
-});
-
-it('leaves a computer whose Kit runs natively to the native placement', async () => {
-  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
-  expect(host.run()).toMatchObject({ status: 0 });
-  await host.forget();
-
-  expect(host.run(['--container'])).toEqual({
-    status: 1,
-    stdout: '',
-    stderr: 'kit_bootstrap_refused: House Kit runs natively on this computer; rerun this bootstrap without --container\n',
-  });
-  expect(host.calls('docker')).toEqual([]);
-});
-
 it('forwards kit and house only into the container', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
 

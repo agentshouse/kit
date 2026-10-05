@@ -42,6 +42,7 @@ NODE_SHA256=6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff
 CHECKSUM=(sha256sum)
 SERVER_PREFIX=/opt/house-kit
 DESKTOP_PREFIX="$HOME/.local/share/house-kit"
+DESKTOP_BIN="$HOME/.local/bin"
 NATIVE_PREFIX="$SERVER_PREFIX"
 NATIVE_PACKAGE="$SERVER_PREFIX/lib/node_modules/@agentshouse/kit/dist"
 IMAGE_PACKAGE=/usr/local/lib/node_modules/@agentshouse/kit/dist
@@ -57,6 +58,7 @@ SERVICE=house-kit
 LAUNCH_AGENT="$HOME/Library/LaunchAgents/$SERVICE.plist"
 USER_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE.service"
 REDEFINED=0
+REPLACES=''
 RELEASE="@agentshouse/kit@$VERSION node@$NODE_VERSION"
 
 refuse() {
@@ -75,7 +77,7 @@ enrolled() {
 
 login_kit() {
   if [[ " $* " == *' --manual '* ]]; then
-    "${LOGIN_TYPED[@]}" "$@"
+    "${LOGIN_TYPED[@]}" "$@" || exit 1
   else
     command -v "$OPENER" >/dev/null || refuse 'no host browser opener; rerun with --manual'
     "${LOGIN_OPENED[@]}" "$@" | while IFS= read -r line; do
@@ -85,7 +87,7 @@ login_kit() {
       else
         printf '%s\n' "$line"
       fi
-    done
+    done || exit 1
   fi
   [[ -f "$KIT_HOME/credential.json" ]] || refuse 'kit login connected no Environment'
 }
@@ -168,7 +170,6 @@ install_docker_desktop() {
 }
 
 establish_docker_desktop() {
-  PATH="$PATH:$DOCKER_APP/Contents/Resources/bin"
   docker_answers && return
   if ((FORWARDING)); then
     [[ -d "$DOCKER_APP" ]] || refuse "House Kit is not installed; run this command without $FORWARDED and its arguments first"
@@ -505,20 +506,73 @@ add_path_line() {
   printf 'Added %s to the path in %s; new terminals find kit and house.\n' "$NATIVE_BIN" "$profile"
 }
 
+held_placement() {
+  if [[ -f "$KIT_HOME/placement" ]]; then
+    cat "$KIT_HOME/placement"
+  elif [[ -e "$DESKTOP_PREFIX" ]]; then
+    printf 'native\n'
+  else
+    printf 'container\n'
+  fi
+}
+
+record_placement() {
+  printf '%s\n' "$1" > "$KIT_HOME/placement" || refuse "$KIT_HOME/placement could not be written"
+}
+
+placed() {
+  if [[ "$1" == native ]]; then printf natively; else printf 'in the container'; fi
+}
+
+take_placement() {
+  local held environment answer=''
+  [[ -f "$KIT_HOME/credential.json" ]] || return 0
+  held=$(held_placement)
+  [[ "$held" != "$1" ]] || return 0
+  environment=$(enrolled environment)
+  if [[ "$held" == container ]] && type -P docker >/dev/null && ! docker_answers; then
+    refuse "House Kit runs in the container $NAME for Environment $environment and Docker does not answer: $(docker_cause); start Docker so that container can be removed, then rerun this bootstrap"
+  fi
+  [[ -t 0 ]] || refuse "House Kit runs $(placed "$held") on this computer for Environment $environment; installing it $(placed "$1") ends that Environment and its Agents, so run this bootstrap in a terminal to confirm"
+  printf 'House Kit runs %s on this computer for Environment %s. Installing it %s ends that Environment and its Agents and connects a new one.\n' \
+    "$(placed "$held")" "$environment" "$(placed "$1")"
+  read -r -p 'Replace it? [y/N] ' answer || true
+  [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]] || refuse "Environment $environment was kept; nothing changed"
+  record_placement "$held"
+  REPLACES=$environment
+}
+
+remove_container() {
+  containerized || return 0
+  docker rm -f "$NAME" >/dev/null || refuse "the container $NAME could not be removed"
+}
+
+remove_native() {
+  if [[ -e "$LAUNCH_AGENT" || -e "$USER_UNIT" ]]; then
+    if desktop_running; then stop_desktop_service; fi
+    if ((MACOS)); then
+      rm -f "$LAUNCH_AGENT" || refuse "$LAUNCH_AGENT could not be removed"
+    else
+      systemctl --user --quiet disable "$SERVICE.service" && rm -f "$USER_UNIT" && systemctl --user daemon-reload ||
+        refuse "$USER_UNIT could not be removed"
+    fi
+  fi
+  rm -rf "$DESKTOP_PREFIX" "$DESKTOP_BIN/kit" "$DESKTOP_BIN/house" || refuse "House Kit could not be removed from $DESKTOP_PREFIX"
+}
+
 connect_desktop() {
   local connected=updated
   NATIVE_PREFIX="$DESKTOP_PREFIX"
   NATIVE_PACKAGE="$DESKTOP_PREFIX/lib/node_modules/@agentshouse/kit/dist"
-  NATIVE_BIN="$HOME/.local/bin"
+  NATIVE_BIN="$DESKTOP_BIN"
   PLACING=(env)
   PLACING_OWNER="$(id -u):$(id -g)"
   PLACING_NOTE=''
   DIRECT=(env)
   RECONNECT="run $NATIVE_BIN/kit login"
   notice_desktop_host
-  if containerized; then
-    refuse "House Kit runs in the container $NAME on this computer; rerun this bootstrap with --container"
-  fi
+  take_placement native
+  remove_container
   prepare_roots
   bind_house
   if [[ "$(cat "$NATIVE_PREFIX/release" 2>/dev/null || true)" != "$RELEASE" ]]; then
@@ -531,15 +585,16 @@ connect_desktop() {
     connected=restarted
   fi
   add_path_line
-  if [[ -f "$KIT_HOME/credential.json" ]]; then
+  if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   else
     connected=connected
-    LOGIN_TYPED=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
+    LOGIN_TYPED=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
     LOGIN_OPENED=("${LOGIN_TYPED[@]}")
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
+  record_placement native
   configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
   define_desktop_service
   if ! desktop_running; then
@@ -616,12 +671,13 @@ resume_kit() {
 }
 
 connect_kit() {
-  if [[ -f "$KIT_HOME/credential.json" ]]; then
+  if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
     check_authority "${AUTHORITY[@]}"
   else
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
+  record_placement container
   configure_kit "${CONFIGURE[@]}"
   start_resident
   printf 'House Kit connected for Environment %s.\n' "$(enrolled environment)"
@@ -684,8 +740,8 @@ if ((NATIVE)); then
 elif [[ -e "$SERVER_PREFIX" ]]; then
   ((FORWARDING == 0)) || refuse "House Kit runs natively on this host; run $FORWARDED there directly"
   refuse 'House Kit runs natively on this host; rerun this bootstrap with --linux'
-elif ((CONTAINER)) && [[ -e "$DESKTOP_PREFIX" ]]; then
-  refuse 'House Kit runs natively on this computer; rerun this bootstrap without --container'
+elif ((CONTAINER && FORWARDING)) && [[ -e "$DESKTOP_PREFIX" ]]; then
+  refuse "House Kit runs natively on this computer; run $FORWARDED there directly"
 fi
 [[ "$WORKSPACE" == /* ]] || refuse 'workspace root must be an absolute path'
 
@@ -717,6 +773,7 @@ case "$(uname -s)" in
   Darwin)
     ((NATIVE == 0)) || refuse "--linux runs only on Ubuntu $NATIVE_RELEASE LTS on $NATIVE_ARCHITECTURE, not macOS"
     MACOS=1
+    PATH="$PATH:$DOCKER_APP/Contents/Resources/bin"
     RUNTIME='Docker Desktop'
     OPENER=open
     CHECKSUM=(shasum -a 256)
@@ -743,6 +800,7 @@ if ((CONTAINER == 0)); then
   connect_desktop
   exit 0
 fi
+if ((FORWARDING == 0)); then take_placement container; fi
 
 if [[ "$RUNTIME" == 'Docker Desktop' ]]; then
   establish_docker_desktop "$CHIP"
@@ -766,6 +824,7 @@ prepare_roots
 KIT_HOME_MOUNT=$(bind_mount "$KIT_HOME" /kit-home)
 WORKSPACE_MOUNT=$(bind_mount "$WORKSPACE" /agents/house)
 bind_house
+if ((FORWARDING == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
 
 if [[ "$RUNTIME" == 'Docker Desktop' ]]; then NAMED=(--hostname "$(hostname)"); fi
 if [[ "$RUNTIME" == 'Docker Desktop' && "$HOUSE" == https://* ]]; then
@@ -774,8 +833,8 @@ if [[ "$RUNTIME" == 'Docker Desktop' && "$HOUSE" == https://* ]]; then
   PUBLISHED=(--publish "127.0.0.1:$LOGIN_PORT:$LOGIN_PORT" --env "HOUSE_KIT_LOGIN_PORT=$LOGIN_PORT")
 fi
 DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${NAMED[@]+"${NAMED[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
-LOGIN_TYPED=("${DOCKER_RUN[@]:0:2}" -i "${DOCKER_RUN[@]:2}" login)
-LOGIN_OPENED=("${DOCKER_RUN[@]:0:2}" ${PUBLISHED[@]+"${PUBLISHED[@]}"} "${DOCKER_RUN[@]:2}" login)
+LOGIN_TYPED=("${DOCKER_RUN[@]:0:2}" -i ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
+LOGIN_OPENED=("${DOCKER_RUN[@]:0:2}" ${PUBLISHED[@]+"${PUBLISHED[@]}"} ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
 AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/authority-main.js")
 CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/configure-main.js")
 
@@ -792,6 +851,7 @@ if kit_installed; then
     exit
   fi
   check_authority "${AUTHORITY[@]}"
+  record_placement container
   configure_kit "${CONFIGURE[@]}"
   if [[ "$(docker inspect --format '{{.Config.Image}}' "$NAME")" != "$IMAGE" ]]; then
     update_kit

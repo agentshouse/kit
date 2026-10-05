@@ -86,12 +86,13 @@ export async function login(argv: string[]): Promise<void> {
   });
   const enrolled = await readEnrolment();
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
+  const replaces = process.env.HOUSE_KIT_REPLACES;
   const environment =
-    values.environment ?? (enrolled?.house === house ? enrolled.environment : undefined);
+    replaces === undefined ? (values.environment ?? (enrolled?.house === house ? enrolled.environment : undefined)) : undefined;
   const verifier = randomBytes(32).toString('base64url');
   const started = {
     ...(environment === undefined
-      ? { act: 'new_environment', label: hostname() }
+      ? { act: 'new_environment', label: hostname(), ...(replaces === undefined ? {} : { replaces }) }
       : { act: 'existing_environment', environment_id: environment }),
     code_challenge: createHash('sha256').update(verifier).digest('base64url'),
   };
