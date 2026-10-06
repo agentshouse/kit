@@ -9,11 +9,11 @@ import {
   git,
   HOUSE_REF,
   importCommits,
+  localCopies,
   revision,
   run,
   succeeded,
   tree,
-  workingCopies,
 } from './git.ts';
 import { kitHome } from './home.ts';
 import { operationId } from './operation.ts';
@@ -21,7 +21,6 @@ import { refusalOf, type Refusal } from './refusals.ts';
 import { changed, type Edit } from './translate.ts';
 
 const BRANCH = 'main';
-const ROOM_HOMES = ['capture', 'library', 'collaboration'];
 const PROVENANCE = '_provenance';
 const REPLICA_RETRY_MS = 30_000;
 const IDENTITY = { GIT_COMMITTER_NAME: 'House Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
@@ -189,10 +188,6 @@ function relative(path: string): string {
   return path.replace(/^\/private\//, '').replace(/^\/rooms\/[^/]+\//, '');
 }
 
-function prefixesOf(selected: { private: boolean; room_handle: string | null }): string[] {
-  return selected.private ? ['/private'] : ROOM_HOMES.map((home) => `${rootOf(selected)}/${home}`);
-}
-
 function declaredWritable(path: string, copy: { write: string[]; protected: string[] }): boolean {
   const deepest = (scopes: string[]) =>
     Math.max(-1, ...scopes.filter((scope) => covers(path, scope)).map((scope) => scope.length));
@@ -320,7 +315,7 @@ function movedPaths(moves: readonly Move[], before: Map<string, string>, after: 
   );
 }
 
-export class WorkingCopies {
+export class LocalCopies {
   readonly owner: Caller;
   private readonly house: House;
   private readonly copies = new Map<string, Copy>();
@@ -347,7 +342,7 @@ export class WorkingCopies {
   }
 
   async load(): Promise<void> {
-    const home = join(kitHome(), 'working-copies');
+    const home = join(kitHome(), 'local-copies');
     const names = (await readdir(join(home, 'rooms')).catch(() => [])).filter((name) => name.endsWith('.json'));
     for (const path of [...names.map((name) => join(home, 'rooms', name)), join(home, 'private.json')]) {
       const text = await readFile(path, 'utf8').catch(() => null);
@@ -372,9 +367,9 @@ export class WorkingCopies {
   }
 
   private async reselect(): Promise<void> {
-    const { working_copy: chosen } = await this.house.post<{
-      working_copy: { rooms: { room_ref: string; room_handle: string | null }[]; private: boolean } | null;
-    }>('/kit/working-copy/selection', {});
+    const { local_copy: chosen } = await this.house.post<{
+      local_copy: { rooms: { room_ref: string; room_handle: string | null }[]; private: boolean } | null;
+    }>('/kit/local-copy/selection', {});
     const selected: Selected[] = [
       ...(chosen?.rooms ?? [])
         .filter((room) => room.room_handle !== null)
@@ -428,10 +423,10 @@ export class WorkingCopies {
 
   async push(cwd: string, selector: string, caller: Caller): Promise<Pushed> {
     const located = await run(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']);
-    if (located.status !== 0) return { refused: true, text: `${cwd} is not a House working copy; run house git push inside one` };
+    if (located.status !== 0) return { refused: true, text: `${cwd} is not a House Local copy; run house git push inside one` };
     const [common, worktree] = located.stdout.toString('utf8').split('\n') as [string, string];
     const key = await this.keyAt(dirname(common));
-    if (key === undefined) return { refused: true, text: `${worktree} is not a House working copy; run house git push inside one` };
+    if (key === undefined) return { refused: true, text: `${worktree} is not a House Local copy; run house git push inside one` };
     return this.exclusive(key, () => this.pushed(key, worktree, selector, caller));
   }
 
@@ -463,7 +458,7 @@ export class WorkingCopies {
   }
 
   private async save(copy: Copy): Promise<Copy> {
-    const path = join(kitHome(), 'working-copies', copy.private ? 'private.json' : `${copy.key}.json`);
+    const path = join(kitHome(), 'local-copies', copy.private ? 'private.json' : `${copy.key}.json`);
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}`;
     await writeFile(temporary, JSON.stringify(copy), { mode: 0o600 });
@@ -473,7 +468,7 @@ export class WorkingCopies {
   }
 
   private async read(selected: { private: boolean; room_handle: string | null }): Promise<Read | null> {
-    const prefixes = prefixesOf(selected);
+    const prefixes = [rootOf(selected)];
     const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', { prefixes });
     let bundle = await this.house.post<Bundle | { transfer: { url: string } }>('/kit/door/bootstrap', { prefixes });
     if ('transfer' in bundle) bundle = (await (await fetch(bundle.transfer.url)).json()) as Bundle;
@@ -516,7 +511,7 @@ export class WorkingCopies {
       return;
     }
     const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', {
-      prefixes: prefixesOf(copy),
+      prefixes: [rootOf(copy)],
     });
     const authority = discovery.authorities.find((entry) => entry.room_ref === copy.room_ref);
     if (authority === undefined) return;
@@ -540,7 +535,7 @@ export class WorkingCopies {
       logged(`House serves nothing of ${rootOf({ private: scope.private, room_handle: scope.handle })} to copy`);
       return;
     }
-    const repository = scope.private ? join(workingCopies(), 'private') : join(workingCopies(), 'rooms', read.anchor);
+    const repository = scope.private ? join(localCopies(), 'private') : join(localCopies(), 'rooms', read.anchor);
     if (await exists(repository)) {
       logged(`${repository} already exists and House Kit leaves it as it is`);
       return;
@@ -609,7 +604,7 @@ export class WorkingCopies {
       let answer: { authorities: { authority: string; position: string; log_epoch: string; changes: Change[] }[] };
       try {
         answer = await this.house.post('/kit/door/enumerate', {
-          prefixes: prefixesOf(copy),
+          prefixes: [rootOf(copy)],
           positions: [{ authority: copy.room_ref, position: copy.position, log_epoch: copy.log_epoch }],
         });
       } catch (error) {

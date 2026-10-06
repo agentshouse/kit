@@ -4,7 +4,7 @@ import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import { request } from 'node:http';
 import { constants as system } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
-import { workingCopies } from './git.ts';
+import { localCopies } from './git.ts';
 import { kitHome } from './home.ts';
 
 interface Outcome {
@@ -128,7 +128,7 @@ async function observed(git: string, args: string[]): Promise<Outcome> {
   if (bridge === undefined || name === undefined || READS.has(name)) return delegated(git, args);
   const located = captured(git, [...globals, 'rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']);
   const [common, worktree] = located?.split('\n') ?? [];
-  if (common === undefined || worktree === undefined || !dirname(common).startsWith(`${workingCopies()}/`)) {
+  if (common === undefined || worktree === undefined || !dirname(common).startsWith(`${localCopies()}/`)) {
     return delegated(git, args);
   }
   const listing = [...globals, '-C', worktree, 'ls-files', '--stage', '-z'];

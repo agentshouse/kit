@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { withoutProxy } from './clis.ts';
 import { workspaceRoot } from './home.ts';
 
-export function workingCopies(): string {
-  return join(workspaceRoot(), 'working-copies');
+export function localCopies(): string {
+  return join(workspaceRoot(), 'local-copies');
 }
 
 export const HOUSE_REF = 'refs/house/received';

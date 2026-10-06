@@ -31,8 +31,8 @@ async function copied(): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('ROOM.md', 'The notes Room\n');
-  room.put('library/plan.md', 'one\ntwo\n');
-  room.put('library/memo.md', MEMO);
+  room.put('docs/plan.md', 'one\ntwo\n');
+  room.put('docs/memo.md', MEMO);
   room.put('capture/mail/one.md', 'one\n');
   await rooms.select([room]);
   return { hosted, rooms, room };
@@ -54,38 +54,38 @@ function short(commit: string): string {
 
 it('sends the selected commit, HEAD by default, as exact-base edits and leaves staged and unstaged work local', async () => {
   const { hosted, room } = await copied();
-  const memo = room.revision('library/memo.md');
-  await writeFile(join(room.repository, 'library/plan.md'), 'one\ntwo\nthree\n');
-  await writeFile(join(room.repository, 'library/new.md'), 'new\n');
+  const memo = room.revision('docs/memo.md');
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nthree\n');
+  await writeFile(join(room.repository, 'docs/new.md'), 'new\n');
   const first = commitAll(room.repository, 'first');
-  await writeFile(join(room.repository, 'library/memo.md'), `${MEMO}\n## Notes\n\nA new section.\n`);
+  await writeFile(join(room.repository, 'docs/memo.md'), `${MEMO}\n## Notes\n\nA new section.\n`);
   const second = commitAll(room.repository, 'second');
-  await writeFile(join(room.repository, 'library/new.md'), 'new, staged\n');
-  git(room.repository, 'add', 'library/new.md');
-  await writeFile(join(room.repository, 'library/plan.md'), 'unstaged\n');
+  await writeFile(join(room.repository, 'docs/new.md'), 'new, staged\n');
+  git(room.repository, 'add', 'docs/new.md');
+  await writeFile(join(room.repository, 'docs/plan.md'), 'unstaged\n');
 
-  const pushed = await house(hosted, join(room.repository, 'library'), 'git', 'push', first, '--owner');
+  const pushed = await house(hosted, join(room.repository, 'docs'), 'git', 'push', first, '--owner');
 
   expect(pushed).toMatchObject({ status: 0, stdout: `House accepted ${short(first)}.\n` });
   expect(batches(hosted).map((batch) => batch.changes)).toEqual([
     [
-      { op: 'create', path: '/rooms/notes/library/new.md', content: 'new\n' },
-      { op: 'replace_preamble', path: '/rooms/notes/library/plan.md', base: 'one\ntwo\n', content: 'one\ntwo\nthree\n' },
+      { op: 'create', path: '/rooms/notes/docs/new.md', content: 'new\n' },
+      { op: 'replace_preamble', path: '/rooms/notes/docs/plan.md', base: 'one\ntwo\n', content: 'one\ntwo\nthree\n' },
     ],
   ]);
-  expect(room.files.get('library/memo.md')!.content).toBe(MEMO);
+  expect(room.files.get('docs/memo.md')!.content).toBe(MEMO);
 
   const again = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(again).toMatchObject({ status: 0, stdout: `House accepted ${short(second)}.\n` });
   expect(batches(hosted)[1]!.changes).toEqual([
-    { op: 'replace', path: '/rooms/notes/library/memo.md', base: memo, content: `${MEMO}\n## Notes\n\nA new section.\n` },
+    { op: 'replace', path: '/rooms/notes/docs/memo.md', base: memo, content: `${MEMO}\n## Notes\n\nA new section.\n` },
   ]);
-  expect(room.files.get('library/plan.md')!.content).toBe('one\ntwo\nthree\n');
-  expect(room.files.get('library/memo.md')!.content).toBe(`${MEMO}\n## Notes\n\nA new section.\n`);
+  expect(room.files.get('docs/plan.md')!.content).toBe('one\ntwo\nthree\n');
+  expect(room.files.get('docs/memo.md')!.content).toBe(`${MEMO}\n## Notes\n\nA new section.\n`);
   expect(head(room)).toBe(second);
-  expect(git(room.repository, 'show', ':library/new.md')).toBe('new, staged\n');
-  expect(await readFile(join(room.repository, 'library/plan.md'), 'utf8')).toBe('unstaged\n');
+  expect(git(room.repository, 'show', ':docs/new.md')).toBe('new, staged\n');
+  expect(await readFile(join(room.repository, 'docs/plan.md'), 'utf8')).toBe('unstaged\n');
 
   expect(await house(hosted, room.repository, 'git', 'push', '--owner')).toMatchObject({
     status: 0,
@@ -98,7 +98,6 @@ it('sends a changed schema as one whole-text replacement against its revision', 
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room(null);
-  room.write = ['library', 'settings/schema.yaml'];
   room.protected = ['agents', 'house'];
   const schema = 'types:\n  note:\n    fields:\n      title: { kind: string }\n';
   room.put('settings/schema.yaml', schema);
@@ -118,11 +117,11 @@ it('sends a changed schema as one whole-text replacement against its revision', 
 it('sends a changed field, section and preamble against its own prior value, so different remote changes to the same file both stand', async () => {
   const { hosted, room } = await copied();
   const local = MEMO.replace('status: draft', 'status: ready').replace('Grow.', 'Grow fast.').replace('Opening words.', 'New opening.');
-  await writeFile(join(room.repository, 'library/memo.md'), local);
+  await writeFile(join(room.repository, 'docs/memo.md'), local);
   const pushedCommit = commitAll(room.repository, 'memo');
-  room.put('library/memo.md', MEMO.replace('owner: ada', 'owner: grace').replace('None yet.', 'Scope creep.'));
-  const before = parse(MEMO, 'library/memo.md');
-  const after = parse(local, 'library/memo.md');
+  room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace').replace('None yet.', 'Scope creep.'));
+  const before = parse(MEMO, 'docs/memo.md');
+  const after = parse(local, 'docs/memo.md');
   if (!before.ok || !after.ok) throw new Error('the memo fixture does not parse');
 
   const pushed = await house(hosted, room.repository, 'git', 'push', '--owner');
@@ -130,14 +129,14 @@ it('sends a changed field, section and preamble against its own prior value, so 
   expect(batches(hosted)[0]!.changes).toEqual([
     {
       op: 'replace_preamble',
-      path: '/rooms/notes/library/memo.md',
+      path: '/rooms/notes/docs/memo.md',
       base: before.document.preamble,
       content: after.document.preamble,
     },
-    { op: 'set_field', path: '/rooms/notes/library/memo.md', field: 'status', base: 'draft', value: 'ready' },
+    { op: 'set_field', path: '/rooms/notes/docs/memo.md', field: 'status', base: 'draft', value: 'ready' },
     {
       op: 'replace_section',
-      path: '/rooms/notes/library/memo.md',
+      path: '/rooms/notes/docs/memo.md',
       section: 'Goals',
       base: before.document.sections.Goals,
       content: after.document.sections.Goals,
@@ -160,9 +159,9 @@ it('sends a changed field, section and preamble against its own prior value, so 
     'Scope creep.',
     '',
   ].join('\n');
-  expect(room.files.get('library/memo.md')!.content).toBe(canonical);
+  expect(room.files.get('docs/memo.md')!.content).toBe(canonical);
   expect(pushed.stdout).toMatch(new RegExp(`^House accepted ${short(pushedCommit)}; main is at [0-9a-f]{12}\\.\\n$`));
-  expect(await readFile(join(room.repository, 'library/memo.md'), 'utf8')).toBe(canonical);
+  expect(await readFile(join(room.repository, 'docs/memo.md'), 'utf8')).toBe(canonical);
   expect(tryGit(room.repository, 'merge-base', '--is-ancestor', pushedCommit, 'HEAD').status).toBe(0);
   expect(git(room.repository, 'rev-parse', 'HEAD')).toBe(git(room.repository, 'rev-parse', 'refs/house/received^2'));
   expect(git(room.repository, 'status', '--porcelain')).toBe('');
@@ -170,10 +169,10 @@ it('sends a changed field, section and preamble against its own prior value, so 
 
 it('refuses a stale component or whole-file base as one batch, records House state on the House ref, and a native Git resolution then pushes', async () => {
   const { hosted, room } = await copied();
-  await writeFile(join(room.repository, 'library/memo.md'), MEMO.replace('Grow.', 'Grow mine.'));
+  await writeFile(join(room.repository, 'docs/memo.md'), MEMO.replace('Grow.', 'Grow mine.'));
   await writeFile(join(room.repository, 'ROOM.md'), 'Mine too\n');
   commitAll(room.repository, 'mine');
-  room.put('library/memo.md', MEMO.replace('Grow.', 'Grow theirs.'));
+  room.put('docs/memo.md', MEMO.replace('Grow.', 'Grow theirs.'));
 
   const refused = await house(hosted, room.repository, 'git', 'push', '--owner');
 
@@ -181,38 +180,38 @@ it('refuses a stale component or whole-file base as one batch, records House sta
   expect(refused.stderr).toContain('edit_conflict');
   expect(refused.stderr).toContain("refs/house/received holds House's current state; rebase onto it and push again");
   expect(room.files.get('ROOM.md')!.content).toBe('The notes Room\n');
-  expect(git(room.repository, 'show', 'refs/house/received:library/memo.md')).toBe(MEMO.replace('Grow.', 'Grow theirs.'));
-  expect(git(room.repository, 'show', 'HEAD:library/memo.md')).toBe(MEMO.replace('Grow.', 'Grow mine.'));
+  expect(git(room.repository, 'show', 'refs/house/received:docs/memo.md')).toBe(MEMO.replace('Grow.', 'Grow theirs.'));
+  expect(git(room.repository, 'show', 'HEAD:docs/memo.md')).toBe(MEMO.replace('Grow.', 'Grow mine.'));
 
   expect(tryGit(room.repository, 'rebase', 'refs/house/received').status).not.toBe(0);
   const resolved = `${MEMO.replace('Grow.', 'Grow theirs and mine.')}\n## Notes\n\nResolved.\n`;
-  await writeFile(join(room.repository, 'library/memo.md'), resolved);
-  git(room.repository, 'add', 'library/memo.md');
+  await writeFile(join(room.repository, 'docs/memo.md'), resolved);
+  git(room.repository, 'add', 'docs/memo.md');
   git(room.repository, 'rebase', '--continue');
-  const theirs = room.revision('library/memo.md');
-  room.put('library/memo.md', MEMO.replace('Grow.', 'Grow theirs.').replace('Opening words.', 'Opening late.'));
-  const late = room.revision('library/memo.md');
+  const theirs = room.revision('docs/memo.md');
+  room.put('docs/memo.md', MEMO.replace('Grow.', 'Grow theirs.').replace('Opening words.', 'Opening late.'));
+  const late = room.revision('docs/memo.md');
 
   const stale = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(stale.status).toBe(1);
   expect(batches(hosted)[1]!.changes).toEqual([
     { op: 'replace_preamble', path: '/rooms/notes/ROOM.md', base: 'The notes Room\n', content: 'Mine too\n' },
-    { op: 'replace', path: '/rooms/notes/library/memo.md', base: theirs, content: resolved },
+    { op: 'replace', path: '/rooms/notes/docs/memo.md', base: theirs, content: resolved },
   ]);
   expect(room.files.get('ROOM.md')!.content).toBe('The notes Room\n');
 
   git(room.repository, 'rebase', 'refs/house/received');
   const merged = resolved.replace('Opening words.', 'Opening late.');
-  expect(await readFile(join(room.repository, 'library/memo.md'), 'utf8')).toBe(merged);
+  expect(await readFile(join(room.repository, 'docs/memo.md'), 'utf8')).toBe(merged);
   const retried = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(retried).toMatchObject({ status: 0, stdout: `House accepted ${short(head(room))}.\n` });
   expect(batches(hosted)[2]!.changes).toEqual([
     { op: 'replace_preamble', path: '/rooms/notes/ROOM.md', base: 'The notes Room\n', content: 'Mine too\n' },
-    { op: 'replace', path: '/rooms/notes/library/memo.md', base: late, content: merged },
+    { op: 'replace', path: '/rooms/notes/docs/memo.md', base: late, content: merged },
   ]);
-  expect(room.files.get('library/memo.md')!.content).toBe(merged);
+  expect(room.files.get('docs/memo.md')!.content).toBe(merged);
   expect(room.files.get('ROOM.md')!.content).toBe('Mine too\n');
 });
 
@@ -220,8 +219,8 @@ it('refuses a change to a read-only path whatever the ignore file says and chang
   const { hosted, room } = await copied();
   await writeFile(join(room.repository, '.gitignore'), '');
   await writeFile(join(room.repository, 'capture/mail/one.md'), 'forged\n');
-  await writeFile(join(room.repository, 'library/plan.md'), 'one\n');
-  git(room.repository, 'add', '-f', 'capture/mail/one.md', 'library/plan.md');
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\n');
+  git(room.repository, 'add', '-f', 'capture/mail/one.md', 'docs/plan.md');
   git(room.repository, 'commit', '-q', '-m', 'forged');
 
   const refused = await house(hosted, room.repository, 'git', 'push', '--owner');
@@ -230,15 +229,15 @@ it('refuses a change to a read-only path whatever the ignore file says and chang
   expect(refused.stderr).toContain('protected_path');
   expect(refused.stderr).not.toContain('refs/house/received');
   expect(room.files.get('capture/mail/one.md')!.content).toBe('one\n');
-  expect(room.files.get('library/plan.md')!.content).toBe('one\ntwo\n');
+  expect(room.files.get('docs/plan.md')!.content).toBe('one\ntwo\n');
 });
 
 it("brings House's result into the branch by fast-forward or a rebase of later commits, and leaves it pending on dirty work or a moved branch", async () => {
   const { hosted, room } = await copied();
-  room.put('library/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
-  await writeFile(join(room.repository, 'library/memo.md'), MEMO.replace('status: draft', 'status: ready'));
+  room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
+  await writeFile(join(room.repository, 'docs/memo.md'), MEMO.replace('status: draft', 'status: ready'));
   const pushedCommit = commitAll(room.repository, 'memo');
-  await writeFile(join(room.repository, 'library/later.md'), 'later\n');
+  await writeFile(join(room.repository, 'docs/later.md'), 'later\n');
   const later = commitAll(room.repository, 'later');
 
   const rebased = await house(hosted, room.repository, 'git', 'push', pushedCommit, '--owner');
@@ -246,37 +245,37 @@ it("brings House's result into the branch by fast-forward or a rebase of later c
   expect(rebased.stdout).toMatch(new RegExp(`^House accepted ${short(pushedCommit)}; main is at [0-9a-f]{12}\\.\\n$`));
   expect(head(room)).not.toBe(later);
   expect(git(room.repository, 'log', '--format=%s', 'refs/house/received^2..HEAD').trim()).toBe('later');
-  expect(await readFile(join(room.repository, 'library/memo.md'), 'utf8')).toContain('owner: grace');
-  expect(await readFile(join(room.repository, 'library/memo.md'), 'utf8')).toContain('status: ready');
+  expect(await readFile(join(room.repository, 'docs/memo.md'), 'utf8')).toContain('owner: grace');
+  expect(await readFile(join(room.repository, 'docs/memo.md'), 'utf8')).toContain('status: ready');
 
-  room.put('library/memo.md', room.files.get('library/memo.md')!.content.replace('type: memo', 'type: memo\nteam: core'));
-  const memo = await readFile(join(room.repository, 'library/memo.md'), 'utf8');
-  await writeFile(join(room.repository, 'library/memo.md'), memo.replace('status: ready', 'status: done'));
+  room.put('docs/memo.md', room.files.get('docs/memo.md')!.content.replace('type: memo', 'type: memo\nteam: core'));
+  const memo = await readFile(join(room.repository, 'docs/memo.md'), 'utf8');
+  await writeFile(join(room.repository, 'docs/memo.md'), memo.replace('status: ready', 'status: done'));
   const dirty = commitAll(room.repository, 'done');
-  await writeFile(join(room.repository, 'library/later.md'), 'dirty\n');
+  await writeFile(join(room.repository, 'docs/later.md'), 'dirty\n');
 
   const pending = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(pending.status).toBe(0);
   expect(pending.stdout).toMatch(new RegExp(`^House accepted ${short(dirty)}; local integration is pending \\(uncommitted changes\\): [0-9a-f]{40} holds House's result\\.\\n$`));
   expect(head(room)).toBe(dirty);
-  expect(await readFile(join(room.repository, 'library/later.md'), 'utf8')).toBe('dirty\n');
+  expect(await readFile(join(room.repository, 'docs/later.md'), 'utf8')).toBe('dirty\n');
   expect(git(room.repository, 'stash', 'list')).toBe('');
 
-  git(room.repository, 'checkout', '--', 'library/later.md');
+  git(room.repository, 'checkout', '--', 'docs/later.md');
   const finished = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(finished.stdout).toMatch(new RegExp(`^House accepted ${short(dirty)}; main is at [0-9a-f]{12}\\.\\n$`));
-  expect(await readFile(join(room.repository, 'library/memo.md'), 'utf8')).toContain('team: core');
+  expect(await readFile(join(room.repository, 'docs/memo.md'), 'utf8')).toContain('team: core');
   expect(batches(hosted)).toHaveLength(2);
 
-  room.put('library/memo.md', room.files.get('library/memo.md')!.content.replace('owner: grace', 'owner: hopper'));
-  const current = await readFile(join(room.repository, 'library/memo.md'), 'utf8');
-  await writeFile(join(room.repository, 'library/memo.md'), current.replace('status: done', 'status: shipped'));
+  room.put('docs/memo.md', room.files.get('docs/memo.md')!.content.replace('owner: grace', 'owner: hopper'));
+  const current = await readFile(join(room.repository, 'docs/memo.md'), 'utf8');
+  await writeFile(join(room.repository, 'docs/memo.md'), current.replace('status: done', 'status: shipped'));
   const moved = commitAll(room.repository, 'shipped');
-  await writeFile(join(room.repository, 'library/later.md'), 'dirty again\n');
+  await writeFile(join(room.repository, 'docs/later.md'), 'dirty again\n');
   expect((await house(hosted, room.repository, 'git', 'push', '--owner')).stdout).toMatch(/pending \(uncommitted changes\)/);
-  git(room.repository, 'checkout', '--', 'library/later.md');
+  git(room.repository, 'checkout', '--', 'docs/later.md');
   git(room.repository, 'checkout', '-q', '-b', 'elsewhere');
 
   const elsewhere = await house(hosted, room.repository, 'git', 'push', '--owner');
@@ -288,7 +287,7 @@ it("brings House's result into the branch by fast-forward or a rebase of later c
 
 it('recovers an answer lost after House applied the push under the same operation and applies it once', async () => {
   const { hosted, rooms, room } = await copied();
-  await writeFile(join(room.repository, 'library/plan.md'), 'one\ntwo\nthree\n');
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nthree\n');
   const pushedCommit = commitAll(room.repository, 'three');
   rooms.dropping = 1;
 
@@ -298,42 +297,42 @@ it('recovers an answer lost after House applied the push under the same operatio
   expect(lost.stderr).toContain(`House's answer to ${short(pushedCommit)} did not arrive`);
   expect(room.batches).toHaveLength(1);
 
-  await writeFile(join(room.repository, 'library/unrelated.md'), 'unrelated\n');
+  await writeFile(join(room.repository, 'docs/unrelated.md'), 'unrelated\n');
   const recovered = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(recovered).toMatchObject({ status: 0, stdout: `House accepted ${short(pushedCommit)}.\n` });
   const [first, second] = batches(hosted);
   expect(second).toEqual(first);
   expect(room.batches).toHaveLength(1);
-  expect(room.files.get('library/plan.md')!.content).toBe('one\ntwo\nthree\n');
-  expect(await readFile(join(room.repository, 'library/unrelated.md'), 'utf8')).toBe('unrelated\n');
+  expect(room.files.get('docs/plan.md')!.content).toBe('one\ntwo\nthree\n');
+  expect(await readFile(join(room.repository, 'docs/unrelated.md'), 'utf8')).toBe('unrelated\n');
 });
 
 it('removes a file only through a committed deletion and sends a delete and add outside the shim as a removal and a creation', async () => {
   const { hosted, room } = await copied();
-  const plan = room.revision('library/plan.md');
-  const memo = room.revision('library/memo.md');
-  await rm(join(room.repository, 'library/plan.md'));
+  const plan = room.revision('docs/plan.md');
+  const memo = room.revision('docs/memo.md');
+  await rm(join(room.repository, 'docs/plan.md'));
 
   expect(await house(hosted, room.repository, 'git', 'push', '--owner')).toMatchObject({
     status: 0,
     stdout: expect.stringMatching(/^Nothing to submit/),
   });
-  expect(room.files.has('library/plan.md')).toBe(true);
+  expect(room.files.has('docs/plan.md')).toBe(true);
 
   git(room.repository, 'add', '-A');
-  git(room.repository, 'mv', 'library/memo.md', 'library/renamed.md');
+  git(room.repository, 'mv', 'docs/memo.md', 'docs/renamed.md');
   git(room.repository, 'commit', '-q', '-m', 'remove and move');
 
   const pushed = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(pushed.status).toBe(0);
   expect(batches(hosted)[0]!.changes).toEqual([
-    { op: 'remove', path: '/rooms/notes/library/memo.md', base: memo },
-    { op: 'remove', path: '/rooms/notes/library/plan.md', base: plan },
-    { op: 'create', path: '/rooms/notes/library/renamed.md', content: MEMO },
+    { op: 'remove', path: '/rooms/notes/docs/memo.md', base: memo },
+    { op: 'remove', path: '/rooms/notes/docs/plan.md', base: plan },
+    { op: 'create', path: '/rooms/notes/docs/renamed.md', content: MEMO },
   ]);
-  expect(existsSync(join(room.repository, 'library/plan.md'))).toBe(false);
+  expect(existsSync(join(room.repository, 'docs/plan.md'))).toBe(false);
 });
 
 it('pushes as the owner only with --owner outside a conversation and explains itself', async () => {
@@ -348,7 +347,7 @@ it('pushes as the owner only with --owner outside a conversation and explains it
   expect(help.stdout).toBe('usage: house git push [commit] [--owner]\n');
   expect(outside).toMatchObject({
     status: 1,
-    stderr: 'house: / is not a House working copy; run house git push inside one\n',
+    stderr: 'house: / is not a House Local copy; run house git push inside one\n',
   });
   expect(batches(hosted)).toEqual([]);
 });
@@ -357,24 +356,24 @@ it('picks its copies up again when the resident starts anew', async () => {
   const { hosted, room } = await copied();
   process.kill(hosted.kit.pid, 'SIGKILL');
   await hosted.kit.exited;
-  room.put('library/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
+  room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
   runKit(['resident'], { HOUSE_KIT_HOME: hosted.home, PATH: await fakeBin(hosted.home), ...GIT_IDENTITY });
   await until(() => hosted.house.sockets[1]);
-  await writeFile(join(room.repository, 'library/plan.md'), 'one\ntwo\nthree\n');
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nthree\n');
   const pushedCommit = commitAll(room.repository, 'three');
 
   const pushed = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(pushed).toMatchObject({ status: 0, stdout: `House accepted ${short(pushedCommit)}.\n` });
-  expect(room.files.get('library/plan.md')!.content).toBe('one\ntwo\nthree\n');
-  await until(() => git(room.repository, 'show', 'refs/house/received:library/memo.md').includes('owner: grace'));
+  expect(room.files.get('docs/plan.md')!.content).toBe('one\ntwo\nthree\n');
+  await until(() => git(room.repository, 'show', 'refs/house/received:docs/memo.md').includes('owner: grace'));
 });
 
 it('finishes a push whose operation expired when House holds its component changes beside a remote one', async () => {
   const { hosted, rooms, room } = await copied();
-  await writeFile(join(room.repository, 'library/memo.md'), MEMO.replace('status: draft', 'status: ready'));
+  await writeFile(join(room.repository, 'docs/memo.md'), MEMO.replace('status: draft', 'status: ready'));
   const pushedCommit = commitAll(room.repository, 'ready');
-  room.put('library/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
+  room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'git', 'push', '--owner')).status).toBe(1);
   hosted.house.route('POST', '/kit/door/batch', () => ({ status: 410, body: { error: { code: 'operation_expired' } } }));
@@ -383,33 +382,33 @@ it('finishes a push whose operation expired when House holds its component chang
 
   expect(recovered.stdout).toMatch(new RegExp(`^House accepted ${short(pushedCommit)}; main is at [0-9a-f]{12}\\.\\n$`));
   expect(room.batches).toHaveLength(1);
-  const memo = await readFile(join(room.repository, 'library/memo.md'), 'utf8');
+  const memo = await readFile(join(room.repository, 'docs/memo.md'), 'utf8');
   expect(memo).toContain('owner: grace');
   expect(memo).toContain('status: ready');
 });
 
 it('keeps newer House text on the House ref when it finishes a push whose answer it recovers after delivery moved on', async () => {
   const { hosted, rooms, room } = await copied();
-  await writeFile(join(room.repository, 'library/plan.md'), 'one\ntwo\nmine\n');
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nmine\n');
   const pushedCommit = commitAll(room.repository, 'mine');
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'git', 'push', '--owner')).status).toBe(1);
-  room.put('library/plan.md', 'one\ntwo\nmine\nlater\n');
+  room.put('docs/plan.md', 'one\ntwo\nmine\nlater\n');
   hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
-  await until(() => git(room.repository, 'show', 'refs/house/received:library/plan.md') === 'one\ntwo\nmine\nlater\n');
+  await until(() => git(room.repository, 'show', 'refs/house/received:docs/plan.md') === 'one\ntwo\nmine\nlater\n');
   hosted.house.route('POST', '/kit/door/enumerate', () => ({ status: 503, body: { error: { code: 'house_unavailable' } } }));
 
   const recovered = await house(hosted, room.repository, 'git', 'push', '--owner');
 
   expect(recovered).toMatchObject({ status: 0, stdout: `House accepted ${short(pushedCommit)}.\n` });
-  expect(git(room.repository, 'show', 'refs/house/received:library/plan.md')).toBe('one\ntwo\nmine\nlater\n');
-  expect(git(room.repository, 'show', 'refs/house/received^2:library/plan.md')).toBe('one\ntwo\nmine\n');
+  expect(git(room.repository, 'show', 'refs/house/received:docs/plan.md')).toBe('one\ntwo\nmine\nlater\n');
+  expect(git(room.repository, 'show', 'refs/house/received^2:docs/plan.md')).toBe('one\ntwo\nmine\n');
   expect(room.batches).toHaveLength(1);
 });
 
 it('keeps a pushed operation whose outcome it could not yet read and finishes it later under the same operation', async () => {
   const { hosted, rooms, room } = await copied();
-  await writeFile(join(room.repository, 'library/plan.md'), 'one\ntwo\nthree\n');
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nthree\n');
   const pushedCommit = commitAll(room.repository, 'three');
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'git', 'push', '--owner')).status).toBe(1);

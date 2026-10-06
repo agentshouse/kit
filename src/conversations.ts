@@ -18,7 +18,7 @@ import type { House } from './api.ts';
 import { blocksOf, firstChange, type Block } from './blocks.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS, type Cli, type Job, type Phase } from './clis.ts';
-import type { WorkingCopies } from './copies.ts';
+import type { LocalCopies } from './copies.ts';
 import { placeFiles, type MessageFile } from './files.ts';
 import { agentBase } from './home.ts';
 import { instructions } from './instructions.ts';
@@ -30,7 +30,7 @@ import { transcribe } from './transcription.ts';
 export interface Kit {
   house: House;
   agents: Agents;
-  copies: WorkingCopies;
+  copies: LocalCopies;
   send(frame: Frame): boolean;
   changed(): void;
 }

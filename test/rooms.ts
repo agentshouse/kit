@@ -11,7 +11,7 @@ import { until, type Received } from './double.ts';
 import { GIT_IDENTITY, type Hosted, type ToolResult } from './environment.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
-export const COPIES = '/agents/house/working-copies';
+export const COPIES = '/agents/house/local-copies';
 const LOG_EPOCH = '0192f0e4-1c2d-7000-8000-000000000001';
 
 interface Stored {
@@ -62,7 +62,7 @@ export class Room {
   handle: string | null;
   position = 1;
   logEpoch = LOG_EPOCH;
-  write = ['ROOM.md', 'library'];
+  write = [''];
   protected = ['capture', 'collaboration'];
   files = new Map<string, Stored>();
   readonly history = new Map<string, string>();
@@ -133,7 +133,7 @@ export class Room {
     const paths = [...this.files.keys()].sort();
     return {
       manifest: {
-        version: 'working-copy/1',
+        version: 'local-copy/1',
         scope: 'room',
         anchor: this.ref,
         path: this.root,
@@ -265,9 +265,7 @@ export interface Rooms {
 }
 
 function selectedRooms(rooms: Room[], prefixes: string[]): Room[] {
-  return rooms.filter((room) =>
-    prefixes.some((prefix) => (room.private ? prefix === '/private' : prefix.startsWith(`/rooms/${room.handle}/`))),
-  );
+  return rooms.filter((room) => prefixes.includes(room.root));
 }
 
 export const OVERLOADED = {
@@ -298,10 +296,10 @@ export function serveRooms(hosted: Hosted): Rooms {
         rooms: selected.filter((room) => !room.private).map((room) => ({ room_ref: room.ref, room_handle: room.handle })),
         private: selected.some((room) => room.private),
       };
-      hosted.socket.send({ type: 'work_available', subject: 'working_copy' });
+      hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
       for (const room of selected) {
         const key = room.private ? 'private.json' : join('rooms', `${room.ref}.json`);
-        await until(() => existsSync(join(hosted.home, 'working-copies', key)));
+        await until(() => existsSync(join(hosted.home, 'local-copies', key)));
       }
     },
     edits: () => hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'edit'),
@@ -321,7 +319,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       })),
     };
   };
-  hosted.house.route('POST', '/kit/working-copy/selection', () => ({ body: { working_copy: state.selection } }));
+  hosted.house.route('POST', '/kit/local-copy/selection', () => ({ body: { local_copy: state.selection } }));
   hosted.house.route('POST', '/kit/door/discover', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
     return {

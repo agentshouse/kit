@@ -43,7 +43,7 @@ connects your own agent: `house <tool>` run outside an Agent conversation calls
 House as you, until you revoke that connection on Connections.
 
 `kit resident` keeps the Environment connected, and keeps the Rooms you chose
-for this Environment as Git repositories under `working-copies` in the
+for this Environment as Git repositories under `local-copies` in the
 workspace. Commit in one and run `house git push --owner` there to send the
 commit to House; in the container, run it through the install command from the
 copy's directory. Inside an Agent conversation the Agent runs `house git push`.

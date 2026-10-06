@@ -192,7 +192,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const idles: Received[] = [];
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
-    shell: () => shelled('', 1, ['cat: path_not_found /private/library/how-we-work.md']),
+    shell: () => shelled('', 1, ['cat: path_not_found /private/how-we-work.md']),
   };
   house.route('POST', '/', (request) => {
     mcp.push(request);
@@ -209,7 +209,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     body: { credential: conversationCredential(request.params.conversation!) },
   }));
   house.route('POST', '/kit/restarted', () => ({ body: {} }));
-  house.route('POST', '/kit/working-copy/selection', () => ({ body: { working_copy: null } }));
+  house.route('POST', '/kit/local-copy/selection', () => ({ body: { local_copy: null } }));
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved } }));
   house.route('POST', '/kit/agents/report', () => ({ body: {} }));
   house.route('POST', '/kit/inputs/:input/ack', (request) => {
