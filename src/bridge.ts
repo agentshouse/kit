@@ -12,10 +12,10 @@ import { loginPath } from './clis.ts';
 import {
   changedPaths,
   type Caller,
+  type LocalCopies,
   type Observed,
   type Submitted,
   type Upload,
-  type WorkingCopies,
 } from './copies.ts';
 import { kitHome, readEnrolment } from './home.ts';
 import { callHouse, mcpBody, rpc, UNREACHABLE, type Forwarded, type Message } from './mcp.ts';
@@ -111,7 +111,7 @@ function editAnswer(forwarded: Forwarded): Submitted {
 
 export async function openBridge(
   house: House,
-  copies: WorkingCopies,
+  copies: LocalCopies,
   conversationId: string,
   signal: AbortSignal,
 ): Promise<Bridge> {

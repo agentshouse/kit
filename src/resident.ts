@@ -8,7 +8,7 @@ import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations, type Input } from './conversations.ts';
-import { WorkingCopies } from './copies.ts';
+import { LocalCopies } from './copies.ts';
 import { agentBase, kitHome, readEnrolment } from './home.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
@@ -35,7 +35,7 @@ async function installShim(): Promise<void> {
   });
 }
 
-async function serveOwner(copies: WorkingCopies): Promise<void> {
+async function serveOwner(copies: LocalCopies): Promise<void> {
   const socketPath = join(kitHome(), 'owner.sock');
   await rm(socketPath, { force: true });
   const server = createServer(async (request, response) => {
@@ -65,7 +65,7 @@ export async function resident(): Promise<void> {
   await mkdir(agentBase(), { recursive: true });
   process.env.HOUSE_KIT_RESIDENT = String(process.pid);
   const agents = new Agents(house);
-  const copies = new WorkingCopies(house);
+  const copies = new LocalCopies(house);
   await copies.load();
   await installShim();
   await serveOwner(copies);
@@ -107,7 +107,7 @@ export async function resident(): Promise<void> {
     },
     frame: (arrived: Frame) => {
       if (arrived.type === 'work_available' && arrived.subject === 'agents') logged(agents.refresh());
-      if (arrived.type === 'work_available' && arrived.subject === 'working_copy') logged(copies.select());
+      if (arrived.type === 'work_available' && arrived.subject === 'local_copy') logged(copies.select());
       if (arrived.type === 'entries') {
         copies.entries(arrived as unknown as { authority: string; position: string; log_epoch: string });
       }

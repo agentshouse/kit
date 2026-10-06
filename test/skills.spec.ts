@@ -15,7 +15,7 @@ const { version: KIT_VERSION } = JSON.parse(await readFile(new URL('../package.j
 const LEFT_OUT = ['setup-matt-pocock-skills', 'triage', 'wizard'];
 const PROVENANCE = /^<!-- Vendored from mattpocock\/skills at commit ([0-9a-f]{40}) \(/m;
 const RECORD = 'skill-set.json';
-const DOCUMENT = '/private/library/how-we-work.md';
+const DOCUMENT = '/private/how-we-work.md';
 
 async function tree(root: string): Promise<string[]> {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
@@ -283,6 +283,8 @@ it('creates the How-we-work document over the first conversation bridge after th
     `Bearer ${conversationCredential('conversation-1')}`,
   );
   expect(HOW_WE_WORK_TEXT.startsWith('# How we work\n')).toBe(true);
+  expect(HOW_WE_WORK_TEXT).toContain('- Glossary (`CONTEXT.md`): `glossary.md`\n- Decisions (ADRs): `decisions/NNNN-<slug>.md`\n');
+  expect(HOW_WE_WORK_TEXT).not.toContain('library/');
 });
 
 it.each(['operation_denied', 'room_not_found'])(
@@ -315,11 +317,11 @@ it('keeps a present document as it is and never creates it again', async () => {
 
 it("refuses to open a conversation with House's answer when another refusal stops the document, and tries again at the next", async () => {
   const hosted = await hostKit([{}], { skills: true });
-  hosted.tools.edit = () => refused('invalid_library');
+  hosted.tools.edit = () => refused('invalid_documents');
 
   hosted.input({ kind: 'open', conversation_id: 'conversation-1' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('invalid_library') });
+  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('invalid_documents') });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toEqual([]);
   hosted.tools.edit = () => ({ content: [{ type: 'text', text: 'results: []' }] });
   await opened(hosted, 'conversation-2');
