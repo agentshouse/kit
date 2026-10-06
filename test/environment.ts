@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
@@ -274,6 +275,23 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
       }
     },
   };
+}
+
+export async function hostMac(): Promise<Hosted> {
+  const home = await temporaryHome();
+  const bin = join(home, 'macos');
+  await mkdir(bin);
+  await writeFile(join(bin, 'ps'), `#!/bin/sh\nexec env -u NODE_OPTIONS ${process.execPath} ${fileURLToPath(new URL('./ps.ts', import.meta.url))} "$@"\n`);
+  await writeFile(join(bin, 'sw_vers'), '#!/bin/sh\n[ "$*" = -productVersion ] && echo 27.0.1\n');
+  await Promise.all(['ps', 'sw_vers'].map((tool) => chmod(join(bin, tool), 0o755)));
+  return hostKit([{}], {
+    home,
+    skills: false,
+    environment: {
+      PATH: `${bin}:${join(home, 'bin')}:${process.env.PATH}`,
+      NODE_OPTIONS: `--import=${fileURLToPath(new URL('./darwin.ts', import.meta.url))}`,
+    },
+  });
 }
 
 export function lastInput(): string {

@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from 'node:module';
 
 const read = fs.readdirSync;
 Object.defineProperty(process, 'platform', { value: 'darwin' });
+Object.defineProperty(process, 'arch', { value: 'arm64' });
 fs.readdirSync = ((path: fs.PathLike, ...rest: unknown[]) => {
   if (path === '/proc') throw Object.assign(new Error("ENOENT: no such file or directory, scandir '/proc'"), { code: 'ENOENT' });
   return (read as (path: fs.PathLike, ...rest: unknown[]) => unknown)(path, ...rest);

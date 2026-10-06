@@ -16,14 +16,14 @@ export const LOCATIONS: Record<string, string> = {
   'grok-build': '.grok/bin',
 };
 
-export function pinnedArtifacts(): Artifact[] {
-  const engine = ENGINES[`${process.platform}-${process.arch}`]!;
+export function pinnedArtifacts(platform = `${process.platform}-${process.arch}`): Artifact[] {
+  const engine = ENGINES[platform]!;
   return [engine.decoder, engine.engine, MODEL];
 }
 
-export function cacheArtifacts(): void {
+export function cacheArtifacts(platform?: string): void {
   mkdirSync(CACHE, { recursive: true });
-  for (const artifact of pinnedArtifacts()) {
+  for (const artifact of pinnedArtifacts(platform)) {
     const cached = join(CACHE, artifact.sha256);
     if (existsSync(cached)) continue;
     const fetched = spawnSync('curl', ['-fsSL', '--retry', '3', '-o', `${cached}.part`, artifact.url], { stdio: 'inherit' });

@@ -19,7 +19,7 @@ interface Engine {
   engine: Artifact;
 }
 
-const RELEASE = 'https://github.com/agentshouse/kit/releases/download/engine-1';
+const RELEASE = 'https://github.com/agentshouse/kit/releases/download/engine-2';
 
 export const MODEL: Artifact = {
   url: 'https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/ggml-parakeet-tdt-0.6b-v3-q4_k.bin',
@@ -30,11 +30,15 @@ export const MODEL: Artifact = {
 export const ENGINES: Record<string, Engine> = {
   'linux-x64': {
     decoder: { url: `${RELEASE}/ffmpeg-linux-x86_64`, sha256: '1f8235d206428305afb89c6e8ab99d100425a0ba61e22bb4c7aff017db8c8de5', executable: true },
-    engine: { url: `${RELEASE}/parakeet-cli-linux-x86_64`, sha256: '259fd7a1c83f9768be45d15ef88965f82ce86c481215cfe34f778f9890b3a833', executable: true },
+    engine: { url: `${RELEASE}/parakeet-cli-linux-x86_64`, sha256: 'bb2585695992fe1927a33960002cdf51b8a90a96ad65593c3d0a9f1fbc0865c2', executable: true },
   },
   'linux-arm64': {
     decoder: { url: `${RELEASE}/ffmpeg-linux-aarch64`, sha256: 'a7e08a0fae0179d1078312f6bb13d2a9aa4d4c71a1d82a022953f25dee452f5e', executable: true },
-    engine: { url: `${RELEASE}/parakeet-cli-linux-aarch64`, sha256: 'e2585bc37a30baf48b16e19d18e56920cba78c05da8dc0dea2b0dab0b26caab9', executable: true },
+    engine: { url: `${RELEASE}/parakeet-cli-linux-aarch64`, sha256: 'cbc0bedc8daae97f1ef9dcee4200c06226218e300e0fd62ead1306d22742b7ed', executable: true },
+  },
+  'darwin-arm64': {
+    decoder: { url: `${RELEASE}/ffmpeg-darwin-arm64`, sha256: '7abe154aaed3d6b49f5167ca7221bb66bed51388925d99a7e4261a41fe52fba6', executable: true },
+    engine: { url: `${RELEASE}/parakeet-cli-darwin-arm64`, sha256: '9a2aafc0922ad7c0b6db6eff1641e96572ba32ac40bf995a1df242ed2febf297', executable: true },
   },
 };
 

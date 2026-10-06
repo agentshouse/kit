@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { beforeAll, expect, it } from 'vitest';
 import { cacheArtifacts, pinnedArtifacts } from './curl.ts';
 import { until } from './double.ts';
-import { hostKit, lastInput, opened, type Hosted } from './environment.ts';
+import { hostKit, hostMac, lastInput, opened, type Hosted } from './environment.ts';
 import { alive } from './kit.ts';
 
 interface Sent {
@@ -17,12 +17,16 @@ interface Sent {
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/audio/${name}`, import.meta.url));
 const ENGLISH = /^Transcript: .*\bdollar\b.*\bcents\b/i;
 const RUSSIAN = /^Transcript: .*чудная ночь/i;
+const MACH_O_ARM64 = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01]);
 const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/started'));
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 
 let versions = 0;
 
-beforeAll(cacheArtifacts, 900_000);
+beforeAll(() => {
+  cacheArtifacts();
+  cacheArtifacts('darwin-arm64');
+}, 900_000);
 
 function speech(seconds: number): Buffer {
   const wav = fixture('en.wav');
@@ -144,6 +148,19 @@ it('downloads the pinned engine, decoder and model into Kit home once, deleting 
   expect(await prompted(hosted, 1)).toEqual(['second', second.paths[0], expect.stringMatching(ENGLISH)]);
   expect(await downloads(hosted)).toHaveLength(3);
   expect((await readdir(directory)).sort()).toEqual(installed.sort());
+});
+
+it('installs the engine and the decoder built for Apple silicon on a Mac', async () => {
+  const hosted = await hostMac();
+  const { described } = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
+
+  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+
+  await hosted.ack(lastInput());
+  const directory = join(hosted.home, 'transcription');
+  const installed = await Promise.all((await readdir(directory)).map((name) => readFile(join(directory, name))));
+  expect(installed).toHaveLength(3);
+  expect(installed.filter((content) => content.subarray(0, 8).equals(MACH_O_ARM64))).toHaveLength(2);
 });
 
 it('refuses an artifact that does not match its hash, installs nothing, keeps the bare path and tries again on the next audio file', async () => {
