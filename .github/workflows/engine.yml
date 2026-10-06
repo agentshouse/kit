@@ -16,7 +16,23 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - run: docker run --rm -v "$PWD:/kit" -w /kit alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 sh scripts/engine.sh tmp/engine
+      - run: mkdir -p tmp/engine && docker run --rm -v "$PWD:/kit" -w /kit alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 sh scripts/engine.sh tmp/engine
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - name: Transcribe the fixtures with the built engine and the pinned model
+        run: |
+          set -euo pipefail
+          read -r url sha256 < <(node --input-type=module -e "const { MODEL } = await import('./src/transcription.ts'); console.log(MODEL.url, MODEL.sha256)")
+          curl -fsSL --retry 3 -o tmp/model.bin "$url"
+          printf '%s  tmp/model.bin\n' "$sha256" | sha256sum -c -
+          arch=$(uname -m)
+          for fixture in en.ogg en.webm en.m4a en.mp3 en.wav ru.ogg; do
+            tmp/engine/ffmpeg-linux-$arch -nostdin -loglevel error -i "test/fixtures/audio/$fixture" -ar 16000 -ac 1 -c:a pcm_s16le -y tmp/fixture.wav
+            text=$(tmp/engine/parakeet-cli-linux-$arch -np -m tmp/model.bin -f tmp/fixture.wav 2>/dev/null)
+            printf '%s: %s\n' "$fixture" "$text"
+            grep -qiE 'dollar.*cents|чудная ночь' <<< "$text"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: engine-${{ matrix.runner }}
