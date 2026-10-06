@@ -30,11 +30,11 @@ export const MODEL: Artifact = {
 export const ENGINES: Record<string, Engine> = {
   'linux-x64': {
     decoder: { url: `${RELEASE}/ffmpeg-linux-x86_64`, sha256: '1f8235d206428305afb89c6e8ab99d100425a0ba61e22bb4c7aff017db8c8de5', executable: true },
-    engine: { url: `${RELEASE}/parakeet-cli-linux-x86_64`, sha256: '00b038974a18476ce7db7289b0952fbba9f9f7f4f2d101e60b558c2ab9e96970', executable: true },
+    engine: { url: `${RELEASE}/parakeet-cli-linux-x86_64`, sha256: '259fd7a1c83f9768be45d15ef88965f82ce86c481215cfe34f778f9890b3a833', executable: true },
   },
   'linux-arm64': {
     decoder: { url: `${RELEASE}/ffmpeg-linux-aarch64`, sha256: 'a7e08a0fae0179d1078312f6bb13d2a9aa4d4c71a1d82a022953f25dee452f5e', executable: true },
-    engine: { url: `${RELEASE}/parakeet-cli-linux-aarch64`, sha256: '3b1f50f4bad8fe954a593abe42e92565a703eced89c51092d569e7ca34c6d94d', executable: true },
+    engine: { url: `${RELEASE}/parakeet-cli-linux-aarch64`, sha256: 'e2585bc37a30baf48b16e19d18e56920cba78c05da8dc0dea2b0dab0b26caab9', executable: true },
   },
 };
 
