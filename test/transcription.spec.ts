@@ -10,7 +10,7 @@ import { alive } from './kit.ts';
 
 interface Sent {
   name: string;
-  media_type: string;
+  media_type: string | null;
   content: Buffer;
 }
 
@@ -69,14 +69,19 @@ async function prompted(hosted: Hosted, index: number): Promise<string[]> {
 }
 
 function engines(hosted: Hosted): number[] {
-  const engine = join(hosted.home, 'transcription', pinnedArtifacts()[1]!.sha256);
+  const installed = join(hosted.home, 'transcription');
   return readdirSync('/proc').flatMap((entry) => {
     try {
-      return readFileSync(`/proc/${entry}/cmdline`, 'utf8').split('\0')[0] === engine ? [Number(entry)] : [];
+      const argv = readFileSync(`/proc/${entry}/cmdline`, 'utf8').split('\0');
+      return argv[0]!.startsWith(installed) && argv.includes('-m') ? [Number(entry)] : [];
     } catch {
       return [];
     }
   });
+}
+
+async function downloads(hosted: Hosted): Promise<string[]> {
+  return (await readFile(join(hosted.home, 'curl.log'), 'utf8')).trim().split('\n');
 }
 
 it('follows each audio path with its transcript in the prompt and leaves every other path bare', async () => {
@@ -85,13 +90,22 @@ it('follows each audio path with its transcript in the prompt and leaves every o
     { name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') },
     { name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') },
     { name: 'notes.txt', media_type: 'text/plain', content: Buffer.from('plain notes\n') },
+    { name: 'untyped', media_type: null, content: Buffer.from('no media type\n') },
   ]);
 
   hosted.input({ kind: 'message', text: 'listen to these', files: described, first: false });
 
   expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
   const lines = await prompted(hosted, 0);
-  expect(lines).toEqual(['listen to these', paths[0], expect.stringMatching(ENGLISH), paths[1], expect.stringMatching(RUSSIAN), paths[2]]);
+  expect(lines).toEqual([
+    'listen to these',
+    paths[0],
+    expect.stringMatching(ENGLISH),
+    paths[1],
+    expect.stringMatching(RUSSIAN),
+    paths[2],
+    paths[3],
+  ]);
 });
 
 it.each([['en.ogg', 'audio/ogg'], ['en.webm', 'audio/webm'], ['en.m4a', 'audio/mp4'], ['en.mp3', 'audio/mpeg'], ['en.wav', 'audio/wav']])(
@@ -116,17 +130,20 @@ it('downloads the pinned engine, decoder and model into Kit home once, deleting 
   hosted.input({ kind: 'message', text: 'first', files: first.described, first: false });
 
   expect(await prompted(hosted, 0)).toEqual(['first', first.paths[0], expect.stringMatching(RUSSIAN)]);
-  const pinned = pinnedArtifacts();
-  expect((await readFile(join(hosted.home, 'curl.log'), 'utf8')).trim().split('\n').sort()).toEqual(
-    pinned.map((artifact) => artifact.url).sort(),
-  );
-  expect((await readdir(directory)).sort()).toEqual(pinned.map((artifact) => artifact.sha256).sort());
+  expect(new Set(await downloads(hosted)).size).toBe(3);
+  const installed = await readdir(directory);
+  expect(installed).toHaveLength(3);
+  expect(installed).not.toContain('0'.repeat(64));
+  for (const name of installed) {
+    expect(createHash('sha256').update(await readFile(join(directory, name))).digest('hex')).toBe(name);
+  }
 
   const second = sent(hosted, [{ name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') }]);
   hosted.input({ kind: 'message', text: 'second', files: second.described, first: false });
 
   expect(await prompted(hosted, 1)).toEqual(['second', second.paths[0], expect.stringMatching(ENGLISH)]);
-  expect((await readFile(join(hosted.home, 'curl.log'), 'utf8')).trim().split('\n')).toHaveLength(3);
+  expect(await downloads(hosted)).toHaveLength(3);
+  expect((await readdir(directory)).sort()).toEqual(installed.sort());
 });
 
 it('refuses an artifact that does not match its hash, installs nothing, keeps the bare path and tries again on the next audio file', async () => {

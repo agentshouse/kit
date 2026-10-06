@@ -16,10 +16,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - run: mkdir -p tmp/engine && docker run --rm -v "$PWD:/kit" -w /kit alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 sh scripts/engine.sh tmp/engine
       - uses: actions/setup-node@v4
         with:
           node-version: 24.21.0
+      - run: npm install --global --ignore-scripts npm@11.19.0
+      - run: npm run engine
       - name: Transcribe the fixtures with the built engine and the pinned model
         run: |
           set -euo pipefail

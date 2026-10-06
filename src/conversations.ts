@@ -217,8 +217,8 @@ export class Conversations {
     if (input.kind === 'open') return this.open(conversation, input);
     if (input.kind === 'message') return this.message(conversation, input);
     if (input.kind === 'interrupt') {
-      await this.interrupt(conversation, String(input.turn_id));
       if (--conversation.interrupts === 0) conversation.interrupted = new AbortController();
+      await this.interrupt(conversation, String(input.turn_id));
     }
     if (input.kind === 'kill') {
       await this.kill(conversation);
@@ -277,7 +277,7 @@ export class Conversations {
     const lines: string[] = [];
     for (const [index, path] of paths.entries()) {
       lines.push(path);
-      if (!files[index]!.media_type.startsWith('audio/')) continue;
+      if (files[index]!.media_type?.startsWith('audio/') !== true) continue;
       try {
         const text = await transcribe(path, AbortSignal.any([conversation.killed.signal, conversation.interrupted.signal]));
         if (text !== '') lines.push(`Transcript: ${text}`);
