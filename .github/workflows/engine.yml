@@ -1,0 +1,61 @@
+name: Build the transcription engine
+
+on:
+  push:
+    tags:
+      - 'engine-*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - run: npm install --global --ignore-scripts npm@11.19.0
+      - run: npm run engine
+      - name: Transcribe the fixtures with the built engine and the pinned model
+        run: |
+          set -euo pipefail
+          read -r url sha256 < <(node --input-type=module -e "const { MODEL } = await import('./src/transcription.ts'); console.log(MODEL.url, MODEL.sha256)")
+          curl -fsSL --retry 3 -o tmp/model.bin "$url"
+          printf '%s  tmp/model.bin\n' "$sha256" | sha256sum -c -
+          arch=$(uname -m)
+          for fixture in en.ogg en.webm en.m4a en.mp3 en.wav ru.ogg; do
+            tmp/engine/ffmpeg-linux-$arch -nostdin -loglevel error -i "test/fixtures/audio/$fixture" -ar 16000 -ac 1 -c:a pcm_s16le -y tmp/fixture.wav
+            text=$(tmp/engine/parakeet-cli-linux-$arch -np -m tmp/model.bin -f tmp/fixture.wav 2>/dev/null)
+            printf '%s: %s\n' "$fixture" "$text"
+            grep -qiE 'dollar.*cents|чудная ночь' <<< "$text"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.runner }}
+          path: tmp/engine/
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: tmp/engine
+          merge-multiple: true
+      - name: Publish the engine release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd tmp/engine
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" ./* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+            --title "Transcription engine $GITHUB_REF_NAME" \
+            --notes "parakeet-cli from whisper.cpp v1.9.4 (MIT) and FFmpeg 9.0.2 (LGPL-2.1-or-later, source https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz), built as static binaries by scripts/engine.sh at $GITHUB_SHA."
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir ../readback
+          diff -r . ../readback

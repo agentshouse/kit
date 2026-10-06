@@ -11,6 +11,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { unlessAborted } from './abort.ts';
 import { killMarked, startAdapter, TURN_ENDED, TURN_STARTED, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
@@ -24,6 +25,7 @@ import { instructions } from './instructions.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 import { createHowWeWork } from './skills.ts';
 import type { Frame } from './stream.ts';
+import { transcribe } from './transcription.ts';
 
 export interface Kit {
   house: House;
@@ -57,15 +59,6 @@ function answerMessage(request: unknown, response: unknown): string {
 
 function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
-}
-
-function unlessKilled<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const killed = () => reject(signal.reason);
-    signal.addEventListener('abort', killed, { once: true });
-    if (signal.aborted) killed();
-    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', killed));
-  });
 }
 
 function stop(bridge: Bridge): void {
@@ -124,6 +117,8 @@ class Conversation {
   opening: Bridge | null = null;
   kills = 0;
   killed = new AbortController();
+  interrupts = 0;
+  interrupted = new AbortController();
   open = 0;
   queue: Promise<unknown> = Promise.resolve();
   reports: Promise<unknown> = Promise.resolve();
@@ -175,6 +170,10 @@ export class Conversations {
           conversation.killed.abort(new Error(KILLED));
           this.halt(conversation);
         }
+        if (input.kind === 'interrupt') {
+          conversation.interrupts++;
+          conversation.interrupted.abort();
+        }
         const work = conversation.queue.then(() => this.carry(conversation, input));
         conversation.queue = work.catch(() => undefined);
         this.acks.set(input.input_id, work);
@@ -217,7 +216,10 @@ export class Conversations {
   private async carry(conversation: Conversation, input: Input): Promise<Ack> {
     if (input.kind === 'open') return this.open(conversation, input);
     if (input.kind === 'message') return this.message(conversation, input);
-    if (input.kind === 'interrupt') await this.interrupt(conversation, String(input.turn_id));
+    if (input.kind === 'interrupt') {
+      if (--conversation.interrupts === 0) conversation.interrupted = new AbortController();
+      await this.interrupt(conversation, String(input.turn_id));
+    }
     if (input.kind === 'kill') {
       await this.kill(conversation);
       if (--conversation.kills === 0) conversation.killed = new AbortController();
@@ -247,12 +249,9 @@ export class Conversations {
     const prompt: ContentBlock[] = [];
     try {
       const route = await this.route(conversation, input.agent_id);
-      const paths = await placeFiles(
-        this.kit.house,
-        route.working_directory,
-        input.files as MessageFile[],
-        conversation.killed.signal,
-      );
+      const files = input.files as MessageFile[];
+      const paths = await placeFiles(this.kit.house, route.working_directory, files, conversation.killed.signal);
+      const lines = await this.transcribed(conversation, files, paths);
       if (conversation.running === null) {
         const opened = await this.start(conversation, route, input.provider_session_id);
         if (input.provider_session_id === null) ack = { provider_session_id: opened };
@@ -264,7 +263,7 @@ export class Conversations {
         });
       }
       prompt.push({ type: 'text', text: String(input.text) });
-      if (paths.length > 0) prompt.push({ type: 'text', text: paths.join('\n') });
+      if (lines.length > 0) prompt.push({ type: 'text', text: lines.join('\n') });
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
       if ('provider_session_id' in ack) await this.kill(conversation);
@@ -272,6 +271,22 @@ export class Conversations {
     }
     this.prompt(conversation, prompt);
     return ack;
+  }
+
+  private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[]): Promise<string[]> {
+    const lines: string[] = [];
+    for (const [index, path] of paths.entries()) {
+      lines.push(path);
+      if (files[index]!.media_type?.startsWith('audio/') !== true) continue;
+      try {
+        const text = await transcribe(path, AbortSignal.any([conversation.killed.signal, conversation.interrupted.signal]));
+        if (text !== '') lines.push(`Transcript: ${text}`);
+      } catch (error) {
+        if (conversation.kills > 0) throw error;
+        logged(new Error(`${files[index]!.name} was not transcribed: ${causeOf(error)}`));
+      }
+    }
+    return lines;
   }
 
   private async interrupt(conversation: Conversation, turnId: string): Promise<void> {
@@ -311,8 +326,8 @@ export class Conversations {
 
   private async route(conversation: Conversation, agentId: string): Promise<Route> {
     const signal = conversation.killed.signal;
-    await unlessKilled(this.kit.agents.read(), signal);
-    if (this.kit.agents.route(agentId) === undefined) await unlessKilled(this.kit.agents.refresh(), signal);
+    await unlessAborted(this.kit.agents.read(), signal);
+    if (this.kit.agents.route(agentId) === undefined) await unlessAborted(this.kit.agents.refresh(), signal);
     const route = this.kit.agents.route(agentId);
     if (route === undefined) throw new Error(`this Environment hosts no Agent ${agentId}`);
     if (route.working_directory === join(agentBase(), route.agent_id)) {
@@ -332,7 +347,7 @@ export class Conversations {
       .onRequest('elicitation/create', ({ params, signal }) =>
         this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       );
-    const cli = await unlessKilled(this.kit.agents.cli(route.kind), conversation.killed.signal);
+    const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridge = await openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal);
     if (conversation.kills > 0) {
       bridge.close();
@@ -340,7 +355,7 @@ export class Conversations {
     }
     conversation.opening = bridge;
     try {
-      await unlessKilled(createHowWeWork(bridge), conversation.killed.signal);
+      await unlessAborted(createHowWeWork(bridge), conversation.killed.signal);
       const adapter = await startAdapter(
         route.kind,
         cli,

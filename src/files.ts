@@ -5,6 +5,7 @@ import type { House } from './api.ts';
 export interface MessageFile {
   version: string;
   name: string;
+  media_type: string | null;
 }
 
 interface Original {

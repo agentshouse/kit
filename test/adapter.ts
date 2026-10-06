@@ -1,7 +1,7 @@
 import { agent, ndJsonStream, RequestError, type AgentContext } from '@agentclientprotocol/sdk';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -158,6 +158,11 @@ async function directive(
     log({ pinged: true });
   }
   if (name === 'exit') process.exit(Number(argument));
+  if (name === 'deaf') {
+    process.stdin.destroy();
+    closeSync(0);
+    setInterval(() => undefined, 60_000);
+  }
   if (name === 'plan') {
     await client.notify('session/update', {
       sessionId,
