@@ -259,3 +259,20 @@ it('ends a running transcription on a kill and refuses its message', async () =>
   await until(() => !alive(engine), 3000);
   expect(await hosted.ack(message)).toEqual({ refused: 'the conversation was killed' });
 });
+
+it('transcribes the next audio file after an interrupt whose cancel could not reach the CLI', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  hosted.input({ kind: 'message', text: '@deaf\n@wait', files: [], first: false });
+  const turn = (await until(() => started(hosted)[0])).params.turn!;
+  hosted.input({ kind: 'interrupt', turn_id: turn });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  hosted.input({ kind: 'interrupt', turn_id: turn });
+  await until(() => hosted.kit.stderr().includes('EPIPE'));
+  const { described } = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
+
+  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+
+  await hosted.ack(lastInput());
+  expect(await readdir(join(hosted.home, 'transcription'))).toHaveLength(3);
+});
