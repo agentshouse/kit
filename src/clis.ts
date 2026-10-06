@@ -165,29 +165,36 @@ export function withoutProxy(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([name]) => !PROXY.test(name)));
 }
 
-export function run(command: string, args: string[], timeoutMs: number, detached = false): Promise<Ran> {
+export function run(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  detached = false,
+  signal?: AbortSignal,
+): Promise<Ran> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: timeoutMs,
       env: withoutProxy(),
       detached,
+      signal,
     });
     let stdout = '';
     let output = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
-      output += chunk.toString('utf8');
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      stdout += chunk;
+      output += chunk;
     });
-    child.stderr.on('data', (chunk: Buffer) => {
-      output += chunk.toString('utf8');
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+      output += chunk;
     });
     child.on('error', (error) => resolve({ status: null, stdout, output: error.message }));
     child.on('close', (status) => resolve({ status, stdout, output }));
   });
 }
 
-function failureOf(ran: Ran, program: string): string {
+export function failureOf(ran: Ran, program: string): string {
   return ran.output.trim().slice(-CAUSE_CHARACTERS) || `${program} exited with ${ran.status ?? 'a signal'}`;
 }
 
