@@ -1,3 +1,4 @@
+import { retryDelay } from './api.ts';
 import { readEnrolment } from './home.ts';
 
 export type Frame = { type: string } & Record<string, unknown>;
@@ -43,9 +44,7 @@ export function holdStream(handlers: StreamHandlers): Stream {
     opening.onclose = (event) => {
       if (socket === opening) socket = null;
       process.stderr.write(`kit: control stream closed ${event.code} ${event.reason}\n`);
-      const delay = opened
-        ? 1000 + Math.random() * 2000
-        : Math.min(30_000, 1000 * 2 ** failures++);
+      const delay = opened ? 1000 + Math.random() * 2000 : retryDelay(failures++);
       setTimeout(() => void connect(), delay);
     };
   };

@@ -1,4 +1,4 @@
-import type { House } from './api.ts';
+import { retryDelay, type House } from './api.ts';
 
 export type Step =
   | { kind: 'visit'; label: string; url: string }
@@ -13,14 +13,15 @@ export async function holdSecretInput(
   steps: Step[],
   waiting: () => boolean,
 ): Promise<Record<string, string> | null> {
-  while (waiting()) {
+  for (let failures = 0; waiting(); ) {
     try {
       const held = await house.post<Held>(`/kit/secret-input/${subject}`, { steps });
       if (held.outcome === 'collected') return held.content;
       if (held.release !== 'held') return null;
+      failures = 0;
     } catch (error) {
       process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, retryDelay(failures++)));
     }
   }
   return null;

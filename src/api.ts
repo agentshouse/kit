@@ -12,7 +12,7 @@ export class HouseRefusal extends Error {
 }
 
 export function retryDelay(attempt: number): number {
-  return Math.min(30_000, 1000 * 2 ** attempt);
+  return Math.random() * Math.min(30_000, 1000 * 2 ** attempt);
 }
 
 export async function post<T>(
