@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
-import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer, STATUS_CODES, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
 import { connect, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -167,14 +167,33 @@ export async function startHouse(tls?: Certificate): Promise<House> {
       duplex.destroy();
       return;
     }
-    requests.push({
+    const received: Received = {
       method: 'UPGRADE',
       path: '/kit/stream',
       params: {},
       headers: request.headers,
       body: null,
       port: request.socket.remotePort!,
-    });
+    };
+    requests.push(received);
+    const refusing = routes.find((candidate) => candidate.method === 'UPGRADE');
+    const refusal = refusing === undefined ? undefined : await refusing.handler(received);
+    if (refusal?.status !== undefined) {
+      const body = JSON.stringify(refusal.body ?? {});
+      const code = (refusal.body as { error?: { code?: string } } | undefined)?.error?.code;
+      duplex.end(
+        [
+          `HTTP/1.1 ${refusal.status} ${STATUS_CODES[refusal.status]}`,
+          'Connection: close',
+          ...(code === undefined ? [] : [`X-House-Refusal: ${code}`]),
+          'Content-Type: application/json',
+          `Content-Length: ${Buffer.byteLength(body)}`,
+          '',
+          body,
+        ].join('\r\n'),
+      );
+      return;
+    }
     await streamsHeld;
     streams.handleUpgrade(request, duplex, head, (socket) => {
       const held: KitSocket = {
@@ -217,6 +236,7 @@ export async function startHouse(tls?: Certificate): Promise<House> {
 
 export async function until<T>(
   read: () => T | undefined | false | Promise<T | undefined | false>,
+  // Ten seconds outlasts any one step of a real Kit process on a loaded runner and still fails a lost step inside the spec's deadline.
   timeoutMs = 10_000,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
@@ -224,6 +244,10 @@ export async function until<T>(
     const value = await read();
     if (value !== undefined && value !== false) return value;
     if (Date.now() > deadline) throw new Error('timed out waiting for the condition');
+    // Twenty milliseconds notices a met condition at once without starving the doubles that share this event loop.
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+// Half a second outlasts the Kit's reaction to what a spec just did, so what it has not done by then it is not doing.
+export const settle = () => new Promise((resolve) => setTimeout(resolve, 500));

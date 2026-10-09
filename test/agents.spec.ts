@@ -315,6 +315,7 @@ it('reads the models when it starts and on no timer after it, though House names
   await writeFile(join(home, 'models', 'codex-acp'), JSON.stringify([{ id: 'gpt-5.5', name: '5.5', efforts: ['high'] }]));
 
   house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+  // A second and a half lets every Kit interval, capped at 300 ms, fire several times before the reads are counted.
   await new Promise((resolve) => setTimeout(resolve, 1500));
 
   expect(await probes()).toBe(1);

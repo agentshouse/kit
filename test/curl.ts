@@ -26,6 +26,7 @@ export function cacheArtifacts(platform?: string): void {
   for (const artifact of pinnedArtifacts(platform)) {
     const cached = join(CACHE, artifact.sha256);
     if (existsSync(cached)) continue;
+    // Three retries ride out a dropped download of a pinned artifact before the suite fails on it.
     const fetched = spawnSync('curl', ['-fsSL', '--retry', '3', '-o', `${cached}.part`, artifact.url], { stdio: 'inherit' });
     if (fetched.status !== 0) throw new Error(`${artifact.url} did not download`);
     if (createHash('sha256').update(readFileSync(`${cached}.part`)).digest('hex') !== artifact.sha256) {

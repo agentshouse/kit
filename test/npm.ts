@@ -26,6 +26,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const spec = argv.at(-1)!;
   const at = spec.lastIndexOf('@');
   const name = spec.slice(0, at);
+  // Fifty milliseconds resumes the held install as soon as the spec removes its file.
   while (existsSync(join(home, 'npm-hold'))) await new Promise((resolve) => setTimeout(resolve, 50));
   const muted = join(home, 'npm-mute');
   if (existsSync(muted) && readFileSync(muted, 'utf8').includes(name)) process.exit(1);

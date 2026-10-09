@@ -94,12 +94,14 @@ async function models(kind: string, adapter: Adapter, known: Model[]): Promise<P
 
 async function signedIn(kind: string, cli: string, known: Offer): Promise<boolean> {
   const probe = CLIS[kind]!.signedIn;
+  // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
   if ('command' in probe) return (await run(cli, probe.command, 30_000)).status === 0;
   return (await offer(kind, cli, known)).signed_in;
 }
 
 async function offer(kind: string, cli: string, known: Offer): Promise<Offer> {
   const probe = CLIS[kind]!.signedIn;
+  // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
   if ('command' in probe && (await run(cli, probe.command, 30_000)).status !== 0) return SIGNED_OUT;
   let adapter: Adapter | undefined;
   try {
@@ -140,11 +142,13 @@ function tooOld(kind: string, release: string): string {
 }
 
 async function sshHostKey(): Promise<string | null> {
+  // Listing a local host key takes a moment, so ten seconds only bounds a stuck ssh-keygen.
   const listed = await run('ssh-keygen', ['-l', '-E', 'sha256', '-f', '/etc/ssh/ssh_host_ed25519_key.pub'], 10_000);
   return listed.status === 0 ? (/^\d+ (SHA256:\S+)/.exec(listed.output)?.[1] ?? null) : null;
 }
 
 async function operatingSystem(): Promise<string> {
+  // sw_vers answers at once, so ten seconds only bounds a stuck call.
   if (process.platform === 'darwin') return `macOS ${(await run('sw_vers', ['-productVersion'], 10_000)).output.trim()}`;
   const release = await readFile('/etc/os-release', 'utf8');
   return /^PRETTY_NAME="?([^"\n]*)"?$/m.exec(release)?.[1] ?? release;

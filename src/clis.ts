@@ -154,7 +154,9 @@ export const KIT_VERSION = KIT_PACKAGE.version;
 
 const PROXY = /^https?_proxy$/i;
 const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/;
+// An install still running after fifteen minutes is ended and reported as failed, so a hung download cannot hold its CLI's report.
 const INSTALL_MS = 15 * 60_000;
+// A login shell or a version read is ended after half a minute, so a profile that waits for input cannot stall the report.
 const READ_MS = 30_000;
 const CAUSE_CHARACTERS = 4000;
 

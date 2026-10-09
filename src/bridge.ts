@@ -138,6 +138,7 @@ export async function openBridge(
       });
       const after = resendAfter(forwarded, attempt);
       if (after === null) return forwarded!;
+      // A write House did not settle is sent again on the jittered curve, or after the wait House names for a pending one.
       await delay(after, undefined, { signal: closed.signal });
     }
   };

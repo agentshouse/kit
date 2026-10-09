@@ -254,6 +254,7 @@ export interface Rooms {
   select(rooms: Room[]): Promise<void>;
   denied: Set<string>;
   expired: Set<string>;
+  behind: Set<string>;
   dropping: number;
   dropsEdits: number;
   overloadsUploads: number;
@@ -278,6 +279,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     selection: null,
     denied: new Set(),
     expired: new Set(),
+    behind: new Set(),
     dropping: 0,
     dropsEdits: 0,
     overloadsUploads: 0,
@@ -337,6 +339,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     const [known] = positions;
     const room = rooms.find((candidate) => candidate.ref === known!.authority)!;
     if (state.reads.shift() === false) return { status: 503, body: { error: { code: 'house_unavailable' } } };
+    if (state.behind.has(room.ref)) return { status: 409, body: { error: { code: 'replica_behind' } } };
     if (state.expired.delete(room.ref) || known!.log_epoch !== room.logEpoch) {
       return { status: 410, body: { error: { code: 'position_expired' } } };
     }

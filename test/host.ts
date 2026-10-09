@@ -44,6 +44,7 @@ export interface Host {
   mark(name: Mark): Promise<void>;
   clear(name: Mark): Promise<void>;
   forget(): Promise<void>;
+  restartPolicy(policy: string): Promise<void>;
 }
 
 type Mark = 'changed' | 'container' | 'docker-down' | 'login-fails' | 'refused';
@@ -76,17 +77,32 @@ esac\n`,
 case "$1" in
   info) case "$3" in *OperatingSystem*) echo 'Docker Desktop' ;; *) echo linux/x86_64 ;; esac ;;
   container) [ -e "$FAKE/container" ] ;;
+  inspect)
+    . "$FAKE/container"
+    printf '%s\\n' "$3" | sed -e "s|{{.Config.Image}}|$image|" -e "s|{{.HostConfig.RestartPolicy.Name}}|$policy|" -e 's|{{len .Mounts}}|2|' \\
+      -e "s|{{range .Mounts}}{{if eq .Destination \\"/kit-home\\"}}{{.Source}}{{end}}{{end}}|$home|" \\
+      -e "s|{{range .Mounts}}{{if eq .Destination \\"/agents/house\\"}}{{.Source}}{{end}}{{end}}|$workspace|" \\
+      -e 's|{{range .Mounts}}{{if eq .Destination "[^"]*"}}{{.Type}}/{{.RW}}{{end}}{{end}}|bind/true|' \\
+      -e "s|{{index .Config.Labels \\"agentshouse.house\\"}}|$label|" -e 's|{{.State.Running}}|true|'
+    ;;
   rm) rm "$FAKE/container" ;;
   run)
     for argument; do
+      case "$previous" in
+        --restart) policy=$argument ;;
+        --label) label=\${argument#*=} ;;
+      esac
       case "$argument" in
         *dst=/kit-home) home=\${argument#*src=}; home=\${home%%\\",dst=*} ;;
+        *dst=/agents/house) workspace=\${argument#*src=}; workspace=\${workspace%%\\",dst=*} ;;
         HOUSE_KIT_REPLACES=*) replacing=environment-two ;;
-        -d) touch "$FAKE/container" ;;
+        -d) detached=1 ;;
       esac
-      last=$argument
+      image=$previous
+      previous=$argument
     done
-    if [ "$last" = login ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
+    [ -z "$detached" ] || printf 'image=%s\\npolicy=%s\\nhome=%s\\nworkspace=%s\\nlabel=%s\\n' "$image" "$policy" "$home" "$workspace" "$label" > "$FAKE/container"
+    if [ "$previous" = login ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
     ;;
 esac\n`,
   sudo: `${LOGGED}exit 1\n`,
@@ -164,5 +180,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     mark: (name) => writeFile(join(fake, name), ''),
     clear: (name) => rm(join(fake, name), { force: true }),
     forget: () => writeFile(join(fake, 'log'), ''),
+    restartPolicy: async (policy) =>
+      writeFile(join(fake, 'container'), (await readFile(join(fake, 'container'), 'utf8')).replace(/^policy=.*$/m, `policy=${policy}`)),
   };
 }

@@ -56,9 +56,11 @@ async function finished(inputId: string): Promise<Ack> {
   for (;;) {
     const ack = await recorded();
     if (ack !== null) return ack;
+    // systemctl answers at once, so ten seconds only bounds a stuck service manager.
     if ((await run('systemctl', ['is-active', '--quiet', unit(inputId)], 10_000)).status !== 0) {
       return (await recorded()) ?? { refused: 'the Kit bootstrap did not finish' };
     }
+    // The bootstrap runs for minutes, so checking each second sees its outcome within a second at little cost.
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }

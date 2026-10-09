@@ -14,6 +14,7 @@ $BootstrapArguments = @($args | ForEach-Object { [string]$_ })
 $MinimumBuild = 22631
 $MinimumWsl = [version]'2.1.5'
 $DesktopInstaller = 'https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe'
+# Docker Desktop's first start waits on its own terms and setup windows; five minutes bounds that before asking for a rerun.
 $DesktopWaitSeconds = 300
 
 function Stop-Bootstrap([string] $Cause) {
@@ -157,6 +158,7 @@ function Initialize-DockerDesktop {
     if ($waited -ge $DesktopWaitSeconds) {
       Stop-Bootstrap "Docker Desktop is not ready: $($docker.Cause); finish what its window asks, then rerun this bootstrap"
     }
+    # Checking every two seconds finds Docker Desktop ready at most two seconds after it answers.
     Start-Sleep -Seconds 2
     $waited += 2
   }
@@ -281,7 +283,7 @@ function Get-HouseWorkdir([string] $Here, [string] $Root) {
 function Start-Resident {
   $resident = @()
   if (-not $House.StartsWith('https://')) { $resident = @('--network', 'host') }
-  Invoke-Docker run -d --name $Name --restart unless-stopped @resident --mount $KitHomeMount --mount $WorkspaceMount --label "agentshouse.house=$House" $Image resident | Out-Null
+  Invoke-Docker run -d --name $Name --restart on-failure @resident --mount $KitHomeMount --mount $WorkspaceMount --label "agentshouse.house=$House" $Image resident | Out-Null
 }
 
 function Connect-Kit {
@@ -387,8 +389,7 @@ function Connect-Kit {
   $Common = @('--hostname', [Net.Dns]::GetHostName(), '--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
 
   if (Test-Container) {
-    $installed = Read-Inspect '{{.Config.Image}}'
-    if ((Read-Inspect '{{.HostConfig.RestartPolicy.Name}}') -cne 'unless-stopped') { Stop-Bootstrap 'the installed Kit has a different lifecycle' }
+    $installed = Read-Inspect '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}'
     if ((Read-Inspect '{{len .Mounts}}') -cne '2') { Stop-Bootstrap 'the installed Kit has unexpected mounts' }
     if ((Read-Inspect '{{range .Mounts}}{{if eq .Destination `/kit-home`}}{{.Name}}{{end}}{{end}}') -cne $KitHome) { Stop-Bootstrap 'the installed Kit uses another Kit home' }
     if ((Read-Inspect '{{range .Mounts}}{{if eq .Destination `/kit-home`}}{{.Type}}/{{.RW}}{{end}}{{end}}') -cne 'volume/true') { Stop-Bootstrap 'the installed Kit home is not a writable volume' }
@@ -425,7 +426,7 @@ function Connect-Kit {
   if (Test-Container) {
     $configured = Set-Configuration
     Update-Clis
-    if ($installed -cne $Image) {
+    if ($installed -cne "$Image on-failure") {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
       Write-Host 'House Kit updated.'

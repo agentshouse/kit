@@ -3,7 +3,7 @@ import { dirname, join, relative } from 'node:path';
 import { expect, it } from 'vitest';
 import { BINS, RELEASES, placeUserCli } from './cli.ts';
 import { LOCATIONS } from './curl.ts';
-import { until } from './double.ts';
+import { settle, until } from './double.ts';
 import { hostKit, lastInput, userBin, type Hosted } from './environment.ts';
 
 const KINDS = Object.keys(BINS);
@@ -20,8 +20,6 @@ async function report(hosted: Hosted, matches: (agents: Record<string, unknown>[
 async function reportOf(hosted: Hosted, agents: unknown[]): Promise<void> {
   await report(hosted, (reported) => JSON.stringify(reported) === JSON.stringify(agents));
 }
-
-const settle = () => new Promise((resolve) => setTimeout(resolve, 500));
 
 async function open(hosted: Hosted, conversation: string, agent = 'agent-1'): Promise<unknown> {
   hosted.input({ kind: 'open', conversation_id: conversation, agent_id: agent });

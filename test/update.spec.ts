@@ -80,6 +80,7 @@ it('refuses a bootstrap that does not match its sha256 and runs nothing', async 
 
 it('carries two updates one after the other, each with its own bootstrap and status', async () => {
   const hosted = await hostKit();
+  // The failing bootstrap runs half a second, so the second update arrives while it runs.
   const failing = await serve(hosted, 'sleep 0.5\nexit 3\n');
   const passing = {
     bootstrap: `${hosted.house.origin}/releases/next/connect-linux.sh`,

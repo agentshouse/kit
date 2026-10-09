@@ -203,6 +203,7 @@ it('keeps a copy where it is through a handle change, stops it on deselection an
   await until(async () => (await readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8')).includes('"active":false'));
   room.put('a.md', 'a, from House\n');
   hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
+  // Three tenths of a second outlast the Kit taking an entries frame, so a read it has not made by then is not coming.
   await new Promise((resolve) => setTimeout(resolve, 300));
   expect(hosted.house.requests.slice(deselected).filter((request) => request.path.startsWith('/kit/door/'))).toEqual([]);
   expect(git(room.repository, 'rev-parse', 'HEAD').trim()).toBe(local);
@@ -235,6 +236,34 @@ it('reads the Room whole again when House no longer holds the copy position', as
   expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, much later\n');
   expect(hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap')).toHaveLength(2);
 });
+
+it(
+  'asks a replica behind the copy position once and catches the copy up at the next entries frame',
+  async () => {
+    const hosted = await hostKit();
+    const rooms = serveRooms(hosted);
+    const room = rooms.room('notes');
+    room.put('a.md', 'a\n');
+    await rooms.select([room]);
+    const enumerations = () => hosted.house.requests.filter((request) => request.path === '/kit/door/enumerate');
+    const before = received(room);
+
+    room.put('a.md', 'a, from House\n');
+    rooms.behind.add(room.ref);
+    hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
+    await until(() => enumerations()[0]);
+    // Thirty-one seconds outlast the Kit's longest wait before any retry, so an ask not repeated by then is not coming.
+    await new Promise((resolve) => setTimeout(resolve, 31_000));
+    expect(enumerations()).toHaveLength(1);
+    expect(received(room)).toBe(before);
+
+    rooms.behind.delete(room.ref);
+    await deliveredTo(hosted, room);
+    expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, from House\n');
+  },
+  // The spec waits out the Kit's half-minute longest retry wait before it catches the copy up.
+  45_000,
+);
 
 it('reads a bundle House hands over through a transfer address', async () => {
   const hosted = await hostKit();

@@ -254,6 +254,7 @@ it('names the copies of a selection still being read in a first prompt that arri
   await until(() => hosted.house.requests.some((request) => request.path === '/kit/door/bootstrap'));
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  // Three tenths of a second let the message reach the Kit while the copy it reads is still held.
   await new Promise((resolve) => setTimeout(resolve, 300));
   release();
 

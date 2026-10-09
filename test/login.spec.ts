@@ -147,6 +147,7 @@ it('finishes and keeps the credential when the browser disconnects before its an
   browser.on('error', () => undefined);
   house.route('POST', '/kit/token', async () => {
     browser.destroy();
+    // Fifty milliseconds let the closed browser connection reach the Kit before House answers the token.
     await new Promise((resolve) => setTimeout(resolve, 50));
     return { body: { credential: 'ahk_first', environment: 'environment-one', user: 'user-one' } };
   });

@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { until } from './double.ts';
+import { settle, until } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-const settle = () => new Promise((resolve) => setTimeout(resolve, 500));
 
 async function opened(hosted: Hosted): Promise<void> {
   hosted.input({ kind: 'open' });
@@ -17,6 +16,7 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
+  // The turn holds a second and a half, outlasting the half second the spec watches for an idle report.
   hosted.input({ kind: 'message', text: '@hold 1500\n@say done', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   await settle();
@@ -30,6 +30,7 @@ it('reports idle only after it acknowledges the input it carried out', async () 
   const hosted = await hostKit();
   await until(() => hosted.idles[0]);
   hosted.house.route('POST', '/kit/inputs/:input/ack', async (request) => {
+    // The acknowledgement takes three tenths of a second, so an idle report sent before it would show.
     await new Promise((resolve) => setTimeout(resolve, 300));
     hosted.acks.push(request);
     return { body: {} };
@@ -57,6 +58,7 @@ it('counts a turn waiting on a non-secret question as idle', async () => {
 it('does not count a turn waiting on a secret question as idle', async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/secret-input/:subject', async () => {
+    // House holds the secret question two tenths of a second each time, so the Kit keeps holding it.
     await new Promise((resolve) => setTimeout(resolve, 200));
     return { body: { outcome: 'released', release: 'held' } };
   });
@@ -105,6 +107,7 @@ it('drops an idle report House did not take once the CLI reports a running backg
 
   hosted.input({ kind: 'message', text: '@job job-1\n@say started', files: [], first: true });
   await until(() => ended(hosted)[0]);
+  // A second outlasts the first retry of the refused idle report, which the running job must drop.
   await new Promise((resolve) => setTimeout(resolve, 1000));
   hosted.input({ kind: 'message', text: '@jobdone job-1', files: [], first: false });
   await until(() => ended(hosted)[1]);

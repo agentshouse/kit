@@ -86,10 +86,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     log({ pasted: createHash('sha256').update(pasted).digest('hex') });
     if (!pasted.includes('#')) {
       process.stdout.write('Invalid code. Please make sure the full code was copied.\n');
+      // An idle tick each minute keeps the refused login waiting, as the real one does, until the Kit ends it.
       await new Promise(() => setInterval(() => undefined, 60_000));
     }
   } else {
     const finished = join(home, 'device-login', kind);
+    // Fifty milliseconds finishes the login as soon as the spec writes its outcome.
     while (!existsSync(finished)) await new Promise((resolve) => setTimeout(resolve, 50));
     const refusal = readFileSync(finished, 'utf8');
     if (refusal !== '') {

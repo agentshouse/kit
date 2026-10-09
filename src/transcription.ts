@@ -55,6 +55,7 @@ function installed(artifact: Artifact): string {
 }
 
 async function executed(command: string, args: string[], signal: AbortSignal): Promise<string> {
+  // A download or a transcription runs as long as its size needs; the conversation's interrupt or end aborts it instead.
   const ran = await run(command, args, 0, false, signal);
   if (ran.status !== 0) throw new Error(failureOf(ran, basename(command)));
   return ran.stdout;
@@ -90,6 +91,7 @@ async function install(artifacts: Artifact[], signal: AbortSignal): Promise<void
   try {
     for (const artifact of missing) {
       const part = `${installed(artifact)}.part`;
+      // Three retries carry a large download past a dropped connection before the transcription fails.
       await executed('curl', ['-fsSL', '--retry', '3', '-o', part, artifact.url], signal);
       if ((await sha256(part)) !== artifact.sha256) throw new Error(`${artifact.url} does not match its sha256`);
     }

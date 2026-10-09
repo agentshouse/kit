@@ -113,6 +113,7 @@ it('opens a conversation of an Agent whose CLI House added once the Kit has inst
 
   hosted.input({ kind: 'open', agent_id: 'agent-2' });
   const open = lastInput();
+  // Half a second lets the open reach the held install before the spec releases it.
   await new Promise((resolve) => setTimeout(resolve, 500));
   await rm(hold);
 
@@ -148,6 +149,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
   });
   hosted.socket.send({ type: 'work_available', subject: 'agents' });
   await until(() => moved);
+  // A tenth of a second lets the Kit take House's moved route before the spec releases the install the open waits on.
   await new Promise((resolve) => setTimeout(resolve, 100));
   await rm(hold);
 
@@ -166,6 +168,7 @@ it('opens a conversation with the launch settings House changed while the Kit wa
     effort: null,
   };
   hosted.house.route('POST', '/kit/agents/desired', async () => {
+    // House answers the read half a second late, so the open arrives while the Kit is still reading.
     await new Promise((resolve) => setTimeout(resolve, 500));
     return { body: { agents: ['codex-acp'], routes: [changed] } };
   });
@@ -333,6 +336,7 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
       return { body: {} };
     });
 
+    // The first prompt holds half a second, so the second message is written while it runs.
     hosted.input({ kind: 'message', text: '@hold 500\n@say first', files: [], first: false });
     hosted.input({ kind: 'message', text: '@say second', files: [], first: false });
 
@@ -351,6 +355,7 @@ it.each(['codex-acp', 'claude-agent-acp'])(
     hosted.input({ kind: 'open' });
     await hosted.ack(lastInput());
 
+    // The prompt fails a second in, after the message sent meanwhile has ended its own turn.
     hosted.input({ kind: 'message', text: '@hold 1000\n@fail earlier prompt failed', files: [], first: true });
     await hosted.ack(lastInput());
     hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
@@ -375,11 +380,13 @@ it.each(['codex-acp', 'claude-agent-acp'])(
     const hosted = await hostKit([{ kind }]);
     hosted.input({ kind: 'open' });
     await hosted.ack(lastInput());
+    // The prompt fails a second in, while the turn started after the first one ends still runs.
     hosted.input({ kind: 'message', text: '@hold 1000\n@fail earlier prompt failed', files: [], first: true });
     await hosted.ack(lastInput());
     hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
     await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
+    // This turn holds two seconds, so the earlier prompt fails while it runs.
     hosted.input({ kind: 'message', text: '@hold 2000\n@say current', files: [], first: false });
 
     const sequence = await reports(hosted, 6);
@@ -421,8 +428,10 @@ it('ends a turn when Grok ends it and reports the turn Grok then runs for a mess
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
+  // The first turn holds a second, so the next message reaches the CLI while it runs and is queued.
   hosted.input({ kind: 'message', text: '@hold 1000\n@say first', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  // The queued turn holds longer than the first, so it is still running when the first ends.
   hosted.input({ kind: 'message', text: '@hold 1500\n@say second', files: [], first: false });
 
   const ends = await until(() => {
@@ -490,6 +499,7 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
     hosted.input({ kind: 'open' });
     await hosted.ack(lastInput());
 
+    // The prompt fails a tenth of a second after the CLI ends its turn, so the failure arrives after the end.
     hosted.input({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', files: [], first: true });
 
     const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
@@ -516,8 +526,10 @@ it('ends the turn Grok runs for a message it queued failed when Grok fails that 
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
+  // The first turn holds half a second, so the next message reaches the CLI while it runs and is queued.
   hosted.input({ kind: 'message', text: '@hold 500\n@say first', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  // The queued message fails a second after the CLI starts it, once the first turn has ended.
   hosted.input({ kind: 'message', text: '@hold 1000\n@started\n@fail queued message refused', files: [], first: false });
 
   const ends = await until(() => {
@@ -537,6 +549,7 @@ it('reports a message Grok fails before it runs it as a failed turn of its own o
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
+  // The first turn holds a second, so the CLI refuses the next message while it runs.
   hosted.input({ kind: 'message', text: '@hold 1000\n@say first', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   hosted.input({ kind: 'message', text: '@fail refused before it ran', files: [], first: false });
@@ -559,6 +572,7 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
     hosted.input({ kind: 'open' });
     await hosted.ack(lastInput());
 
+    // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
     hosted.input({ kind: 'message', text: '@later 500 by itself', files: [], first: true });
 
     const ends = await until(() => {
@@ -582,6 +596,7 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
     hosted.input({ kind: 'open' });
     await hosted.ack(lastInput());
 
+    // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
     hosted.input({ kind: 'message', text: '@later 500', files: [], first: true });
 
     const ends = await until(() => {
@@ -648,6 +663,7 @@ it('writes an empty draft once House answers the turn start, before the turn has
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
 
+  // The turn holds a second before it writes, so its empty draft is seen before any text.
   hosted.input({ kind: 'message', text: '@hold 1000\n@say Hello', files: [], first: true });
 
   const started = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
@@ -669,6 +685,7 @@ it('writes an empty draft once House answers the turn start, before the turn has
 it("writes the turn's whole view as its next draft on a new socket", async () => {
   const hosted = await hostKit();
   startHeld(hosted);
+  // The turn holds four seconds, past the one to three seconds a closed socket takes to reopen, before it writes its suffix.
   hosted.input({ kind: 'message', text: '@say first\\n\\nsecond\n@hold 4000\n@say  suffix', files: [], first: false });
   await until(() => hosted.socket.frames.find((frame) => frame.type === 'draft'));
 
@@ -835,6 +852,7 @@ it.each(KINDS)('separates the notes and answer of a turn %s starts by itself lik
 
   hosted.input({
     kind: 'message',
+    // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
     text: '@itself 500 @note Checking the job;@tool Read the job output;@say The job finished',
     files: [],
     first: true,
@@ -901,6 +919,7 @@ it('sends a note finished before House answered the turn start once House answer
 
   hosted.input({ kind: 'message', text: '@note Reading it\n@tool Read the file\n@ping\n@say Done', files: [], first: true });
   await until(async () => (await hosted.adapterLog()).some((entry) => entry.pinged === true));
+  // Two tenths of a second outlast the Kit taking the CLI's note, so a note not sent by then waits on House's answer.
   await new Promise((resolve) => setTimeout(resolve, 200));
   expect(notes(hosted)).toEqual([]);
   admit();

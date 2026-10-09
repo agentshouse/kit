@@ -24,6 +24,7 @@ UBUNTU_RELEASES=(jammy noble resolute)
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 CONFLICTING_PACKAGES=(docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc)
 DOCKER_APP=/Applications/Docker.app
+# Docker Desktop's first start waits on its own terms and setup windows; five minutes bounds that before asking for a rerun.
 DESKTOP_WAIT_SECONDS=300
 RUNTIME='Docker Engine'
 OPENER=xdg-open
@@ -211,6 +212,7 @@ establish_docker_desktop() {
   local waited=0
   until docker_answers; do
     ((waited < DESKTOP_WAIT_SECONDS)) || refuse "Docker Desktop is not ready: $(docker_cause); finish what its window asks, then rerun this bootstrap"
+    # Checking every two seconds finds Docker Desktop ready at most two seconds after it answers.
     sleep 2
     waited=$((waited + 2))
   done
@@ -355,6 +357,7 @@ stop_native_service() {
 }
 
 start_native_service() {
+  # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
   printf '[Unit]\nDescription=House Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' \
     "$(id -un)" "$NATIVE_WORKSPACE" "$NATIVE_BIN" | elevated tee "$NATIVE_UNIT" >/dev/null &&
     elevated chmod 0644 "$NATIVE_UNIT" || refuse "$NATIVE_UNIT could not be written"
@@ -491,6 +494,7 @@ define_desktop_service() {
     define "$LAUNCH_AGENT" "$(printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>%s</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s/kit</string>\n\t\t<string>resident</string>\n\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>HOUSE_KIT_WORKSPACE</key>\n\t\t<string>%s</string>\n\t</dict>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\t<key>StandardErrorPath</key>\n\t<string>%s/kit.log</string>\n</dict>\n</plist>\n' \
       "$SERVICE" "$(xml_text "$NATIVE_BIN")" "$(xml_text "$WORKSPACE")" "$(xml_text "$KIT_HOME")")"
   else
+    # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
     define "$USER_UNIT" "$(printf '[Unit]\nDescription=House Kit\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n' \
       "$(unit_text "$WORKSPACE")" "$(unit_text "$NATIVE_BIN")")"
   fi
@@ -666,7 +670,6 @@ kit_installed() {
 }
 
 check_installation() {
-  [[ "$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$NAME")" == unless-stopped ]] || refuse 'the installed Kit has a different lifecycle'
   [[ "$(docker inspect --format '{{len .Mounts}}' "$NAME")" == 2 ]] || refuse 'the installed Kit has unexpected mounts'
   [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Source}}{{end}}{{end}}' "$NAME")" == "$KIT_HOME" ]] || refuse 'the installed Kit uses another Kit home'
   [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Type}}/{{.RW}}{{end}}{{end}}' "$NAME")" == bind/true ]] || refuse 'the installed Kit home is not a writable bind mount'
@@ -717,7 +720,7 @@ container_cli_update() {
 start_resident() {
   local network=()
   [[ "$HOUSE" == https://* ]] || network=(--network host)
-  docker run -d --name "$NAME" --restart unless-stopped ${network[@]+"${network[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" --label "agentshouse.house=$HOUSE" "$IMAGE" resident >/dev/null
+  docker run -d --name "$NAME" --restart on-failure ${network[@]+"${network[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" --label "agentshouse.house=$HOUSE" "$IMAGE" resident >/dev/null
 }
 
 update_kit() {
@@ -937,7 +940,7 @@ if kit_installed; then
   record_placement container
   configure_kit "${CONFIGURE[@]}"
   update_clis container_clis container_cli_update
-  if [[ "$(docker inspect --format '{{.Config.Image}}' "$NAME")" != "$IMAGE" ]]; then
+  if [[ "$(docker inspect --format '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}' "$NAME")" != "$IMAGE on-failure" ]]; then
     update_kit
   else
     resume_kit

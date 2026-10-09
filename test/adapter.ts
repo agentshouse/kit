@@ -38,6 +38,7 @@ let mode: string | undefined;
 const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode);
 const cancelled = new Map<string, () => void>();
 
+// A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.
 const JOB =
   "const clean = require('node:child_process').spawn('sleep', ['600'], { detached: true, stdio: 'ignore', env: { PATH: process.env.PATH } }); process.stdout.write(String(clean.pid)); setInterval(() => undefined, 60_000);";
 const LAUNCHER = `const job = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(JOB)}], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] }); job.stdout.once('data', (clean) => { process.stdout.write(JSON.stringify({ spawned: job.pid, clean: Number(clean) })); process.exit(0); });`;
@@ -150,8 +151,10 @@ async function directive(
   if (name === 'ended') await turnEnded(client, sessionId);
   if (name === 'fail') throw new RequestError(-32603, argument);
   if (name === 'answer') return 'answered';
+  // A hold keeps the turn running for the milliseconds its spec names, the time that spec stages something else in.
   if (name === 'hold') await new Promise((resolve) => setTimeout(resolve, Number(argument)));
   if (name === 'gate') {
+    // Twenty milliseconds opens the gate as soon as the spec creates its file.
     while (!existsSync(join(home, argument))) await new Promise((resolve) => setTimeout(resolve, 20));
   }
   if (name === 'ping') {
@@ -162,6 +165,7 @@ async function directive(
   if (name === 'deaf') {
     process.stdin.destroy();
     closeSync(0);
+    // An idle tick each minute keeps the deaf CLI alive after it stops reading, as a hung one stays.
     setInterval(() => undefined, 60_000);
   }
   if (name === 'plan') {
@@ -179,14 +183,17 @@ async function directive(
   }
   if (name === 'later') {
     const [delay, ...text] = rest;
+    // The CLI starts a turn of its own the milliseconds its spec names after the prompted turn ends.
     setTimeout(async () => {
       await turnStarted(client, sessionId);
       if (text.length > 0) await say(client, sessionId, text.join(' '));
     }, Number(delay));
+    // It ends that turn as long again after it started it, so the turn is seen running.
     setTimeout(() => void turnEnded(client, sessionId), 2 * Number(delay));
   }
   if (name === 'itself') {
     const [delay, ...script] = rest;
+    // The CLI starts a turn of its own the milliseconds its spec names after the prompted turn ends.
     setTimeout(async () => {
       await turnStarted(client, sessionId);
       for (const step of script.join(' ').split(';')) await directive(client, sessionId, step.trim());
@@ -206,6 +213,7 @@ async function directive(
   }
   if (name === 'abandon') {
     const abandon = new AbortController();
+    // The CLI stops waiting on its question after the milliseconds its spec names.
     setTimeout(() => abandon.abort(), Number(argument));
     const outcome = await client
       .request(
@@ -315,6 +323,7 @@ const app = agent({ name: 'adapter-double' })
     const probeHold = join(home, 'probe-hold');
     if (params.cwd === home && existsSync(probeHold) && readFileSync(probeHold, 'utf8') === models[0]!.id) {
       log({ heldProbe: models[0]!.id });
+      // Twenty milliseconds releases the held model read as soon as the spec removes its file.
       while (existsSync(probeHold)) await new Promise((resolve) => setTimeout(resolve, 20));
       log({ releasedProbe: models[0]!.id });
     }

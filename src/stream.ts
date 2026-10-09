@@ -1,4 +1,6 @@
-import { retryDelay } from './api.ts';
+import { subscribe } from 'node:diagnostics_channel';
+import { HouseRefusal, retryDelay } from './api.ts';
+import { end, REPLACED, SIGN_IN_AGAIN } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
 
@@ -13,13 +15,35 @@ export interface Stream {
   send(frame: Frame): boolean;
 }
 
+interface Answered {
+  request: { path: string };
+  response: { statusCode: number; statusText: string; headers: Buffer[] };
+}
+
+const PATH = '/kit/stream';
 const SUBPROTOCOL = 'house.kit.stream.1';
+const REFUSAL_HEADER = 'x-house-refusal';
 
 function streamUrl(house: string): URL {
-  const url = new URL('/kit/stream', house);
+  const url = new URL(PATH, house);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url;
 }
+
+function header(headers: Buffer[], name: string): string {
+  for (let index = 0; index < headers.length; index += 2) {
+    if (headers[index]!.toString('latin1').toLowerCase() === name) return headers[index + 1]!.toString('latin1');
+  }
+  return '';
+}
+
+let refused: HouseRefusal | null = null;
+
+subscribe('undici:request:headers', (message) => {
+  const { request, response } = message as Answered;
+  if (!request.path.endsWith(PATH)) return;
+  refused = new HouseRefusal(PATH, response.statusCode, header(response.headers, REFUSAL_HEADER) || response.statusText);
+});
 
 export function holdStream(handlers: StreamHandlers): Stream {
   let socket: WebSocket | null = null;
@@ -27,6 +51,7 @@ export function holdStream(handlers: StreamHandlers): Stream {
 
   const connect = async () => {
     const { house, credential } = (await readEnrolment())!;
+    refused = null;
     const opening = new WebSocket(relayed(streamUrl(house)), {
       protocols: [SUBPROTOCOL],
       headers: { authorization: `Bearer ${credential}` },
@@ -45,8 +70,11 @@ export function holdStream(handlers: StreamHandlers): Stream {
     opening.onclose = (event) => {
       if (socket === opening) socket = null;
       process.stderr.write(`kit: control stream closed ${event.code} ${event.reason}\n`);
-      const delay = opened ? 1000 + Math.random() * 2000 : retryDelay(failures++);
-      setTimeout(() => void connect(), delay);
+      if (event.reason === 'replaced') end(REPLACED);
+      if (event.reason === 'credential_rejected' || refused?.status === 401) end(SIGN_IN_AGAIN);
+      if (refused !== null && refused.status >= 400 && refused.status < 500) end(refused.message);
+      // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; a failed opening backs off on the jittered curve.
+      setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));
     };
   };
 

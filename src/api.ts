@@ -1,3 +1,4 @@
+import { end, SIGN_IN_AGAIN } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
 
@@ -13,6 +14,7 @@ export class HouseRefusal extends Error {
 }
 
 export function retryDelay(attempt: number): number {
+  // Full jitter, doubling from one second to a 30-second cap, spreads the Kits one outage dropped and retries within half a minute of House's return.
   return Math.random() * Math.min(30_000, 1000 * 2 ** attempt);
 }
 
@@ -44,7 +46,12 @@ export interface House {
 
 async function enrolledPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const { house, credential } = (await readEnrolment())!;
-  return post<T>(house, path, body, credential, signal);
+  try {
+    return await post<T>(house, path, body, credential, signal);
+  } catch (error) {
+    if (error instanceof HouseRefusal && error.status === 401) end(SIGN_IN_AGAIN);
+    throw error;
+  }
 }
 
 export const house: House = {
@@ -56,6 +63,7 @@ export const house: House = {
       } catch (error) {
         if (error instanceof HouseRefusal && error.status < 500) throw error;
         process.stderr.write(`kit: ${path} did not reach House: ${(error as Error).message}\n`);
+        // A delivery House did not take is sent again on the jittered curve for as long as it is still current.
         await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
         if (!current()) throw error;
       }

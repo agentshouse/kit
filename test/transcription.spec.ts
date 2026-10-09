@@ -26,6 +26,7 @@ let versions = 0;
 beforeAll(() => {
   cacheArtifacts();
   cacheArtifacts('darwin-arm64');
+// Fifteen minutes cover downloading the pinned engines and model once into an empty cache.
 }, 900_000);
 
 function speech(seconds: number): Buffer {
@@ -68,6 +69,7 @@ async function prompted(hosted: Hosted, index: number): Promise<string[]> {
   const prompts = await until(async () => {
     const found = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
     return found.length > index ? found : undefined;
+  // Thirty seconds cover transcribing a sample before the CLI double is prompted.
   }, 30_000);
   return String(prompts[index]!.text).split('\n');
 }
@@ -204,11 +206,14 @@ it(
 
     hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
 
+    // Thirty seconds cover the engine starting on a loaded runner.
     await until(() => engines(hosted)[0], 30_000);
+    // Half a second outlasts the Kit reporting idle, so a report not sent by then is not coming.
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(engines(hosted)).toHaveLength(1);
     expect(hosted.idles).toHaveLength(2);
     await hosted.ack(lastInput());
+    // Thirty seconds cover transcribing the forty-second sample before the Kit reports idle.
     await until(() => hosted.idles[2], 30_000);
   },
   // Transcribing the deliberate 40-second sample can exceed the default on the two-vCPU runner.
@@ -225,6 +230,7 @@ it("makes a second conversation's audio wait for the first conversation's transc
   ]);
   const seen = new Set<number>();
   let most = 0;
+  // Sampling every twenty milliseconds sees each engine that runs, however briefly.
   const sampling = setInterval(() => {
     const running = engines(hosted);
     for (const pid of running) seen.add(pid);
@@ -238,6 +244,7 @@ it("makes a second conversation's audio wait for the first conversation's transc
 
   try {
     const acked = (input: string) => hosted.acks.some((ack) => ack.params.input === input);
+    // A minute covers transcribing both samples one after the other.
     await until(() => acked(first) && acked(second), 60_000);
   } finally {
     clearInterval(sampling);
@@ -253,12 +260,15 @@ it('ends a running transcription on an interrupt and writes the message with its
   hosted.input({ kind: 'message', text: '@wait', files: [], first: false });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
   const { described, paths } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(240) }]);
+  // The prompt holds two seconds, so the interrupt reaches the turn while it still runs.
   hosted.input({ kind: 'message', text: '@hold 2000', files: described, first: false });
   const message = lastInput();
+  // Thirty seconds cover the engine starting on a loaded runner.
   const engine = await until(() => engines(hosted)[0], 30_000);
 
   hosted.input({ kind: 'interrupt', turn_id: turn });
 
+  // Three seconds cover the Kit ending the engine it started.
   await until(() => !alive(engine), 3000);
   expect(await hosted.ack(message)).toEqual({});
   expect(await prompted(hosted, 1)).toEqual(['@hold 2000', paths[0]]);
@@ -274,10 +284,12 @@ it('ends a running transcription on a kill and refuses its message', async () =>
   const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(240) }]);
   hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
   const message = lastInput();
+  // Thirty seconds cover the engine starting on a loaded runner.
   const engine = await until(() => engines(hosted)[0], 30_000);
 
   hosted.input({ kind: 'kill' });
 
+  // Three seconds cover the Kit ending the engine it started.
   await until(() => !alive(engine), 3000);
   expect(await hosted.ack(message)).toEqual({ refused: 'the conversation was killed' });
 });
@@ -288,6 +300,7 @@ it('transcribes the next audio file after an interrupt whose cancel could not re
   hosted.input({ kind: 'message', text: '@deaf\n@wait', files: [], first: false });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
   hosted.input({ kind: 'interrupt', turn_id: turn });
+  // Half a second lets the first interrupt fail to reach the deaf CLI before the second is sent.
   await new Promise((resolve) => setTimeout(resolve, 500));
   hosted.input({ kind: 'interrupt', turn_id: turn });
   await until(() => hosted.kit.stderr().includes('EPIPE'));

@@ -31,6 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           read -r url sha256 < <(node --input-type=module -e "const { MODEL } = await import('./src/transcription.ts'); console.log(MODEL.url, MODEL.sha256)")
+          # Three retries carry the large model download past a dropped connection before the job fails.
           curl -fsSL --retry 3 -o tmp/model.bin "$url"
           printf '%s  tmp/model.bin\n' "$sha256" | shasum -a 256 -c -
           platform=$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)

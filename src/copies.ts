@@ -23,7 +23,6 @@ import { relayed } from './relay.ts';
 
 const BRANCH = 'main';
 const PROVENANCE = '_provenance';
-const REPLICA_RETRY_MS = 30_000;
 const IDENTITY = { GIT_COMMITTER_NAME: 'House Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
 
 interface Selected {
@@ -606,7 +605,6 @@ export class LocalCopies {
         const code = error instanceof HouseRefusal ? (refusalOf(error.text)?.code ?? null) : null;
         if (code === 'position_expired') return this.received(copy);
         if (code !== 'replica_behind') throw error;
-        setTimeout(() => this.deliver(copy.key), REPLICA_RETRY_MS).unref();
         return copy;
       }
       const view = answer.authorities.find((entry) => entry.authority === copy.room_ref);

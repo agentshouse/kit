@@ -412,11 +412,34 @@ it('installs the container exactly as before only with the container choice', as
     `run --rm --network host --user ${uid} ${mounts} ${image} login`,
     `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,
     `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js`,
-    `run -d --name house-kit --restart unless-stopped --user ${uid} ${mounts} --label agentshouse.house=https://agents.house ${image} resident`,
+    `run -d --name house-kit --restart on-failure --user ${uid} ${mounts} --label agentshouse.house=https://agents.house ${image} resident`,
   ]);
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
   expect([...host.calls('curl'), ...host.calls('systemctl'), ...host.calls('sudo')]).toEqual([]);
   await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('keeps an installed container on the pinned image and on-failure, and replaces one under another restart policy on a rerun', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run(['--container'])).toMatchObject({ status: 0 });
+  await host.forget();
+
+  const kept = host.run(['--container']);
+
+  expect(kept).toMatchObject({ status: 0, stderr: '' });
+  expect(kept.stdout.split('\n').at(-2)).toBe('House Kit is already installed.');
+  expect(host.calls('docker').filter((call) => /^(rm|run -d) /.test(call))).toEqual([]);
+  await host.restartPolicy('unless-stopped');
+  await host.forget();
+
+  const replaced = host.run(['--container']);
+
+  expect(replaced).toMatchObject({ status: 0, stderr: '' });
+  expect(replaced.stdout.split('\n').at(-2)).toBe('House Kit updated.');
+  expect(host.calls('docker').filter((call) => /^(rm|run -d) /.test(call))).toEqual([
+    'rm -f house-kit',
+    expect.stringMatching(/^run -d --name house-kit --restart on-failure .* resident$/),
+  ]);
 });
 
 it('forwards kit and house only into the container', async () => {

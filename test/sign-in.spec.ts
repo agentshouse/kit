@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { DEVICE_LOGINS } from './device-login.ts';
-import { until } from './double.ts';
+import { settle, until } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
 import { alive, filesUnder, temporaryHome } from './kit.ts';
 
@@ -13,7 +13,6 @@ interface Hold {
 }
 
 const HELD = { outcome: 'released', release: 'held' };
-const settle = () => new Promise((resolve) => setTimeout(resolve, 500));
 
 async function signingIn(
   kind: string,
@@ -25,6 +24,7 @@ async function signingIn(
   const holds: Hold[] = [];
   hosted.house.route('POST', '/kit/secret-input/:subject', async (request) => {
     holds.push({ subject: request.params.subject!, body: request.body });
+    // House holds the page a tenth of a second each time, so the ceremony is seen holding.
     await new Promise((resolve) => setTimeout(resolve, 100));
     return { status, body: answer(holds.length) };
   });
@@ -150,6 +150,21 @@ it('ends the login and acknowledges the input when House refuses its hold', asyn
   expect(holds).toHaveLength(1);
   const [login] = await logins(hosted);
   await until(() => !alive(login!.pid as number));
+});
+
+it('holds the page again after House answers its hold with a 5xx', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }]);
+  const answers = [
+    { status: 503, body: { error: { code: 'service_unavailable' } } },
+    { body: { outcome: 'released', release: 'withdrawn' } },
+  ];
+  let holds = 0;
+  hosted.house.route('POST', '/kit/secret-input/:subject', () => answers[holds++] ?? { body: HELD });
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'grok-build' });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+
+  expect(holds).toBe(2);
 });
 
 it('holds the page and acknowledges a finished sign-in while a model read of its CLI never ends', async () => {

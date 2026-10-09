@@ -270,17 +270,20 @@ it('resumes the session for an answer no process waits on and writes the questio
   ]);
 });
 
+// The report lands at once or 2.5 s late, after the CLI stopped waiting and ended its turn.
 it.each([0, 2500])(
   'drops a question the CLI stops waiting on, its report %i ms on its way, so the turn no longer counts as waiting and its answer goes to the CLI as a new message',
   async (delay) => {
     const hosted = await hostKit();
     hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/interactions', async (request) => {
+      // House takes the report as late as the case names.
       await new Promise((resolve) => setTimeout(resolve, delay));
       hosted.interactions.push(request);
       return { body: {} };
     });
     await opened(hosted);
     await until(() => hosted.idles[1]);
+    // The CLI stops waiting 300 ms in and ends its turn 1.5 s later, before a late report lands.
     hosted.input({ kind: 'message', text: '@abandon 300\n@hold 1500\n@say after', files: [], first: true });
     await until(() => hosted.idles[2]);
 

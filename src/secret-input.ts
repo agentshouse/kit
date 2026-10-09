@@ -22,6 +22,7 @@ export async function holdSecretInput(
     } catch (error) {
       if (error instanceof HouseRefusal && error.status < 500) return null;
       process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
+      // A wait that did not reach House is held again on the jittered curve for as long as its asker still waits.
       await new Promise((resolve) => setTimeout(resolve, retryDelay(failures++)));
     }
   }
