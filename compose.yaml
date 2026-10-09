@@ -1,6 +1,6 @@
 services:
   test:
-    image: node:24.21.0-bookworm@sha256:6dac556d980b7f0e5498d08f08cee0ca67798b4ad6c23964a9214920e67758d0
+    image: mirror.gcr.io/library/node:24.21.0-bookworm@sha256:6dac556d980b7f0e5498d08f08cee0ca67798b4ad6c23964a9214920e67758d0
     init: true
     user: "${KIT_TEST_UID:-1001}:${KIT_TEST_GID:-1001}"
     working_dir: /kit

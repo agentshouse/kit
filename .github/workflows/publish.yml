@@ -57,8 +57,12 @@ jobs:
           mv tmp/agentshouse-kit-*.tgz tmp/kit.tgz
       - uses: docker/setup-qemu-action@v3
         if: steps.version.outputs.published != 'true' && steps.version.outputs.released != 'true'
+        with:
+          image: mirror.gcr.io/tonistiigi/binfmt:latest
       - uses: docker/setup-buildx-action@v3
         if: steps.version.outputs.published != 'true' && steps.version.outputs.released != 'true'
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
       - uses: docker/login-action@v3
         if: steps.version.outputs.published != 'true' && steps.version.outputs.released != 'true'
         with:
