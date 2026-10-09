@@ -262,7 +262,14 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
         ...fields,
       });
     },
-    ack: async (inputId) => (await until(() => acks.find((ack) => ack.params.input === inputId))).body,
+    ack: async (inputId) =>
+      (
+        await until(
+          () => acks.find((ack) => ack.params.input === inputId),
+          // Acknowledgement follows local transcription and can exceed thirty seconds under constrained CPU.
+          45_000,
+        )
+      ).body,
     adapterLog: async () => {
       try {
         const log = await readFile(join(home, 'adapter.log'), 'utf8');

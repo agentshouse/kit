@@ -9,6 +9,7 @@ import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import { until, type Received } from './double.ts';
 import { GIT_IDENTITY, type Hosted, type ToolResult } from './environment.ts';
+import { stop } from './kit.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 export const COPIES = '/agents/house/local-copies';
@@ -288,7 +289,11 @@ export function serveRooms(hosted: Hosted): Rooms {
     room: (handle) => {
       const room = new Room(handle);
       rooms.push(room);
-      onTestFinished(() => rm(room.repository, { recursive: true, force: true }));
+      onTestFinished(async () => {
+        stop(hosted.kit.pid);
+        await hosted.kit.exited;
+        await rm(room.repository, { recursive: true, force: true });
+      });
       return room;
     },
     select: async (selected) => {

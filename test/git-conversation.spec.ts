@@ -141,33 +141,41 @@ it("names each Local copy in a conversation's first prompt", async () => {
   ]);
 });
 
-it('sends a change set above the MCP bound as one prepared upload under the push operation, and resends that edit when its answer is lost', async () => {
-  const { hosted, rooms, room, edits } = await copied();
-  const big = '\u0001'.repeat(800_000);
-  await writeFile(join(room.repository, 'big.md'), big);
-  commitAll(room.repository, 'big');
-  rooms.dropsEdits = 1;
+it(
+  'sends a change set above the MCP bound as one prepared upload under the push operation, and resends that edit when its answer is lost',
+  async () => {
+    const { hosted, rooms, room, edits } = await copied();
+    const big = '\u0001'.repeat(800_000);
+    await writeFile(join(room.repository, 'big.md'), big);
+    commitAll(room.repository, 'big');
+    rooms.dropsEdits = 1;
 
-  const pushed = await shell(hosted, `cd ${room.repository} && house git push`);
+    const pushed = await shell(hosted, `cd ${room.repository} && house git push`);
 
-  expect(pushed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
-  const bytes = Buffer.from(JSON.stringify({ changes: [{ op: 'create', path: '/rooms/notes/big.md', content: big }] }));
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
-  expect(rooms.prepared).toEqual([{ paths: ['/rooms/notes/big.md'], bytes: bytes.length, sha256 }]);
-  expect(rooms.uploaded).toEqual([bytes]);
-  const uploaded = edits().map((received) => (received.body as { params: { arguments: unknown } }).params.arguments);
-  expect(uploaded).toEqual([
-    { paths: ['/rooms/notes/big.md'], upload: { url: expect.any(String), operation: expect.any(String), bytes: bytes.length, sha256 } },
-    uploaded[0],
-  ]);
-  const operations = hosted.mcp
-    .filter((received) => ['run_command', 'edit'].includes(String((received.body as { params: { name?: string } }).params.name)))
-    .map((received) => (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation']);
-  expect(operations).toHaveLength(3);
-  expect(new Set(operations).size).toBe(1);
-  expect(room.batches).toHaveLength(1);
-  expect(room.files.get('big.md')!.content).toBe(big);
-});
+    expect(pushed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+    const bytes = Buffer.from(JSON.stringify({ changes: [{ op: 'create', path: '/rooms/notes/big.md', content: big }] }));
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    expect(rooms.prepared).toEqual([{ paths: ['/rooms/notes/big.md'], bytes: bytes.length, sha256 }]);
+    expect(rooms.uploaded).toEqual([bytes]);
+    const uploaded = edits().map((received) => (received.body as { params: { arguments: unknown } }).params.arguments);
+    expect(uploaded).toEqual([
+      { paths: ['/rooms/notes/big.md'], upload: { url: expect.any(String), operation: expect.any(String), bytes: bytes.length, sha256 } },
+      uploaded[0],
+    ]);
+    const operations = hosted.mcp
+      .filter((received) => ['run_command', 'edit'].includes(String((received.body as { params: { name?: string } }).params.name)))
+      .map(
+        (received) =>
+          (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation'],
+      );
+    expect(operations).toHaveLength(3);
+    expect(new Set(operations).size).toBe(1);
+    expect(room.batches).toHaveLength(1);
+    expect(room.files.get('big.md')!.content).toBe(big);
+  },
+  // Preparing, uploading and retrying 800 KB can exceed the default on the two-vCPU runner.
+  60_000,
+);
 
 it("prints the byte origin's refusal of a prepared upload as House words it, with its delay", async () => {
   const { hosted, rooms, room } = await copied();

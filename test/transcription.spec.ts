@@ -194,21 +194,26 @@ it('keeps the bare path of an audio file it cannot decode', async () => {
   expect(await prompted(hosted, 0)).toEqual(['listen', paths[0], paths[1], expect.stringMatching(ENGLISH)]);
 });
 
-it('reports no idle while a transcription runs', async () => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  await until(() => hosted.idles[1]);
-  const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(40) }]);
+it(
+  'reports no idle while a transcription runs',
+  async () => {
+    const hosted = await hostKit();
+    await opened(hosted);
+    await until(() => hosted.idles[1]);
+    const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(40) }]);
 
-  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+    hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
 
-  await until(() => engines(hosted)[0], 30_000);
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  expect(engines(hosted)).toHaveLength(1);
-  expect(hosted.idles).toHaveLength(2);
-  await hosted.ack(lastInput());
-  await until(() => hosted.idles[2], 30_000);
-});
+    await until(() => engines(hosted)[0], 30_000);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(engines(hosted)).toHaveLength(1);
+    expect(hosted.idles).toHaveLength(2);
+    await hosted.ack(lastInput());
+    await until(() => hosted.idles[2], 30_000);
+  },
+  // Transcribing the deliberate 40-second sample can exceed the default on the two-vCPU runner.
+  60_000,
+);
 
 it("makes a second conversation's audio wait for the first conversation's transcription", async () => {
   const hosted = await hostKit();
