@@ -246,6 +246,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     ...hosting.environment,
   });
   const socket = await until(() => house.sockets[0]);
+  await until(() => house.requests.find((request) => request.path === '/kit/local-copy/selection'));
   return {
     house,
     home,

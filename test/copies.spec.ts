@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { HouseRefusal, type House } from '../src/api.ts';
+import { LocalCopies } from '../src/copies.ts';
 import { until } from './double.ts';
 import { hostKit, type Hosted } from './environment.ts';
 import { temporaryHome } from './kit.ts';
@@ -237,33 +239,85 @@ it('reads the Room whole again when House no longer holds the copy position', as
   expect(hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap')).toHaveLength(2);
 });
 
-it(
-  'asks a replica behind the copy position once and catches the copy up at the next entries frame',
-  async () => {
-    const hosted = await hostKit();
-    const rooms = serveRooms(hosted);
-    const room = rooms.room('notes');
-    room.put('a.md', 'a\n');
-    await rooms.select([room]);
-    const enumerations = () => hosted.house.requests.filter((request) => request.path === '/kit/door/enumerate');
-    const before = received(room);
+it('does not ask House again on a timer after its replica is behind the copy position', async () => {
+  const home = await temporaryHome();
+  const previousHome = process.env.HOUSE_KIT_HOME;
+  process.env.HOUSE_KIT_HOME = home;
+  vi.useFakeTimers();
+  try {
+    const key = 'rooms/r_replica.x';
+    const roomRef = 'r_replica.x';
+    const logEpoch = '0192f0e4-1c2d-7000-8000-000000000001';
+    await mkdir(join(home, 'local-copies', 'rooms'), { recursive: true });
+    await writeFile(
+      join(home, 'local-copies', 'rooms', `${roomRef}.json`),
+      JSON.stringify({
+        key,
+        room_ref: roomRef,
+        room_handle: 'notes',
+        repository: '/unused',
+        active: true,
+        house: 'commit',
+        position: '1',
+        log_epoch: logEpoch,
+        write: [''],
+        protected: [],
+        read_only: [],
+        manifests: { commit: { parent: null, files: {} } },
+        moves: [],
+      }),
+    );
+    let enumerations = 0;
+    const house: House = {
+      post: async () => {
+        enumerations++;
+        throw new HouseRefusal('/kit/door/enumerate', 409, '{"error":{"code":"replica_behind"}}');
+      },
+      deliver: async () => {
+        throw new Error('unexpected delivery');
+      },
+    };
+    const copies = new LocalCopies(house);
+    await copies.load();
 
-    room.put('a.md', 'a, from House\n');
-    rooms.behind.add(room.ref);
-    hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
-    await until(() => enumerations()[0]);
-    // Thirty-one seconds outlast the Kit's longest wait before any retry, so an ask not repeated by then is not coming.
-    await new Promise((resolve) => setTimeout(resolve, 31_000));
-    expect(enumerations()).toHaveLength(1);
-    expect(received(room)).toBe(before);
+    copies.entries({ authority: roomRef, position: '2', log_epoch: logEpoch });
+    const queues = (copies as unknown as { queues: Map<string, Promise<unknown>> }).queues;
+    const first = queues.get(key);
+    expect(first).toBeDefined();
+    await first;
+    expect(enumerations).toBe(1);
 
-    rooms.behind.delete(room.ref);
-    await deliveredTo(hosted, room);
-    expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, from House\n');
-  },
-  // The spec waits out the Kit's half-minute longest retry wait before it catches the copy up.
-  45_000,
-);
+    // Thirty seconds is the removed replica-behind retry deadline, so advancing through it proves the 409 schedules no retry.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await queues.get(key);
+    expect(enumerations).toBe(1);
+  } finally {
+    vi.useRealTimers();
+    if (previousHome === undefined) delete process.env.HOUSE_KIT_HOME;
+    else process.env.HOUSE_KIT_HOME = previousHome;
+  }
+});
+
+it('asks a replica behind the copy position once and catches the copy up at the next entries frame', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('a.md', 'a\n');
+  await rooms.select([room]);
+  const enumerations = () => hosted.house.requests.filter((request) => request.path === '/kit/door/enumerate');
+  const before = received(room);
+
+  room.put('a.md', 'a, from House\n');
+  rooms.behind.add(room.ref);
+  hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
+  await until(() => enumerations()[0]);
+  expect(enumerations()).toHaveLength(1);
+  expect(received(room)).toBe(before);
+
+  rooms.behind.delete(room.ref);
+  await deliveredTo(hosted, room);
+  expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, from House\n');
+});
 
 it('reads a bundle House hands over through a transfer address', async () => {
   const hosted = await hostKit();
