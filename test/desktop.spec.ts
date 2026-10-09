@@ -313,45 +313,66 @@ it('says the Kit updated when a rerun installs a newer release', async () => {
 
 const OTHER_ACCOUNT = 'House Kit is already installed for another account. Replace it? [y/N]';
 
+const HOUSE = ['--house', 'https://agents.house'];
+
 async function heldByAnotherAccount(): Promise<Host> {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   expect(host.run()).toMatchObject({ status: 0 });
+  await writeFile(
+    join(host.home, '.house-kit', 'credential.json'),
+    '{"house":"https://dev.agents.house","environment":"environment-one","credential":"ahk_one"}',
+  );
   await writeFile(join(host.home, '.house-kit', 'own-agent.json'), '{"user":"user-one"}\n');
   await writeFile(join(host.home, 'AgentsHouse', 'notes.md'), 'kept\n');
-  await host.mark('refused');
   await host.forget();
   return host;
 }
 
-it('asks from the terminal, while the script arrives on standard input, whether to replace a Kit House refuses as another account\'s, and installs afresh on yes', async () => {
+it('asks from the terminal, while the script arrives on standard input, whether to replace a Kit of another House account, and installs afresh on yes', async () => {
   const host = await heldByAnotherAccount();
 
-  const ran = host.terminal([], 'y\n');
+  const ran = host.terminal(HOUSE, 'y\n');
 
   expect(ran.status).toBe(0);
   expect(ran.stdout.match(/Replace it\?/g)).toHaveLength(1);
   expect(ran.stdout).toContain(OTHER_ACCOUNT);
   expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
-  expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${host.home}/.house-kit`]);
+  expect(host.calls('kit')).toEqual([`login --house https://agents.house HOUSE_KIT_HOME=${host.home}/.house-kit`]);
   expect(host.calls('systemctl')).toEqual(expect.arrayContaining(['--user stop house-kit.service', '--user --quiet enable --now house-kit.service']));
   await expect(access(join(host.home, '.house-kit', 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readFile(join(host.home, 'AgentsHouse', 'notes.md'), 'utf8')).toBe('kept\n');
 });
 
-it('keeps a Kit House refuses as another account\'s when the User declines, and refuses without a terminal', async () => {
+it('keeps a Kit of another House account when the User declines, and refuses without a terminal', async () => {
   const host = await heldByAnotherAccount();
 
-  const declined = host.terminal([], 'n\n');
+  const declined = host.terminal(HOUSE, 'n\n');
   expect(declined.status).toBe(1);
   expect(declined.stdout).toContain(OTHER_ACCOUNT);
   expect(declined.stdout).toContain('kit_bootstrap_refused: Environment environment-one was kept; nothing changed');
-  expect(host.run()).toMatchObject({
+  expect(host.run(HOUSE)).toMatchObject({
     status: 1,
-    stderr: `kit_bootstrap_refused: House refuses the stored Kit credential of Environment environment-one; to reconnect it, run ${host.home}/.local/bin/kit login\n`,
+    stderr: 'kit_bootstrap_refused: this Environment is bound to another House origin\n',
   });
 
   expect(host.calls('kit')).toEqual([]);
   expect(await readFile(join(host.home, '.house-kit', 'own-agent.json'), 'utf8')).toBe('{"user":"user-one"}\n');
+});
+
+it('refuses a stored credential House refuses, in a terminal too, and offers no replacement', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run()).toMatchObject({ status: 0 });
+  await host.mark('refused');
+  await host.forget();
+
+  const ran = host.terminal(HOUSE, 'y\n');
+
+  expect(ran.status).toBe(1);
+  expect(ran.stdout).not.toContain('Replace it?');
+  expect(ran.stdout).toContain(
+    `kit_bootstrap_refused: House refuses the stored Kit credential of Environment environment-one; to reconnect it, run ${host.home}/.local/bin/kit login`,
+  );
+  expect(host.calls('kit')).toEqual([]);
 });
 
 it('refuses a Linux architecture Node.js is not built for before installing anything', async () => {

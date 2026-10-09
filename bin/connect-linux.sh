@@ -112,9 +112,13 @@ bind_house() {
     BOUND_HOUSE=$(enrolled house) || refuse 'the stored credential is unreadable'
     [[ -n "$BOUND_HOUSE" ]] || refuse 'the stored credential names no House origin'
     if ((HOUSE_SELECTED)) && [[ "$HOUSE" != "$BOUND_HOUSE" ]]; then
-      refuse 'this Environment is bound to another House origin'
+      ((FORWARDING == 0)) && terminal || refuse 'this Environment is bound to another House origin'
+      confirmed 'House Kit is already installed for another account. Replace it?' || refuse "Environment $(enrolled environment) was kept; nothing changed"
+      "$1"
+      find "$KIT_HOME" -mindepth 1 -delete || refuse "$KIT_HOME could not be cleared"
+    else
+      HOUSE="$BOUND_HOUSE"
     fi
-    HOUSE="$BOUND_HOUSE"
   fi
   [[ "$HOUSE" == https://* || "$HOUSE" == http://127.0.0.1:* || "$HOUSE" == http://localhost:* ]] || refuse 'House origin must use HTTPS or local loopback HTTP'
 }
@@ -130,13 +134,8 @@ confirmed() {
 }
 
 check_authority() {
-  HOUSE_KIT_HOME="$KIT_HOME" "${@:2}" && return
-  local environment
-  environment=$(enrolled environment)
-  terminal || refuse "House refuses the stored Kit credential of Environment $environment; to reconnect it, $RECONNECT"
-  confirmed 'House Kit is already installed for another account. Replace it?' || refuse "Environment $environment was kept; nothing changed"
-  "$1"
-  find "$KIT_HOME" -mindepth 1 -delete || refuse "$KIT_HOME could not be cleared"
+  HOUSE_KIT_HOME="$KIT_HOME" "$@" ||
+    refuse "House refuses the stored Kit credential of Environment $(enrolled environment); to reconnect it, $RECONNECT"
 }
 
 configure_kit() {
@@ -355,10 +354,6 @@ stop_native_service() {
   fi
 }
 
-refused_enrolment() {
-  refuse 'House refuses the Kit credential it was given'
-}
-
 start_native_service() {
   printf '[Unit]\nDescription=House Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' \
     "$(id -un)" "$NATIVE_WORKSPACE" "$NATIVE_BIN" | elevated tee "$NATIVE_UNIT" >/dev/null &&
@@ -400,7 +395,7 @@ connect_native() {
   fi
   prepare_directory "$KIT_HOME"
   KIT_HOME=$(cd "$KIT_HOME" && pwd -P)
-  bind_house
+  bind_house stop_native_service
   if ((ENROLL_SELECTED)) && [[ -f "$KIT_HOME/credential.json" && "$(enrolled environment)" != "$ENROLL" ]]; then
     refuse "this host is enrolled for Environment $(enrolled environment), not $ENROLL"
   fi
@@ -414,14 +409,14 @@ connect_native() {
     connected=restarted
   fi
   if [[ -f "$KIT_HOME/credential.json" ]]; then
-    check_authority stop_native_service "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   fi
   if [[ -f "$KIT_HOME/credential.json" ]]; then
     :
   elif ((ENROLL_SELECTED)); then
     connected=connected
     enroll_kit
-    check_authority refused_enrolment "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   else
     connected=connected
     LOGIN_TYPED=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
@@ -628,7 +623,7 @@ connect_desktop() {
   take_placement native
   remove_container
   prepare_roots
-  bind_house
+  bind_house stop_running_desktop
   if [[ "$(cat "$NATIVE_PREFIX/release" 2>/dev/null || true)" != "$RELEASE" ]]; then
     stage_native_kit
     stop_running_desktop
@@ -640,7 +635,7 @@ connect_desktop() {
   fi
   add_path_line
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_authority stop_running_desktop "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   fi
   if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     connected=connected
@@ -746,7 +741,7 @@ resume_kit() {
 
 connect_kit() {
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_authority remove_container "${AUTHORITY[@]}"
+    check_authority "${AUTHORITY[@]}"
   fi
   if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     login_arguments
@@ -903,7 +898,7 @@ fi
 prepare_roots
 KIT_HOME_MOUNT=$(bind_mount "$KIT_HOME" /kit-home)
 WORKSPACE_MOUNT=$(bind_mount "$WORKSPACE" /agents/house)
-bind_house
+bind_house remove_container
 if ((FORWARDING == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
 
 if [[ "$RUNTIME" == 'Docker Desktop' ]]; then NAMED=(--hostname "$(hostname)"); fi
@@ -932,7 +927,7 @@ if kit_installed; then
     if [[ "$FORWARDED" == kit && "${FORWARD[0]:-}" == logout ]]; then docker stop "$NAME" >/dev/null; fi
     exit 0
   fi
-  if [[ -f "$KIT_HOME/credential.json" ]]; then check_authority remove_container "${AUTHORITY[@]}"; fi
+  if [[ -f "$KIT_HOME/credential.json" ]]; then check_authority "${AUTHORITY[@]}"; fi
   if [[ ! -f "$KIT_HOME/credential.json" ]]; then
     remove_container
     docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null

@@ -233,11 +233,7 @@ function Invoke-Login([string[]] $LoginArguments) {
 
 function Test-Authority {
   & docker run --rm @Network --entrypoint node @Common $AuthorityMain
-  if ($LASTEXITCODE -eq 0) { return $true }
-  if (-not $Interactive) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
-  $answer = Read-Host 'House Kit is already installed for another account. Replace it? [y/N]'
-  if ($answer -notmatch '^(y|yes)$') { Stop-Bootstrap "Environment $($enrolment['environment']) was kept; nothing changed" }
-  $false
+  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
 }
 
 function Clear-KitHome {
@@ -370,8 +366,15 @@ function Connect-Kit {
   $enrolment = Read-Enrolment
   if ($enrolment.ContainsKey('environment')) {
     if (-not $enrolment.ContainsKey('house')) { Stop-Bootstrap 'the stored credential names no House origin' }
-    if ($HouseSelected -and $House -cne $enrolment['house']) { Stop-Bootstrap 'this Environment is bound to another House origin' }
-    $House = $enrolment['house']
+    if ($HouseSelected -and $House -cne $enrolment['house']) {
+      if ($Forwarding -or -not $Interactive) { Stop-Bootstrap 'this Environment is bound to another House origin' }
+      $answer = Read-Host 'House Kit is already installed for another account. Replace it? [y/N]'
+      if ($answer -notmatch '^(y|yes)$') { Stop-Bootstrap "Environment $($enrolment['environment']) was kept; nothing changed" }
+      Clear-KitHome
+      $enrolment = @{}
+    } else {
+      $House = $enrolment['house']
+    }
   }
   if ($House -notmatch '^(https://|http://127\.0\.0\.1:|http://localhost:)') { Stop-Bootstrap 'House origin must use HTTPS or local loopback HTTP' }
   $Network = @('--network', 'host')
@@ -416,8 +419,7 @@ function Connect-Kit {
       if ($status -eq 0 -and $Forwarded -ceq 'kit' -and $Forward.Count -gt 0 -and $Forward[0] -ceq 'logout') { Invoke-Docker stop $Name | Out-Null }
       Exit-Bootstrap $status
     }
-    if ($enrolment.ContainsKey('environment') -and -not (Test-Authority)) { $enrolment = @{} }
-    if (-not $enrolment.ContainsKey('environment')) { Clear-KitHome }
+    if ($enrolment.ContainsKey('environment')) { Test-Authority } else { Clear-KitHome }
   }
 
   if (Test-Container) {
@@ -441,11 +443,9 @@ function Connect-Kit {
     return
   }
 
-  if ($enrolment.ContainsKey('environment') -and -not (Test-Authority)) {
-    Clear-KitHome
-    $enrolment = @{}
-  }
-  if (-not $enrolment.ContainsKey('environment')) {
+  if ($enrolment.ContainsKey('environment')) {
+    Test-Authority
+  } else {
     $login = @()
     if ($HouseSelected) { $login += @('--house', $House) }
     if ($Manual) { $login += '--manual' }
