@@ -7,7 +7,7 @@ import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { delimiter, dirname, join } from 'node:path';
 import { parse } from 'yaml';
-import { HouseRefusal, retryDelay, type House } from './api.ts';
+import { finalRefusal, HouseRefusal, retryDelay, retrying, type House } from './api.ts';
 import { loginPath } from './clis.ts';
 import {
   changedPaths,
@@ -20,7 +20,7 @@ import {
 import { kitHome, readEnrolment } from './home.ts';
 import { callHouse, mcpBody, rpc, UNREACHABLE, type Forwarded, type Message } from './mcp.ts';
 import { operationId, uuidOf } from './operation.ts';
-import { refusalOf, type Refusal } from './refusals.ts';
+import { refusalOf, retryable, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
 import { relayed } from './relay.ts';
 
@@ -68,7 +68,6 @@ function refusalIn(text: string, status: number): Refusal {
 }
 
 function answered(forwarded: Forwarded): { text: string } | { refused: Refusal } {
-  if (forwarded.status >= 500) throw new HouseRefusal('/', forwarded.status, forwarded.text);
   if (forwarded.status !== 200) return { refused: refusalIn(forwarded.text, forwarded.status) };
   const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
   if (answer.error !== undefined) return { refused: refusalIn(answer.error.message, forwarded.status) };
@@ -88,7 +87,7 @@ function pendingSeconds(forwarded: Forwarded): number | null {
 
 function resendAfter(forwarded: Forwarded | null, attempt: number): number | null {
   if (forwarded === null) return retryDelay(attempt);
-  if (forwarded.status >= 500) return refusalOf(forwarded.text) === null ? retryDelay(attempt) : null;
+  if (forwarded.status !== 200) return retryable(forwarded.text) === false ? null : retryDelay(attempt);
   const seconds = pendingSeconds(forwarded);
   return seconds === null ? null : seconds * 1000;
 }
@@ -159,15 +158,23 @@ export async function openBridge(
     );
     if ('refused' in prepared) return prepared;
     const { transfer } = parse(prepared.text) as { transfer: { url: string; operation: string } };
-    const posted = await fetch(relayed(transfer.url), {
-      method: 'POST',
-      headers: { 'content-type': 'text/plain; charset=utf-8' },
-      body: Buffer.concat([Buffer.from(`${transfer.operation}\n`), bytes]),
-      signal: closed.signal,
-    });
-    const text = await posted.text();
-    if (posted.status >= 500) throw new HouseRefusal('/', posted.status, text);
-    if (!posted.ok) return { refused: refusalIn(text, posted.status) };
+    let text: string;
+    try {
+      text = await retrying(async () => {
+        const posted = await fetch(relayed(transfer.url), {
+          method: 'POST',
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+          body: Buffer.concat([Buffer.from(`${transfer.operation}\n`), bytes]),
+          signal: closed.signal,
+        });
+        const answer = await posted.text();
+        if (!posted.ok) throw new HouseRefusal('/', posted.status, answer);
+        return answer;
+      }, closed.signal);
+    } catch (error) {
+      if (!finalRefusal(error)) throw error;
+      return { refused: refusalIn(error.text, error.status) };
+    }
     const held = (JSON.parse(text) as { transfer: { url: string; operation: string } }).transfer;
     return { url: held.url, operation: held.operation, bytes: bytes.length, sha256 };
   };

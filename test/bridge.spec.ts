@@ -290,7 +290,11 @@ it("prints House's own line for a refused call, and no route, status or body", a
       body: {
         jsonrpc: '2.0',
         id: message.id,
-        error: { code: -32000, message: 'house_overloaded: House is busy; call again in 5 s', data: { code: 'house_overloaded' } },
+        error: {
+          code: -32000,
+          message: 'house_overloaded: House is busy; call again in 5 s',
+          data: { code: 'house_overloaded', retryable: true },
+        },
       },
     };
   });
@@ -300,6 +304,7 @@ it("prints House's own line for a refused call, and no route, status or body", a
       error: {
         code: 'room_archived',
         message: 'room_archived: this Room is archived and read-only; its owner can unarchive it at /rooms/<room>/settings',
+        retryable: false,
       },
     },
   }));

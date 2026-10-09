@@ -98,7 +98,7 @@ it('drops an idle report House did not take once the CLI reports a running backg
   const endedAtReport: number[] = [];
   hosted.house.route('POST', '/kit/idle', (request) => {
     endedAtReport.push(ended(hosted).length);
-    if (endedAtReport.length === 1) return { status: 503, body: { error: { code: 'house_unavailable' } } };
+    if (endedAtReport.length === 1) return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
     hosted.idles.push(request);
     return { body: {} };
   });

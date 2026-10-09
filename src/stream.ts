@@ -1,5 +1,5 @@
 import { subscribe } from 'node:diagnostics_channel';
-import { HouseRefusal, retryDelay } from './api.ts';
+import { finalRefusal, HouseRefusal, retryDelay } from './api.ts';
 import { end, REPLACED, SIGN_IN_AGAIN } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
@@ -72,8 +72,8 @@ export function holdStream(handlers: StreamHandlers): Stream {
       process.stderr.write(`kit: control stream closed ${event.code} ${event.reason}\n`);
       if (event.reason === 'replaced') end(REPLACED);
       if (event.reason === 'credential_rejected' || refused?.status === 401) end(SIGN_IN_AGAIN);
-      if (refused !== null && refused.status >= 400 && refused.status < 500) end(refused.message);
-      // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; a failed opening backs off on the jittered curve.
+      if (finalRefusal(refused)) end(refused.message);
+      // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; an opening House refused as retryable or left unanswered backs off on the jittered curve.
       setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));
     };
   };

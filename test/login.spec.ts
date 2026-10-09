@@ -18,7 +18,7 @@ function serveLogin(house: House, environment: string, credential: string, own?:
     const { code, code_verifier } = body as { code: string; code_verifier: string };
     const proved = createHash('sha256').update(code_verifier).digest('base64url') === challenge;
     if (code !== 'ahk_code_one' || !proved) {
-      return { status: 400, body: { error: { code: 'kit_login_rejected' } } };
+      return { status: 400, body: { error: { code: 'kit_login_rejected', retryable: false } } };
     }
     return {
       body: { credential, environment, user: 'user-one', ...(own === undefined ? {} : { headless_credential: own }) },
@@ -112,7 +112,7 @@ it('enrols a new Environment naming the stored one it replaces, and keeps only t
 it('ends with the cause when House refuses to start the login', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
-  house.route('POST', '/kit', () => ({ status: 404, body: { error: { code: 'kit_environment_not_found' } } }));
+  house.route('POST', '/kit', () => ({ status: 404, body: { error: { code: 'kit_environment_not_found', retryable: false } } }));
 
   const login = runKit(['login', '--house', house.origin, '--environment', 'environment-gone'], {
     HOUSE_KIT_HOME: home,
@@ -126,7 +126,7 @@ it('tells the browser the Environment was not connected when the exchange is ref
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
-  house.route('POST', '/kit/token', () => ({ status: 400, body: { error: { code: 'kit_login_rejected' } } }));
+  house.route('POST', '/kit/token', () => ({ status: 400, body: { error: { code: 'kit_login_rejected', retryable: false } } }));
 
   const { browser, exit, login } = await confirm(house, home);
 

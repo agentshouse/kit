@@ -145,7 +145,7 @@ export async function startHouse(tls?: Certificate): Promise<House> {
       };
       requests.push(received);
       const answer: Answer =
-        route === undefined ? { status: 404, body: { error: { code: 'not_found' } } } : await route.handler(received);
+        route === undefined ? { status: 404, body: { error: { code: 'not_found', retryable: false } } } : await route.handler(received);
       if (answer.drop === true) {
         response.destroy();
         return;
@@ -180,12 +180,11 @@ export async function startHouse(tls?: Certificate): Promise<House> {
     const refusal = refusing === undefined ? undefined : await refusing.handler(received);
     if (refusal?.status !== undefined) {
       const body = JSON.stringify(refusal.body ?? {});
-      const code = (refusal.body as { error?: { code?: string } } | undefined)?.error?.code;
       duplex.end(
         [
           `HTTP/1.1 ${refusal.status} ${STATUS_CODES[refusal.status]}`,
           'Connection: close',
-          ...(code === undefined ? [] : [`X-House-Refusal: ${code}`]),
+          ...(refusal.body === undefined ? [] : [`X-House-Refusal: ${body}`]),
           'Content-Type: application/json',
           `Content-Length: ${Buffer.byteLength(body)}`,
           '',

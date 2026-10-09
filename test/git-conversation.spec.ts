@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
 import { conversationCredential, hostKit, type Hosted } from './environment.ts';
-import { commitAll, git, serveRooms, type Room, type Rooms } from './rooms.ts';
+import { commitAll, git, OVERLOADED, serveRooms, type Room, type Rooms } from './rooms.ts';
 
 interface Shelled {
   sh: string;
@@ -177,43 +177,97 @@ it(
   60_000,
 );
 
-it("prints the byte origin's refusal of a prepared upload as House words it, with its delay", async () => {
+function uploads(hosted: Hosted): number {
+  return hosted.house.requests.filter((request) => request.path.startsWith('/uploads/')).length;
+}
+
+it('uploads a prepared edit again when the byte origin refuses it with a refusal it marks retryable, and lands the push', async () => {
   const { hosted, rooms, room } = await copied();
   await writeFile(join(room.repository, 'big.md'), '\u0001'.repeat(800_000));
   commitAll(room.repository, 'big');
-  rooms.overloadsUploads = 1;
+  rooms.refusesUploads = [{ status: 503, body: OVERLOADED }];
+
+  const landed = await shell(hosted, `cd ${room.repository} && house push`);
+
+  expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  expect(uploads(hosted)).toBe(2);
+  expect(rooms.uploaded).toHaveLength(1);
+});
+
+it("prints the byte origin's refusal of a prepared upload it does not mark retryable as House words it, and the next push lands it", async () => {
+  const { hosted, rooms, room } = await copied();
+  await writeFile(join(room.repository, 'big.md'), '\u0001'.repeat(800_000));
+  commitAll(room.repository, 'big');
+  rooms.refusesUploads = [
+    {
+      status: 409,
+      body: {
+        error: {
+          code: 'invalid_upload',
+          message: 'invalid_upload: the uploaded edit does not match its upload; run the same command again',
+          retryable: false,
+        },
+      },
+    },
+  ];
 
   const refused = await shell(hosted, `cd ${room.repository} && house push`);
   const landed = await shell(hosted, `cd ${room.repository} && house push`);
 
-  expect(refused).toMatchObject({ status: 1, stderr: 'house: house_overloaded: House is busy; call again in 5 s\n' });
+  expect(refused).toMatchObject({
+    status: 1,
+    stderr: 'house: invalid_upload: the uploaded edit does not match its upload; run the same command again\n',
+  });
   expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
 });
 
-it("prints House's refusal of a push as House words it, keeps its delay, and the next push lands it", async () => {
-  const { hosted, room } = await copied();
-  let overloaded = false;
+function refusingFirstEdit(hosted: Hosted, status: number, error: { message: string; data: { code: string; retryable: boolean } }): void {
+  let refused = false;
   hosted.house.route('POST', '/', (request) => {
     hosted.mcp.push(request);
     const message = request.body as { id: string; params: { name: string; arguments: Record<string, unknown> } };
-    if (!overloaded) {
-      overloaded = true;
-      return {
-        status: 503,
-        body: {
-          jsonrpc: '2.0',
-          id: message.id,
-          error: { code: -32000, message: 'house_overloaded: House is busy; call again in 5 s', data: { code: 'house_overloaded' } },
-        },
-      };
+    if (!refused && message.params.name === 'edit') {
+      refused = true;
+      return { status, body: { jsonrpc: '2.0', id: message.id, error: { code: -32000, ...error } } };
     }
-    return { body: { jsonrpc: '2.0', id: message.id, result: hosted.tools.edit!(message.params.arguments, request) } };
+    return { body: { jsonrpc: '2.0', id: message.id, result: hosted.tools[message.params.name]!(message.params.arguments, request) } };
+  });
+}
+
+function editOperations(hosted: Hosted): string[] {
+  return hosted.mcp
+    .filter((received) => (received.body as { params: { name?: string } }).params.name === 'edit')
+    .map((received) => (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation']!);
+}
+
+it('sends a push House refuses with a refusal it marks retryable again under its operation until House lands it', async () => {
+  const { hosted, room } = await copied();
+  refusingFirstEdit(hosted, 503, {
+    message: 'house_overloaded: House is busy; call again in 5 s',
+    data: { code: 'house_overloaded', retryable: true },
+  });
+
+  const landed = await shell(hosted, `cd ${room.repository} && echo two >> plan.md && git commit -qam two && house push`);
+
+  expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
+  const operations = editOperations(hosted);
+  expect(operations).toHaveLength(2);
+  expect(new Set(operations).size).toBe(1);
+});
+
+it("answers the CLI House's own words for a push refusal it does not mark retryable, whatever its status, and the next push lands it", async () => {
+  const { hosted, room } = await copied();
+  refusingFirstEdit(hosted, 500, {
+    message: 'internal_error: House failed on this call; call again once',
+    data: { code: 'internal_error', retryable: false },
   });
 
   const refused = await shell(hosted, `cd ${room.repository} && echo two >> plan.md && git commit -qam two && house push`);
-  const landed = await shell(hosted, `cd ${room.repository} && house push`);
 
-  expect(refused).toMatchObject({ status: 1, stderr: 'house: house_overloaded: House is busy; call again in 5 s\n' });
+  expect(refused).toMatchObject({ status: 1, stderr: 'house: internal_error: House failed on this call; call again once\n' });
+  expect(editOperations(hosted)).toHaveLength(1);
+  const landed = await shell(hosted, `cd ${room.repository} && house push`);
   expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
   expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
 });

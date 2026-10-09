@@ -30,6 +30,18 @@ function spoken(text: string): Refusal | null {
   return { code: head[1]!, text: said, conflicts: detail === -1 ? [] : conflictCodes(said.slice(detail + 1)) };
 }
 
+export function retryable(text: string): boolean | null {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const error = (body as { error?: { retryable?: unknown; data?: { retryable?: unknown } | null } | null } | null)?.error;
+  const verdict = error?.retryable ?? error?.data?.retryable;
+  return typeof verdict === 'boolean' ? verdict : null;
+}
+
 export function refusalOf(text: string): Refusal | null {
   let body: unknown;
   try {

@@ -54,7 +54,7 @@ it('refuses a stored credential House rejects, with its cause', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   await enrolled(house, home, 'ahk_revoked');
-  house.route('POST', '/kit/agents/desired', () => ({ status: 401, body: { error: { code: 'token_rejected' } } }));
+  house.route('POST', '/kit/agents/desired', () => ({ status: 401, body: { error: { code: 'token_rejected', retryable: false } } }));
 
   const refused = await entry('authority-main.ts', [], home);
 

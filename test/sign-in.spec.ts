@@ -143,7 +143,11 @@ it('ends the login and acknowledges the input when the page releases the hold fo
 });
 
 it('ends the login and acknowledges the input when House refuses its hold', async () => {
-  const { hosted, holds, input } = await signingIn('codex-acp', () => ({ code: 'secret_input_not_found' }), 404);
+  const { hosted, holds, input } = await signingIn(
+    'codex-acp',
+    () => ({ error: { code: 'secret_input_not_found', retryable: false } }),
+    404,
+  );
 
   expect(await hosted.ack(input)).toEqual({});
 
@@ -152,10 +156,10 @@ it('ends the login and acknowledges the input when House refuses its hold', asyn
   await until(() => !alive(login!.pid as number));
 });
 
-it('holds the page again after House answers its hold with a 5xx', async () => {
+it('holds the page again after House answers its hold with a refusal it marks retryable', async () => {
   const hosted = await hostKit([{ kind: 'grok-build' }]);
   const answers = [
-    { status: 503, body: { error: { code: 'service_unavailable' } } },
+    { status: 429, body: { error: { code: 'rate_limited', retry_after: 1, retry_at: '2026-10-09T00:00:01.000Z', retryable: true } } },
     { body: { outcome: 'released', release: 'withdrawn' } },
   ];
   let holds = 0;
@@ -165,6 +169,18 @@ it('holds the page again after House answers its hold with a 5xx', async () => {
   expect(await hosted.ack(lastInput())).toEqual({});
 
   expect(holds).toBe(2);
+});
+
+it('ends the hold at once when House answers it with a 500 refusal it does not mark retryable', async () => {
+  const { hosted, holds, input } = await signingIn(
+    'codex-acp',
+    () => ({ error: { code: 'sync_failed', retryable: false } }),
+    500,
+  );
+
+  expect(await hosted.ack(input)).toEqual({});
+
+  expect(holds).toHaveLength(1);
 });
 
 it('holds the page and acknowledges a finished sign-in while a model read of its CLI never ends', async () => {

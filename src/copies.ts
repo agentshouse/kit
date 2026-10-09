@@ -2,7 +2,7 @@ import { parse } from '@agentshouse/mdmodel';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { HouseRefusal, type House } from './api.ts';
+import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import {
   blobId,
   blobText,
@@ -327,10 +327,12 @@ export class LocalCopies {
       key: 'owner',
       submit: async (operation, changes) => {
         try {
-          const outcome = await house.post<{ contents: Written[] }>('/kit/door/batch', { operation_id: operation, changes });
+          const outcome = await retrying(() =>
+            house.post<{ contents: Written[] }>('/kit/door/batch', { operation_id: operation, changes }),
+          );
           return { accepted: outcome.contents };
         } catch (error) {
-          if (!(error instanceof HouseRefusal) || error.status >= 500) throw error;
+          if (!finalRefusal(error)) throw error;
           return {
             refused: refusalOf(error.text) ?? { code: '', text: `House refused it with ${error.status}`, conflicts: [] },
           };

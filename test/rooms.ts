@@ -7,7 +7,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
-import { until, type Received } from './double.ts';
+import { until, type Answer, type Received } from './double.ts';
 import { GIT_IDENTITY, type Hosted, type ToolResult } from './environment.ts';
 import { stop } from './kit.ts';
 
@@ -257,7 +257,8 @@ export interface Rooms {
   behind: Set<string>;
   dropping: number;
   dropsEdits: number;
-  overloadsUploads: number;
+  refusesBatches: Answer[];
+  refusesUploads: Answer[];
   reads: boolean[];
   prepared: unknown[];
   uploaded: Buffer[];
@@ -282,7 +283,8 @@ export function serveRooms(hosted: Hosted): Rooms {
     behind: new Set(),
     dropping: 0,
     dropsEdits: 0,
-    overloadsUploads: 0,
+    refusesBatches: [],
+    refusesUploads: [],
     reads: [],
     prepared: [],
     uploaded: [],
@@ -338,10 +340,10 @@ export function serveRooms(hosted: Hosted): Rooms {
     const { positions } = request.body as { positions: { authority: string; position: string; log_epoch: string }[] };
     const [known] = positions;
     const room = rooms.find((candidate) => candidate.ref === known!.authority)!;
-    if (state.reads.shift() === false) return { status: 503, body: { error: { code: 'house_unavailable' } } };
-    if (state.behind.has(room.ref)) return { status: 409, body: { error: { code: 'replica_behind' } } };
+    if (state.reads.shift() === false) return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
+    if (state.behind.has(room.ref)) return { status: 409, body: { error: { code: 'replica_behind', retryable: true } } };
     if (state.expired.delete(room.ref) || known!.log_epoch !== room.logEpoch) {
-      return { status: 410, body: { error: { code: 'position_expired' } } };
+      return { status: 410, body: { error: { code: 'position_expired', retryable: false } } };
     }
     return { body: { authorities: [room.enumerated(Number(known!.position))] } };
   });
@@ -351,6 +353,8 @@ export function serveRooms(hosted: Hosted): Rooms {
     return { body: { path, revisions: [{ revision, content: room.history.get(revision) }], next_before: null } };
   });
   hosted.house.route('POST', '/kit/door/batch', (request) => {
+    const refused = state.refusesBatches.shift();
+    if (refused !== undefined) return refused;
     const { operation_id: operation, changes } = request.body as { operation_id: string; changes: EditChange[] };
     if (!receipts.has(operation)) {
       const outcome = edited(roomOf(changes[0]!.path), changes);
@@ -361,7 +365,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       state.dropping--;
       return { drop: true };
     }
-    if ('refusal' in outcome) return { status: 409, body: { error: { ...outcome.refusal, message: said(outcome.refusal) } } };
+    if ('refusal' in outcome) return { status: 409, body: { error: { ...outcome.refusal, message: said(outcome.refusal), retryable: false } } };
     const { writes, ...rest } = outcome;
     return {
       body: { ...rest, contents: answered(writes).map((write) => ({ path: write.path, content: write.content, revision: write.revision })) },
@@ -377,10 +381,8 @@ export function serveRooms(hosted: Hosted): Rooms {
     return { content: [{ type: 'text', text: stringify({ transfer: { method: 'POST', url: `${hosted.house.origin}/uploads/${grant}`, operation } }) }] };
   };
   hosted.house.route('POST', '/uploads/:grant', (request) => {
-    if (state.overloadsUploads > 0) {
-      state.overloadsUploads--;
-      return { status: 503, body: OVERLOADED };
-    }
+    const refused = state.refusesUploads.shift();
+    if (refused !== undefined) return refused;
     const framed = request.body as Buffer;
     const line = framed.indexOf(10);
     const grant = grants.get(request.params.grant!)!;

@@ -308,6 +308,53 @@ it('recovers an answer lost after House applied the push under the same operatio
   expect(await readFile(join(room.repository, 'docs/unrelated.md'), 'utf8')).toBe('unrelated\n');
 });
 
+it('sends an owner push House refuses with a refusal it marks retryable again under its operation until House lands it', async () => {
+  const { hosted, rooms, room } = await copied();
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nthree\n');
+  const pushedCommit = commitAll(room.repository, 'three');
+  rooms.refusesBatches = [
+    {
+      status: 429,
+      body: {
+        error: {
+          code: 'rate_limited',
+          message: 'rate_limited: too many writes for now; try again in 1 s',
+          retry_after: 1,
+          retry_at: '2026-10-09T00:00:01.000Z',
+          retryable: true,
+        },
+      },
+    },
+  ];
+
+  const landed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(landed).toMatchObject({ status: 0, stdout: `House accepted ${short(pushedCommit)}.\n` });
+  const sent = batches(hosted);
+  expect(sent).toHaveLength(2);
+  expect(sent[1]).toEqual(sent[0]);
+  expect(room.files.get('docs/plan.md')!.content).toBe('one\ntwo\nthree\n');
+});
+
+it("answers an owner push House refuses with a refusal it does not mark retryable, whatever its status, in House's words", async () => {
+  const { hosted, rooms, room } = await copied();
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nthree\n');
+  commitAll(room.repository, 'three');
+  rooms.refusesBatches = [
+    {
+      status: 500,
+      body: { error: { code: 'internal_error', message: 'internal_error: House failed on this call; call again once', retryable: false } },
+    },
+  ];
+
+  const refused = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(refused.status).toBe(1);
+  expect(refused.stderr).toContain('internal_error: House failed on this call; call again once');
+  expect(batches(hosted)).toHaveLength(1);
+  expect(room.files.get('docs/plan.md')!.content).toBe('one\ntwo\n');
+});
+
 it('removes a file only through a committed deletion and sends a delete and add outside the shim as a removal and a creation', async () => {
   const { hosted, room } = await copied();
   const plan = room.revision('docs/plan.md');
@@ -379,7 +426,7 @@ it('finishes a push whose operation expired when House holds its component chang
   room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 410, body: { error: { code: 'operation_expired' } } }));
+  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 410, body: { error: { code: 'operation_expired', retryable: false } } }));
 
   const recovered = await house(hosted, room.repository, 'push', '--owner');
 
@@ -399,7 +446,7 @@ it('keeps newer House text on the House ref when it finishes a push whose answer
   room.put('docs/plan.md', 'one\ntwo\nmine\nlater\n');
   hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
   await until(() => git(room.repository, 'show', 'refs/house/received:docs/plan.md') === 'one\ntwo\nmine\nlater\n');
-  hosted.house.route('POST', '/kit/door/enumerate', () => ({ status: 503, body: { error: { code: 'house_unavailable' } } }));
+  hosted.house.route('POST', '/kit/door/enumerate', () => ({ status: 503, body: { error: { code: 'house_unavailable', retryable: true } } }));
 
   const recovered = await house(hosted, room.repository, 'push', '--owner');
 
@@ -415,7 +462,7 @@ it('keeps a pushed operation whose outcome it could not yet read and finishes it
   const pushedCommit = commitAll(room.repository, 'three');
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 410, body: { error: { code: 'operation_expired' } } }));
+  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 410, body: { error: { code: 'operation_expired', retryable: false } } }));
   rooms.reads = [true, false];
 
   const unread = await house(hosted, room.repository, 'push', '--owner');
