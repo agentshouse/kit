@@ -92,6 +92,12 @@ async function models(kind: string, adapter: Adapter, known: Model[]): Promise<P
   return { models: offered, modes };
 }
 
+async function signedIn(kind: string, cli: string, known: Offer): Promise<boolean> {
+  const probe = CLIS[kind]!.signedIn;
+  if ('command' in probe) return (await run(cli, probe.command, 30_000)).status === 0;
+  return (await offer(kind, cli, known)).signed_in;
+}
+
 async function offer(kind: string, cli: string, known: Offer): Promise<Offer> {
   const probe = CLIS[kind]!.signedIn;
   if ('command' in probe && (await run(cli, probe.command, 30_000)).status !== 0) return SIGNED_OUT;
@@ -177,7 +183,7 @@ export class Agents {
     });
     this.reading = reading;
     return reading.then(({ agents }) => {
-      Promise.all(agents.map((kind) => this.queue(kind, () => this.load(kind))))
+      Promise.all(agents.map((kind) => this.load(kind)))
         .then(() => this.report())
         .catch(logged);
     });
@@ -212,10 +218,15 @@ export class Agents {
   }
 
   async reread(kind: string): Promise<void> {
-    await this.queue(kind, async () => {
-      this.nextRead(kind);
-      this.readings.set(kind, await this.examine(kind, this.readings.get(kind) ?? SIGNED_OUT));
-    });
+    await this.examine(kind, this.readings.get(kind) ?? SIGNED_OUT, offer);
+    await this.report();
+  }
+
+  async recheck(kind: string): Promise<void> {
+    const known = this.readings.get(kind) ?? SIGNED_OUT;
+    await this.examine(kind, known, async (kind, cli) =>
+      (await signedIn(kind, cli, known)) ? { ...known, signed_in: true } : SIGNED_OUT,
+    );
     await this.report();
   }
 
@@ -275,17 +286,22 @@ export class Agents {
     return { cli, release };
   }
 
-  private async examine(kind: string, known: Offer): Promise<Reading> {
-    const resolved = await this.resolve(kind);
-    if (!('cli' in resolved)) return resolved;
-    return { release: resolved.release, failure: null, ...(await offer(kind, resolved.cli, known)) };
+  private async examine(
+    kind: string,
+    known: Offer,
+    read: (kind: string, cli: string, known: Offer) => Promise<Offer>,
+  ): Promise<void> {
+    const current = this.nextRead(kind);
+    const resolved = await this.queue(kind, () => this.resolve(kind));
+    const reading =
+      'cli' in resolved ? { release: resolved.release, failure: null, ...(await read(kind, resolved.cli, known)) } : resolved;
+    if (this.reads.get(kind) === current) this.readings.set(kind, reading);
   }
 
   private async load(kind: string): Promise<void> {
     const known = this.readings.get(kind);
     if (known !== undefined && known.failure === null) return;
-    this.nextRead(kind);
-    this.readings.set(kind, await this.examine(kind, SIGNED_OUT));
+    await this.examine(kind, SIGNED_OUT, offer);
   }
 
   private async send(): Promise<void> {

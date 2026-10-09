@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { until } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
-import { alive, filesUnder } from './kit.ts';
+import { alive, filesUnder, temporaryHome } from './kit.ts';
 
 interface Hold {
   subject: string;
@@ -15,13 +15,18 @@ interface Hold {
 const HELD = { outcome: 'released', release: 'held' };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 500));
 
-async function signingIn(kind: string, answer: (hold: number) => unknown = () => HELD) {
-  const hosted = await hostKit([{ kind }]);
+async function signingIn(
+  kind: string,
+  answer: (hold: number) => unknown = () => HELD,
+  status = 200,
+  home?: string,
+) {
+  const hosted = await hostKit([{ kind }], home === undefined ? {} : { home });
   const holds: Hold[] = [];
   hosted.house.route('POST', '/kit/secret-input/:subject', async (request) => {
     holds.push({ subject: request.params.subject!, body: request.body });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    return { body: answer(holds.length) };
+    return { status, body: answer(holds.length) };
   });
   hosted.input({ kind: 'sign_in', conversation_id: null, cli: kind });
   return { hosted, holds, input: lastInput() };
@@ -135,6 +140,28 @@ it('ends the login and acknowledges the input when the page releases the hold fo
   const [login] = await logins(hosted);
   await until(() => !alive(login!.pid as number));
   expect(hosted.kit.stderr()).toContain('grok-build sign-in');
+});
+
+it('ends the login and acknowledges the input when House refuses its hold', async () => {
+  const { hosted, holds, input } = await signingIn('codex-acp', () => ({ code: 'secret_input_not_found' }), 404);
+
+  expect(await hosted.ack(input)).toEqual({});
+
+  expect(holds).toHaveLength(1);
+  const [login] = await logins(hosted);
+  await until(() => !alive(login!.pid as number));
+});
+
+it('holds the page and acknowledges a finished sign-in while a model read of its CLI never ends', async () => {
+  const home = await temporaryHome();
+  await writeFile(join(home, 'hold-open'), '');
+  const { hosted, holds, input } = await signingIn('codex-acp', () => HELD, 200, home);
+  await until(() => holds[0]);
+
+  await finish(hosted, 'codex-acp');
+
+  expect(await hosted.ack(input)).toEqual({});
+  expect(reportBeforeAck(hosted, input)).toMatchObject({ agents: [{ kind: 'codex-acp', signed_in: true }] });
 });
 
 it('starts no second login for a sign-in input sent again while it runs', async () => {

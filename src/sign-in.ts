@@ -44,8 +44,9 @@ export class SignIns {
     this.running.add(input.input_id);
     this.changed();
     this.login(input)
-      .then(() => this.agents.reread(input.cli))
+      .then(() => this.agents.recheck(input.cli))
       .then(() => this.house.deliver(`/kit/inputs/${input.input_id}/ack`, {}))
+      .then(() => this.agents.reread(input.cli))
       .catch(logged)
       .finally(() => {
         this.running.delete(input.input_id);
