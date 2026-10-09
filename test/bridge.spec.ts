@@ -72,7 +72,8 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   expect(help!.stdout).toBe(
     [
       "usage: house <tool> ['<arguments as JSON>']",
-      'git push [commit]',
+      'help',
+      "push [commit]: sends the Local copy's committed changes to House",
       ...LISTING.map((tool) => `${tool.name}: ${tool.description}`),
     ].join('\n') + '\n',
   );

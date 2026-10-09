@@ -68,5 +68,24 @@ foreach ($case in @(
   $mapped = Get-HouseWorkdir $case[0] 'C:\Users\u\AgentsHouse'
   if ($mapped -cne $case[1]) { $findings += "Get-HouseWorkdir mapped $($case[0]) to $mapped, not $($case[1])" }
 }
+$authority = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-Authority' }, $true)
+. ([scriptblock]::Create($authority.Extent.Text))
+function Stop-Bootstrap([string] $Cause) { throw "kit_bootstrap_refused: $Cause" }
+function docker { $global:LASTEXITCODE = 1 }
+$AuthorityMain = 'authority-main.js'
+$enrolment = @{ environment = 'environment-one' }
+$Interactive = $true
+$script:Answers = @('y')
+$script:Prompts = @()
+if ((Test-Authority) -ne $false) { $findings += 'Test-Authority kept a Kit House refuses after a yes' }
+if ($script:Prompts[0] -cne 'House Kit is already installed for another account. Replace it? [y/N]') { $findings += "Test-Authority asked: $($script:Prompts[0])" }
+$script:Answers = @('n')
+$script:Prompts = @()
+try {
+  [void](Test-Authority)
+  $findings += 'Test-Authority replaced a Kit after a no'
+} catch {
+  if ($_.Exception.Message -cne 'kit_bootstrap_refused: Environment environment-one was kept; nothing changed') { $findings += "Test-Authority refused with: $($_.Exception.Message)" }
+}
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }

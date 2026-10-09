@@ -10,7 +10,7 @@ import { refusalOf } from './refusals.ts';
 
 interface Tool {
   name: string;
-  description: string;
+  description?: string;
   inputSchema: unknown;
 }
 
@@ -25,7 +25,8 @@ interface Saved {
 }
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
-const GIT_USAGE = 'usage: house git push [commit] [--owner]';
+const PUSH_USAGE = 'usage: house push [commit] [--owner]';
+const PUSH = "push [commit]: sends the Local copy's committed changes to House";
 const ARGUMENTS = `the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'`;
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
@@ -124,13 +125,12 @@ async function upload(path: unknown, roomRef: unknown, missing: string): Promise
   return saved.attachment;
 }
 
-async function gitPush(args: string[]): Promise<string> {
-  if (args.includes('--help')) return GIT_USAGE;
-  if (args[0] !== 'push') throw new Error('only house git push [commit] exists; use plain git for the rest');
+async function push(args: string[]): Promise<string> {
+  if (args.includes('--help')) return PUSH_USAGE;
   const owner = args.includes('--owner');
-  const commit = args.slice(1).find((arg) => arg !== '--owner') ?? 'HEAD';
-  if (owner && socketPath !== undefined) throw new Error('--owner is not for Agent conversations; run house git push without it');
-  if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house git push needs --owner');
+  const commit = args.find((arg) => arg !== '--owner') ?? 'HEAD';
+  if (owner && socketPath !== undefined) throw new Error('--owner is not for Agent conversations; run house push without it');
+  if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house push needs --owner');
   const pushed = JSON.parse(
     await bridged('/git/push', { cwd: process.cwd(), commit }, undefined, owner ? join(kitHome(), 'owner.sock') : socketPath),
   ) as { refused: boolean; text: string };
@@ -151,13 +151,13 @@ function argumentsOf(argument: string | undefined): Record<string, unknown> {
 }
 
 async function house([verb, argument]: string[]): Promise<string> {
-  if (verb === undefined || verb === '--help') {
-    return [USAGE, 'git push [commit]', ...(await tools()).map((tool) => `${tool.name}: ${tool.description}`)].join('\n');
+  if (verb === undefined || verb === '--help' || verb === 'help') {
+    return [USAGE, 'help', PUSH, ...(await tools()).map((tool) => (tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`))].join('\n');
   }
   if (argument === '--help') {
     const tool = (await tools()).find((listed) => listed.name === verb);
     if (tool === undefined) throw new Error(`${verb} is no Tool; house find_command '{"query":"${verb}"}' finds Commands`);
-    return `${tool.description}\n${JSON.stringify(tool.inputSchema)}`;
+    return [...(tool.description === undefined ? [] : [tool.description]), JSON.stringify(tool.inputSchema)].join('\n');
   }
   const args = argumentsOf(argument);
   if (socketPath !== undefined && verb === 'upload_attachment') {
@@ -177,7 +177,7 @@ async function house([verb, argument]: string[]): Promise<string> {
 }
 
 const argv = process.argv.slice(2);
-(argv[0] === 'git' ? gitPush(argv.slice(1)) : house(argv)).then(
+(argv[0] === 'push' ? push(argv.slice(1)) : house(argv)).then(
   (text) => {
     process.stdout.write(`${text}\n`);
   },

@@ -274,3 +274,41 @@ it("stops with House's answer when House cannot say whether the User's own agent
   expect(login.stderr()).toContain('503');
   expect(house.requests.map((request) => request.path)).toEqual(['/']);
 });
+
+it('logs out by revoking and deleting the credential and stopping the resident, and a later login reconnects the same Environment', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  await confirm(house, home);
+  const resident = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => house.sockets[0]);
+  house.route('POST', '/kit/logout', () => ({ body: {} }));
+  house.requests.length = 0;
+
+  const logout = runKit(['logout'], { HOUSE_KIT_HOME: home });
+
+  expect(await logout.exited).toBe(0);
+  expect(logout.stdout()).toBe('Environment environment-one is disconnected; kit login reconnects it.\n');
+  expect(house.requests.filter((request) => request.path === '/kit/logout').map((request) => request.headers.authorization)).toEqual([
+    'Bearer ahk_first',
+  ]);
+  await expect(access(join(home, 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await resident.exited).toBe(1);
+  const restarted = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => restarted.stderr().includes('run kit login'));
+  expect(house.sockets).toHaveLength(1);
+
+  serveLogin(house, 'environment-one', 'ahk_second');
+  const { started, exit } = await confirm(house, home);
+
+  expect(exit).toBe(0);
+  expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
+    house: house.origin,
+    environment: 'environment-one',
+    credential: 'ahk_second',
+  });
+  await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  const reconnected = await until(() => house.sockets[1]);
+  expect(reconnected.headers.authorization).toBe('Bearer ahk_second');
+});

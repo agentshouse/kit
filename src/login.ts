@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { post } from './api.ts';
-import { forgetOwnAgent, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
+import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
 
 const DEFAULT_HOUSE = 'https://agents.house';
@@ -94,7 +94,7 @@ export async function login(argv: string[]): Promise<void> {
       manual: { type: 'boolean', default: false },
     },
   });
-  const enrolled = await readEnrolment();
+  const enrolled = (await readEnrolment()) ?? (await readDisconnected());
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
   const replaces = process.env.HOUSE_KIT_REPLACES;
   const environment =

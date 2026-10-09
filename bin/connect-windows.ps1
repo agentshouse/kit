@@ -233,7 +233,17 @@ function Invoke-Login([string[]] $LoginArguments) {
 
 function Test-Authority {
   & docker run --rm @Network --entrypoint node @Common $AuthorityMain
-  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
+  if ($LASTEXITCODE -eq 0) { return $true }
+  if (-not $Interactive) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
+  $answer = Read-Host 'House Kit is already installed for another account. Replace it? [y/N]'
+  if ($answer -notmatch '^(y|yes)$') { Stop-Bootstrap "Environment $($enrolment['environment']) was kept; nothing changed" }
+  $false
+}
+
+function Clear-KitHome {
+  if (Test-Container) { Invoke-Docker rm -f $Name | Out-Null }
+  Invoke-Docker volume rm $KitHome | Out-Null
+  Invoke-Docker volume create $KitHome | Out-Null
 }
 
 function Set-Configuration {
@@ -382,12 +392,13 @@ function Connect-Kit {
     if ((Read-Source '/agents/house') -ine $Workspace) { Stop-Bootstrap 'the installed Kit uses another workspace root' }
     if ((Read-Inspect '{{range .Mounts}}{{if eq .Destination `/agents/house`}}{{.Type}}/{{.RW}}{{end}}{{end}}') -cne 'bind/true') { Stop-Bootstrap 'the installed workspace is not a writable bind mount' }
     if ((Read-Inspect '{{index .Config.Labels `agentshouse.house`}}') -cne $House) { Stop-Bootstrap 'the installed Kit uses another House origin' }
-    if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'the installed Kit has no enrolled authority' }
     if ($Forwarding) {
       if ($Forwarded -ceq 'kit' -and $Forward.Count -gt 0 -and $Forward[0] -ceq 'login') {
         Invoke-Login @($Forward | Select-Object -Skip 1)
+        if ((Read-Inspect '{{.State.Running}}') -cne 'true') { Invoke-Docker start $Name | Out-Null }
         return
       }
+      if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'the installed Kit has no enrolled authority' }
       $placed = @()
       $entry = @()
       if ($Forwarded -ceq 'house') {
@@ -401,15 +412,21 @@ function Connect-Kit {
       } else {
         & docker run -i @terminal @placed @entry --rm @Network @Common @Forward
       }
-      Exit-Bootstrap $LASTEXITCODE
+      $status = $LASTEXITCODE
+      if ($status -eq 0 -and $Forwarded -ceq 'kit' -and $Forward.Count -gt 0 -and $Forward[0] -ceq 'logout') { Invoke-Docker stop $Name | Out-Null }
+      Exit-Bootstrap $status
     }
-    Test-Authority
+    if ($enrolment.ContainsKey('environment') -and -not (Test-Authority)) { $enrolment = @{} }
+    if (-not $enrolment.ContainsKey('environment')) { Clear-KitHome }
+  }
+
+  if (Test-Container) {
     $configured = Set-Configuration
     Update-Clis
     if ($installed -cne $Image) {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
-      Write-Host "House Kit updated for Environment $($enrolment['environment'])."
+      Write-Host 'House Kit updated.'
       return
     }
     if ((Read-Inspect '{{.State.Running}}') -cne 'true') {
@@ -419,14 +436,16 @@ function Connect-Kit {
       Invoke-Docker restart $Name | Out-Null
       Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
     } else {
-      Write-Host "House Kit is already running for Environment $($enrolment['environment'])."
+      Write-Host 'House Kit is already installed.'
     }
     return
   }
 
-  if ($enrolment.ContainsKey('environment')) {
-    Test-Authority
-  } else {
+  if ($enrolment.ContainsKey('environment') -and -not (Test-Authority)) {
+    Clear-KitHome
+    $enrolment = @{}
+  }
+  if (-not $enrolment.ContainsKey('environment')) {
     $login = @()
     if ($HouseSelected) { $login += @('--house', $House) }
     if ($Manual) { $login += '--manual' }

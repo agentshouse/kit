@@ -1,4 +1,5 @@
 import { once } from 'node:events';
+import { watch } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join } from 'node:path';
@@ -9,7 +10,7 @@ import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations, type Input } from './conversations.ts';
 import { LocalCopies } from './copies.ts';
-import { agentBase, kitHome, readEnrolment } from './home.ts';
+import { agentBase, enrolled, kitHome } from './home.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
 import { holdStream, type Frame, type Stream } from './stream.ts';
@@ -55,12 +56,29 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
   await once(server, 'listening');
 }
 
+function connected(): Promise<void> {
+  return new Promise((resolve) => {
+    const watcher = watch(kitHome(), () => {
+      if (!enrolled()) return;
+      watcher.close();
+      resolve();
+    });
+    if (!enrolled()) {
+      process.stderr.write('kit: this Environment is not connected; run kit login\n');
+      return;
+    }
+    watcher.close();
+    resolve();
+  });
+}
+
 export async function resident(): Promise<void> {
-  if ((await readEnrolment()) === null) {
-    process.stderr.write('kit: this Environment is not enrolled; run kit login\n');
-    process.exitCode = 1;
-    return;
-  }
+  await connected();
+  watch(kitHome(), () => {
+    if (enrolled()) return;
+    killDescendants();
+    process.exit(1);
+  });
   await placeSkillSet();
   await mkdir(agentBase(), { recursive: true });
   process.env.HOUSE_KIT_RESIDENT = String(process.pid);

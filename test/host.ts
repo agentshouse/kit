@@ -46,7 +46,7 @@ export interface Host {
   forget(): Promise<void>;
 }
 
-type Mark = 'changed' | 'container' | 'docker-down' | 'login-fails';
+type Mark = 'changed' | 'container' | 'docker-down' | 'login-fails' | 'refused';
 
 const LOGGED = 'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n';
 
@@ -96,6 +96,7 @@ esac\n`,
 };
 
 const NODE = `printf 'node %s\\n' "\${1##*/}" >> "$FAKE/log"
+[ "\${1##*/}" != authority-main.js ] || [ ! -e "$FAKE/refused" ] || exit 1
 [ "\${1##*/}" != configure-main.js ] || [ ! -e "$FAKE/changed" ] || echo changed
 [ "\${1##*/}" != clis-main.js ] || [ ! -e "$HOME/.clis" ] || cat "$HOME/.clis"
 `;
@@ -148,7 +149,9 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     home,
     run: (argv = []) => ran('bash', [bootstrap, ...argv]),
     terminal: (argv, typed) => {
-      const line = ['bash', bootstrap, ...argv].map((word) => `'${word.replaceAll("'", `'\\''`)}'`).join(' ');
+      const line = ['cat', bootstrap, '|', 'bash', '-s', '--', ...argv]
+        .map((word) => (word === '|' ? word : `'${word.replaceAll("'", `'\\''`)}'`))
+        .join(' ');
       const finished = spawnSync('script', ['-qec', line, '/dev/null'], { encoding: 'utf8', env: environment, input: typed });
       return { status: finished.status, stdout: finished.stdout.replaceAll('\r\n', '\n'), stderr: finished.stderr };
     },

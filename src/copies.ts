@@ -423,10 +423,10 @@ export class LocalCopies {
 
   async push(cwd: string, selector: string, caller: Caller): Promise<Pushed> {
     const located = await run(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']);
-    if (located.status !== 0) return { refused: true, text: `${cwd} is not a House Local copy; run house git push inside one` };
+    if (located.status !== 0) return { refused: true, text: `${cwd} is not a House Local copy; run house push inside one` };
     const [common, worktree] = located.stdout.toString('utf8').split('\n') as [string, string];
     const key = await this.keyAt(dirname(common));
-    if (key === undefined) return { refused: true, text: `${worktree} is not a House Local copy; run house git push inside one` };
+    if (key === undefined) return { refused: true, text: `${worktree} is not a House Local copy; run house push inside one` };
     return this.exclusive(key, () => this.pushed(key, worktree, selector, caller));
   }
 
@@ -755,7 +755,7 @@ export class LocalCopies {
       const refusal = error instanceof HouseRefusal ? refusalOf(error.text) : null;
       return {
         refused: true,
-        text: refusal?.text ?? `House's answer to ${short(push.commit)} did not arrive; run house git push again`,
+        text: refusal?.text ?? `House's answer to ${short(push.commit)} did not arrive; run house push again`,
       };
     }
     if ('refused' in outcome) {
@@ -793,7 +793,7 @@ export class LocalCopies {
       await this.save(without(current));
       return {
         refused: true,
-        text: `House does not hold ${short(push.commit)}; run house git push again`,
+        text: `House does not hold ${short(push.commit)}; run house push again`,
       };
     }
     const written: Written[] = [];
@@ -819,7 +819,7 @@ export class LocalCopies {
     } catch {
       return {
         refused: false,
-        text: `House accepted ${short(commit)}; run house git push again to finish integrating it here`,
+        text: `House accepted ${short(commit)}; run house push again to finish integrating it here`,
       };
     }
   }

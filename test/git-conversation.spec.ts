@@ -50,20 +50,20 @@ it("pushes from a Conversation process under that conversation's own credential 
 
   const first = await shell(
     hosted,
-    `cd ${room.repository} && echo two >> plan.md && git commit -qam two && house git push`,
+    `cd ${room.repository} && echo two >> plan.md && git commit -qam two && house push`,
   );
   const second = await shell(
     hosted,
-    `cd ${room.repository} && echo three >> plan.md && git commit -qam three && house git push`,
+    `cd ${room.repository} && echo three >> plan.md && git commit -qam three && house push`,
     'conversation-2',
     'agent-2',
   );
-  const owner = await shell(hosted, `cd ${room.repository} && house git push --owner`, 'conversation-2', 'agent-2');
+  const owner = await shell(hosted, `cd ${room.repository} && house push --owner`, 'conversation-2', 'agent-2');
 
   expect(first).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
   expect(second.status).toBe(1);
   expect(second.stderr).toContain('operation_denied');
-  expect(owner).toMatchObject({ status: 1, stderr: 'house: --owner is not for Agent conversations; run house git push without it\n' });
+  expect(owner).toMatchObject({ status: 1, stderr: 'house: --owner is not for Agent conversations; run house push without it\n' });
   expect(edits().map((received) => received.headers.authorization)).toEqual([
     `Bearer ${conversationCredential('conversation-1')}`,
     `Bearer ${conversationCredential('conversation-2')}`,
@@ -76,7 +76,7 @@ it('sends a committed git mv the shim saw as a House rename that keeps identity 
   const { hosted, room, edits } = await copied();
   const alpha = room.revision('a.md');
 
-  const moved = await shell(hosted, `cd ${room.repository} && git mv a.md b.md && git commit -qm move && house git push`);
+  const moved = await shell(hosted, `cd ${room.repository} && git mv a.md b.md && git commit -qm move && house push`);
 
   expect(moved).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}; main is at [0-9a-f]{12}\.\n$/) });
   expect(edits().map(changesOf)).toEqual([
@@ -100,7 +100,7 @@ it('sends no rename for a failed, undone or uncommitted move', async () => {
       'git mv a.md b.md',
       'git mv b.md a.md',
       'git mv plan.md p2.md',
-      'house git push',
+      'house push',
     ].join(' && '),
   );
   const undone = await shell(
@@ -111,7 +111,7 @@ it('sends no rename for a failed, undone or uncommitted move', async () => {
       'mv plan.md p2.md',
       'git add -A',
       'git commit -qm "delete and add"',
-      'house git push',
+      'house push',
     ].join(' && '),
   );
 
@@ -136,7 +136,7 @@ it("names each Local copy in a conversation's first prompt", async () => {
   );
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
   expect(block.slice(3)).toEqual([
-    'House Local copies; commit, then `house git push`:',
+    'House Local copies; commit, then `house push`:',
     `/rooms/notes: ${room.repository}`,
   ]);
 });
@@ -150,7 +150,7 @@ it(
     commitAll(room.repository, 'big');
     rooms.dropsEdits = 1;
 
-    const pushed = await shell(hosted, `cd ${room.repository} && house git push`);
+    const pushed = await shell(hosted, `cd ${room.repository} && house push`);
 
     expect(pushed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
     const bytes = Buffer.from(JSON.stringify({ changes: [{ op: 'create', path: '/rooms/notes/big.md', content: big }] }));
@@ -183,8 +183,8 @@ it("prints the byte origin's refusal of a prepared upload as House words it, wit
   commitAll(room.repository, 'big');
   rooms.overloadsUploads = 1;
 
-  const refused = await shell(hosted, `cd ${room.repository} && house git push`);
-  const landed = await shell(hosted, `cd ${room.repository} && house git push`);
+  const refused = await shell(hosted, `cd ${room.repository} && house push`);
+  const landed = await shell(hosted, `cd ${room.repository} && house push`);
 
   expect(refused).toMatchObject({ status: 1, stderr: 'house: house_overloaded: House is busy; call again in 5 s\n' });
   expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
@@ -210,8 +210,8 @@ it("prints House's refusal of a push as House words it, keeps its delay, and the
     return { body: { jsonrpc: '2.0', id: message.id, result: hosted.tools.edit!(message.params.arguments, request) } };
   });
 
-  const refused = await shell(hosted, `cd ${room.repository} && echo two >> plan.md && git commit -qam two && house git push`);
-  const landed = await shell(hosted, `cd ${room.repository} && house git push`);
+  const refused = await shell(hosted, `cd ${room.repository} && echo two >> plan.md && git commit -qam two && house push`);
+  const landed = await shell(hosted, `cd ${room.repository} && house push`);
 
   expect(refused).toMatchObject({ status: 1, stderr: 'house: house_overloaded: House is busy; call again in 5 s\n' });
   expect(landed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
@@ -228,7 +228,7 @@ it('drops an expired rename House never applied when another writer took both of
     return null;
   };
 
-  const expired = await shell(hosted, `cd ${room.repository} && git mv a.md b.md && git commit -qm move && house git push`);
+  const expired = await shell(hosted, `cd ${room.repository} && git mv a.md b.md && git commit -qm move && house push`);
 
   expect(expired.status).toBe(1);
   expect(expired.stderr).toContain('House does not hold');
@@ -270,7 +270,7 @@ it("brings House's reference rewrites home when it finishes an expired rename Ho
   hosted.tools.edit = (args, request) =>
     ++calls === 1 ? edit(args, request) : { isError: true, content: [{ type: 'text', text: EXPIRED }] };
 
-  const finished = await shell(hosted, `cd ${room.repository} && git mv a.md b.md && git commit -qm move && house git push`);
+  const finished = await shell(hosted, `cd ${room.repository} && git mv a.md b.md && git commit -qm move && house push`);
 
   expect(finished).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}; main is at [0-9a-f]{12}\.\n$/) });
   expect(room.batches).toHaveLength(1);

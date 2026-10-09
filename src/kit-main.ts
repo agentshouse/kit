@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { setGlobalProxyFromEnv } from 'node:http';
 import { login } from './login.ts';
+import { logout } from './logout.ts';
 import { resident } from './resident.ts';
 
 declare module 'node:http' {
@@ -12,8 +13,9 @@ setGlobalProxyFromEnv();
 
 async function run(): Promise<void> {
   if (command === 'login') return login(argv);
+  if (command === 'logout') return logout();
   if (command === 'resident') return resident();
-  process.stderr.write('usage: kit <login|resident>\n');
+  process.stderr.write('usage: kit <login|logout|resident>\n');
   process.exitCode = 2;
 }
 

@@ -79,7 +79,7 @@ it('never lets a change under capture/ into a local commit, and pushes the root 
   const commit = commitAll(room.repository, 'everything');
 
   expect(git(room.repository, 'show', '--name-only', '--format=', commit).trim()).toBe('notes.md');
-  expect(await house(hosted, room.repository, 'git', 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
   expect(room.batches.flat().map((change) => change.path)).toEqual(['/rooms/notes/notes.md']);
   expect(room.files.get('notes.md')!.content).toBe('Notes, edited\n');
   expect(room.files.get('capture/mail/one.md')!.content).toBe('one\n');
@@ -211,7 +211,7 @@ it('keeps a copy where it is through a handle change, stops it on deselection an
   expect(hosted.house.requests.slice(deselected).filter((request) => request.path.startsWith('/kit/door/'))).toEqual([]);
   expect(git(room.repository, 'rev-parse', 'HEAD').trim()).toBe(local);
   expect(await readFile(join(room.repository, 'draft.md'), 'utf8')).toBe('draft\n');
-  expect(await house(hosted, room.repository, 'git', 'push', '--owner')).toMatchObject({
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({
     status: 1,
     stderr: 'house: /rooms/renamed-notes is no longer synced to this Environment, so House takes no push from it\n',
   });

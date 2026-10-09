@@ -76,7 +76,7 @@ it('refuses a native install on any host but the one selected Linux platform bef
 });
 
 it('leaves a native host its own kit and house rather than forwarding to them', async () => {
-  expect(bootstrap(await published(), ['--linux', 'house', 'git', 'push', '--owner'])).toMatchObject({
+  expect(bootstrap(await published(), ['--linux', 'house', 'push', '--owner'])).toMatchObject({
     status: 1,
     stderr: "kit_bootstrap_refused: --linux puts kit and house on this host's PATH; run house there directly\n",
   });
@@ -184,7 +184,7 @@ async function updatingClis(flag: 0 | 1, terminal: boolean, answers = '') {
   const log = join(home, 'updates.log');
   const script = `set -u
 UPDATE_CLIS=${flag}
-${await steps('update_clis')}
+${await steps('terminal', 'update_clis')}
 listing() { printf '%s\\n' ${LISTED.map((line) => `'${line.join('\t')}'`).join(' ')}; }
 updating() { printf '%s\\n' "$1" >> ${log}; [ "$1" != /home/u/.grok/bin/grok ]; }
 update_clis listing updating
@@ -273,7 +273,7 @@ enrolled() { printf environment-one; }
 docker() { printf 'docker %s\\n' "$*" >&2; }
 listing() { printf 'codex\\t/kit-home/.local/bin/codex\\t0.150.0\\t0.159.1\\told\\n'; }
 updating() { printf 'updated %s\\n' "$1" >&2; }
-${await steps('update_clis', 'resume_kit')}
+${await steps('terminal', 'update_clis', 'resume_kit')}
 update_clis listing updating
 resume_kit`,
     ],
@@ -281,7 +281,7 @@ resume_kit`,
   );
 
   expect(ran.stderr).toBe('updated /kit-home/.local/bin/codex\n');
-  expect(ran.stdout).toBe('Updating codex 0.150.0.\nHouse Kit is already running for Environment environment-one.\n');
+  expect(ran.stdout).toBe('Updating codex 0.150.0.\nHouse Kit is already installed.\n');
 });
 
 function listClis(home: string, cwd: string): Promise<{ status: number | null; listed: string[][] }> {
@@ -359,7 +359,7 @@ it('names each chosen CLI the login shell finds, even through a relative PATH en
   ]);
 });
 
-it('names the container choice beside the workspace argument for the linux host alone', async () => {
+it('lists macOS with the Linux script beside Linux and Windows', async () => {
   const root = await temporaryHome();
   await mkdir(join(root, 'scripts'));
   await mkdir(join(root, 'dist'));
@@ -368,14 +368,16 @@ it('names the container choice beside the workspace argument for the linux host 
 
   expect(spawnSync(process.execPath, [join(root, 'scripts', 'bootstrap-manifest.mjs')]).status).toBe(0);
 
-  const { hosts } = JSON.parse(await readFile(join(root, 'dist', 'bootstrap.json'), 'utf8')) as {
-    hosts: Record<string, Record<string, unknown>>;
-  };
-  expect(hosts.linux).toMatchObject({
-    workspace: { argument: '--workspace', quoting: 'posix' },
-    container: { argument: '--container' },
+  const release = 'https://github.com/agentshouse/kit/releases/download/v0.2.1-alpha.1';
+  expect(JSON.parse(await readFile(join(root, 'dist', 'bootstrap.json'), 'utf8'))).toEqual({
+    schemaVersion: 2,
+    version: '0.2.1-alpha.1',
+    hosts: {
+      macos: { asset: { name: 'connect-linux.sh', url: `${release}/connect-linux.sh` } },
+      linux: { asset: { name: 'connect-linux.sh', url: `${release}/connect-linux.sh` } },
+      windows: { asset: { name: 'connect-windows.ps1', url: `${release}/connect-windows.ps1` } },
+    },
   });
-  expect(hosts.windows).not.toHaveProperty('container');
 });
 
 it.each([

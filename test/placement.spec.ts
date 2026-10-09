@@ -70,14 +70,12 @@ it('tells a native computer run with the container choice that its Environment e
   expect(unattended).toEqual({
     status: 1,
     stdout: '',
-    stderr: `kit_bootstrap_refused: House Kit runs natively on this computer for Environment environment-one; installing it in the container ${ENDS}, so run this bootstrap in a terminal to confirm\n`,
+    stderr: `kit_bootstrap_refused: House Kit runs natively on this computer for Environment environment-one; installing it in a container ${ENDS}, so run this bootstrap in a terminal to confirm\n`,
   });
   for (const typed of ['n\n', '\n']) {
     const declined = host.terminal(['--container'], typed);
     expect(declined.status).toBe(1);
-    expect(declined.stdout).toContain(
-      `House Kit runs natively on this computer for Environment environment-one. Installing it in the container ${ENDS} and connects a new one.`,
-    );
+    expect(declined.stdout).toContain('House Kit is already installed natively. Replace it? [y/N]');
     expect(declined.stdout).toContain('kit_bootstrap_refused: Environment environment-one was kept; nothing changed');
   }
 
@@ -90,11 +88,11 @@ it('tells a container computer run natively that its Environment ends, and chang
 
   expect(host.run()).toMatchObject({
     status: 1,
-    stderr: `kit_bootstrap_refused: House Kit runs in the container on this computer for Environment environment-one; installing it natively ${ENDS}, so run this bootstrap in a terminal to confirm\n`,
+    stderr: `kit_bootstrap_refused: House Kit runs in a container on this computer for Environment environment-one; installing it natively ${ENDS}, so run this bootstrap in a terminal to confirm\n`,
   });
   const declined = host.terminal([], 'no\n');
   expect(declined.status).toBe(1);
-  expect(declined.stdout).toContain(`House Kit runs in the container on this computer for Environment environment-one. Installing it natively ${ENDS}`);
+  expect(declined.stdout).toContain('House Kit is already installed in a container. Replace it? [y/N]');
 
   await containerUnchanged(host);
   await keptTheRest(host);
@@ -157,7 +155,7 @@ it('replaces a container Environment with a new native one once the User confirm
   const again = host.run();
 
   expect(again).toMatchObject({ status: 0, stderr: '' });
-  expect(again.stdout).toContain('House Kit is already running for Environment environment-two.');
+  expect(again.stdout).toContain('House Kit is already installed.');
   expect(host.calls('kit')).toEqual([]);
   expect(await enrolled(host)).toBe('environment-two');
 });

@@ -119,9 +119,24 @@ bind_house() {
   [[ "$HOUSE" == https://* || "$HOUSE" == http://127.0.0.1:* || "$HOUSE" == http://localhost:* ]] || refuse 'House origin must use HTTPS or local loopback HTTP'
 }
 
+terminal() {
+  { : </dev/tty; } 2>/dev/null
+}
+
+confirmed() {
+  local answer=''
+  read -r -p "$1 [y/N] " answer </dev/tty || true
+  [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]]
+}
+
 check_authority() {
-  HOUSE_KIT_HOME="$KIT_HOME" "$@" ||
-    refuse "House refuses the stored Kit credential of Environment $(enrolled environment); to reconnect it, $RECONNECT"
+  HOUSE_KIT_HOME="$KIT_HOME" "${@:2}" && return
+  local environment
+  environment=$(enrolled environment)
+  terminal || refuse "House refuses the stored Kit credential of Environment $environment; to reconnect it, $RECONNECT"
+  confirmed 'House Kit is already installed for another account. Replace it?' || refuse "Environment $environment was kept; nothing changed"
+  "$1"
+  find "$KIT_HOME" -mindepth 1 -delete || refuse "$KIT_HOME could not be cleared"
 }
 
 configure_kit() {
@@ -134,8 +149,8 @@ update_clis() {
   [[ -n "$listed" ]] || return 0
   while IFS=$'\t' read -r -u 3 name path release minimum state; do
     if ((UPDATE_CLIS == 0)); then
-      [[ "$state" == old && -t 0 ]] || continue
-      read -r -p "$name $release is older than $minimum, the oldest this House Kit runs. Update it? [Y/n] " answer || answer=n
+      [[ "$state" == old ]] && terminal || continue
+      read -r -p "$name $release is older than $minimum, the oldest this House Kit runs. Update it? [Y/n] " answer </dev/tty || answer=n
       [[ -z "$answer" || "$answer" == [Yy]* ]] || continue
     fi
     printf 'Updating %s %s.\n' "$name" "$release"
@@ -334,8 +349,18 @@ native_cli_update() {
   "${DIRECT[@]}" "$1" update
 }
 
+stop_native_service() {
+  if service_manager && systemctl is-active --quiet "$NATIVE_SERVICE"; then
+    elevated systemctl stop "$NATIVE_SERVICE" || refuse 'the House Kit service could not be stopped'
+  fi
+}
+
+refused_enrolment() {
+  refuse 'House refuses the Kit credential it was given'
+}
+
 start_native_service() {
-  printf '[Unit]\nDescription=House Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' \
+  printf '[Unit]\nDescription=House Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' \
     "$(id -un)" "$NATIVE_WORKSPACE" "$NATIVE_BIN" | elevated tee "$NATIVE_UNIT" >/dev/null &&
     elevated chmod 0644 "$NATIVE_UNIT" || refuse "$NATIVE_UNIT could not be written"
   elevated systemctl daemon-reload || refuse 'systemd could not read the House Kit service'
@@ -345,8 +370,8 @@ start_native_service() {
 announce() {
   case "$1" in
     connected) printf 'House Kit connected for Environment %s.\n' "$(enrolled environment)" ;;
-    updated) printf 'House Kit updated for Environment %s.\n' "$(enrolled environment)" ;;
-    running) printf 'House Kit is already running for Environment %s.\n' "$(enrolled environment)" ;;
+    updated) printf 'House Kit updated.\n' ;;
+    running) printf 'House Kit is already installed.\n' ;;
     restarted) printf 'House Kit restarted for Environment %s.\n' "$(enrolled environment)" ;;
   esac
 }
@@ -381,9 +406,7 @@ connect_native() {
   fi
   if [[ "$(cat "$NATIVE_PREFIX/release" 2>/dev/null || true)" != "$RELEASE" ]]; then
     stage_native_kit
-    if service_manager && systemctl is-active --quiet "$NATIVE_SERVICE"; then
-      elevated systemctl stop "$NATIVE_SERVICE" || refuse 'the House Kit service could not be stopped'
-    fi
+    stop_native_service
     place_native_kit
   elif service_manager && systemctl is-active --quiet "$NATIVE_SERVICE"; then
     connected=running
@@ -391,11 +414,14 @@ connect_native() {
     connected=restarted
   fi
   if [[ -f "$KIT_HOME/credential.json" ]]; then
-    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+    check_authority stop_native_service "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+  fi
+  if [[ -f "$KIT_HOME/credential.json" ]]; then
+    :
   elif ((ENROLL_SELECTED)); then
     connected=connected
     enroll_kit
-    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+    check_authority refused_enrolment "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   else
     connected=connected
     LOGIN_TYPED=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
@@ -422,9 +448,11 @@ notice_desktop_host() {
   local version described=Linux distribution='' release=''
   if ((MACOS)); then
     version=$(sw_vers -productVersion)
-    [[ "${version%%.*}" == "$MACOS_RELEASE" && "$ARCH" == arm64 ]] && return
-    printf 'House Kit supports macOS %s on Apple silicon, not macOS %s on %s; it installs without that guarantee.\n' "$MACOS_RELEASE" "$version" "$CHIP"
-    return
+    if ((${version%%.*} < MACOS_RELEASE)); then
+      printf 'Warning: macOS %s is outdated; update to macOS %s.\n' "$version" "$MACOS_RELEASE"
+    fi
+    [[ "$ARCH" == arm64 ]] || printf 'Warning: House Kit supports Apple silicon, not %s.\n' "$CHIP"
+    return 0
   fi
   if [[ -r /etc/os-release ]]; then
     distribution=$(. /etc/os-release && printf '%s' "${ID:-}")
@@ -489,6 +517,10 @@ stop_desktop_service() {
   fi
 }
 
+stop_running_desktop() {
+  if desktop_running; then stop_desktop_service; fi
+}
+
 start_desktop_service() {
   if ((MACOS)); then
     launchctl enable "gui/$(id -u)/$SERVICE" && launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT" ||
@@ -546,11 +578,11 @@ record_placement() {
 }
 
 placed() {
-  if [[ "$1" == native ]]; then printf natively; else printf 'in the container'; fi
+  if [[ "$1" == native ]]; then printf natively; else printf 'in a container'; fi
 }
 
 take_placement() {
-  local held environment answer=''
+  local held environment
   [[ -f "$KIT_HOME/credential.json" ]] || return 0
   held=$(held_placement)
   [[ "$held" != "$1" ]] || return 0
@@ -558,11 +590,8 @@ take_placement() {
   if [[ "$held" == container ]] && type -P docker >/dev/null && ! docker_answers; then
     refuse "House Kit runs in the container $NAME for Environment $environment and Docker does not answer: $(docker_cause); start Docker so that container can be removed, then rerun this bootstrap"
   fi
-  [[ -t 0 ]] || refuse "House Kit runs $(placed "$held") on this computer for Environment $environment; installing it $(placed "$1") ends that Environment and its Agents, so run this bootstrap in a terminal to confirm"
-  printf 'House Kit runs %s on this computer for Environment %s. Installing it %s ends that Environment and its Agents and connects a new one.\n' \
-    "$(placed "$held")" "$environment" "$(placed "$1")"
-  read -r -p 'Replace it? [y/N] ' answer || true
-  [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]] || refuse "Environment $environment was kept; nothing changed"
+  terminal || refuse "House Kit runs $(placed "$held") on this computer for Environment $environment; installing it $(placed "$1") ends that Environment and its Agents, so run this bootstrap in a terminal to confirm"
+  confirmed "House Kit is already installed $(placed "$held"). Replace it?" || refuse "Environment $environment was kept; nothing changed"
   record_placement "$held"
   REPLACES=$environment
 }
@@ -574,7 +603,7 @@ remove_container() {
 
 remove_native() {
   if [[ -e "$LAUNCH_AGENT" || -e "$USER_UNIT" ]]; then
-    if desktop_running; then stop_desktop_service; fi
+    stop_running_desktop
     if ((MACOS)); then
       rm -f "$LAUNCH_AGENT" || refuse "$LAUNCH_AGENT could not be removed"
     else
@@ -602,7 +631,7 @@ connect_desktop() {
   bind_house
   if [[ "$(cat "$NATIVE_PREFIX/release" 2>/dev/null || true)" != "$RELEASE" ]]; then
     stage_native_kit
-    if desktop_running; then stop_desktop_service; fi
+    stop_running_desktop
     place_native_kit
   elif desktop_running; then
     connected=running
@@ -611,8 +640,9 @@ connect_desktop() {
   fi
   add_path_line
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
-  else
+    check_authority stop_running_desktop "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+  fi
+  if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     connected=connected
     LOGIN_TYPED=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
     LOGIN_OPENED=("${LOGIN_TYPED[@]}")
@@ -699,7 +729,7 @@ update_kit() {
   docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null
   docker rm -f "$NAME" >/dev/null
   start_resident
-  printf 'House Kit updated for Environment %s.\n' "$(enrolled environment)"
+  printf 'House Kit updated.\n'
 }
 
 resume_kit() {
@@ -708,7 +738,7 @@ resume_kit() {
   elif [[ -n "$CONFIGURED" ]]; then
     docker restart "$NAME" >/dev/null
   else
-    printf 'House Kit is already running for Environment %s.\n' "$(enrolled environment)"
+    printf 'House Kit is already installed.\n'
     return
   fi
   printf 'House Kit restarted for Environment %s.\n' "$(enrolled environment)"
@@ -716,8 +746,9 @@ resume_kit() {
 
 connect_kit() {
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_authority "${AUTHORITY[@]}"
-  else
+    check_authority remove_container "${AUTHORITY[@]}"
+  fi
+  if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
@@ -889,17 +920,25 @@ CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE
 
 if kit_installed; then
   check_installation
-  [[ -f "$KIT_HOME/credential.json" ]] || refuse 'the installed Kit has no enrolled authority'
   if ((FORWARDING)); then
     [[ "$(docker inspect --format '{{.Config.Image}}' "$NAME")" == "$IMAGE" ]] || refuse "an installed Kit uses a different image; rerun this command without $FORWARDED and its arguments to update it"
     if [[ "$FORWARDED" == kit && "${FORWARD[0]:-}" == login ]]; then
       login_kit ${FORWARD[@]+"${FORWARD[@]:1}"}
+      kit_running || docker start "$NAME" >/dev/null
       exit 0
     fi
+    [[ -f "$KIT_HOME/credential.json" ]] || refuse 'the installed Kit has no enrolled authority'
     forward_kit
-    exit
+    if [[ "$FORWARDED" == kit && "${FORWARD[0]:-}" == logout ]]; then docker stop "$NAME" >/dev/null; fi
+    exit 0
   fi
-  check_authority "${AUTHORITY[@]}"
+  if [[ -f "$KIT_HOME/credential.json" ]]; then check_authority remove_container "${AUTHORITY[@]}"; fi
+  if [[ ! -f "$KIT_HOME/credential.json" ]]; then
+    remove_container
+    docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null
+    connect_kit
+    exit 0
+  fi
   record_placement container
   configure_kit "${CONFIGURE[@]}"
   update_clis container_clis container_cli_update

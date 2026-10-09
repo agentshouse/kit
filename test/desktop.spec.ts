@@ -133,7 +133,7 @@ it.each([
     const ran = host.run();
 
     expect(ran).toMatchObject({ status: 0, stderr: '' });
-    expect(ran.stdout).toContain('House Kit is already running for Environment environment-one.\n');
+    expect(ran.stdout).toContain('House Kit is already installed.\n');
     expect(host.calls('curl')).toEqual([]);
     expect(host.calls('kit')).toEqual([]);
     expect(acts(host)).toEqual([]);
@@ -253,8 +253,6 @@ it("updates every chosen CLI the native placement's Kit names with its own updat
 });
 
 it.each([
-  ['an earlier macOS', { system: 'Darwin', machine: 'arm64', macos: '26.7.1' }, 'macOS 27 on Apple silicon, not macOS 26.7.1 on Apple silicon', 'darwin-arm64'],
-  ['an Intel Mac', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, 'macOS 27 on Apple silicon, not macOS 27.0.1 on an Intel chip', 'darwin-x64'],
   ['a Linux host outside the native contract', { system: 'Linux', machine: 'aarch64' }, 'Ubuntu 26.04 LTS on amd64, not Debian GNU/Linux 12 (bookworm) on arm64', 'linux-arm64'],
   ['a Linux host on another architecture Node.js is built for', { system: 'Linux', machine: 'ppc64le' }, 'Ubuntu 26.04 LTS on amd64, not Debian GNU/Linux 12 (bookworm) on ppc64le', 'linux-ppc64le'],
 ] as const)('prints exactly one unsupported notice on %s and installs', async (_name, platform, notice, node) => {
@@ -266,6 +264,94 @@ it.each([
   expect(notices(ran.stdout)).toEqual([`House Kit supports ${notice}; ${UNSUPPORTED}`]);
   expect(host.calls('curl')).toEqual([expect.stringContaining(`/node-v24.21.0-${node}.tar.gz`)]);
   await installed(host);
+});
+
+it('warns in one line on a macOS older than the supported release and installs', async () => {
+  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', macos: '26.7.1' });
+
+  const ran = host.run();
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').filter((line) => /macOS|guarantee/.test(line))).toEqual([
+    'Warning: macOS 26.7.1 is outdated; update to macOS 27.',
+  ]);
+  expect(host.calls('curl')).toEqual([expect.stringContaining('/node-v24.21.0-darwin-arm64.tar.gz')]);
+  await installed(host);
+});
+
+it('says nothing about the system on the supported macOS release on Apple silicon', async () => {
+  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', appleSilicon: true });
+
+  const ran = host.run();
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout).not.toMatch(/macOS|guarantee|Apple silicon/);
+});
+
+it('warns once on an Intel Mac and installs', async () => {
+  const host = await fakeHost({ system: 'Darwin', machine: 'x86_64', appleSilicon: false });
+
+  const ran = host.run();
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').filter((line) => line.startsWith('Warning:'))).toEqual([
+    'Warning: House Kit supports Apple silicon, not an Intel chip.',
+  ]);
+  await installed(host);
+});
+
+it('says the Kit updated when a rerun installs a newer release', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run()).toMatchObject({ status: 0 });
+  await writeFile(join(host.home, '.local', 'share', 'house-kit', 'release'), '@agentshouse/kit@0.2.1-alpha.0 node@24.21.0\n');
+
+  const ran = host.run();
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').at(-2)).toBe('House Kit updated.');
+});
+
+const OTHER_ACCOUNT = 'House Kit is already installed for another account. Replace it? [y/N]';
+
+async function heldByAnotherAccount(): Promise<Host> {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run()).toMatchObject({ status: 0 });
+  await writeFile(join(host.home, '.house-kit', 'own-agent.json'), '{"user":"user-one"}\n');
+  await writeFile(join(host.home, 'AgentsHouse', 'notes.md'), 'kept\n');
+  await host.mark('refused');
+  await host.forget();
+  return host;
+}
+
+it('asks from the terminal, while the script arrives on standard input, whether to replace a Kit House refuses as another account\'s, and installs afresh on yes', async () => {
+  const host = await heldByAnotherAccount();
+
+  const ran = host.terminal([], 'y\n');
+
+  expect(ran.status).toBe(0);
+  expect(ran.stdout.match(/Replace it\?/g)).toHaveLength(1);
+  expect(ran.stdout).toContain(OTHER_ACCOUNT);
+  expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
+  expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${host.home}/.house-kit`]);
+  expect(host.calls('systemctl')).toEqual(expect.arrayContaining(['--user stop house-kit.service', '--user --quiet enable --now house-kit.service']));
+  await expect(access(join(host.home, '.house-kit', 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(join(host.home, 'AgentsHouse', 'notes.md'), 'utf8')).toBe('kept\n');
+});
+
+it('keeps a Kit House refuses as another account\'s when the User declines, and refuses without a terminal', async () => {
+  const host = await heldByAnotherAccount();
+
+  const declined = host.terminal([], 'n\n');
+  expect(declined.status).toBe(1);
+  expect(declined.stdout).toContain(OTHER_ACCOUNT);
+  expect(declined.stdout).toContain('kit_bootstrap_refused: Environment environment-one was kept; nothing changed');
+  expect(host.run()).toMatchObject({
+    status: 1,
+    stderr: `kit_bootstrap_refused: House refuses the stored Kit credential of Environment environment-one; to reconnect it, run ${host.home}/.local/bin/kit login\n`,
+  });
+
+  expect(host.calls('kit')).toEqual([]);
+  expect(await readFile(join(host.home, '.house-kit', 'own-agent.json'), 'utf8')).toBe('{"user":"user-one"}\n');
 });
 
 it('refuses a Linux architecture Node.js is not built for before installing anything', async () => {

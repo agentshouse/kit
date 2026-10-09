@@ -84,3 +84,27 @@ it("never falls back to the User's own agent's connection when a conversation's 
   expect(ran.stderr).toBe("house: this conversation's House connection is closed; nothing to do from here\n");
   expect(house.requests).toEqual([]);
 });
+
+it('prints the same help for house help as for house --help, listing help and push, a Tool without a description by its name alone, and no Git verb', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  house.route('POST', '/', ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    return { body: { jsonrpc: '2.0', id: message.id, result: { tools: [...LISTING, { name: 'about_house', inputSchema: { type: 'object' } }] } } };
+  });
+
+  const help = await runHouse(home, ['help']);
+  const dashed = await runHouse(home, ['--help']);
+
+  expect(help).toEqual(dashed);
+  expect(help.status).toBe(0);
+  const lines = help.stdout.split('\n');
+  expect(lines.slice(0, 3)).toEqual([
+    "usage: house <tool> ['<arguments as JSON>']",
+    'help',
+    "push [commit]: sends the Local copy's committed changes to House",
+  ]);
+  expect(lines).toContain('about_house');
+  expect(help.stdout).not.toMatch(/\bgit\b/);
+  expect((await runHouse(home, ['about_house', '--help'])).stdout).toBe('{"type":"object"}\n');
+});

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +20,7 @@ export interface OwnAgent {
 }
 
 const ENROLMENT = 'credential.json';
+const DISCONNECTED = 'disconnected.json';
 const CONFIGURATION = 'kit.json';
 const OWN_AGENT = 'own-agent.json';
 
@@ -55,8 +57,22 @@ export function readEnrolment(): Promise<Enrolment | null> {
   return readHome<Enrolment>(ENROLMENT);
 }
 
-export function writeEnrolment(enrolment: Enrolment): Promise<void> {
-  return writeHome(ENROLMENT, enrolment);
+export async function writeEnrolment(enrolment: Enrolment): Promise<void> {
+  await writeHome(ENROLMENT, enrolment);
+  await rm(join(kitHome(), DISCONNECTED), { force: true });
+}
+
+export function readDisconnected(): Promise<Omit<Enrolment, 'credential'> | null> {
+  return readHome(DISCONNECTED);
+}
+
+export async function forgetEnrolment({ house, environment }: Enrolment): Promise<void> {
+  await writeHome(DISCONNECTED, { house, environment });
+  await rm(join(kitHome(), ENROLMENT), { force: true });
+}
+
+export function enrolled(): boolean {
+  return existsSync(join(kitHome(), ENROLMENT));
 }
 
 export function readOwnAgent(): Promise<OwnAgent | null> {
