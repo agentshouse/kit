@@ -45,7 +45,8 @@ export async function received(request: IncomingMessage): Promise<string> {
   return text;
 }
 
-function relay(request: IncomingMessage, response: ServerResponse, target: URL, authorization?: string): void {
+function relay(request: IncomingMessage, response: ServerResponse, house: URL, authorization?: string): void {
+  const target = relayed(house);
   const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
   const forwarded = send(
     target,
