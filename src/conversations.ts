@@ -475,10 +475,8 @@ export class Conversations {
   private admitted(conversation: Conversation, turn: Turn): void {
     turn.admitted = true;
     for (const note of turn.notes.splice(0)) this.kit.send(note);
-    if (turn.text !== '') {
-      turn.unsentFrom = 0;
-      this.draft(conversation, turn);
-    }
+    turn.unsentFrom = 0;
+    this.draft(conversation, turn);
     if (turn.entries !== null) this.plan(conversation, turn);
   }
 
@@ -525,8 +523,10 @@ export class Conversations {
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
       () => this.answered(conversation, sent, null),
       async (error: unknown) => {
-        if (!running.adapter.connection.signal.aborted) this.answered(conversation, sent, causeOf(error));
-        else if (sent.turn !== null) {
+        if (!running.adapter.connection.signal.aborted) {
+          this.answered(conversation, sent, causeOf(error));
+          if (conversation.open === 0 && conversation.running === running) stop(running.bridge);
+        } else if (sent.turn !== null) {
           this.end(conversation, sent.turn, { failed: running.killed ? KILLED : await running.adapter.exited });
         }
       },

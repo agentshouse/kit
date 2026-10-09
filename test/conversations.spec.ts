@@ -464,6 +464,25 @@ it('ends a turn failed when its process exits during it', async () => {
   );
 });
 
+it.each(['codex-acp', 'claude-agent-acp'])(
+  'ends the %s process when a prompt fails with no turn left running, so the next message resumes the session in a fresh one',
+  async (kind) => {
+    const hosted = await hostKit([{ kind }]);
+    hosted.input({ kind: 'open' });
+    const { provider_session_id } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+
+    hosted.input({ kind: 'message', text: '@fail The agent process exited unexpectedly', files: [], first: true });
+
+    expect(await ends(hosted, 1)).toEqual([{ failed: expect.stringContaining('exited unexpectedly') }]);
+    await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
+    hosted.input({ kind: 'message', text: '@say back', files: [], first: false, provider_session_id });
+    expect(await ends(hosted, 2)).toEqual([{ failed: expect.stringContaining('exited unexpectedly') }, { text: 'back' }]);
+    const log = await hosted.adapterLog();
+    expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: provider_session_id });
+    expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
+  },
+);
+
 it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
   'ends a turn failed with the cause %s gives when it fails the prompt after it ends the turn',
   async (kind) => {
@@ -624,6 +643,29 @@ it('writes each message chunk as a draft frame with the next sequence and plan u
   expect(ended.body).toEqual({ text: 'Hello world\n\nNext' });
 });
 
+it('writes an empty draft once House answers the turn start, before the turn has any text', async () => {
+  const hosted = await hostKit();
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+
+  hosted.input({ kind: 'message', text: '@hold 1000\n@say Hello', files: [], first: true });
+
+  const started = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  expect(await until(() => drafts(hosted)[0])).toEqual({
+    type: 'draft',
+    conversation_id: 'conversation-1',
+    turn_id: started.params.turn,
+    sequence: 1,
+    from: 0,
+    blocks: [],
+  });
+  expect(await ends(hosted, 1)).toEqual([{ text: 'Hello' }]);
+  expect(drafts(hosted).map((frame) => [frame.sequence, frame.blocks])).toEqual([
+    [1, []],
+    [2, [{ type: 'paragraph', text: 'Hello' }]],
+  ]);
+});
+
 it("writes the turn's whole view as its next draft on a new socket", async () => {
   const hosted = await hostKit();
   startHeld(hosted);
@@ -757,7 +799,7 @@ it.each(KINDS)('sends each working note %s writes between actions as one complet
     drafts(hosted).find((frame) => JSON.stringify(frame.blocks).includes('The config is fine.')),
   );
   expect(answer).toMatchObject({ from: 0, blocks: [{ type: 'paragraph', text: 'The config is fine.' }] });
-  for (const draft of drafts(hosted)) {
+  for (const draft of drafts(hosted).filter((frame) => (frame.blocks as unknown[]).length > 0)) {
     expect(draft.blocks).toEqual([{ type: 'paragraph', text: expect.stringMatching(/^The config/) }]);
   }
 });
@@ -785,7 +827,7 @@ it.each(KINDS)('ends a turn %s writes only notes in with an empty answer', async
 
   expect(await ends(hosted, 1)).toEqual([{ text: '' }]);
   expect(notes(hosted)).toEqual([note('Reading the logs')]);
-  expect(drafts(hosted)).toEqual([]);
+  expect(drafts(hosted).map((frame) => frame.blocks)).toEqual([[]]);
 });
 
 it.each(KINDS)('separates the notes and answer of a turn %s starts by itself like those of a prompted turn', async (kind) => {
