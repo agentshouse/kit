@@ -12,6 +12,7 @@ export interface Route {
   working_directory: string;
   model: string;
   effort: string | null;
+  mode: string | null;
 }
 
 export interface Desired {
@@ -24,9 +25,15 @@ interface Model {
   efforts: string[];
 }
 
+interface Mode {
+  mode: string;
+  name: string;
+}
+
 interface Offer {
   signed_in: boolean;
   models: Model[];
+  modes: Mode[];
 }
 
 interface Reading extends Offer {
@@ -35,15 +42,19 @@ interface Reading extends Offer {
   failure: string | null;
 }
 
-const SIGNED_OUT: Offer = { signed_in: false, models: [] };
+const SIGNED_OUT: Offer = { signed_in: false, models: [], modes: [] };
 
 function select(options: SessionConfigOption[], category: string) {
   const option = options.find((candidate) => candidate.category === category);
   return option?.type === 'select' ? option : undefined;
 }
 
+function choices(options: SessionConfigSelectOptions) {
+  return options.flatMap((entry) => ('group' in entry ? entry.options : [entry]));
+}
+
 function values(options: SessionConfigSelectOptions): string[] {
-  return options.flatMap((entry) => ('group' in entry ? entry.options : [entry])).map((entry) => entry.value);
+  return choices(options).map((entry) => entry.value);
 }
 
 function causeOf(error: unknown): string {
@@ -54,12 +65,14 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
-async function models(kind: string, adapter: Adapter, known: Model[]): Promise<Model[]> {
+async function models(kind: string, adapter: Adapter, known: Model[]): Promise<Pick<Offer, 'models' | 'modes'>> {
   const agent = adapter.connection.agent;
   const opened = await agent.request('session/new', { cwd: kitHome(), mcpServers: [] });
   let options = opened.configOptions ?? [];
+  const mode = select(options, 'mode');
+  const modes = mode === undefined ? [] : choices(mode.options).map(({ value, name }) => ({ mode: value, name }));
   const model = select(options, 'model');
-  if (model === undefined) return [];
+  if (model === undefined) return { models: [], modes };
   const offered: Model[] = [];
   for (const value of values(model.options)) {
     if (select(options, 'model')?.currentValue !== value) {
@@ -76,7 +89,7 @@ async function models(kind: string, adapter: Adapter, known: Model[]): Promise<M
     const effort = select(options, 'thought_level');
     offered.push({ model: value, efforts: effort === undefined ? [] : values(effort.options) });
   }
-  return offered;
+  return { models: offered, modes };
 }
 
 async function offer(kind: string, cli: string, known: Offer): Promise<Offer> {
@@ -89,10 +102,14 @@ async function offer(kind: string, cli: string, known: Offer): Promise<Offer> {
       const method = adapter.initialized._meta?.[probe.initializeMeta];
       if (typeof method !== 'string' || method.length === 0) return SIGNED_OUT;
     }
-    return { signed_in: true, models: await models(kind, adapter, known.models) };
+    return { signed_in: true, ...(await models(kind, adapter, known.models)) };
   } catch (error) {
     process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
-    return { signed_in: adapter === undefined && 'initializeMeta' in probe ? known.signed_in : true, models: known.models };
+    return {
+      signed_in: adapter === undefined && 'initializeMeta' in probe ? known.signed_in : true,
+      models: known.models,
+      modes: known.modes,
+    };
   } finally {
     if (adapter !== undefined) killTree(adapter.child);
   }
@@ -106,6 +123,8 @@ function reported(kind: string, reading: Reading) {
     failure: reading.failure,
     signed_in: reading.signed_in,
     models: reading.models,
+    modes: reading.modes,
+    full_access: CLIS[kind]!.fullAccess,
   };
 }
 
@@ -175,7 +194,7 @@ export class Agents {
       const known = this.readings.get(kind);
       const kept = known?.release === null || known?.minimum !== undefined ? SIGNED_OUT : (known ?? SIGNED_OUT);
       if (known?.release !== release || known.minimum !== undefined) {
-        this.update(kind, { release, failure: null, signed_in: kept.signed_in, models: kept.models });
+        this.update(kind, { release, failure: null, signed_in: kept.signed_in, models: kept.models, modes: kept.modes });
       }
       const read = this.nextRead(kind);
       offer(kind, cli, kept)

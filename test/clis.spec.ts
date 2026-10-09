@@ -68,7 +68,7 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
   const executable = EXECUTABLES[kind];
   if (executable === undefined) {
     expect(env.CLI_PATH).toBe(cli);
-    expect((entry!.argv as string[]).slice(2)).toEqual(['agent', '--no-leader', 'stdio']);
+    expect((entry!.argv as string[]).slice(2)).toEqual(['agent', '--always-approve', '--no-leader', 'stdio']);
   } else {
     expect(env[executable]).toBe(cli);
     expect(env.CLI_PATH).toBeUndefined();
@@ -214,6 +214,12 @@ it('reads the CLI again at every Conversation process start, its sign-in and eve
         { model: 'gpt-6', efforts: ['high', 'max'] },
         { model: 'gpt-5.5', efforts: ['medium'] },
       ],
+      modes: [
+        { mode: 'read-only', name: 'Read-only' },
+        { mode: 'workspace-write', name: 'Workspace access' },
+        { mode: 'agent', name: 'Auto review' },
+        { mode: 'agent-full-access', name: 'Full access' },
+      ],
     },
   ]);
   const count = reported(hosted).length;
@@ -295,6 +301,8 @@ it('reads a CLI a conversation finds at a new version again, its sign-in and eve
         { model: 'grok-5', efforts: ['high'] },
         { model: 'grok-4.6', efforts: ['low'] },
       ],
+      modes: [],
+      full_access: null,
     },
   ]);
   expect(await probes(hosted)).toBe(2);
@@ -342,6 +350,14 @@ it('reports a model its CLI refuses to select, when it reads that CLI again, wit
         { model: 'default', efforts: ['default', 'high'] },
         { model: 'sonnet', efforts: ['default', 'low', 'medium', 'high', 'max'] },
       ],
+      modes: [
+        { mode: 'default', name: 'Manual' },
+        { mode: 'acceptEdits', name: 'Accept edits' },
+        { mode: 'plan', name: 'Plan' },
+        { mode: 'auto', name: 'Auto' },
+        { mode: 'bypassPermissions', name: 'Bypass permissions' },
+      ],
+      full_access: 'bypassPermissions',
     },
   ]);
   await until(() => hosted.kit.stderr().includes('claude-agent-acp refused its model sonnet'));

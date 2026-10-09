@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { rm, stat, writeFile } from 'node:fs/promises';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
@@ -13,7 +13,7 @@ async function reports(hosted: Hosted, count: number): Promise<[string, string, 
   return received.map((report) => [report.path.slice(report.path.lastIndexOf('/') + 1), report.params.turn!, report.body]);
 }
 
-it('opens the provider session in the launch directory with the route settings and reports its id', async () => {
+it('opens the provider session in the launch directory with the route settings and full access and reports its id', async () => {
   const hosted = await hostKit([{ model: 'gpt-route', effort: 'high' }]);
 
   hosted.input({ kind: 'open' });
@@ -24,11 +24,60 @@ it('opens the provider session in the launch directory with the route settings a
   expect(ack).toEqual({ provider_session_id: opened.sessionId });
   expect(opened.params).toMatchObject({ cwd: hosted.workingDirectory });
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
+    { sessionId: opened.sessionId, configId: 'mode', value: 'agent-full-access' },
     { sessionId: opened.sessionId, configId: 'model', value: 'gpt-route' },
     { sessionId: opened.sessionId, configId: 'reasoning_effort', value: 'high' },
   ]);
   expect(new Set(log.map((entry) => entry.pid)).size).toBe(1);
   expect(hosted.socket.frames).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
+});
+
+it("opens the session in the mode the route names, and Codex runs `house` outside its sandbox by its own rule", async () => {
+  const hosted = await hostKit([{ mode: 'read-only', effort: null }]);
+
+  hosted.input({ kind: 'open' });
+
+  await hosted.ack(lastInput());
+  const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
+  expect(settings.map((entry) => entry.params)).toEqual([
+    expect.objectContaining({ configId: 'mode', value: 'read-only' }),
+    expect.objectContaining({ configId: 'model', value: 'route-model' }),
+  ]);
+  expect(await readFile(join(hosted.home, '.codex', 'rules', 'house.rules'), 'utf8')).toBe(
+    'prefix_rule(pattern = ["house"], decision = "allow")\n',
+  );
+});
+
+it('opens a Claude Code session in bypass permissions with `house` allowed in every mode', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp', model: 'default', effort: null }]);
+
+  hosted.input({ kind: 'open' });
+
+  await hosted.ack(lastInput());
+  const log = await hosted.adapterLog();
+  expect(log.find((entry) => entry.method === 'initialize')!.env).toMatchObject({ IS_SANDBOX: '1' });
+  expect(log.find((entry) => entry.method === 'session/new')!.params).toMatchObject({
+    _meta: { claudeCode: { options: { allowedTools: ['Bash(house:*)'] } } },
+  });
+  expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
+    expect.objectContaining({ configId: 'mode', value: 'bypassPermissions' }),
+    expect.objectContaining({ configId: 'model', value: 'default' }),
+  ]);
+});
+
+it('starts Grok approving every tool, since it offers no mode', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build', model: 'grok-4.6', effort: null }]);
+
+  hosted.input({ kind: 'open' });
+
+  await hosted.ack(lastInput());
+  const log = await hosted.adapterLog();
+  expect(log.find((entry) => entry.method === 'initialize')!.argv).toEqual(
+    expect.arrayContaining(['agent', '--always-approve', '--no-leader', 'stdio']),
+  );
+  expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
+    expect.objectContaining({ configId: 'model', value: 'grok-4.6' }),
+  ]);
 });
 
 it("refuses the open with the CLI's cause when the CLI does not take the route's effort", async () => {
@@ -126,7 +175,10 @@ it('opens a conversation with the launch settings House changed while the Kit wa
 
   expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
   const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
-  expect(settings.map((entry) => entry.params)).toEqual([expect.objectContaining({ configId: 'model', value: 'changed-model' })]);
+  expect(settings.map((entry) => entry.params)).toEqual([
+    expect.objectContaining({ configId: 'mode', value: 'agent-full-access' }),
+    expect.objectContaining({ configId: 'model', value: 'changed-model' }),
+  ]);
 });
 
 async function reportHeld(hosted: Hosted): Promise<void> {
@@ -177,7 +229,10 @@ it('opens a conversation with the launch settings House changed while the Kit wa
 
   expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
   const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
-  expect(settings.map((entry) => entry.params)).toEqual([expect.objectContaining({ configId: 'model', value: 'changed-model' })]);
+  expect(settings.map((entry) => entry.params)).toEqual([
+    expect.objectContaining({ configId: 'mode', value: 'agent-full-access' }),
+    expect.objectContaining({ configId: 'model', value: 'changed-model' }),
+  ]);
 });
 
 it('creates an absent default launch directory beneath /agents/house/agents before it opens the session there', async () => {

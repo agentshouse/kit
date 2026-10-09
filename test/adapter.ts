@@ -34,7 +34,8 @@ const offered = join(home, 'models', kind);
 const models = existsSync(offered) ? (JSON.parse(readFileSync(offered, 'utf8')) as CliModel[]) : MODELS[kind]!;
 let model = models[0]!.id;
 let effort = 'medium';
-const options = () => SESSION_OPTIONS[kind]!(models, model, effort);
+let mode: string | undefined;
+const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode);
 const cancelled = new Map<string, () => void>();
 
 const JOB =
@@ -340,6 +341,7 @@ const app = agent({ name: 'adapter-double' })
     }
     if (option.category === 'model') model = String(params.value);
     if (option.category === 'thought_level') effort = String(params.value);
+    if (option.category === 'mode') mode = String(params.value);
     return { configOptions: options() };
   })
   .onNotification('session/cancel', ({ params }) => {

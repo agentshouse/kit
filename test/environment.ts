@@ -121,6 +121,7 @@ export interface RouteOverrides {
   working_directory?: string;
   model?: string;
   effort?: string | null;
+  mode?: string | null;
 }
 
 export interface Hosting {
@@ -185,6 +186,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     working_directory: workingDirectory,
     model: 'route-model',
     effort: 'route-effort',
+    mode: null,
     ...route,
   }));
   const kinds = [...new Set(resolved.map((route) => route.kind))];

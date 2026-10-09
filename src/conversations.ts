@@ -356,6 +356,7 @@ export class Conversations {
     conversation.opening = bridge;
     try {
       await unlessAborted(createHowWeWork(bridge), conversation.killed.signal);
+      await CLIS[route.kind]!.allowHouse();
       const adapter = await startAdapter(
         route.kind,
         cli,
@@ -367,10 +368,11 @@ export class Conversations {
       void adapter.exited.then(() => bridge.close());
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
+      const _meta = CLIS[route.kind]!.sessionMeta;
       const opened =
         sessionId === null
-          ? await agent.request('session/new', { cwd, mcpServers: [] })
-          : { ...(await agent.request('session/resume', { sessionId, cwd, mcpServers: [] })), sessionId };
+          ? await agent.request('session/new', { cwd, mcpServers: [], _meta })
+          : { ...(await agent.request('session/resume', { sessionId, cwd, mcpServers: [], _meta })), sessionId };
       const running: Running = {
         adapter,
         bridge,
@@ -402,6 +404,7 @@ export class Conversations {
   ): Promise<SessionConfigOption[]> {
     let options = offered;
     const settings: [string, string | null][] = [
+      ['mode', route.mode ?? CLIS[route.kind]!.fullAccess],
       ['model', route.model],
       ['thought_level', route.effort],
     ];

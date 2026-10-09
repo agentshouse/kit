@@ -7,7 +7,7 @@ export interface CliModel {
 }
 
 type Choice = { value: string; name: string };
-type Build = (models: CliModel[], model: string, effort: string) => SessionConfigOption[];
+type Build = (models: CliModel[], model: string, effort: string, mode?: string) => SessionConfigOption[];
 
 export const MODELS: Record<string, CliModel[]> = {
   'codex-acp': [
@@ -43,8 +43,8 @@ function effortOption(id: string, name: string, models: CliModel[], model: strin
 }
 
 export const SESSION_OPTIONS: Record<string, Build> = {
-  'codex-acp': (models, model, effort) => [
-    select('mode', 'Mode', 'mode', 'agent', [
+  'codex-acp': (models, model, effort, mode = 'agent') => [
+    select('mode', 'Mode', 'mode', mode, [
       { value: 'read-only', name: 'Read-only' },
       { value: 'workspace-write', name: 'Workspace access' },
       { value: 'agent', name: 'Auto review' },
@@ -57,8 +57,8 @@ export const SESSION_OPTIONS: Record<string, Build> = {
     modelOption(models, model),
     ...effortOption('reasoning_effort', 'Reasoning effort', models, model, effort),
   ],
-  'claude-agent-acp': (models, model, effort) => [
-    select('mode', 'Mode', 'mode', 'default', [
+  'claude-agent-acp': (models, model, effort, mode = 'default') => [
+    select('mode', 'Mode', 'mode', mode, [
       { value: 'default', name: 'Manual' },
       { value: 'acceptEdits', name: 'Accept edits' },
       { value: 'plan', name: 'Plan' },

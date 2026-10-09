@@ -84,7 +84,7 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
   expect(await logged('curl.log')).toEqual([]);
 });
 
-it('reports the release of each CLI the login shell finds, its sign-in state and the models with the efforts its session options name, with the operating system and the Kit version', async () => {
+it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system and the Kit version', async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -106,6 +106,13 @@ it('reports the release of each CLI the login shell finds, its sign-in state and
           { model: 'gpt-5.5-mini', efforts: ['minimal', 'low', 'medium', 'high'] },
           { model: 'codex-instant', efforts: [] },
         ],
+        modes: [
+          { mode: 'read-only', name: 'Read-only' },
+          { mode: 'workspace-write', name: 'Workspace access' },
+          { mode: 'agent', name: 'Auto review' },
+          { mode: 'agent-full-access', name: 'Full access' },
+        ],
+        full_access: 'agent-full-access',
       },
       {
         kind: 'claude-agent-acp',
@@ -117,6 +124,14 @@ it('reports the release of each CLI the login shell finds, its sign-in state and
           { model: 'sonnet', efforts: ['default', 'low', 'medium', 'high', 'max'] },
           { model: 'haiku', efforts: [] },
         ],
+        modes: [
+          { mode: 'default', name: 'Manual' },
+          { mode: 'acceptEdits', name: 'Accept edits' },
+          { mode: 'plan', name: 'Plan' },
+          { mode: 'auto', name: 'Auto' },
+          { mode: 'bypassPermissions', name: 'Bypass permissions' },
+        ],
+        full_access: 'bypassPermissions',
       },
       {
         kind: 'grok-build',
@@ -127,6 +142,8 @@ it('reports the release of each CLI the login shell finds, its sign-in state and
           { model: 'grok-4.6', efforts: ['xhigh', 'high', 'medium', 'low'] },
           { model: 'grok-4.5', efforts: ['high', 'medium', 'low'] },
         ],
+        modes: [],
+        full_access: null,
       },
     ],
   });
@@ -181,7 +198,7 @@ it("reports a CLI whose official install failed with no release and the installe
 
   expect(failed.agents).toEqual([
     expect.objectContaining({ kind: 'codex-acp', release: RELEASES['codex-acp'] }),
-    { kind: 'claude-agent-acp', release: null, failure: 'Checksum verification failed', signed_in: false, models: [] },
+    { kind: 'claude-agent-acp', release: null, failure: 'Checksum verification failed', signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
   ]);
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: Checksum verification failed');
 
@@ -191,7 +208,7 @@ it("reports a CLI whose official install failed with no release and the installe
   const recovered = await until(() => reports[1]);
   expect(recovered.agents).toEqual([
     expect.objectContaining({ kind: 'codex-acp', release: RELEASES['codex-acp'] }),
-    { kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'], failure: null, signed_in: false, models: [] },
+    { kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'], failure: null, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
   ]);
 });
 
@@ -222,6 +239,8 @@ it("reports a CLI whose adapter failed to install with no release and npm's caus
       failure: 'npm error 404 Not Found - @agentclientprotocol/claude-agent-acp',
       signed_in: false,
       models: [],
+      modes: [],
+      full_access: 'bypassPermissions',
     },
   ]);
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: npm error 404 Not Found - @agentclientprotocol/claude-agent-acp');
@@ -234,7 +253,7 @@ it("names npm's exit status as the cause of an adapter install that failed witho
   const report = await until(() => reports[0]);
 
   expect(report.agents).toEqual([
-    { kind: 'claude-agent-acp', release: null, failure: 'npm exited with 1', signed_in: false, models: [] },
+    { kind: 'claude-agent-acp', release: null, failure: 'npm exited with 1', signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
   ]);
 });
 
@@ -255,6 +274,8 @@ it('reports a CLI below its minimum with the version found and the minimum, and 
       failure: null,
       signed_in: false,
       models: [],
+      modes: [],
+      full_access: 'agent-full-access',
     },
   ]);
   expect(await probes()).toBe(0);
@@ -278,6 +299,8 @@ it('reports a model its CLI refuses to select with no efforts before the Kit rea
         { model: 'sonnet', efforts: [] },
         { model: 'haiku', efforts: [] },
       ],
+      modes: expect.arrayContaining([{ mode: 'bypassPermissions', name: 'Bypass permissions' }]),
+      full_access: 'bypassPermissions',
     },
   ]);
   expect(kit!.stderr()).toContain('claude-agent-acp refused its model sonnet: Model switch blocked by a PreModelSwitch hook');

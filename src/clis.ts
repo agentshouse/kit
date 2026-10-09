@@ -1,8 +1,8 @@
 import type { ContentChunk } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { userInfo } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { kitHome } from './home.ts';
 
@@ -34,6 +34,9 @@ export interface Cli {
   install: string;
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
+  fullAccess: string | null;
+  sessionMeta: Record<string, unknown>;
+  allowHouse(): Promise<void>;
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
   queues: boolean;
@@ -44,6 +47,14 @@ export interface Cli {
 }
 
 const RUNNING_JOB = new Set(['running', 'paused']);
+
+async function allowHouseInCodex(): Promise<void> {
+  const rules = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'rules');
+  await mkdir(rules, { recursive: true });
+  await writeFile(join(rules, 'house.rules'), 'prefix_rule(pattern = ["house"], decision = "allow")\n');
+}
+
+async function nothing(): Promise<void> {}
 
 function threadStatus({ method, params }: Notice): string | undefined {
   if (method !== 'session/update' || params?.update?.sessionUpdate !== 'session_info_update') return undefined;
@@ -74,6 +85,9 @@ export const CLIS: Record<string, Cli> = {
     install: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
     adapter: { package: '@agentclientprotocol/codex-acp', bin: 'codex-acp', executable: 'CODEX_PATH', env: {} },
     args: [],
+    fullAccess: 'agent-full-access',
+    sessionMeta: {},
+    allowHouse: allowHouseInCodex,
     signedIn: { command: ['login', 'status'] },
     login: { args: ['login', '--device-auth'], code: 'show' },
     queues: false,
@@ -90,9 +104,12 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/claude-agent-acp',
       bin: 'claude-agent-acp',
       executable: 'CLAUDE_CODE_EXECUTABLE',
-      env: { CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp' },
+      env: { CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1' },
     },
     args: [],
+    fullAccess: 'bypassPermissions',
+    sessionMeta: { claudeCode: { options: { allowedTools: ['Bash(house:*)'] } } },
+    allowHouse: nothing,
     signedIn: { command: ['auth', 'status'] },
     login: { args: ['auth', 'login', '--claudeai'], code: 'collect', rejected: 'Invalid code' },
     queues: false,
@@ -109,7 +126,10 @@ export const CLIS: Record<string, Cli> = {
     minimum: '1.0.46',
     install: 'curl -fsSL https://x.ai/cli/install.sh | bash',
     adapter: null,
-    args: ['agent', '--no-leader', 'stdio'],
+    args: ['agent', '--always-approve', '--no-leader', 'stdio'],
+    fullAccess: null,
+    sessionMeta: {},
+    allowHouse: nothing,
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },
     queues: true,
