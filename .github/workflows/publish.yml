@@ -98,8 +98,9 @@ jobs:
         run: |
           set -euo pipefail
           npm publish --access public --provenance --tag latest
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 90); do
             [ "$(npm view "@agentshouse/kit@latest" version --prefer-online 2>/dev/null)" = "$VERSION" ] && exit 0
+            # npm served 0.2.1-c3e4a20bb3183 as latest more than five minutes after its publish
             sleep 10
           done
           echo "::error::npm does not read back @agentshouse/kit@$VERSION as latest"
