@@ -113,7 +113,7 @@ place_native_kit`,
   expect(await readFile(join(home, 'opt', 'house-kit', 'release'), 'utf8')).toBe('old');
 });
 
-it('downloads its packages, Node.js and the Kit without the proxy variables a Flex sandbox sets for House traffic', async () => {
+it('downloads its packages, Node.js and the Kit without the proxy variables a Sandbox sets for House traffic', async () => {
   const home = await temporaryHome();
   const linux = await readFile(LINUX, 'utf8');
   const steps = ['establish_native_packages', 'stage_native_kit'].map(
