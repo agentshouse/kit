@@ -1,5 +1,6 @@
 import { retryDelay } from './api.ts';
 import { readEnrolment } from './home.ts';
+import { relayed } from './relay.ts';
 
 export type Frame = { type: string } & Record<string, unknown>;
 
@@ -26,7 +27,7 @@ export function holdStream(handlers: StreamHandlers): Stream {
 
   const connect = async () => {
     const { house, credential } = (await readEnrolment())!;
-    const opening = new WebSocket(streamUrl(house), {
+    const opening = new WebSocket(relayed(streamUrl(house)), {
       protocols: [SUBPROTOCOL],
       headers: { authorization: `Bearer ${credential}` },
     } as unknown as string[]);

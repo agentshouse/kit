@@ -19,6 +19,7 @@ import { kitHome } from './home.ts';
 import { operationId } from './operation.ts';
 import { refusalOf, type Refusal } from './refusals.ts';
 import { changed, type Edit } from './translate.ts';
+import { relayed } from './relay.ts';
 
 const BRANCH = 'main';
 const PROVENANCE = '_provenance';
@@ -471,7 +472,7 @@ export class LocalCopies {
     const prefixes = [rootOf(selected)];
     const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', { prefixes });
     let bundle = await this.house.post<Bundle | { transfer: { url: string } }>('/kit/door/bootstrap', { prefixes });
-    if ('transfer' in bundle) bundle = (await (await fetch(bundle.transfer.url)).json()) as Bundle;
+    if ('transfer' in bundle) bundle = (await (await fetch(relayed(bundle.transfer.url))).json()) as Bundle;
     const [view] = bundle.scopes;
     if (view === undefined) return null;
     const authority = discovery.authorities.find((entry) => entry.room_ref === view.manifest.anchor)!;

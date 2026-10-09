@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { KIT_VERSION } from './clis.ts';
+import { relayed } from './relay.ts';
 
 export interface Message {
   jsonrpc: '2.0';
@@ -44,7 +45,7 @@ export async function callHouse(
   signal?: AbortSignal,
 ): Promise<Forwarded> {
   const tool = message.method === 'tools/call' ? String(message.params.name) : null;
-  const answer = await fetch(new URL('/', origin), {
+  const answer = await fetch(relayed(new URL('/', origin)), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',

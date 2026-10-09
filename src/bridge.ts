@@ -22,6 +22,7 @@ import { callHouse, mcpBody, rpc, UNREACHABLE, type Forwarded, type Message } fr
 import { operationId, uuidOf } from './operation.ts';
 import { refusalOf, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
+import { relayed } from './relay.ts';
 
 export interface ToolResult {
   content: { type: string; text: string }[];
@@ -156,7 +157,7 @@ export async function openBridge(
     );
     if ('refused' in prepared) return prepared;
     const { transfer } = parse(prepared.text) as { transfer: { url: string; operation: string } };
-    const posted = await fetch(transfer.url, {
+    const posted = await fetch(relayed(transfer.url), {
       method: 'POST',
       headers: { 'content-type': 'text/plain; charset=utf-8' },
       body: Buffer.concat([Buffer.from(`${transfer.operation}\n`), bytes]),
@@ -188,7 +189,7 @@ export async function openBridge(
       const tool = message.method === 'tools/call' ? String(message.params.name) : null;
       return send(message, tool !== null && (await writes(tool)) ? operationId() : null);
     }
-    const answer = await fetch(new URL(path, origin), {
+    const answer = await fetch(relayed(new URL(path, origin)), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
       body: versioned(conversationId, text),

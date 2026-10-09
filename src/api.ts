@@ -1,4 +1,5 @@
 import { readEnrolment } from './home.ts';
+import { relayed } from './relay.ts';
 
 export class HouseRefusal extends Error {
   readonly status: number;
@@ -22,7 +23,7 @@ export async function post<T>(
   credential?: string,
   signal?: AbortSignal,
 ): Promise<T> {
-  const answer = await fetch(new URL(path, house), {
+  const answer = await fetch(relayed(new URL(path, house)), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
