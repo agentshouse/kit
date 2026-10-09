@@ -97,7 +97,7 @@ it('sends the selected commit, HEAD by default, as exact-base edits and leaves s
 it('sends a changed schema as one whole-text replacement against its revision', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room(null);
+  const room = rooms.room('private');
   room.protected = ['agents', 'house'];
   const schema = 'types:\n  note:\n    fields:\n      title: { kind: string }\n';
   room.put('settings/schema.yaml', schema);
@@ -109,7 +109,7 @@ it('sends a changed schema as one whole-text replacement against its revision', 
 
   expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
   expect(batches(hosted).map((batch) => batch.changes)).toEqual([
-    [{ op: 'replace', path: '/private/settings/schema.yaml', base: revision, content: widened }],
+    [{ op: 'replace', path: '/rooms/private/settings/schema.yaml', base: revision, content: widened }],
   ]);
   expect(room.files.get('settings/schema.yaml')!.content).toBe(widened);
 });

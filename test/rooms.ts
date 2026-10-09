@@ -59,8 +59,7 @@ function covers(path: string, prefix: string): boolean {
 
 export class Room {
   readonly ref = `r_${randomBytes(5).toString('hex')}.x`;
-  readonly private: boolean;
-  handle: string | null;
+  handle: string;
   position = 1;
   logEpoch = LOG_EPOCH;
   write = [''];
@@ -70,17 +69,16 @@ export class Room {
   readonly log: { position: number; paths: string[] }[] = [];
   readonly batches: EditChange[][] = [];
 
-  constructor(handle: string | null) {
+  constructor(handle: string) {
     this.handle = handle;
-    this.private = handle === null;
   }
 
   get root(): string {
-    return this.private ? '/private' : `/rooms/${this.handle}`;
+    return `/rooms/${this.handle}`;
   }
 
   get repository(): string {
-    return this.private ? join(COPIES, 'private') : join(COPIES, 'rooms', this.ref);
+    return join(COPIES, 'rooms', this.ref);
   }
 
   writable(path: string): boolean {
@@ -251,8 +249,8 @@ function answered(writes: Write[]): Write[] {
 }
 
 export interface Rooms {
-  selection: { rooms: { room_ref: string; room_handle: string | null }[]; private: boolean } | null;
-  room(handle: string | null): Room;
+  selection: { rooms: { room_ref: string; room_handle: string | null }[] } | null;
+  room(handle: string): Room;
   select(rooms: Room[]): Promise<void>;
   denied: Set<string>;
   expired: Set<string>;
@@ -297,14 +295,10 @@ export function serveRooms(hosted: Hosted): Rooms {
       return room;
     },
     select: async (selected) => {
-      state.selection = {
-        rooms: selected.filter((room) => !room.private).map((room) => ({ room_ref: room.ref, room_handle: room.handle })),
-        private: selected.some((room) => room.private),
-      };
+      state.selection = { rooms: selected.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) };
       hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
       for (const room of selected) {
-        const key = room.private ? 'private.json' : join('rooms', `${room.ref}.json`);
-        await until(() => existsSync(join(hosted.home, 'local-copies', key)));
+        await until(() => existsSync(join(hosted.home, 'local-copies', 'rooms', `${room.ref}.json`)));
       }
     },
     edits: () => hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'edit'),

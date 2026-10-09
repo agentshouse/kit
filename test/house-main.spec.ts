@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
-import { LISTING, shelled, type McpCall } from './environment.ts';
+import { helpLine, LISTING, shelled, type McpCall } from './environment.ts';
 import { temporaryHome } from './kit.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
@@ -58,7 +58,7 @@ it("lists the Tools House lists to the User's own agent as its help, and never s
   const ran = await runHouse(home, ['--help']);
 
   expect(ran.status).toBe(0);
-  for (const tool of LISTING) expect(ran.stdout).toContain(`${tool.name}: ${tool.description}`);
+  for (const tool of LISTING) expect(ran.stdout).toContain(helpLine(tool));
   expect(house.requests.map((request) => request.headers.authorization)).toEqual(['Bearer ahp_own']);
 });
 

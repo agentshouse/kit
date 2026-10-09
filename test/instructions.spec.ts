@@ -4,7 +4,7 @@ import { conversationCredential, hostKit, lastInput, shelled, type Hosted, type 
 import { alive } from './kit.ts';
 
 const DOCUMENT = '# How we work\n\nWork goes into the Room it belongs to.';
-const READ = 'cat /private/how-we-work.md';
+const READ = 'cat /rooms/private/how-we-work.md';
 
 type Prompt = { type: string; text: string }[];
 
@@ -21,7 +21,7 @@ function refused(code: string): ToolResult {
 
 const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
 const FILE_LINE = 'To give the User a file or a page, upload it with `house upload_attachment` and link it; never start a server.';
-const READ_LINE = 'Before working in a Room, read `/private/rooms/<handle>/AGENTS.md`.';
+const READ_LINE = 'Before working in a Room, read `/rooms/private/rooms/<handle>/AGENTS.md`.';
 
 function blockOf(prompt: Prompt): string[] {
   expect(prompt).toHaveLength(2);
@@ -59,7 +59,7 @@ it('begins a first message with the house line, the file line, the reading line,
 });
 
 it.each([
-  ['an absent document', shelled('', 1, ['cat: path_not_found /private/how-we-work.md'])],
+  ['an absent document', shelled('', 1, ['cat: path_not_found /rooms/private/how-we-work.md'])],
   ['a Private Room the Profile cannot read', refused('room_not_found')],
   ['a read the Profile does not allow', refused('operation_denied')],
 ])('adds nothing for %s and still sends the message', async (_case, answer) => {
@@ -84,7 +84,7 @@ it('refuses a first message with the cause when House cannot answer the document
 
 it.each([
   ['house_unavailable', refused('house_unavailable')],
-  ['is_a_directory', shelled('', 1, ['cat: is_a_directory /private/how-we-work.md'])],
+  ['is_a_directory', shelled('', 1, ['cat: is_a_directory /rooms/private/how-we-work.md'])],
 ])("refuses a first message with House's answer when the document read fails with %s", async (code, answer) => {
   const hosted = await hostKit();
   hosted.tools.shell = () => answer;

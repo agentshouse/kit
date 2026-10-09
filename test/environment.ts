@@ -45,15 +45,24 @@ export function shelled(stdout: string, exit = 0, stderr: string[] = []): ToolRe
   return { content: [{ type: 'text', text: text.join('\n') }] };
 }
 
-export const LISTING = [
+export interface Listed {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export function helpLine(tool: Listed): string {
+  return tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`;
+}
+
+export const LISTING: Listed[] = [
   {
     name: 'search',
-    description: 'Search Rooms and `/private` by words, meaning or date.',
     inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
   },
   {
     name: 'shell',
-    description: 'Read-only shell over `/rooms/<handle>` and `/private`.',
+    description: 'Read-only shell over `/rooms/<handle>`.',
     inputSchema: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' } } },
   },
   {
@@ -63,7 +72,6 @@ export const LISTING = [
   },
   {
     name: 'edit',
-    description: 'Edit files atomically within one Room or `/private`.',
     inputSchema: { type: 'object', properties: { changes: { type: 'array' } } },
   },
   {
@@ -83,17 +91,14 @@ export const LISTING = [
   },
   {
     name: 'find_command',
-    description: 'Find the Command, House page, or document for anything else.',
     inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
   },
   {
     name: 'run_command',
-    description: 'Run a Command.',
     inputSchema: { type: 'object', properties: { command: { type: 'string' }, arguments: { type: 'object' } } },
   },
   {
     name: 'get_started',
-    description: 'What House does and how to connect.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];
@@ -192,7 +197,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const idles: Received[] = [];
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
-    shell: () => shelled('', 1, ['cat: path_not_found /private/how-we-work.md']),
+    shell: () => shelled('', 1, ['cat: path_not_found /rooms/private/how-we-work.md']),
   };
   house.route('POST', '/', (request) => {
     mcp.push(request);

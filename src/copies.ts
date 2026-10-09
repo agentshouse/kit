@@ -28,8 +28,7 @@ const IDENTITY = { GIT_COMMITTER_NAME: 'House Kit', GIT_COMMITTER_EMAIL: 'house-
 
 interface Selected {
   key: string;
-  private: boolean;
-  handle: string | null;
+  handle: string;
 }
 
 interface Manifest {
@@ -73,9 +72,8 @@ interface Push {
 
 interface Copy {
   key: string;
-  private: boolean;
   room_ref: string;
-  room_handle: string | null;
+  room_handle: string;
   repository: string;
   active: boolean;
   house: string;
@@ -181,12 +179,12 @@ function sidecar(path: string): string {
   return segments.join('/');
 }
 
-function rootOf(copy: { private: boolean; room_handle: string | null }): string {
-  return copy.private ? '/private' : `/rooms/${copy.room_handle}`;
+function rootOf(handle: string): string {
+  return `/rooms/${handle}`;
 }
 
 function relative(path: string): string {
-  return path.replace(/^\/private\//, '').replace(/^\/rooms\/[^/]+\//, '');
+  return path.replace(/^\/rooms\/[^/]+\//, '');
 }
 
 function declaredWritable(path: string, copy: { write: string[]; protected: string[] }): boolean {
@@ -345,7 +343,7 @@ export class LocalCopies {
   async load(): Promise<void> {
     const home = join(kitHome(), 'local-copies');
     const names = (await readdir(join(home, 'rooms')).catch(() => [])).filter((name) => name.endsWith('.json'));
-    for (const path of [...names.map((name) => join(home, 'rooms', name)), join(home, 'private.json')]) {
+    for (const path of names.map((name) => join(home, 'rooms', name))) {
       const text = await readFile(path, 'utf8').catch(() => null);
       if (text === null) continue;
       const copy = JSON.parse(text) as Copy;
@@ -357,7 +355,7 @@ export class LocalCopies {
     await this.selecting;
     return [...this.copies.values()]
       .filter((copy) => copy.active)
-      .map((copy) => `${rootOf(copy)}: ${copy.repository}`)
+      .map((copy) => `${rootOf(copy.room_handle)}: ${copy.repository}`)
       .sort();
   }
 
@@ -369,14 +367,11 @@ export class LocalCopies {
 
   private async reselect(): Promise<void> {
     const { local_copy: chosen } = await this.house.post<{
-      local_copy: { rooms: { room_ref: string; room_handle: string | null }[]; private: boolean } | null;
+      local_copy: { rooms: { room_ref: string; room_handle: string | null }[] } | null;
     }>('/kit/local-copy/selection', {});
-    const selected: Selected[] = [
-      ...(chosen?.rooms ?? [])
-        .filter((room) => room.room_handle !== null)
-        .map((room) => ({ key: `rooms/${room.room_ref}`, private: false, handle: room.room_handle })),
-      ...(chosen?.private === true ? [{ key: 'private', private: true, handle: null }] : []),
-    ];
+    const selected: Selected[] = (chosen?.rooms ?? []).flatMap((room) =>
+      room.room_handle === null ? [] : [{ key: `rooms/${room.room_ref}`, handle: room.room_handle }],
+    );
     const keys = new Set(selected.map((scope) => scope.key));
     const work: Promise<unknown>[] = [];
     for (const key of this.copies.keys()) {
@@ -459,7 +454,7 @@ export class LocalCopies {
   }
 
   private async save(copy: Copy): Promise<Copy> {
-    const path = join(kitHome(), 'local-copies', copy.private ? 'private.json' : `${copy.key}.json`);
+    const path = join(kitHome(), 'local-copies', `${copy.key}.json`);
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}`;
     await writeFile(temporary, JSON.stringify(copy), { mode: 0o600 });
@@ -468,8 +463,8 @@ export class LocalCopies {
     return copy;
   }
 
-  private async read(selected: { private: boolean; room_handle: string | null }): Promise<Read | null> {
-    const prefixes = [rootOf(selected)];
+  private async read(handle: string): Promise<Read | null> {
+    const prefixes = [rootOf(handle)];
     const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', { prefixes });
     let bundle = await this.house.post<Bundle | { transfer: { url: string } }>('/kit/door/bootstrap', { prefixes });
     if ('transfer' in bundle) bundle = (await (await fetch(relayed(bundle.transfer.url))).json()) as Bundle;
@@ -512,12 +507,12 @@ export class LocalCopies {
       return;
     }
     const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', {
-      prefixes: [rootOf(copy)],
+      prefixes: [rootOf(copy.room_handle)],
     });
     const authority = discovery.authorities.find((entry) => entry.room_ref === copy.room_ref);
     if (authority === undefined) return;
     if (authority.managed_replication !== 'admitted') {
-      logged(`operation_denied: ${rootOf(copy)} is not synchronized to this Environment`);
+      logged(`operation_denied: ${rootOf(copy.room_handle)} is not synchronized to this Environment`);
       return;
     }
     if (
@@ -531,12 +526,12 @@ export class LocalCopies {
   }
 
   private async materialize(scope: Selected): Promise<void> {
-    const read = await this.read({ private: scope.private, room_handle: scope.handle });
+    const read = await this.read(scope.handle);
     if (read === null) {
-      logged(`House serves nothing of ${rootOf({ private: scope.private, room_handle: scope.handle })} to copy`);
+      logged(`House serves nothing of ${rootOf(scope.handle)} to copy`);
       return;
     }
-    const repository = scope.private ? join(localCopies(), 'private') : join(localCopies(), 'rooms', read.anchor);
+    const repository = join(localCopies(), 'rooms', read.anchor);
     if (await exists(repository)) {
       logged(`${repository} already exists and House Kit leaves it as it is`);
       return;
@@ -548,7 +543,7 @@ export class LocalCopies {
     try {
       await git(staging, ['init', '-q', '-b', BRANCH]);
       house = await importCommits(staging, [
-        { message: `House ${rootOf({ private: scope.private, room_handle: scope.handle })}`, from: null, files: read.writable },
+        { message: `House ${rootOf(scope.handle)}`, from: null, files: read.writable },
       ]);
       await git(staging, ['update-ref', `refs/heads/${BRANCH}`, house]);
       await git(staging, ['reset', '-q', '--hard']);
@@ -561,7 +556,6 @@ export class LocalCopies {
     }
     await this.save({
       key: scope.key,
-      private: scope.private,
       room_ref: read.anchor,
       room_handle: scope.handle,
       repository,
@@ -578,10 +572,10 @@ export class LocalCopies {
   }
 
   private async received(copy: Copy): Promise<Copy> {
-    const read = await this.read(copy);
+    const read = await this.read(copy.room_handle);
     if (read === null) return copy;
     const house = await importCommits(copy.repository, [
-      { message: `House ${rootOf(copy)} at position ${read.position}`, from: copy.house, replaces: true, files: read.writable },
+      { message: `House ${rootOf(copy.room_handle)} at position ${read.position}`, from: copy.house, replaces: true, files: read.writable },
     ]);
     const removed = copy.read_only.filter((path) => !read.readOnly.has(path));
     const readOnly = await readOnlyPlaced(copy.repository, copy.read_only, read.readOnly, removed);
@@ -605,7 +599,7 @@ export class LocalCopies {
       let answer: { authorities: { authority: string; position: string; log_epoch: string; changes: Change[] }[] };
       try {
         answer = await this.house.post('/kit/door/enumerate', {
-          prefixes: [rootOf(copy)],
+          prefixes: [rootOf(copy.room_handle)],
           positions: [{ authority: copy.room_ref, position: copy.position, log_epoch: copy.log_epoch }],
         });
       } catch (error) {
@@ -648,7 +642,7 @@ export class LocalCopies {
     let { house, manifests } = copy;
     if (files.size > 0) {
       house = await importCommits(copy.repository, [
-        { message: `House ${rootOf(copy)} at position ${position}`, from: copy.house, files },
+        { message: `House ${rootOf(copy.room_handle)} at position ${position}`, from: copy.house, files },
       ]);
       manifests = { ...manifests, [house]: { parent: copy.house, files: revisions } };
     }
@@ -678,7 +672,7 @@ export class LocalCopies {
       copy = await this.save(without(copy));
     }
     if (!copy.active) {
-      return { refused: true, text: `${rootOf(copy)} is no longer synced to this Environment, so House takes no push from it` };
+      return { refused: true, text: `${rootOf(copy.room_handle)} is no longer synced to this Environment, so House takes no push from it` };
     }
     const listed = (await git(copy.repository, ['rev-list', '--topo-order', commit])).split('\n');
     const base = listed.find((ancestor) => ancestor in copy.manifests);
@@ -714,7 +708,7 @@ export class LocalCopies {
   }
 
   private async derived(copy: Copy, base: string, commit: string): Promise<Edit[]> {
-    const root = rootOf(copy);
+    const root = rootOf(copy.room_handle);
     const before = await tree(copy.repository, base);
     const after = await tree(copy.repository, commit);
     const moved = movedPaths(copy.moves, before, after);
@@ -789,7 +783,7 @@ export class LocalCopies {
     const push = copy.push!;
     const current = await this.save(await this.caughtUp(copy));
     const house = await tree(copy.repository, current.house);
-    const root = rootOf(current);
+    const root = rootOf(current.room_handle);
     if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit)))) {
       await this.save(without(current));
       return {
@@ -843,7 +837,7 @@ export class LocalCopies {
         written = [
           ...written,
           {
-            path: `${rootOf(copy)}/${path}`,
+            path: `${rootOf(copy.room_handle)}/${path}`,
             revision: entry === undefined ? null : (revisionAt(copy, copy.house, path) ?? null),
             content: entry === undefined ? null : await blobText(copy.repository, entry, path),
           },
@@ -866,7 +860,7 @@ export class LocalCopies {
     const received = [...files.keys()].filter(
       (path) => revisionAt(copy, copy.house, path) === revisionAt(copy, push.house, path),
     );
-    const accepted = `House ${rootOf(copy)} with ${push.commit} accepted`;
+    const accepted = `House ${rootOf(copy.room_handle)} with ${push.commit} accepted`;
     const house = await importCommits(copy.repository, [
       ...(edits.size === 0 ? [] : [{ message: accepted, from: push.commit, files: edits }]),
       {

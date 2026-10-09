@@ -249,7 +249,7 @@ it('names the copies of a selection still being read in a first prompt that arri
     await held;
     return { body: { scopes: [room.bundle()] } };
   });
-  rooms.selection = { rooms: [{ room_ref: room.ref, room_handle: room.handle }], private: false };
+  rooms.selection = { rooms: [{ room_ref: room.ref, room_handle: room.handle }] };
   hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
   await until(() => hosted.house.requests.some((request) => request.path === '/kit/door/bootstrap'));
 

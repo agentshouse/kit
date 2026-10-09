@@ -1,13 +1,11 @@
 import { existsSync } from 'node:fs';
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, type Hosted } from './environment.ts';
 import { temporaryHome } from './kit.ts';
-import { COPIES, commitAll, git, house, serveRooms, type Room } from './rooms.ts';
-
-const PRIVATE = join(COPIES, 'private');
+import { commitAll, git, house, serveRooms, type Room } from './rooms.ts';
 
 function received(room: Room): string {
   return git(room.repository, 'rev-parse', 'refs/house/received').trim();
@@ -115,7 +113,6 @@ it('keeps each selected Room as its own Git repository with its readable tree, t
   const searched = (await readFile(join(notes.repository, '.ignore'), 'utf8')).split('\n');
   expect(ignored).toEqual(expect.arrayContaining(['/capture', '/collaboration', '/archive/old.md']));
   expect(searched).toEqual(expect.arrayContaining(['!/capture', '!/collaboration', '!/archive/old.md', '!_provenance']));
-  expect(existsSync(PRIVATE)).toBe(false);
 });
 
 it('keeps the selected Rooms beneath the native workspace root and nothing under /agents/house', async () => {
@@ -133,23 +130,22 @@ it('keeps the selected Rooms beneath the native workspace root and nothing under
   expect(existsSync(notes.repository)).toBe(false);
 });
 
-it('copies /private only through its own choice', async () => {
-  await rm(PRIVATE, { recursive: true, force: true });
+it('copies the Private Room at /rooms/private like any selected Room', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const shared = rooms.room('shared');
   shared.put('a.md', 'a\n');
-  const own = rooms.room(null);
+  const own = rooms.room('private');
   own.put('diary.md', 'Private\n');
 
   await rooms.select([shared]);
-  expect(existsSync(PRIVATE)).toBe(false);
+  expect(existsSync(own.repository)).toBe(false);
 
   await rooms.select([shared, own]);
   expect(tracked(own)).toEqual(['diary.md']);
   expect(hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap').map((request) => request.body)).toEqual([
     { prefixes: ['/rooms/shared'] },
-    { prefixes: ['/private'] },
+    { prefixes: ['/rooms/private'] },
   ]);
 });
 
@@ -202,7 +198,7 @@ it('keeps a copy where it is through a handle change, stops it on deselection an
   const local = commitAll(room.repository, 'local');
   await writeFile(join(room.repository, 'draft.md'), 'draft\n');
   const deselected = hosted.house.requests.length;
-  rooms.selection = { rooms: [], private: false };
+  rooms.selection = { rooms: [] };
   hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
   await until(async () => (await readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8')).includes('"active":false'));
   room.put('a.md', 'a, from House\n');

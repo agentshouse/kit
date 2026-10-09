@@ -10,6 +10,7 @@ import {
   attachmentDouble,
   conversationCredential,
   directed,
+  helpLine,
   hostKit,
   lastInput,
   LISTING,
@@ -74,7 +75,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       "usage: house <tool> ['<arguments as JSON>']",
       'help',
       "push [commit]: sends the Local copy's committed changes to House",
-      ...LISTING.map((tool) => `${tool.name}: ${tool.description}`),
+      ...LISTING.map(helpLine),
     ].join('\n') + '\n',
   );
   const inspect = LISTING.find((tool) => tool.name === 'inspect')!;
@@ -305,7 +306,7 @@ it("prints House's own line for a refused call, and no route, status or body", a
 
   directed(
     hosted,
-    '@house search {"query":"one"}\n@house inspect {"path":"/private"}\n@house upload_attachment {"path":"report.txt"}',
+    '@house search {"query":"one"}\n@house inspect {"path":"/rooms/private"}\n@house upload_attachment {"path":"report.txt"}',
   );
 
   expect((await runs(hosted, 3)).map((ran) => [ran.status, ran.stderr])).toEqual([

@@ -15,7 +15,7 @@ const { version: KIT_VERSION } = JSON.parse(await readFile(new URL('../package.j
 const LEFT_OUT = ['setup-matt-pocock-skills', 'triage', 'wizard'];
 const PROVENANCE = /^<!-- Vendored from mattpocock\/skills at commit ([0-9a-f]{40}) \(/m;
 const RECORD = 'skill-set.json';
-const DOCUMENT = '/private/how-we-work.md';
+const DOCUMENT = '/rooms/private/how-we-work.md';
 
 async function tree(root: string): Promise<string[]> {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });

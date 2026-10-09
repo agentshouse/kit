@@ -13,7 +13,7 @@ interface Installed {
   names: string[];
 }
 
-export const HOW_WE_WORK = '/private/how-we-work.md';
+export const HOW_WE_WORK = '/rooms/private/how-we-work.md';
 
 const SKILL_SET = fileURLToPath(new URL('../skills/', import.meta.url));
 const HOW_WE_WORK_TEXT = readFileSync(new URL('../how-we-work.md', import.meta.url), 'utf8');
