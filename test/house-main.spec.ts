@@ -108,3 +108,19 @@ it('prints the same help for house help as for house --help, listing help and pu
   expect(help.stdout).not.toMatch(/\bgit\b/);
   expect((await runHouse(home, ['about_house', '--help'])).stdout).toBe('{"type":"object"}\n');
 });
+
+it("exits with the status House's shell answer names, and 0 when it names none", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  house.route('POST', '/', ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    const failed = message.params.arguments?.command === 'ls /rooms/private/house';
+    return { body: { jsonrpc: '2.0', id: message.id, result: failed ? shelled('', 2, ['ls: path_not_found /rooms/private/house']) : shelled('ROOM.md') } };
+  });
+
+  const failed = await runHouse(home, ['shell', '{"command":"ls /rooms/private/house"}']);
+  const listed = await runHouse(home, ['shell', '{"command":"ls /rooms/private"}']);
+
+  expect(failed).toEqual({ status: 2, stdout: 'exit: 2\nstderr: ls: path_not_found /rooms/private/house\n', stderr: '' });
+  expect(listed).toEqual({ status: 0, stdout: 'ROOM.md\n', stderr: '' });
+});

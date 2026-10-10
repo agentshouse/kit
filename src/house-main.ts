@@ -180,6 +180,7 @@ const argv = process.argv.slice(2);
 (argv[0] === 'push' ? push(argv.slice(1)) : house(argv)).then(
   (text) => {
     process.stdout.write(`${text}\n`);
+    if (argv[0] === 'shell') process.exitCode = Number(/^exit: (\d+)(?:\n|$)/.exec(text)?.[1] ?? 0);
   },
   (error: unknown) => {
     process.stderr.write(`house: ${error instanceof Error ? error.message : String(error)}\n`);
