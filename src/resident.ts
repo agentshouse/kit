@@ -2,20 +2,21 @@ import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { extname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { killDescendants } from './acp.ts';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations, type Input } from './conversations.ts';
 import { LocalCopies } from './copies.ts';
 import { agentBase, enrolled, kitHome } from './home.ts';
+import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
 import { holdStream, type Frame, type Stream } from './stream.ts';
 import { Updates, type Update } from './update.ts';
+import { codexLauncher } from './work.ts';
 
 function report(error: unknown): void {
   process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -25,12 +26,10 @@ function logged(work: Promise<unknown>): void {
   work.catch(report);
 }
 
-async function installShim(): Promise<void> {
-  const main = fileURLToPath(new URL(`./git-main${extname(fileURLToPath(import.meta.url))}`, import.meta.url));
-  await mkdir(join(kitHome(), 'shim'), { recursive: true });
-  await writeFile(join(kitHome(), 'shim', 'git'), `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(main)} "$@"\n`, {
-    mode: 0o755,
-  });
+async function installShim(path: string, module: string): Promise<void> {
+  const main = fileURLToPath(new URL(`./${module}${extname(fileURLToPath(import.meta.url))}`, import.meta.url));
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(main)} "$@"\n`, { mode: 0o755 });
 }
 
 async function serveOwner(copies: LocalCopies): Promise<void> {
@@ -82,7 +81,8 @@ export async function resident(): Promise<void> {
   const agents = new Agents(house);
   const copies = new LocalCopies(house);
   await copies.load();
-  await installShim();
+  await installShim(join(kitHome(), 'shim', 'git'), 'git-main');
+  await installShim(codexLauncher(), 'codex-main');
   await serveOwner(copies);
   let stream: Stream | null = null;
   let reported = false;

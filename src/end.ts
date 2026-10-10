@@ -1,4 +1,4 @@
-import { killDescendants } from './acp.ts';
+import { killDescendants } from './scope.ts';
 
 export const REPLACED = 'another Kit started for this Environment';
 export const SIGN_IN_AGAIN = 'sign in again';

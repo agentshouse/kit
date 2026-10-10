@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { killTree } from './acp.ts';
 import type { Agents } from './agents.ts';
 import type { House } from './api.ts';
 import { CLIS, withoutProxy } from './clis.ts';
+import { killTree } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 
 export interface SignIn {

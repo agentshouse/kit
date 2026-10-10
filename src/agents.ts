@@ -1,9 +1,10 @@
 import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
 import { readFile, realpath } from 'node:fs/promises';
-import { killTree, startAdapter, type Adapter } from './acp.ts';
+import { startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_VERSION, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
+import { killTree } from './scope.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
 
 export interface Route {

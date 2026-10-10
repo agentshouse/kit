@@ -7,7 +7,7 @@ import { settle, until } from './double.ts';
 import { hostKit, lastInput, outcome, userBin, type Hosted } from './environment.ts';
 
 const KINDS = Object.keys(BINS);
-const EXECUTABLES: Record<string, string> = { 'codex-acp': 'CODEX_PATH', 'claude-agent-acp': 'CLAUDE_CODE_EXECUTABLE' };
+const EXECUTABLES: Record<string, string> = { 'codex-acp': 'HOUSE_KIT_CODEX', 'claude-agent-acp': 'CLAUDE_CODE_EXECUTABLE' };
 
 function reported(hosted: Hosted): Record<string, unknown>[] {
   return hosted.house.requests.filter((request) => request.path === '/kit/agents/report').map((request) => request.body as Record<string, unknown>);
@@ -71,6 +71,7 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
     expect(env[executable]).toBe(cli);
     expect(env.CLI_PATH).toBeUndefined();
   }
+  expect(env.CODEX_PATH).toBe(kind === 'codex-acp' ? join(hosted.home, 'launchers', 'codex') : undefined);
   expect(env.CLAUDE_CODE_ENTRYPOINT).toBe(kind === 'claude-agent-acp' ? 'claude-agent-acp' : undefined);
   expect(env.HOME).toBe(hosted.home);
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GROK_HOME']) expect(env[variable]).toBeUndefined();

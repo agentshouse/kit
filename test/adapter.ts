@@ -1,8 +1,10 @@
 import { agent, ndJsonStream, RequestError, type AgentContext } from '@agentclientprotocol/sdk';
-import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import { appendFileSync, closeSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { MODELS, SESSION_OPTIONS, type CliModel } from './fixtures/clis/session-options.ts';
@@ -18,7 +20,7 @@ const cli =
   executable === undefined
     ? { path: process.env.CLI_PATH, release: process.env.CLI_RELEASE }
     : {
-        path: executable,
+        path: process.env.HOUSE_KIT_CODEX ?? executable,
         release: /\d+\.\d+\.\d+/.exec(spawnSync(executable, ['--version'], { encoding: 'utf8' }).stdout)?.[0],
       };
 recordStart('adapter');
@@ -45,19 +47,40 @@ const JOB =
   "const clean = require('node:child_process').spawn('sleep', ['600'], { detached: true, stdio: 'ignore', env: { PATH: process.env.PATH } }); process.stdout.write(String(clean.pid)); setInterval(() => undefined, 60_000);";
 const LAUNCHER = `const job = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(JOB)}], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] }); job.stdout.once('data', (clean) => { process.stdout.write(JSON.stringify({ spawned: job.pid, clean: Number(clean) })); process.exit(0); });`;
 
+const SERVER =
+  "require('node:readline').createInterface({ input: process.stdin }).on('line', () => process.stdout.write(`${require('node:child_process').spawn('sleep', ['603'], { stdio: 'ignore' }).pid}\\n`));";
+let server: ChildProcess | null = null;
+
 function spawnJob(): void {
   log(JSON.parse(spawnSync(process.execPath, ['-e', LAUNCHER], { encoding: 'utf8' }).stdout) as Record<string, unknown>);
 }
 
-function serve(): void {
-  // A ten-minute sleep keeps the server alive past any spec that watches it.
-  const server = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' });
-  server.unref();
-  log({ server: server.pid });
-}
-
 function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): void {
   log({ ...entry, status: result.status, stdout: result.stdout, stderr: result.stderr });
+}
+
+const appServer = kind === 'codex-acp' ? spawn(process.env.CODEX_PATH!, ['app-server'], { stdio: ['pipe', 'pipe', 'inherit'] }) : null;
+const answers = new Map<unknown, () => void>();
+const configured = appServer === null ? Promise.resolve() : new Promise<void>((resolve) => answers.set('config', resolve));
+let emitted = 0;
+if (appServer !== null) {
+  createInterface({ input: appServer.stdout! }).on('line', (line) => answers.get((JSON.parse(line) as { id?: unknown }).id)?.());
+  appServer.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'config', method: 'config/read', params: { includeLayers: false } })}\n`);
+}
+
+function codex(params: unknown): Promise<void> {
+  const id = `emit-${++emitted}`;
+  const answered = new Promise<void>((resolve) => answers.set(id, resolve));
+  appServer!.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'emit', params })}\n`);
+  return answered;
+}
+
+function lines(path: string, from?: string, to?: string): Record<string, any>[] {
+  return readFileSync(path, 'utf8')
+    .trim()
+    .split('\n')
+    .slice(Number(from ?? 0), to === undefined ? undefined : Number(to))
+    .map((line) => JSON.parse(line) as Record<string, any>);
 }
 
 let items = 0;
@@ -311,11 +334,37 @@ async function directive(
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }
   if (name === 'spawn') spawnJob();
-  if (name === 'serve') serve();
+  if (name === 'server') {
+    const later = spawn('sleep', ['602'], { stdio: 'ignore' });
+    later.unref();
+    log({ server: later.pid });
+  }
+  if (name === 'host') {
+    const host = spawn('sleep', ['604'], { argv0: `${cli.path}-code-mode-host`, stdio: 'ignore' });
+    host.unref();
+    log({ host: host.pid });
+  }
+  if (name === 'serve') {
+    const served = new Promise<string>((resolve) => server!.stdout!.once('data', (chunk) => resolve(String(chunk))));
+    server!.stdin!.write('\n');
+    log({ served: Number(await served) });
+  }
   if (name === 'emit') {
     const { method, params } = JSON.parse(argument.split('$SESSION').join(sessionId)) as { method: string; params: unknown };
     await client.notify(method as 'session/update', params as never);
   }
+  if (name === 'play') {
+    for (const { method, params } of lines(rest[0]!, rest[1], rest[2])) {
+      await client.notify(method as 'session/update', { ...params, sessionId } as never);
+    }
+  }
+  if (name === 'codex') await codex(JSON.parse(argument) as unknown);
+  if (name === 'stall') appServer!.kill('SIGSTOP');
+  if (name === 'lose') {
+    appServer!.kill('SIGKILL');
+    await once(appServer!, 'exit');
+  }
+  if (name === 'stream') await codex({ messages: lines(rest[0]!, rest[1], rest[2]) });
   if (name === 'replay') {
     await replay(client, sessionId, argument);
     return 'answered';
@@ -349,6 +398,7 @@ const app = agent({ name: 'adapter-double' })
     };
   })
   .onRequest('session/new', async ({ params }) => {
+    await configured;
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
     if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
@@ -359,14 +409,18 @@ const app = agent({ name: 'adapter-double' })
       while (existsSync(probeHold)) await new Promise((resolve) => setTimeout(resolve, 20));
       log({ releasedProbe: models[0]!.id });
     }
-    if (existsSync(join(home, 'start-server'))) serve();
+    if (existsSync(join(home, 'start-server'))) {
+      server = spawn(process.execPath, ['-e', SERVER], { stdio: ['pipe', 'pipe', 'ignore'] });
+      log({ server: server.pid });
+    }
     if (existsSync(join(home, 'hold-open'))) {
       spawnJob();
       await new Promise(() => undefined);
     }
     return { sessionId, configOptions: options() };
   })
-  .onRequest('session/resume', ({ params }) => {
+  .onRequest('session/resume', async ({ params }) => {
+    await configured;
     log({ method: 'session/resume', params });
     if (existsSync(join(home, 'refuse-resume'))) {
       throw new RequestError(-32002, 'the session cannot be resumed');
@@ -394,6 +448,10 @@ const app = agent({ name: 'adapter-double' })
   })
   .onRequest('session/prompt', async ({ params, client }) => {
     const text = params.prompt.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+    if (kind === 'codex-acp' && text.startsWith('/rename ')) {
+      log({ renamed: text.slice('/rename '.length), params });
+      return { stopReason: 'end_turn' };
+    }
     log({ method: 'session/prompt', params, text });
     const directives = text.split('\n').filter((line) => line.startsWith('@'));
     for (const line of directives.length === 0 ? ['@say ok'] : directives) {

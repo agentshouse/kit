@@ -12,12 +12,23 @@ export interface Cli {
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
   fullAccess: string | null;
-  sessionMeta(bridge: string): Record<string, unknown>;
+  sessionMeta(bridge: string, title: string): Record<string, unknown>;
+  renames: boolean;
   allowHouse(path: string): Promise<void>;
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
   air: string[];
 }
+
+const RAW_SUBTYPES = [
+  'background_tasks_changed',
+  'task_started',
+  'task_updated',
+  'task_notification',
+  'session_state_changed',
+  'hook_started',
+  'hook_response',
+];
 
 async function executable(path: string): Promise<boolean> {
   try {
@@ -62,6 +73,7 @@ export const CLIS: Record<string, Cli> = {
     args: [],
     fullAccess: 'agent-full-access',
     sessionMeta: () => ({}),
+    renames: true,
     allowHouse: allowHouseInCodex,
     signedIn: { command: ['login', 'status'] },
     login: { args: ['login', '--device-auth'], code: 'show' },
@@ -79,17 +91,18 @@ export const CLIS: Record<string, Cli> = {
     },
     args: [],
     fullAccess: 'bypassPermissions',
-    sessionMeta: (bridge) => ({
+    sessionMeta: (bridge, title) => ({
       claudeCode: {
         options: {
           allowedTools: ['Bash(house:*)'],
+          includeHookEvents: true,
+          title,
           settings: { sandbox: { network: bridgeInClaudeSandbox(bridge) } },
         },
-        emitRawSDKMessages: ['background_tasks_changed', 'session_state_changed', 'task_started', 'task_notification'].map(
-          (subtype) => ({ type: 'system', subtype }),
-        ),
+        emitRawSDKMessages: RAW_SUBTYPES.map((subtype) => ({ type: 'system', subtype })),
       },
     }),
+    renames: false,
     allowHouse: nothing,
     signedIn: { command: ['auth', 'status'] },
     login: { args: ['auth', 'login', '--claudeai'], code: 'collect', rejected: 'Invalid code' },
@@ -103,6 +116,7 @@ export const CLIS: Record<string, Cli> = {
     args: ['agent', '--always-approve', '--no-leader', 'stdio'],
     fullAccess: null,
     sessionMeta: () => ({}),
+    renames: false,
     allowHouse: nothing,
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },

@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
-import { killMarked, processes, startAdapter, type Adapter } from './acp.ts';
+import { startAdapter, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
@@ -20,10 +20,12 @@ import { placeFiles, uploadBytes, type MessageFile, type SavedFile } from './fil
 import { agentBase } from './home.ts';
 import { instructions } from './instructions.ts';
 import { Parts, type Context, type Operation, type Part } from './parts.ts';
+import { killMarked, Scope } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 import { createHowWeWork } from './skills.ts';
 import type { Frame } from './stream.ts';
 import { transcribe } from './transcription.ts';
+import { workFor, type Work } from './work.ts';
 
 export interface Kit {
   house: House;
@@ -45,8 +47,6 @@ export interface Input {
 type Ack = { provider_session_id: string } | { refused: string } | Record<string, never>;
 
 const KILLED = 'the conversation was killed';
-// A process a conversation left running reports nothing when it exits, so the Kit looks again every five seconds while one runs.
-const PROCESS_RECHECK_MS = 5000;
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -62,10 +62,6 @@ function logged(error: unknown): void {
 
 function marker(bridge: Bridge): string {
   return `HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`;
-}
-
-function stop(bridge: Bridge): void {
-  killMarked(marker(bridge));
 }
 
 class Turn {
@@ -90,7 +86,8 @@ interface Running {
   sessionId: string;
   killed: boolean;
   reader: Reader;
-  baseline: Set<string> | null;
+  work: Work;
+  scope: Scope;
 }
 
 interface Waiting {
@@ -112,7 +109,7 @@ class Conversation {
   turn: Turn | null = null;
   commands: AvailableCommand[] | null = null;
   context: Context | null = null;
-  readonly busy = new Set<string>();
+  readonly leftovers = new Set<Scope>();
   readonly waiting: Waiting[] = [];
   sending: Promise<void> | null = null;
   readonly subagents = new Map<string, { description: string; turn: Turn; index: number }>();
@@ -158,10 +155,11 @@ export class Conversations {
   private carrying = 0;
   private reporting = 0;
   private watched = false;
-  private recheck: NodeJS.Timeout | null = null;
 
   constructor(kit: Kit) {
     this.kit = kit;
+    // A process or a durable schedule ends without a report, so the Kit looks at both again every two seconds.
+    setInterval(() => this.look(), 2_000);
   }
 
   input(input: Input): void {
@@ -200,19 +198,25 @@ export class Conversations {
     for (const conversation of this.conversations.values()) {
       const turn = conversation.turn;
       const asking = turn !== null && turn.questions > 0 && turn.secrets === 0;
-      if (conversation.busy.size > 0 || conversation.open > (asking ? 1 : 0)) return false;
+      if (conversation.open > (asking ? 1 : 0)) return false;
     }
+    const conversations = [...this.conversations.values()];
+    if (conversations.some((conversation) => conversation.running?.work.busy())) return false;
+    return !conversations.some(
+      (conversation) =>
+        conversation.running?.scope.working() || [...conversation.leftovers].some((scope) => scope.working()),
+    );
+  }
+
+  private look(): void {
     for (const conversation of this.conversations.values()) {
-      const running = conversation.running;
-      if (running === null || running.baseline === null) continue;
-      if ([...processes(marker(running.bridge))].every((found) => running.baseline!.has(found))) continue;
-      this.recheck ??= setTimeout(() => {
-        this.recheck = null;
-        this.kit.changed();
-      }, PROCESS_RECHECK_MS);
-      return false;
+      for (const scope of conversation.leftovers) {
+        if (!scope.empty()) continue;
+        scope.close();
+        conversation.leftovers.delete(scope);
+      }
     }
-    return true;
+    this.kit.changed();
   }
 
   opened(): void {
@@ -354,10 +358,11 @@ export class Conversations {
   }
 
   private halt(conversation: Conversation): void {
-    if (conversation.opening !== null) stop(conversation.opening);
+    if (conversation.opening !== null) killMarked(marker(conversation.opening));
+    for (const scope of conversation.leftovers) scope.kill();
     if (conversation.running === null) return;
     conversation.running.killed = true;
-    stop(conversation.running.bridge);
+    conversation.running.scope.kill();
   }
 
   private async kill(conversation: Conversation): Promise<void> {
@@ -412,30 +417,40 @@ export class Conversations {
       throw new Error(KILLED);
     }
     conversation.opening = bridge;
+    const work = workFor(route.kind, route.working_directory, () => this.kit.changed());
+    const scope = new Scope(marker(bridge), randomUUID(), cli);
     try {
       await unlessAborted(createHowWeWork(bridge), conversation.killed.signal);
       await CLIS[route.kind]!.allowHouse(bridge.env.PATH!);
-      conversation.busy.clear();
       const adapter = await startAdapter(
         route.kind,
         cli,
         route.working_directory,
         app,
-        (message) => this.read(conversation, reader, message),
-        bridge.env,
+        (message) => {
+          work.read(message);
+          this.read(conversation, reader, message);
+        },
+        { ...bridge.env, ...(await work.open(cli)) },
+        undefined,
+        scope,
       );
       void adapter.exited.then(() => bridge.close());
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
-      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!);
+      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, conversation.id);
       const opened =
         sessionId === null
           ? await agent.request('session/new', { cwd, mcpServers: [], _meta })
           : { ...(await agent.request('session/resume', { sessionId, cwd, mcpServers: [], _meta })), sessionId };
       reader.session = opened.sessionId;
-      const running: Running = { adapter, bridge, sessionId: opened.sessionId, killed: false, reader, baseline: null };
+      if (sessionId === null && CLIS[route.kind]!.renames) {
+        const prompt: ContentBlock[] = [{ type: 'text', text: `/rename ${conversation.id}` }];
+        await agent.request('session/prompt', { sessionId: opened.sessionId, prompt });
+      }
+      const running: Running = { adapter, bridge, sessionId: opened.sessionId, killed: false, reader, work, scope };
       const options = await this.launchSettings(running, route, opened.configOptions ?? []);
-      running.baseline = processes(marker(bridge));
+      void work.settled().then(() => scope.record());
       conversation.running = running;
       conversation.session = running.sessionId;
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
@@ -444,7 +459,9 @@ export class Conversations {
       void adapter.exited.then((cause) => this.exited(conversation, adapter, cause));
       return running.sessionId;
     } catch (error) {
-      stop(bridge);
+      scope.kill();
+      work.close();
+      conversation.leftovers.add(scope);
       bridge.close();
       throw conversation.kills > 0 ? new Error(KILLED) : error;
     } finally {
@@ -480,7 +497,7 @@ export class Conversations {
   private exited(conversation: Conversation, adapter: Adapter, cause: string): void {
     const running = conversation.running;
     if (running?.adapter !== adapter) return;
-    this.detach(conversation);
+    this.detach(conversation, running);
     if (conversation.turn !== null) {
       this.end(conversation, conversation.turn, { failed: running.killed ? KILLED : cause });
     }
@@ -488,10 +505,11 @@ export class Conversations {
     this.kit.changed();
   }
 
-  private detach(conversation: Conversation): void {
+  private detach(conversation: Conversation, running: Running): void {
+    running.work.close();
+    conversation.leftovers.add(running.scope);
     conversation.running = null;
     conversation.commands = null;
-    conversation.busy.clear();
     for (const [id, question] of this.questions) {
       if (question.conversation === conversation) this.questions.delete(id);
     }
@@ -544,7 +562,6 @@ export class Conversations {
     conversation.turn = turn;
     if (conversation.context !== null) turn.parts.measure(conversation.context);
     for (const part of conversation.held.splice(0)) turn.parts.start(part);
-    for (const event of conversation.running?.reader.turnStarted() ?? []) this.event(conversation, event);
     this.kit.changed();
     return turn;
   }
@@ -578,8 +595,8 @@ export class Conversations {
           this.end(conversation, turn, { failed: running.killed ? KILLED : await running.adapter.exited });
         } else {
           if (conversation.open === 1 && conversation.running === running) {
-            stop(running.bridge);
-            this.detach(conversation);
+            running.scope.kill();
+            this.detach(conversation, running);
           }
           this.end(conversation, turn, { failed: causeOf(error) });
         }
@@ -667,16 +684,6 @@ export class Conversations {
       case 'options':
         this.options(conversation, event.options);
         return;
-      case 'busy':
-        if (event.running) conversation.busy.add(event.key);
-        else conversation.busy.delete(event.key);
-        this.kit.changed();
-        return;
-      case 'servers': {
-        const running = conversation.running;
-        if (running?.baseline) for (const found of processes(marker(running.bridge))) running.baseline.add(found);
-        return;
-      }
       case 'context':
         conversation.context = { used: event.used, window: event.window };
         conversation.turn?.parts.measure(conversation.context);

@@ -23,9 +23,7 @@ export type Event =
   | { kind: 'plan'; entries: PlanStep[] }
   | { kind: 'context'; used: number; window: number }
   | { kind: 'commands'; commands: AvailableCommand[] }
-  | { kind: 'options'; options: SessionConfigOption[] }
-  | { kind: 'busy'; key: string; running: boolean }
-  | { kind: 'servers' };
+  | { kind: 'options'; options: SessionConfigOption[] };
 
 type Decision =
   | { shown: 'command' | 'hidden' }
@@ -48,7 +46,7 @@ interface Call {
 const COMMAND: Decision = { shown: 'command' };
 const HIDDEN: Decision = { shown: 'hidden' };
 const FINISHED = new Set(['completed', 'failed']);
-const RUNNING_JOB = new Set(['running', 'paused']);
+export const RUNNING_JOB = new Set(['running', 'paused']);
 const ROUTINE_TARGETS: Record<string, string> = { send_routine_request: 'access', cancel_routine_request: 'request' };
 
 function words(line: string): string[] {
@@ -156,10 +154,6 @@ abstract class Reader {
     this.requestedOptions.delete(option);
   }
 
-  turnStarted(): Event[] {
-    return [];
-  }
-
   closeTurn(): Event[] {
     const events: Event[] = [];
     for (const [id, call] of this.calls) {
@@ -229,10 +223,7 @@ abstract class Reader {
     if (name !== null) this.jobs.set(id, name);
     const label = this.jobs.get(id) ?? '';
     if (state !== 'running') this.jobs.delete(id);
-    return [
-      { kind: 'busy', key: `job:${id}`, running: state === 'running' },
-      { kind: 'marker', marker: 'job', text: `${label}: ${state}` },
-    ];
+    return [{ kind: 'marker', marker: 'job', text: `${label}: ${state}` }];
   }
 
   private optionsChanged(options: Fields[]): Event[] {
@@ -315,7 +306,6 @@ abstract class Reader {
 class ClaudeReader extends Reader {
   protected override readonly watchedOptions: Record<string, Marker> = { model: 'model' };
   private readonly tasks = new Map<string, string>();
-  private readonly scheduled = new Map<string, { recurring: boolean; text: string }>();
 
   protected override own(message: Message): Event[] {
     if (message.params?.update?._meta?.claudeCode?.parentToolUseId !== undefined) return [];
@@ -336,10 +326,6 @@ class ClaudeReader extends Reader {
     if (message.method !== '_claude/sdkMessage') return [];
     const sdk = message.params!.message as Fields;
     switch (sdk.subtype) {
-      case 'background_tasks_changed':
-        return [{ kind: 'busy', key: 'tasks', running: sdk.tasks.length > 0 }];
-      case 'session_state_changed':
-        return [{ kind: 'busy', key: 'state', running: sdk.state === 'running' }];
       case 'task_started':
         if (sdk.tool_use_id !== undefined) this.tasks.set(sdk.task_id, sdk.tool_use_id);
         return [];
@@ -348,16 +334,6 @@ class ClaudeReader extends Reader {
       default:
         return [];
     }
-  }
-
-  override turnStarted(): Event[] {
-    const events: Event[] = [];
-    for (const [id, entry] of this.scheduled) {
-      if (entry.recurring) continue;
-      this.scheduled.delete(id);
-      events.push({ kind: 'busy', key: `scheduled:${id}`, running: false });
-    }
-    return events;
   }
 
   protected override decide(call: Call, final: boolean): Decision | null {
@@ -385,21 +361,7 @@ class ClaudeReader extends Reader {
     const tool = call.meta.claudeCode?.toolName as string | undefined;
     if (call.status !== 'completed') return [];
     if (tool === 'CronCreate' || (tool === 'ScheduleWakeup' && call.rawInput?.stop !== true)) {
-      this.scheduled.set(call.id, {
-        recurring: tool === 'CronCreate' && call.rawInput?.recurring !== false,
-        text: contentText(call.content) ?? '',
-      });
-      return [
-        { kind: 'busy', key: `scheduled:${call.id}`, running: true },
-        { kind: 'marker', marker: 'job', text: `${call.rawInput?.prompt ?? call.title ?? ''}: scheduled` },
-      ];
-    }
-    if (tool === 'CronDelete') {
-      for (const [id, entry] of this.scheduled) {
-        if (!entry.text.includes(String(call.rawInput?.id))) continue;
-        this.scheduled.delete(id);
-        return [{ kind: 'busy', key: `scheduled:${id}`, running: false }];
-      }
+      return [{ kind: 'marker', marker: 'job', text: `${call.rawInput?.prompt ?? call.title ?? ''}: scheduled` }];
     }
     return [];
   }
@@ -437,15 +399,9 @@ class CodexReader extends Reader {
       case 'subagent_spawned':
         this.children.set(update.subagentSessionId, { id: null, text: '' });
         this.subagents.add(update.subagentSessionId);
-        return [
-          { kind: 'busy', key: `subagent:${update.subagentSessionId}`, running: true },
-          { kind: 'subagent', id: update.subagentSessionId, description: update.name },
-        ];
+        return [{ kind: 'subagent', id: update.subagentSessionId, description: update.name }];
       case 'subagent_state_update':
-        return [
-          { kind: 'busy', key: `subagent:${update.subagentSessionId}`, running: false },
-          ...this.finish(update.subagentSessionId, this.children.get(update.subagentSessionId)?.text || null),
-        ];
+        return this.finish(update.subagentSessionId, this.children.get(update.subagentSessionId)?.text || null);
       default:
         return super.update(update);
     }
@@ -460,10 +416,6 @@ class CodexReader extends Reader {
       if (child.id !== id) child.text = '';
       child.id = id;
       child.text += update.content.text;
-    }
-    const status = update._meta?.codex?.threadStatus?.type as string | undefined;
-    if (update.sessionUpdate === 'session_info_update' && status !== undefined) {
-      return [{ kind: 'busy', key: `thread:${session}`, running: status === 'active' }];
     }
     return [];
   }
@@ -490,7 +442,6 @@ class CodexReader extends Reader {
 class GrokReader extends Reader {
   protected override readonly watchedOptions: Record<string, Marker> = {};
   private readonly children = new Map<string, string | null>();
-  private readonly queues = new Map<string, { running: string | null; entries: number }>();
   private models: Fields[] = [];
   private model: string | null = null;
 
@@ -503,25 +454,16 @@ class GrokReader extends Reader {
     const session = message.params?.sessionId as string;
     if (this.session !== null && session !== undefined && session !== this.session && !this.children.has(session)) return [];
     if (message.method === '_x.ai/queue/changed') {
-      const running = message.params!.runningPromptId ?? null;
-      this.queues.set(session, { running, entries: message.params!.entries.length });
-      return [this.queued(session), ...(running !== null && session === this.session ? [{ kind: 'started' as const }] : [])];
+      return (message.params!.runningPromptId ?? null) !== null && session === this.session ? [{ kind: 'started' }] : [];
     }
     if (message.params?.update?.sessionUpdate === 'turn_completed') {
-      const queue = this.queues.get(session);
-      if (queue !== undefined && queue.running === message.params.update.prompt_id) queue.running = null;
-      return [this.queued(session), ...(session === this.session ? [{ kind: 'ended' as const }] : [])];
+      return session === this.session ? [{ kind: 'ended' }] : [];
     }
     if (message.method === '_x.ai/models/update') {
       this.offered(message.params!);
       return [];
     }
     return super.read(message);
-  }
-
-  private queued(session: string): Event {
-    const queue = this.queues.get(session);
-    return { kind: 'busy', key: `queue:${session}`, running: queue !== undefined && (queue.running !== null || queue.entries > 0) };
   }
 
   private offered(models: Fields): void {
@@ -541,16 +483,9 @@ class GrokReader extends Reader {
       case '_x.ai/task_completed':
         return this.job(update!.task_snapshot.task_id, null, update!.task_snapshot.exit_code === 0 ? 'completed' : 'failed');
       case '_x.ai/scheduled_task_created':
-        return [
-          { kind: 'busy', key: `scheduled:${update!.task_id}`, running: true },
-          { kind: 'marker', marker: 'job', text: `${update!.prompt}: next run ${update!.next_fire_at}` },
-        ];
-      case '_x.ai/scheduled_task_deleted':
-        return [{ kind: 'busy', key: `scheduled:${update!.task_id}`, running: false }];
+        return [{ kind: 'marker', marker: 'job', text: `${update!.prompt}: next run ${update!.next_fire_at}` }];
       case '_x.ai/session_notification':
         return this.notification(update!);
-      case '_x.ai/mcp_initialized':
-        return [{ kind: 'servers' }];
       default:
         return [];
     }
@@ -578,14 +513,11 @@ class GrokReader extends Reader {
             (candidate) => candidate.decided?.shown === 'subagent' && ![...this.children.values()].includes(candidate.id),
           );
         this.children.set(update.child_session_id, call?.id ?? null);
-        return [{ kind: 'busy', key: `subagent:${update.child_session_id}`, running: true }];
+        return [];
       }
       case 'subagent_finished': {
         const call = this.children.get(update.child_session_id);
-        return [
-          { kind: 'busy', key: `subagent:${update.child_session_id}`, running: false },
-          ...(typeof call === 'string' ? this.finish(call, update.output ?? null) : []),
-        ];
+        return typeof call === 'string' ? this.finish(call, update.output ?? null) : [];
       }
       case 'auto_compact_completed':
         return [{ kind: 'marker', marker: 'compaction', text: '' }];
