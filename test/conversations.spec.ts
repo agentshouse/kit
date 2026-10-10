@@ -83,7 +83,7 @@ it('starts Grok approving every tool, since it offers no mode', async () => {
   await hosted.ack(lastInput());
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'initialize')!.argv).toEqual(
-    expect.arrayContaining(['agent', '--always-approve', '--no-leader', 'stdio']),
+    expect.arrayContaining(['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio']),
   );
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'model', value: 'grok-4.6' }),

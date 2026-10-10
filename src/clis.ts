@@ -113,7 +113,7 @@ export const CLIS: Record<string, Cli> = {
     minimum: '1.0.46',
     install: 'curl -fsSL https://x.ai/cli/install.sh | bash',
     adapter: null,
-    args: ['agent', '--always-approve', '--no-leader', 'stdio'],
+    args: ['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio'],
     fullAccess: null,
     sessionMeta: () => ({}),
     renames: false,

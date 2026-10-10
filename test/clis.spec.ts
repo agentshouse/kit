@@ -66,7 +66,7 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
   const executable = EXECUTABLES[kind];
   if (executable === undefined) {
     expect(env.CLI_PATH).toBe(cli);
-    expect((entry!.argv as string[]).slice(2)).toEqual(['agent', '--always-approve', '--no-leader', 'stdio']);
+    expect((entry!.argv as string[]).slice(2)).toEqual(['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio']);
   } else {
     expect(env[executable]).toBe(cli);
     expect(env.CLI_PATH).toBeUndefined();
