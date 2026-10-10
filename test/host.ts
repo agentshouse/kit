@@ -44,14 +44,15 @@ export interface Host {
   mark(name: Mark): Promise<void>;
   clear(name: Mark): Promise<void>;
   forget(): Promise<void>;
+  uninstall(tool: string): Promise<void>;
   restartPolicy(policy: string): Promise<void>;
 }
 
-type Mark = 'changed' | 'container' | 'docker-down' | 'login-fails' | 'refused';
+type Mark = 'changed' | 'container' | 'docker-down' | 'login-fails' | 'opener-fails' | 'refused';
 
 const LOGGED = 'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n';
 
-const LOGIN = `[ ! -e "$FAKE/login-fails" ] || exit 1
+const LOGIN = `[ ! -e "$FAKE/login-fails" ] || exit 7
 printf 'Open this link and confirm: ${LOGIN_LINK}\\n'
 printf '{"house":"https://agents.house","environment":"%s","credential":"ahk_one"}' "\${2:-environment-one}" > "$1/credential.json"
 `;
@@ -106,8 +107,8 @@ case "$1" in
     ;;
 esac\n`,
   sudo: `${LOGGED}exit 1\n`,
-  'xdg-open': LOGGED,
-  open: LOGGED,
+  'xdg-open': `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
+  open: `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
   zsh: '[ ! -f "${ZDOTDIR:-$HOME}/.zshenv" ] || . "${ZDOTDIR:-$HOME}/.zshenv"\n[ "$1" != -c ] || eval "$2"\n',
 };
 
@@ -180,6 +181,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     mark: (name) => writeFile(join(fake, name), ''),
     clear: (name) => rm(join(fake, name), { force: true }),
     forget: () => writeFile(join(fake, 'log'), ''),
+    uninstall: (tool) => rm(join(bin, tool)),
     restartPolicy: async (policy) =>
       writeFile(join(fake, 'container'), (await readFile(join(fake, 'container'), 'utf8')).replace(/^policy=.*$/m, `policy=${policy}`)),
   };

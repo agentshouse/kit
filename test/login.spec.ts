@@ -1,29 +1,33 @@
-import { once } from 'node:events';
-import { createServer, get } from 'node:http';
 import { access, readFile, stat, writeFile } from 'node:fs/promises';
-import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startHouse, until } from './double.ts';
 import { runKit, temporaryHome } from './kit.ts';
-import { answerOwnAgent, confirm, ownAgent, serveLogin } from './login.ts';
+import { answerOwnAgent, LOGIN, logIn, loginLink, opener, ownAgent, serveLogin } from './login.ts';
 
-it('enrols a new Environment through the PKCE exchange and stores its credential', async () => {
+it('prints the link, opens it with the host opener, waits for the confirmation and stores the credential, reading nothing from standard input', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first');
+  const served = serveLogin(house, 'environment-one', 'ahk_first', { waiting: true });
+  const { path, opened } = await opener(home);
 
-  const { started, browser, exit } = await confirm(house, home);
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home, PATH: path });
+  await until(() => house.requests.some((request) => request.path === '/kit/token'));
+  served.confirm();
 
-  expect(exit).toBe(0);
-  expect(browser).toContain('This Environment is connected');
-  expect(started).toMatchObject({
-    act: 'new_environment',
-    presentation: 'loopback',
-    code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
-  });
-  expect(typeof started.label).toBe('string');
+  expect(await login.exited).toBe(0);
+  expect(login.stdout()).toContain(`Open this link and confirm: ${loginLink(house)}\n`);
+  expect(await until(opened)).toBe(`${loginLink(house)}\n`);
+  const started = house.requests.find((request) => request.path === '/kit')!.body;
+  expect(started).toMatchObject({ act: 'new_environment', code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+  expect(typeof (started as { label: unknown }).label).toBe('string');
   expect(started).not.toHaveProperty('environment_id');
+  expect(started).not.toHaveProperty('presentation');
+  expect(started).not.toHaveProperty('loopback_uri');
+  const polls = house.requests.filter((request) => request.path === '/kit/token').map((request) => request.body);
+  expect(polls.length).toBeGreaterThan(1);
+  expect(new Set(polls.map((poll) => JSON.stringify(poll))).size).toBe(1);
+  expect(polls[0]).toEqual({ login: LOGIN, code_verifier: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,
     environment: 'environment-one',
@@ -31,14 +35,72 @@ it('enrols a new Environment through the PKCE exchange and stores its credential
   });
 });
 
+it.each([
+  ['no browser opener', false],
+  ['a browser opener that fails', true],
+])('prints the link with %s and completes once the login is confirmed elsewhere', async (_name, fails) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const served = serveLogin(house, 'environment-one', 'ahk_first', { waiting: true });
+  const environment = { HOUSE_KIT_HOME: home, PATH: fails ? (await opener(home, true)).path : join(home, 'empty') };
+
+  const login = runKit(['login', '--house', house.origin], environment);
+  await until(() => login.stdout().includes(loginLink(house)) && house.requests.some((request) => request.path === '/kit/token'));
+  served.confirm();
+
+  expect(await login.exited).toBe(0);
+  expect(login.stdout()).toContain(`Open this link and confirm: ${loginLink(house)}\n`);
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
+});
+
+it('ends with the cause and no credential when the waiting login expires', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const served = serveLogin(house, 'environment-one', 'ahk_first', { waiting: true });
+
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  await until(() => house.requests.some((request) => request.path === '/kit/token'));
+  served.end();
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toContain('kit_login_rejected');
+  await expect(access(join(home, 'credential.json'))).rejects.toThrow();
+});
+
+it('ends with the cause and no credential when House refuses the exchange', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  house.route('POST', '/kit/token', () => ({ status: 400, body: { error: { code: 'kit_login_rejected', retryable: false } } }));
+
+  const { exit, login } = await logIn(house, home);
+
+  expect(exit).toBe(1);
+  expect(login.stderr()).toContain('kit_login_rejected');
+  expect(house.requests.filter((request) => request.path === '/kit/token')).toHaveLength(1);
+  await expect(access(join(home, 'credential.json'))).rejects.toThrow();
+});
+
+it('refuses --manual as an unknown option before starting a login', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const login = runKit(['login', '--house', house.origin, '--manual'], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toContain("Unknown option '--manual'");
+  expect(house.requests).toEqual([]);
+});
+
 it('reconnects the same Environment on a second login', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
-  await confirm(house, home);
+  await logIn(house, home);
   serveLogin(house, 'environment-one', 'ahk_second');
 
-  const { started, exit } = await confirm(house, home);
+  const { started, exit } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
@@ -54,10 +116,10 @@ it('enrols a new Environment naming the stored one it replaces, and keeps only t
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
-  await confirm(house, home);
+  await logIn(house, home);
   serveLogin(house, 'environment-two', 'ahk_second');
 
-  const { started, exit } = await confirm(house, home, { HOUSE_KIT_REPLACES: 'environment-one' });
+  const { started, exit } = await logIn(house, home, { HOUSE_KIT_REPLACES: 'environment-one' });
 
   expect(exit).toBe(0);
   expect(started).toMatchObject({ act: 'new_environment', replaces: 'environment-one', label: expect.any(String) });
@@ -67,6 +129,18 @@ it('enrols a new Environment naming the stored one it replaces, and keeps only t
     environment: 'environment-two',
     credential: 'ahk_second',
   });
+});
+
+it('starts the login again while House answers its start as retryable', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first', { busy: 2 });
+
+  const { exit } = await logIn(house, home);
+
+  expect(exit).toBe(0);
+  expect(house.requests.filter((request) => request.path === '/kit')).toHaveLength(3);
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
 });
 
 it('ends with the cause when House refuses to start the login', async () => {
@@ -82,81 +156,12 @@ it('ends with the cause when House refuses to start the login', async () => {
   expect(login.stderr()).toContain('kit_environment_not_found');
 });
 
-it('tells the browser the Environment was not connected when the exchange is refused', async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first');
-  house.route('POST', '/kit/token', () => ({ status: 400, body: { error: { code: 'kit_login_rejected', retryable: false } } }));
-
-  const { browser, exit, login } = await confirm(house, home);
-
-  expect(exit).toBe(1);
-  expect(browser).toContain('This Environment was not connected');
-  expect(login.stderr()).toContain('kit_login_rejected');
-  await expect(access(join(home, 'credential.json'))).rejects.toThrow();
-});
-
-it('finishes and keeps the credential when the browser disconnects before its answer', async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first');
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
-  const started = await until(() => house.requests.find((request) => request.path === '/kit'));
-  const { loopback_uri } = started.body as { loopback_uri: string };
-  const browser = get(`${loopback_uri}?code=ahk_code_one`);
-  browser.on('error', () => undefined);
-  house.route('POST', '/kit/token', async () => {
-    browser.destroy();
-    // Fifty milliseconds let the closed browser connection reach the Kit before House answers the token.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    return { body: { credential: 'ahk_first', environment: 'environment-one', user: 'user-one' } };
-  });
-
-  expect(await login.exited).toBe(0);
-  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
-});
-
-it('takes the browser return on the published callback port from beyond the loopback interface', async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first');
-  const probe = createServer().listen(0);
-  await once(probe, 'listening');
-  const port = (probe.address() as { port: number }).port;
-  probe.close();
-  const outside = Object.values(networkInterfaces())
-    .flat()
-    .find((address) => address?.family === 'IPv4' && !address.internal)!.address;
-
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home, HOUSE_KIT_LOGIN_PORT: String(port) });
-  const started = await until(() => house.requests.find((request) => request.path === '/kit'));
-  const browser = await (await fetch(`http://${outside}:${port}/callback?code=ahk_code_one`)).text();
-
-  expect((started.body as { loopback_uri: string }).loopback_uri).toBe(`http://127.0.0.1:${port}/callback`);
-  expect(browser).toContain('This Environment is connected');
-  expect(await login.exited).toBe(0);
-});
-
-it('ends without a credential when the code it asks for never comes', async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first');
-
-  const login = runKit(['login', '--house', house.origin, '--manual'], { HOUSE_KIT_HOME: home });
-  await until(() => login.stdout().includes('Code: '));
-  login.input.end();
-
-  expect(await login.exited).toBe(1);
-  expect(login.stderr()).toContain('no code was typed');
-  await expect(access(join(home, 'credential.json'))).rejects.toThrow();
-});
-
 it("asks for the User's own agent's connection when Kit holds none and keeps it owner-only beside the Kit credential", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first', 'ahp_own');
+  serveLogin(house, 'environment-one', 'ahk_first', { own: 'ahp_own' });
 
-  const { started, exit } = await confirm(house, home);
+  const { started, exit } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(started.headless).toBe(true);
@@ -173,7 +178,7 @@ it("asks for no connection while House accepts the User's own agent's one Kit ho
   answerOwnAgent(house, 'ahp_live');
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const { started, exit } = await confirm(house, home);
+  const { started, exit } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(started).not.toHaveProperty('headless');
@@ -185,9 +190,9 @@ it("asks again when House answers the User's own agent's connection as revoked, 
   const home = await temporaryHome();
   await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_revoked' }));
   answerOwnAgent(house, 'ahp_other');
-  serveLogin(house, 'environment-one', 'ahk_first', 'ahp_new');
+  serveLogin(house, 'environment-one', 'ahk_first', { own: 'ahp_new' });
 
-  const { started, exit } = await confirm(house, home);
+  const { started, exit } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(started.headless).toBe(true);
@@ -198,9 +203,9 @@ it("never sends the User's own agent's connection to another House, and asks tha
   const house = await startHouse();
   const home = await temporaryHome();
   await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: 'https://elsewhere.example', user: 'user-one', credential: 'ahp_elsewhere' }));
-  serveLogin(house, 'environment-one', 'ahk_first', 'ahp_here');
+  serveLogin(house, 'environment-one', 'ahk_first', { own: 'ahp_here' });
 
-  const { started, exit } = await confirm(house, home);
+  const { started, exit } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(started.headless).toBe(true);
@@ -215,7 +220,7 @@ it("drops the User's own agent's connection when another User confirms the login
   answerOwnAgent(house, 'ahp_two');
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const { exit, login } = await confirm(house, home);
+  const { exit, login } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(login.stdout()).toMatch(/kit login/);
@@ -240,7 +245,7 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
-  await confirm(house, home);
+  await logIn(house, home);
   const resident = runKit(['resident'], { HOUSE_KIT_HOME: home });
   await until(() => house.sockets[0]);
   house.route('POST', '/kit/logout', () => ({ body: {} }));
@@ -260,7 +265,7 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   expect(house.sockets).toHaveLength(1);
 
   serveLogin(house, 'environment-one', 'ahk_second');
-  const { started, exit } = await confirm(house, home);
+  const { started, exit } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });

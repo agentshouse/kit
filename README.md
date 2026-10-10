@@ -33,10 +33,10 @@ them out; running it again without the flag brings them back.
 
 ## Commands
 
-`kit login` opens a link you confirm in your browser and keeps the
-Environment's credential in `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is
-set. Pass `--manual` to paste the code by hand on a machine without a browser,
-and `--environment <id>` to reconnect an Environment you already have. It also
+`kit login` opens or prints a link you confirm in any browser, on this
+computer or another, continues on its own and keeps the Environment's
+credential in `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is set. Pass
+`--environment <id>` to reconnect an Environment you already have. It also
 connects your own agent: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you,
 until you revoke that connection on Connections. `house help` lists the Tools.

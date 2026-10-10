@@ -9,7 +9,6 @@ WORKSPACE="$HOME/AgentsHouse"
 KIT_HOME="$HOME/.house-kit"
 LINK='Open this link and confirm: '
 RECONNECT='run this command again with kit login appended'
-MANUAL=0
 WORKSPACE_SELECTED=0
 HOUSE_SELECTED=0
 ENROLL=''
@@ -30,7 +29,6 @@ RUNTIME='Docker Engine'
 OPENER=xdg-open
 NETWORK=(--network host)
 NAMED=()
-PUBLISHED=()
 NATIVE=0
 CONTAINER=0
 MACOS=0
@@ -77,19 +75,21 @@ enrolled() {
   sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p" "$KIT_HOME/credential.json"
 }
 
+open_link() {
+  local line
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    if [[ "$line" == "$LINK"* ]] && command -v "$OPENER" >/dev/null; then
+      "$OPENER" "${line#"$LINK"}" </dev/null >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 login_kit() {
-  if [[ " $* " == *' --manual '* ]]; then
-    "${LOGIN_TYPED[@]}" "$@" || exit 1
+  if ((CONTAINER)); then
+    "${LOGIN_KIT[@]}" "$@" | open_link || exit
   else
-    command -v "$OPENER" >/dev/null || refuse 'no host browser opener; rerun with --manual'
-    "${LOGIN_OPENED[@]}" "$@" | while IFS= read -r line; do
-      if [[ "$line" == "$LINK"* ]]; then
-        printf 'Opening House Login in the host browser: %s\n' "${line#"$LINK"}"
-        "$OPENER" "${line#"$LINK"}" >/dev/null 2>&1 || refuse 'host browser did not open; rerun with --manual'
-      else
-        printf '%s\n' "$line"
-      fi
-    done || exit 1
+    "${LOGIN_KIT[@]}" "$@" || exit
   fi
   [[ -f "$KIT_HOME/credential.json" ]] || refuse 'kit login connected no Environment'
 }
@@ -97,7 +97,6 @@ login_kit() {
 login_arguments() {
   LOGIN=()
   if ((HOUSE_SELECTED)); then LOGIN+=(--house "$HOUSE"); fi
-  if ((MANUAL)); then LOGIN+=(--manual); fi
 }
 
 prepare_directory() {
@@ -422,8 +421,7 @@ connect_native() {
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   else
     connected=connected
-    LOGIN_TYPED=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
-    LOGIN_OPENED=("${LOGIN_TYPED[@]}")
+    LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
@@ -643,8 +641,7 @@ connect_desktop() {
   fi
   if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     connected=connected
-    LOGIN_TYPED=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
-    LOGIN_OPENED=("${LOGIN_TYPED[@]}")
+    LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
@@ -786,10 +783,6 @@ while (($#)); do
       esac
       shift 2
       ;;
-    --manual)
-      MANUAL=1
-      shift
-      ;;
     --linux)
       NATIVE=1
       shift
@@ -905,14 +898,9 @@ bind_house remove_container
 if ((FORWARDING == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
 
 if [[ "$RUNTIME" == 'Docker Desktop' ]]; then NAMED=(--hostname "$(hostname)"); fi
-if [[ "$RUNTIME" == 'Docker Desktop' && "$HOUSE" == https://* ]]; then
-  NETWORK=()
-  LOGIN_PORT=$((49152 + RANDOM % 16384))
-  PUBLISHED=(--publish "127.0.0.1:$LOGIN_PORT:$LOGIN_PORT" --env "HOUSE_KIT_LOGIN_PORT=$LOGIN_PORT")
-fi
+if [[ "$RUNTIME" == 'Docker Desktop' && "$HOUSE" == https://* ]]; then NETWORK=(); fi
 DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${NAMED[@]+"${NAMED[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
-LOGIN_TYPED=("${DOCKER_RUN[@]:0:2}" -i ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
-LOGIN_OPENED=("${DOCKER_RUN[@]:0:2}" ${PUBLISHED[@]+"${PUBLISHED[@]}"} ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
+LOGIN_KIT=("${DOCKER_RUN[@]:0:2}" ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
 AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/authority-main.js")
 CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/configure-main.js")
 

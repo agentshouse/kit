@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
 import { appRemote, conversationCredential, directed, hostKit, opened, runs } from './environment.ts';
 import { filesUnder, runKit, temporaryHome } from './kit.ts';
-import { answerOwnAgent, confirm, serveLogin } from './login.ts';
+import { answerOwnAgent, logIn, serveLogin } from './login.ts';
 
 const COMMIT = 'a'.repeat(40);
 
@@ -36,8 +36,8 @@ async function loggedIn(): Promise<{ house: House; home: string; credentials: st
   const house = await startHouse();
   const home = await temporaryHome();
   await storingHelpers(home);
-  serveLogin(house, 'environment-one', 'ahk_first', 'ahp_own');
-  expect((await confirm(house, home)).exit).toBe(0);
+  serveLogin(house, 'environment-one', 'ahk_first', { own: 'ahp_own' });
+  expect((await logIn(house, home)).exit).toBe(0);
   return { house, home, credentials: appRemote(house, COMMIT) };
 }
 
@@ -78,9 +78,9 @@ it("stops answering for git once kit logout disconnects the computer, and leaves
 it("stops answering for git when another User's login drops the own agent", async () => {
   const { house, home, credentials } = await loggedIn();
   answerOwnAgent(house, 'ahp_own');
-  serveLogin(house, 'environment-one', 'ahk_second', undefined, 'user-two');
+  serveLogin(house, 'environment-one', 'ahk_second', { user: 'user-two' });
 
-  expect((await confirm(house, home)).exit).toBe(0);
+  expect((await logIn(house, home)).exit).toBe(0);
   const listed = await gitOf(home, 'ls-remote', `${house.origin}/app/a_app.git`);
 
   expect(listed.stderr).toContain('could not read Username');
@@ -109,7 +109,7 @@ it("keeps a conversation's Git under its own credential while the own agent answ
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' }));
   serveLogin(hosted.house, 'environment-one', 'ahk_held');
-  expect((await confirm(hosted.house, hosted.home)).exit).toBe(0);
+  expect((await logIn(hosted.house, hosted.home)).exit).toBe(0);
   const credentials = appRemote(hosted.house, COMMIT);
   await opened(hosted);
 

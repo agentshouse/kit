@@ -1,10 +1,12 @@
 import { access, readFile, stat, writeFile } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, type Host } from './host.ts';
 import { temporaryHome } from './kit.ts';
 
 const UNSUPPORTED = 'it installs without that guarantee.';
+const LINK_LINE = `Open this link and confirm: ${LOGIN_LINK}`;
 const UID = process.getuid!();
 
 function acts(host: Host): string[] {
@@ -91,7 +93,8 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
   expect(host.calls('sudo')).toEqual([]);
   expect(host.calls('docker')).toEqual(['container inspect house-kit']);
   expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${host.home}/.house-kit`]);
-  expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
+  expect(ran.stdout).toContain(`${LINK_LINE}\n`);
+  expect(host.calls('xdg-open')).toEqual([]);
   expect(acts(host)).toEqual(['--user daemon-reload', '--user --quiet enable --now house-kit.service']);
   expect(await readFile(join(host.home, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8')).toBe(userUnit(host.home));
   expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
@@ -109,7 +112,8 @@ it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, w
   expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.21\.0\/node-v24\.21\.0-darwin-arm64\.tar\.gz$/)]);
   expect(host.calls('shasum')).toEqual(['-a 256 --check']);
   expect(host.calls('sudo')).toEqual([]);
-  expect(host.calls('open')).toEqual([LOGIN_LINK]);
+  expect(ran.stdout).toContain(`${LINK_LINE}\n`);
+  expect(host.calls('open')).toEqual([]);
   expect(acts(host)).toEqual([`enable gui/${UID}/house-kit`, `bootstrap gui/${UID} ${host.home}/Library/LaunchAgents/house-kit.plist`]);
   expect(await readFile(join(host.home, 'Library', 'LaunchAgents', 'house-kit.plist'), 'utf8')).toBe(launchAgent(host.home));
   expect(await readFile(join(host.home, '.zprofile'), 'utf8')).toBe(`export PATH="${host.home}/.local/bin:$PATH"\n`);
@@ -402,7 +406,7 @@ it('installs the container exactly as before only with the container choice', as
 
   expect(ran).toEqual({
     status: 0,
-    stdout: `Opening House Login in the host browser: ${LOGIN_LINK}\nHouse Kit connected for Environment environment-one.\n`,
+    stdout: `${LINK_LINE}\nHouse Kit connected for Environment environment-one.\n`,
     stderr: '',
   });
   expect(host.calls('docker')).toEqual([
@@ -417,6 +421,60 @@ it('installs the container exactly as before only with the container choice', as
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
   expect([...host.calls('curl'), ...host.calls('systemctl'), ...host.calls('sudo')]).toEqual([]);
   await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('installs the container on macOS through Docker Desktop, publishing no port, and opens the printed link in the host browser', async () => {
+  const host = await fakeHost({ system: 'Darwin', machine: 'x86_64', appleSilicon: false });
+  const image = `ghcr.io/agentshouse/kit@sha256:${'a'.repeat(64)}`;
+  const uid = `${process.getuid!()}:${process.getgid!()}`;
+  const mounts = `--mount type=bind,"src=${host.home}/.house-kit",dst=/kit-home --mount type=bind,"src=${host.home}/AgentsHouse",dst=/agents/house`;
+
+  const ran = host.run(['--container']);
+
+  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nHouse Kit connected for Environment environment-one.\n`, stderr: '' });
+  expect(host.calls('docker').filter((call) => call.endsWith(' login'))).toEqual([
+    `run --rm --hostname ${hostname()} --user ${uid} ${mounts} ${image} login`,
+  ]);
+  expect(host.calls('docker').join('\n')).not.toMatch(/--publish|HOUSE_KIT_LOGIN_PORT/);
+  expect(host.calls('open')).toEqual([LOGIN_LINK]);
+});
+
+it.each([
+  ['has no browser opener', (host: Host) => host.uninstall('xdg-open')],
+  ['has a browser opener that fails', (host: Host) => host.mark('opener-fails')],
+])('leaves the printed link to the User and connects when the container host %s', async (_name, prepare) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  await prepare(host);
+
+  const ran = host.run(['--container']);
+
+  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nHouse Kit connected for Environment environment-one.\n`, stderr: '' });
+  expect(JSON.parse(await readFile(join(host.home, '.house-kit', 'credential.json'), 'utf8'))).toMatchObject({
+    environment: 'environment-one',
+  });
+});
+
+it('opens the link of a kit login forwarded into the container in the host browser', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run(['--container'])).toMatchObject({ status: 0 });
+  await host.forget();
+
+  const ran = host.run(['--container', 'kit', 'login']);
+
+  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\n`, stderr: '' });
+  expect(host.calls('docker').filter((call) => call.endsWith(' login'))).toEqual([
+    expect.stringMatching(/^run --rm --network host --user \S+ --mount .* login$/),
+  ]);
+  expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
+});
+
+it('ends a kit login forwarded into the container with the status its login ended with', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run(['--container'])).toMatchObject({ status: 0 });
+  await host.forget();
+  await host.mark('login-fails');
+
+  expect(host.run(['--container', 'kit', 'login'])).toMatchObject({ status: 7 });
 });
 
 it('keeps an installed container on the pinned image and on-failure, and replaces one under another restart policy on a rerun', async () => {

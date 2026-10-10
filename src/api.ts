@@ -24,15 +24,15 @@ export function retryDelay(attempt: number): number {
   return Math.random() * Math.min(30_000, 1000 * 2 ** attempt);
 }
 
-export async function retrying<T>(sent: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+export async function retrying<T>(sent: () => Promise<T>, signal?: AbortSignal, pause = retryDelay): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await sent();
     } catch (error) {
       if (!(error instanceof HouseRefusal) || retryable(error.text) !== true) throw error;
     }
-    // A request House refused as retryable is sent again on the jittered curve.
-    await delay(retryDelay(attempt), undefined, { signal });
+    // A request House refused as retryable is sent again after the caller's pause, the jittered curve unless it names its own.
+    await delay(pause(attempt), undefined, { signal });
   }
 }
 

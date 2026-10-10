@@ -84,5 +84,34 @@ try {
   if ($_.Exception.Message -cne 'kit_bootstrap_refused: House refuses the stored Kit credential of Environment environment-one; to reconnect it, run this command again with kit login appended') { $findings += "Test-Authority refused with: $($_.Exception.Message)" }
 }
 if ($script:Prompts.Count -ne 0) { $findings += "Test-Authority asked: $($script:Prompts[0])" }
+$invokeLogin = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Login' }, $true)
+. ([scriptblock]::Create($invokeLogin.Extent.Text))
+function Exit-Bootstrap([int] $Status) { throw "kit_bootstrap_exit: $Status" }
+$Link = 'Open this link and confirm: '
+$Network = @()
+$Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
+$printed = @('Open this link and confirm: https://agents.house/kit/ahk_login_one', 'Environment environment-one is connected to https://agents.house.')
+function docker {
+  $script:Ran += , ($args -join ' ')
+  $global:LASTEXITCODE = 0
+  $printed
+}
+function Start-Process([string] $FilePath) {
+  $script:Opened += , $FilePath
+  if ($script:OpenerFails) { throw 'no browser answers' }
+}
+foreach ($fails in @($false, $true)) {
+  $script:OpenerFails = $fails
+  $script:Ran = @()
+  $script:Opened = @()
+  try {
+    $shown = @(Invoke-Login @('--house', 'https://agents.house') 6>&1 | ForEach-Object { "$_" })
+    if (($shown -join '|') -cne ($printed -join '|')) { $findings += "Invoke-Login showed: $($shown -join '|')" }
+  } catch {
+    $findings += "Invoke-Login refused with: $($_.Exception.Message)"
+  }
+  if (($script:Ran -join '|') -cne 'run --rm --hostname pc --mount home --mount workspace image login --house https://agents.house') { $findings += "Invoke-Login ran: $($script:Ran -join '|')" }
+  if (($script:Opened -join '|') -cne 'https://agents.house/kit/ahk_login_one') { $findings += "Invoke-Login opened: $($script:Opened -join '|')" }
+}
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }

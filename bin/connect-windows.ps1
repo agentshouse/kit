@@ -218,16 +218,10 @@ function Test-Container {
 }
 
 function Invoke-Login([string[]] $LoginArguments) {
-  if ($LoginArguments -contains '--manual') {
-    Invoke-Docker run -i --rm @Network @Common login @LoginArguments
-    return
-  }
-  & docker run @Published --rm @Network @Common login @LoginArguments | ForEach-Object {
+  & docker run --rm @Network @Common login @LoginArguments | ForEach-Object {
+    Write-Host $_
     if ($_.StartsWith($Link)) {
-      Write-Host "Opening House Login in the host browser: $($_.Substring($Link.Length))"
-      try { Start-Process -FilePath $_.Substring($Link.Length) } catch { Stop-Bootstrap 'host browser did not open; rerun with --manual' }
-    } else {
-      Write-Host $_
+      try { Start-Process -FilePath $_.Substring($Link.Length) } catch { }
     }
   }
   if ($LASTEXITCODE -ne 0) { Exit-Bootstrap $LASTEXITCODE }
@@ -289,7 +283,6 @@ function Start-Resident {
 function Connect-Kit {
   $House = 'https://agents.house'
   $Workspace = $null
-  $Manual = $false
   $WorkspaceSelected = $false
   $HouseSelected = $false
   $Forwarding = $false
@@ -318,8 +311,6 @@ function Connect-Kit {
         $House = $Arguments[$index]
         $HouseSelected = $true
       }
-    } elseif ($argument -ceq '--manual') {
-      $Manual = $true
     } elseif ($argument -ceq '--no-skills') {
       $NoSkills = @('--no-skills')
     } elseif ($argument -ceq '--update-clis') {
@@ -380,12 +371,7 @@ function Connect-Kit {
   }
   if ($House -notmatch '^(https://|http://127\.0\.0\.1:|http://localhost:)') { Stop-Bootstrap 'House origin must use HTTPS or local loopback HTTP' }
   $Network = @('--network', 'host')
-  $Published = @()
-  if ($House.StartsWith('https://')) {
-    $Network = @()
-    $port = Get-Random -Minimum 49152 -Maximum 65536
-    $Published = @('--publish', "127.0.0.1:${port}:$port", '--env', "HOUSE_KIT_LOGIN_PORT=$port")
-  }
+  if ($House.StartsWith('https://')) { $Network = @() }
   $Common = @('--hostname', [Net.Dns]::GetHostName(), '--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
 
   if (Test-Container) {
@@ -449,7 +435,6 @@ function Connect-Kit {
   } else {
     $login = @()
     if ($HouseSelected) { $login += @('--house', $House) }
-    if ($Manual) { $login += '--manual' }
     Invoke-Login $login
     $enrolment = Read-Enrolment
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
