@@ -29,6 +29,7 @@ const PUSH_USAGE = 'usage: house push [commit] [--owner]';
 const PUSH = "push [commit]: sends the Local copy's committed changes to House";
 const ARGUMENTS = `the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'`;
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
+const SANDBOXED = "your CLI's sandbox kept house from House; run house as a command of its own, with no pipe, chain or redirect";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
 const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
 const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
@@ -61,7 +62,9 @@ function bridged(
         else reject(new Error(refused(path, answer.statusCode!, text)));
       });
     });
-    sent.on('error', () => reject(new Error(CLOSED)));
+    sent.on('error', (error: NodeJS.ErrnoException) =>
+      reject(new Error(error.code === 'EPERM' || error.code === 'EACCES' ? SANDBOXED : CLOSED)),
+    );
     sent.end(body instanceof Buffer ? body : JSON.stringify(body));
   });
 }

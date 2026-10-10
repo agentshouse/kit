@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { chmod, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -82,6 +84,25 @@ it("never falls back to the User's own agent's connection when a conversation's 
 
   expect(ran.status).toBe(1);
   expect(ran.stderr).toBe("house: this conversation's House connection is closed; nothing to do from here\n");
+  expect(house.requests).toEqual([]);
+});
+
+it("tells an Agent whose CLI sandbox refuses the bridge to run house as a command of its own", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const socket = join(home, 'sandboxed.sock');
+  const bridge = createServer((connection) => connection.end());
+  bridge.listen(socket);
+  await once(bridge, 'listening');
+  await chmod(socket, 0);
+
+  const ran = await runHouse(home, ['search', '{"query":"invoice"}'], socket);
+  bridge.close();
+
+  expect(ran.status).toBe(1);
+  expect(ran.stderr).toBe(
+    "house: your CLI's sandbox kept house from House; run house as a command of its own, with no pipe, chain or redirect\n",
+  );
   expect(house.requests).toEqual([]);
 });
 
