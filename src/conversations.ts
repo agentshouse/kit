@@ -2,26 +2,24 @@ import {
   client,
   type AvailableCommand,
   type ContentBlock,
-  type ContentChunk,
   type CreateElicitationRequest,
-  type PlanEntry,
   type SessionConfigOption,
-  type SessionNotification,
 } from '@agentclientprotocol/sdk';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
-import { killMarked, startAdapter, TURN_ENDED, TURN_STARTED, type Adapter } from './acp.ts';
+import { killMarked, processes, startAdapter, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import type { House } from './api.ts';
-import { blocksOf, firstChange, type Block } from './blocks.ts';
 import { openBridge, type Bridge } from './bridge.ts';
-import { CLIS, type Cli, type Job, type Phase } from './clis.ts';
+import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
-import { placeFiles, type MessageFile } from './files.ts';
+import { readerFor, type Event, type Message, type Reader } from './events.ts';
+import { placeFiles, uploadBytes, type MessageFile, type SavedFile } from './files.ts';
 import { agentBase } from './home.ts';
 import { instructions } from './instructions.ts';
+import { Parts, type Context, type Operation, type Part } from './parts.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 import { createHowWeWork } from './skills.ts';
 import type { Frame } from './stream.ts';
@@ -45,9 +43,10 @@ export interface Input {
 }
 
 type Ack = { provider_session_id: string } | { refused: string } | Record<string, never>;
-type Outcome = { text: string } | { failed: string };
 
 const KILLED = 'the conversation was killed';
+// A process a conversation left running reports nothing when it exits, so the Kit looks again every five seconds while one runs.
+const PROCESS_RECHECK_MS = 5000;
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -61,35 +60,28 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
-function stop(bridge: Bridge): void {
-  killMarked(`HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`);
+function marker(bridge: Bridge): string {
+  return `HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`;
 }
 
-interface Segment {
-  messageId: string | null;
-  phase: Phase | null;
-  text: string;
+function stop(bridge: Bridge): void {
+  killMarked(marker(bridge));
 }
 
 class Turn {
   readonly id = randomUUID();
-  text = '';
-  segment: Segment | null = null;
+  readonly parts: Parts;
   admitted = false;
-  readonly notes: Frame[] = [];
-  sent: Block[] = [];
-  unsentFrom: number | null = null;
-  draftSequence = 0;
-  planSequence = 0;
-  entries: PlanEntry[] | null = null;
   questions = 0;
   secrets = 0;
-  prompt: Sent | null = null;
+  prompted = false;
   ended = false;
-}
+  images = 0;
+  readonly uploads: Promise<unknown>[] = [];
 
-interface Sent {
-  turn: Turn | null;
+  constructor(emit: (operation: Operation) => void) {
+    this.parts = new Parts(emit);
+  }
 }
 
 interface Running {
@@ -97,8 +89,15 @@ interface Running {
   bridge: Bridge;
   sessionId: string;
   killed: boolean;
-  queues: boolean;
-  phase: Cli['phase'];
+  reader: Reader;
+  baseline: Set<string> | null;
+}
+
+interface Waiting {
+  input: Input;
+  route: Route;
+  content: ContentBlock[];
+  settle(ack: Ack): void;
 }
 
 interface Question {
@@ -109,11 +108,15 @@ interface Question {
 class Conversation {
   readonly id: string;
   running: Running | null = null;
+  session: string | null = null;
   turn: Turn | null = null;
   commands: AvailableCommand[] | null = null;
-  readonly jobs = new Set<string>();
-  readonly queued: Sent[] = [];
-  readonly late: string[] = [];
+  context: Context | null = null;
+  readonly busy = new Set<string>();
+  readonly waiting: Waiting[] = [];
+  sending: Promise<void> | null = null;
+  readonly subagents = new Map<string, { description: string; turn: Turn; index: number }>();
+  readonly held: Part[] = [];
   opening: Bridge | null = null;
   kills = 0;
   killed = new AbortController();
@@ -154,6 +157,8 @@ export class Conversations {
   private readonly questions = new Map<string, Question>();
   private carrying = 0;
   private reporting = 0;
+  private watched = false;
+  private recheck: NodeJS.Timeout | null = null;
 
   constructor(kit: Kit) {
     this.kit = kit;
@@ -168,14 +173,16 @@ export class Conversations {
         if (input.kind === 'kill') {
           conversation.kills++;
           conversation.killed.abort(new Error(KILLED));
+          for (const waiting of conversation.waiting.splice(0)) waiting.settle({ refused: KILLED });
           this.halt(conversation);
         }
         if (input.kind === 'interrupt') {
           conversation.interrupts++;
           conversation.interrupted.abort();
         }
-        const work = conversation.queue.then(() => this.carry(conversation, input));
-        conversation.queue = work.catch(() => undefined);
+        const handled = conversation.queue.then(() => this.carry(conversation, input));
+        conversation.queue = handled.catch(() => undefined);
+        const work = handled.then(({ ack }) => ack);
         this.acks.set(input.input_id, work);
         return work;
       })();
@@ -193,14 +200,31 @@ export class Conversations {
     for (const conversation of this.conversations.values()) {
       const turn = conversation.turn;
       const asking = turn !== null && turn.questions > 0 && turn.secrets === 0;
-      if (conversation.jobs.size > 0 || conversation.open > (asking ? 1 : 0)) return false;
+      if (conversation.busy.size > 0 || conversation.open > (asking ? 1 : 0)) return false;
+    }
+    for (const conversation of this.conversations.values()) {
+      const running = conversation.running;
+      if (running === null || running.baseline === null) continue;
+      if ([...processes(marker(running.bridge))].every((found) => running.baseline!.has(found))) continue;
+      this.recheck ??= setTimeout(() => {
+        this.recheck = null;
+        this.kit.changed();
+      }, PROCESS_RECHECK_MS);
+      return false;
     }
     return true;
   }
 
   opened(): void {
+    this.watched = false;
+  }
+
+  watching(watched: boolean): void {
+    const resend = watched && !this.watched;
+    this.watched = watched;
+    if (!resend) return;
     for (const conversation of this.conversations.values()) {
-      if (conversation.turn !== null) conversation.turn.unsentFrom = 0;
+      if (conversation.turn !== null) this.replay(conversation, conversation.turn);
     }
   }
 
@@ -213,8 +237,8 @@ export class Conversations {
     return conversation;
   }
 
-  private async carry(conversation: Conversation, input: Input): Promise<Ack> {
-    if (input.kind === 'open') return this.open(conversation, input);
+  private async carry(conversation: Conversation, input: Input): Promise<{ ack: Promise<Ack> }> {
+    if (input.kind === 'open') return { ack: Promise.resolve(await this.open(conversation, input)) };
     if (input.kind === 'message') return this.message(conversation, input);
     if (input.kind === 'interrupt') {
       if (--conversation.interrupts === 0) conversation.interrupted = new AbortController();
@@ -222,17 +246,19 @@ export class Conversations {
     }
     if (input.kind === 'kill') {
       await this.kill(conversation);
+      await conversation.sending;
       if (--conversation.kills === 0) conversation.killed = new AbortController();
     }
     if (input.kind === 'option') await this.option(conversation, String(input.option), input.value);
     if (input.kind === 'answer') {
       const question = this.questions.get(String(input.interaction_id));
       if (question === undefined) {
-        return this.message(conversation, { ...input, text: answerMessage(input.request, input.response), files: [], first: false });
+        const text = answerMessage(input.request, input.response);
+        return this.message(conversation, { ...input, text, files: [], first: false });
       }
       question.answer(input.response);
     }
-    return {};
+    return { ack: Promise.resolve({}) };
   }
 
   private async open(conversation: Conversation, input: Input): Promise<Ack> {
@@ -244,33 +270,64 @@ export class Conversations {
     }
   }
 
-  private async message(conversation: Conversation, input: Input): Promise<Ack> {
-    let ack: Ack = {};
-    const prompt: ContentBlock[] = [];
+  private async message(conversation: Conversation, input: Input): Promise<{ ack: Promise<Ack> }> {
+    const content: ContentBlock[] = [{ type: 'text', text: String(input.text) }];
+    let route: Route;
     try {
-      const route = await this.route(conversation, input.agent_id);
+      route = await this.route(conversation, input.agent_id);
       const files = input.files as MessageFile[];
       const paths = await placeFiles(this.kit.house, route.working_directory, files, conversation.killed.signal);
       const lines = await this.transcribed(conversation, files, paths);
+      if (lines.length > 0) content.push({ type: 'text', text: lines.join('\n') });
+      if (conversation.kills > 0) throw new Error(KILLED);
+    } catch (error) {
+      return { ack: Promise.resolve({ refused: conversation.kills > 0 ? KILLED : causeOf(error) }) };
+    }
+    return {
+      ack: new Promise<Ack>((settle) => {
+        conversation.waiting.push({ input, route, content, settle });
+        this.next(conversation);
+      }),
+    };
+  }
+
+  private next(conversation: Conversation): void {
+    if (conversation.sending !== null || conversation.open > 0) return;
+    const waiting = conversation.waiting.shift();
+    if (waiting === undefined) return;
+    conversation.sending = this.send(conversation, waiting).finally(() => {
+      conversation.sending = null;
+      this.next(conversation);
+    });
+  }
+
+  private async send(conversation: Conversation, waiting: Waiting): Promise<void> {
+    const { input } = waiting;
+    let ack: Ack = {};
+    const prompt: ContentBlock[] = [];
+    try {
       if (conversation.running === null) {
-        const opened = await this.start(conversation, route, input.provider_session_id);
-        if (input.provider_session_id === null) ack = { provider_session_id: opened };
+        const resumed = input.provider_session_id ?? conversation.session;
+        const opened = await this.start(conversation, waiting.route, resumed);
+        if (resumed === null) ack = { provider_session_id: opened };
       }
       if (input.first === true) {
         prompt.push({
           type: 'text',
-          text: await instructions(conversation.running!.bridge, route.base_instructions, await this.kit.copies.mapping()),
+          text: await instructions(conversation.running!.bridge, waiting.route.base_instructions, await this.kit.copies.mapping()),
         });
       }
-      prompt.push({ type: 'text', text: String(input.text) });
-      if (lines.length > 0) prompt.push({ type: 'text', text: lines.join('\n') });
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
-      if ('provider_session_id' in ack) await this.kill(conversation);
-      return { refused: conversation.kills > 0 ? KILLED : causeOf(error) };
+      if ('provider_session_id' in ack) {
+        conversation.session = null;
+        await this.kill(conversation);
+      }
+      waiting.settle({ refused: conversation.kills > 0 ? KILLED : causeOf(error) });
+      return;
     }
-    this.prompt(conversation, prompt);
-    return ack;
+    this.prompt(conversation, [...prompt, ...waiting.content]);
+    waiting.settle(ack);
   }
 
   private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[]): Promise<string[]> {
@@ -313,6 +370,7 @@ export class Conversations {
     const running = conversation.running;
     if (running === null) return;
     try {
+      running.reader.requested(option, value);
       const answered = await running.adapter.connection.agent.request('session/set_config_option', {
         sessionId: running.sessionId,
         configId: option,
@@ -320,6 +378,7 @@ export class Conversations {
       });
       this.options(conversation, answered.configOptions);
     } catch (error) {
+      running.reader.refused(option);
       logged(error);
     }
   }
@@ -337,10 +396,9 @@ export class Conversations {
   }
 
   private async start(conversation: Conversation, route: Route, sessionId: string | null): Promise<string> {
+    const reader = readerFor(route.kind);
+    reader.session = sessionId;
     const app = client({ name: '@agentshouse/kit' })
-      .onNotification('session/update', ({ params }) => this.update(conversation, params))
-      .onNotification(TURN_STARTED, (params) => params, () => void this.started(conversation))
-      .onNotification(TURN_ENDED, (params) => params, () => this.ended(conversation))
       .onRequest('session/request_permission', ({ params, signal }) =>
         this.ask(conversation, 'session/request_permission', params, false, signal),
       )
@@ -357,12 +415,13 @@ export class Conversations {
     try {
       await unlessAborted(createHowWeWork(bridge), conversation.killed.signal);
       await CLIS[route.kind]!.allowHouse();
+      conversation.busy.clear();
       const adapter = await startAdapter(
         route.kind,
         cli,
         route.working_directory,
         app,
-        (job) => this.job(conversation, job),
+        (message) => this.read(conversation, reader, message),
         bridge.env,
       );
       void adapter.exited.then(() => bridge.close());
@@ -373,16 +432,12 @@ export class Conversations {
         sessionId === null
           ? await agent.request('session/new', { cwd, mcpServers: [], _meta })
           : { ...(await agent.request('session/resume', { sessionId, cwd, mcpServers: [], _meta })), sessionId };
-      const running: Running = {
-        adapter,
-        bridge,
-        sessionId: opened.sessionId,
-        killed: false,
-        queues: CLIS[route.kind]!.queues,
-        phase: CLIS[route.kind]!.phase,
-      };
+      reader.session = opened.sessionId;
+      const running: Running = { adapter, bridge, sessionId: opened.sessionId, killed: false, reader, baseline: null };
       const options = await this.launchSettings(running, route, opened.configOptions ?? []);
+      running.baseline = processes(marker(bridge));
       conversation.running = running;
+      conversation.session = running.sessionId;
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
       if (conversation.commands !== null) this.commands(conversation, conversation.commands);
       this.options(conversation, options);
@@ -411,6 +466,7 @@ export class Conversations {
     for (const [category, value] of settings) {
       if (value === null) continue;
       const option = options.find((candidate) => candidate.category === category);
+      running.reader.requested(option?.id ?? category, value);
       const answered = await running.adapter.connection.agent.request('session/set_config_option', {
         sessionId: running.sessionId,
         configId: option?.id ?? category,
@@ -424,18 +480,22 @@ export class Conversations {
   private exited(conversation: Conversation, adapter: Adapter, cause: string): void {
     const running = conversation.running;
     if (running?.adapter !== adapter) return;
+    this.detach(conversation);
+    if (conversation.turn !== null) {
+      this.end(conversation, conversation.turn, { failed: running.killed ? KILLED : cause });
+    }
+    this.next(conversation);
+    this.kit.changed();
+  }
+
+  private detach(conversation: Conversation): void {
     conversation.running = null;
     conversation.commands = null;
-    conversation.jobs.clear();
-    conversation.queued.length = 0;
+    conversation.busy.clear();
     for (const [id, question] of this.questions) {
       if (question.conversation === conversation) this.questions.delete(id);
     }
     this.kit.send({ type: 'process', conversation_id: conversation.id, running: false });
-    if (conversation.turn !== null) {
-      this.end(conversation, conversation.turn, { failed: running.killed ? KILLED : cause });
-    }
-    this.kit.changed();
   }
 
   private commands(conversation: Conversation, commands: AvailableCommand[]): void {
@@ -451,8 +511,8 @@ export class Conversations {
 
   private deliver(conversation: Conversation, turn: Turn, event: string, body: unknown): Promise<unknown> {
     this.reporting++;
-    const delivered = conversation.reports.then(() =>
-      this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/${event}`, body),
+    const delivered = conversation.reports.then(async () =>
+      this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/${event}`, await body),
     );
     conversation.reports = delivered
       .catch(() => undefined)
@@ -463,110 +523,81 @@ export class Conversations {
     return delivered;
   }
 
-  private report(conversation: Conversation): Turn {
-    const turn = new Turn();
-    conversation.open++;
-    void this.deliver(conversation, turn, 'started', {})
-      .then(() => this.admitted(conversation, turn))
-      .catch(logged);
-    return turn;
+  private write(conversation: Conversation, turn: Turn, operation: Operation): void {
+    if (!turn.admitted || turn.ended || !this.watched) return;
+    this.kit.send({ type: 'turn', conversation_id: conversation.id, turn_id: turn.id, ...operation });
   }
 
-  private admitted(conversation: Conversation, turn: Turn): void {
-    turn.admitted = true;
-    for (const note of turn.notes.splice(0)) this.kit.send(note);
-    turn.unsentFrom = 0;
-    this.draft(conversation, turn);
-    if (turn.entries !== null) this.plan(conversation, turn);
+  private replay(conversation: Conversation, turn: Turn): void {
+    for (const operation of turn.parts.operations()) this.write(conversation, turn, operation);
   }
 
   private begin(conversation: Conversation): Turn {
-    const turn = this.report(conversation);
+    const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
+    conversation.open++;
+    void this.deliver(conversation, turn, 'started', {})
+      .then(() => {
+        turn.admitted = true;
+        this.replay(conversation, turn);
+      })
+      .catch(logged);
     conversation.turn = turn;
+    if (conversation.context !== null) turn.parts.measure(conversation.context);
+    for (const part of conversation.held.splice(0)) turn.parts.start(part);
+    for (const event of conversation.running?.reader.turnStarted() ?? []) this.event(conversation, event);
     this.kit.changed();
     return turn;
   }
 
-  private finish(conversation: Conversation, turn: Turn): void {
+  private end(conversation: Conversation, turn: Turn, failed: { failed: string } | null): void {
     if (turn.ended) return;
-    const segment = turn.segment;
-    turn.segment = null;
-    if (segment?.phase === 'note') this.note(conversation, turn, segment.text);
-    else if (segment !== null) this.answer(conversation, turn, segment.text);
-    this.end(conversation, turn, { text: turn.text });
-  }
-
-  private end(conversation: Conversation, turn: Turn, outcome: Outcome): void {
-    if (turn.ended) return;
+    if (conversation.turn === turn) {
+      for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
+    }
     turn.ended = true;
     conversation.open--;
     if (conversation.turn === turn) conversation.turn = null;
-    void this.deliver(conversation, turn, 'ended', outcome).catch(logged);
-    const late = conversation.open === 0 ? conversation.late.shift() : undefined;
-    if (late !== undefined) this.failed(conversation, late);
+    const body = Promise.allSettled(turn.uploads).then(() => ({
+      parts: turn.parts.parts,
+      context: turn.parts.context,
+      ...failed,
+    }));
+    void this.deliver(conversation, turn, 'ended', body).catch(logged);
+    this.next(conversation);
     this.kit.changed();
-  }
-
-  private failed(conversation: Conversation, cause: string): void {
-    if (conversation.open > 0) conversation.late.push(cause);
-    else this.end(conversation, this.report(conversation), { failed: cause });
   }
 
   private prompt(conversation: Conversation, prompt: ContentBlock[]): void {
     const running = conversation.running!;
-    const sent: Sent = { turn: null };
-    if (running.queues && (conversation.turn !== null || conversation.queued.length > 0)) {
-      conversation.queued.push(sent);
-    } else {
-      this.attach(conversation.turn ?? this.begin(conversation), sent);
-    }
+    const turn = this.begin(conversation);
+    turn.prompted = true;
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
-      () => this.answered(conversation, sent, null),
+      () => this.end(conversation, turn, null),
       async (error: unknown) => {
-        if (!running.adapter.connection.signal.aborted) {
-          this.answered(conversation, sent, causeOf(error));
-          if (conversation.open === 0 && conversation.running === running) stop(running.bridge);
-        } else if (sent.turn !== null) {
-          this.end(conversation, sent.turn, { failed: running.killed ? KILLED : await running.adapter.exited });
+        if (running.adapter.connection.signal.aborted) {
+          this.end(conversation, turn, { failed: running.killed ? KILLED : await running.adapter.exited });
+        } else {
+          if (conversation.open === 1 && conversation.running === running) {
+            stop(running.bridge);
+            this.detach(conversation);
+          }
+          this.end(conversation, turn, { failed: causeOf(error) });
         }
       },
     );
   }
 
-  private attach(turn: Turn, sent: Sent): void {
-    turn.prompt = sent;
-    sent.turn = turn;
-  }
-
-  private answered(conversation: Conversation, sent: Sent, failed: string | null): void {
-    const turn = sent.turn;
-    if (turn === null) {
-      const queued = conversation.queued.indexOf(sent);
-      if (queued < 0) return;
-      conversation.queued.splice(queued, 1);
-      if (failed !== null) this.failed(conversation, failed);
-    } else if (failed !== null) {
-      if (turn.ended) this.failed(conversation, failed);
-      else this.end(conversation, turn, { failed });
-    } else if (turn.prompt === sent) {
-      this.finish(conversation, turn);
-    }
-  }
-
   private started(conversation: Conversation): Turn {
-    if (conversation.turn !== null) return conversation.turn;
-    const turn = this.begin(conversation);
-    const queued = conversation.queued.shift();
-    if (queued !== undefined) this.attach(turn, queued);
-    return turn;
+    return conversation.turn ?? this.begin(conversation);
   }
 
   private ended(conversation: Conversation): void {
     const turn = conversation.turn;
     if (turn === null) return;
-    if (turn.prompt === null) {
-      this.finish(conversation, turn);
+    if (!turn.prompted) {
+      this.end(conversation, turn, null);
     } else {
+      for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
       conversation.turn = null;
       this.kit.changed();
     }
@@ -618,93 +649,108 @@ export class Conversations {
     if (content !== null) this.questions.get(interactionId)?.answer({ action: 'accept', content });
   }
 
-  private update(conversation: Conversation, notification: SessionNotification): void {
-    const update = notification.update;
-    if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
-      this.chunk(conversation, this.started(conversation), update, update.content.text);
-    } else if (update.sessionUpdate === 'plan') {
-      const turn = this.started(conversation);
-      this.close(conversation, turn);
-      turn.entries = update.entries;
-      this.plan(conversation, turn);
-    } else if (update.sessionUpdate === 'tool_call') {
-      this.close(conversation, this.started(conversation));
-    } else if (update.sessionUpdate === 'agent_thought_chunk') {
-      const turn = this.started(conversation);
-      if (turn.segment?.messageId !== (update.messageId ?? null)) this.close(conversation, turn);
-    } else if (update.sessionUpdate === 'available_commands_update') {
-      this.commands(conversation, update.availableCommands);
-    } else if (update.sessionUpdate === 'config_option_update') {
-      this.options(conversation, update.configOptions);
+  private read(conversation: Conversation, reader: Reader, message: Message): void {
+    for (const event of reader.read(message)) this.event(conversation, event);
+  }
+
+  private event(conversation: Conversation, event: Event): void {
+    switch (event.kind) {
+      case 'started':
+        this.started(conversation);
+        return;
+      case 'ended':
+        this.ended(conversation);
+        return;
+      case 'commands':
+        this.commands(conversation, event.commands);
+        return;
+      case 'options':
+        this.options(conversation, event.options);
+        return;
+      case 'busy':
+        if (event.running) conversation.busy.add(event.key);
+        else conversation.busy.delete(event.key);
+        this.kit.changed();
+        return;
+      case 'servers': {
+        const running = conversation.running;
+        if (running?.baseline) for (const found of processes(marker(running.bridge))) running.baseline.add(found);
+        return;
+      }
+      case 'context':
+        conversation.context = { used: event.used, window: event.window };
+        conversation.turn?.parts.measure(conversation.context);
+        return;
+      case 'subagent-done':
+        this.subagentDone(conversation, event.id, event.result);
+        return;
+      case 'marker':
+      case 'image':
+        if (conversation.turn !== null) break;
+        if (event.kind === 'marker' && event.marker === 'job') conversation.held.push({ type: 'marker', marker: 'job', text: event.text });
+        return;
+    }
+    this.apply(conversation, this.started(conversation), event);
+  }
+
+  private apply(conversation: Conversation, turn: Turn, event: Event): void {
+    switch (event.kind) {
+      case 'text':
+      case 'reasoning':
+        turn.parts.write(event.kind, event.id, event.text);
+        return;
+      case 'command':
+        turn.parts.command();
+        return;
+      case 'subagent': {
+        const index = turn.parts.start({ type: 'subagent', description: event.description, status: 'running', result: null });
+        conversation.subagents.set(event.id, { description: event.description, turn, index });
+        return;
+      }
+      case 'message':
+        turn.parts.start({ type: 'message', command: event.command, target: event.target });
+        return;
+      case 'marker':
+        turn.parts.start({ type: 'marker', marker: event.marker, text: event.text });
+        return;
+      case 'plan':
+        turn.parts.plan(event.entries);
+        return;
+      case 'image':
+        turn.uploads.push(this.image(conversation, turn, event.data, event.mediaType));
+        this.kit.changed();
+        return;
     }
   }
 
-  private job(conversation: Conversation, job: Job): void {
-    if (job.running) conversation.jobs.add(job.id);
-    else conversation.jobs.delete(job.id);
-    this.kit.changed();
-  }
-
-  private chunk(conversation: Conversation, turn: Turn, chunk: ContentChunk, text: string): void {
-    const phase = conversation.running?.phase(chunk) ?? null;
-    const messageId = chunk.messageId ?? null;
-    if (turn.segment?.messageId !== messageId || turn.segment.phase !== phase) this.close(conversation, turn);
-    if (phase === 'answer') {
-      this.answer(conversation, turn, text);
+  private subagentDone(conversation: Conversation, id: string, result: string | null): void {
+    const subagent = conversation.subagents.get(id);
+    if (subagent === undefined) return;
+    conversation.subagents.delete(id);
+    if (subagent.turn === conversation.turn) {
+      subagent.turn.parts.done(subagent.index, result);
       return;
     }
-    turn.segment ??= { messageId, phase, text: '' };
-    turn.segment.text += text;
+    const part: Part = { type: 'subagent', description: subagent.description, status: 'done', result };
+    if (conversation.turn === null) conversation.held.push(part);
+    else conversation.turn.parts.start(part);
   }
 
-  private close(conversation: Conversation, turn: Turn): void {
-    const segment = turn.segment;
-    if (segment === null) return;
-    turn.segment = null;
-    this.note(conversation, turn, segment.text);
-  }
-
-  private note(conversation: Conversation, turn: Turn, text: string): void {
-    if (text.trim() === '') return;
-    const note = { type: 'working-note', conversation_id: conversation.id, note_id: randomUUID(), text };
-    if (turn.admitted) this.kit.send(note);
-    else turn.notes.push(note);
-  }
-
-  private answer(conversation: Conversation, turn: Turn, text: string): void {
-    turn.text += text;
-    this.draft(conversation, turn);
-  }
-
-  private draft(conversation: Conversation, turn: Turn): void {
-    const blocks = blocksOf(turn.text);
-    const from = Math.min(firstChange(turn.sent, blocks), turn.unsentFrom ?? Infinity);
-    const sent = this.kit.send({
-      type: 'draft',
-      conversation_id: conversation.id,
-      turn_id: turn.id,
-      sequence: turn.draftSequence + 1,
-      from,
-      blocks: blocks.slice(from),
-    });
-    if (sent) {
-      turn.draftSequence++;
-      turn.sent = blocks;
-      turn.unsentFrom = null;
-    } else {
-      turn.unsentFrom = from;
+  private async image(conversation: Conversation, turn: Turn, data: string, mediaType: string): Promise<void> {
+    const bytes = Buffer.from(data, 'base64');
+    const name = `image-${++turn.images}.${mediaType.split('/')[1]}`;
+    try {
+      const declared = (await this.deliver(conversation, turn, 'images', {
+        name,
+        media_type: mediaType,
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      })) as SavedFile;
+      const saved = declared.upload === undefined ? declared : await uploadBytes(declared.upload, bytes);
+      if (saved.save.status !== 'saved') throw new Error(saved.save.failure ?? saved.save.status);
+      turn.parts.start({ type: 'image', file: saved.version, name, media_type: mediaType });
+    } catch (error) {
+      turn.parts.start({ type: 'marker', marker: 'retry', text: `${name} was not saved: ${causeOf(error)}` });
     }
-  }
-
-  private plan(conversation: Conversation, turn: Turn): void {
-    const sent = this.kit.send({
-      type: 'plan',
-      conversation_id: conversation.id,
-      turn_id: turn.id,
-      sequence: turn.planSequence + 1,
-      from: 0,
-      steps: turn.entries!.map((entry) => ({ label: entry.content, priority: entry.priority, status: entry.status })),
-    });
-    if (sent) turn.planSequence++;
   }
 }

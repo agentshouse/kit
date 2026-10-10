@@ -2,16 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
-import { until } from './double.ts';
-import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
+import { settle, until } from './double.ts';
+import { hostKit, installHeld, lastInput, outcome, type Hosted } from './environment.ts';
 import { placeHostKey, temporaryHome } from './kit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-async function reports(hosted: Hosted, count: number): Promise<[string, string, unknown][]> {
-  const received = await until(() => (hosted.turns.length === count ? hosted.turns : undefined));
-  return received.map((report) => [report.path.slice(report.path.lastIndexOf('/') + 1), report.params.turn!, report.body]);
-}
 
 it('opens the provider session in the launch directory with the route settings and full access and reports its id', async () => {
   const hosted = await hostKit([{ model: 'gpt-route', effort: 'high' }]);
@@ -304,475 +299,9 @@ it('reports a refused resume with the CLI cause', async () => {
   expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('the session cannot be resumed') });
 });
 
-it('writes a message that arrives during a running turn to the CLI at once and ends the turn when the CLI ends it, its first prompt still unanswered', async () => {
-  const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  hosted.input({ kind: 'message', text: '@wait', files: [], first: true });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
-
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(ended.body).toEqual({ text: 'meanwhile' });
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started')).map((turn) => turn.params.turn)).toEqual([
-    ended.params.turn,
-  ]);
-});
-
-it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
-  'writes each message to %s at once while House has not answered its turn start',
-  async (kind) => {
-    const hosted = await hostKit([{ kind }]);
-    hosted.input({ kind: 'open' });
-    await hosted.ack(lastInput());
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    onTestFinished(release);
-    hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async () => {
-      await held;
-      return { body: {} };
-    });
-
-    // The first prompt holds half a second, so the second message is written while it runs.
-    hosted.input({ kind: 'message', text: '@hold 500\n@say first', files: [], first: false });
-    hosted.input({ kind: 'message', text: '@say second', files: [], first: false });
-
-    const prompts = await until(async () => {
-      const sent = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
-      return sent.length === 2 ? sent : undefined;
-    });
-    expect(prompts.map((entry) => entry.text)).toEqual(['@hold 500\n@say first', '@say second']);
-  },
-);
-
-it.each(['codex-acp', 'claude-agent-acp'])(
-  'reports a prompt %s fails after its turn ended as a failed turn of its own',
-  async (kind) => {
-    const hosted = await hostKit([{ kind }]);
-    hosted.input({ kind: 'open' });
-    await hosted.ack(lastInput());
-
-    // The prompt fails a second in, after the message sent meanwhile has ended its own turn.
-    hosted.input({ kind: 'message', text: '@hold 1000\n@fail earlier prompt failed', files: [], first: true });
-    await hosted.ack(lastInput());
-    hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
-
-    const ends = await until(() => {
-      const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-      return ended.length === 2 ? ended : undefined;
-    });
-    expect(ends.map((turn) => turn.body)).toEqual([
-      { text: 'meanwhile' },
-      { failed: expect.stringContaining('earlier prompt failed') },
-    ]);
-    const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-    expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
-    expect(new Set(starts.map((turn) => turn.params.turn)).size).toBe(2);
-  },
-);
-
-it.each(['codex-acp', 'claude-agent-acp'])(
-  'reports a prompt %s fails while a later turn runs as a failed turn of its own once that turn ends',
-  async (kind) => {
-    const hosted = await hostKit([{ kind }]);
-    hosted.input({ kind: 'open' });
-    await hosted.ack(lastInput());
-    // The prompt fails a second in, while the turn started after the first one ends still runs.
-    hosted.input({ kind: 'message', text: '@hold 1000\n@fail earlier prompt failed', files: [], first: true });
-    await hosted.ack(lastInput());
-    hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
-    await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-
-    // This turn holds two seconds, so the earlier prompt fails while it runs.
-    hosted.input({ kind: 'message', text: '@hold 2000\n@say current', files: [], first: false });
-
-    const sequence = await reports(hosted, 6);
-    const [first, second, third] = [0, 2, 4].map((index) => sequence[index]![1]);
-    expect(new Set([first, second, third]).size).toBe(3);
-    expect(sequence).toEqual([
-      ['started', first, {}],
-      ['ended', first, { text: 'meanwhile' }],
-      ['started', second, {}],
-      ['ended', second, { text: 'current' }],
-      ['started', third, {}],
-      ['ended', third, { failed: expect.stringContaining('earlier prompt failed') }],
-    ]);
-  },
-);
-
-it('reports no turn for a prompt the CLI never answered when its process ends after that turn', async () => {
-  const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  const { provider_session_id } = (await hosted.ack(lastInput())) as { provider_session_id: string };
-  hosted.input({ kind: 'message', text: '@wait', files: [], first: true });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: '@say meanwhile', files: [], first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-
-  hosted.input({ kind: 'kill' });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: '@say after', files: [], first: false, provider_session_id });
-
-  const ends = await until(() => {
-    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-    return ended.length === 2 ? ended : undefined;
-  });
-  expect(ends.map((turn) => turn.body)).toEqual([{ text: 'meanwhile' }, { text: 'after' }]);
-});
-
-it('ends a turn when Grok ends it and reports the turn Grok then runs for a message it queued during it', async () => {
-  const hosted = await hostKit([{ kind: 'grok-build' }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  // The first turn holds a second, so the next message reaches the CLI while it runs and is queued.
-  hosted.input({ kind: 'message', text: '@hold 1000\n@say first', files: [], first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  // The queued turn holds longer than the first, so it is still running when the first ends.
-  hosted.input({ kind: 'message', text: '@hold 1500\n@say second', files: [], first: false });
-
-  const ends = await until(() => {
-    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-    return ended.length === 2 ? ended : undefined;
-  });
-  expect(ends.map((turn) => turn.body)).toEqual([{ text: 'first' }, { text: 'second' }]);
-  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-  expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
-  expect(new Set(starts.map((turn) => turn.params.turn)).size).toBe(2);
-});
-
-it('reports a turn start and end once each under the turn id Kit gave it', async () => {
-  const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  hosted.input({ kind: 'message', text: '@say Hello', files: [], first: true });
-
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  const started = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-  expect(started).toHaveLength(1);
-  expect(started[0]!.params).toEqual({ conversation: 'conversation-1', turn: expect.stringMatching(UUID) });
-  expect(ended.params.turn).toBe(started[0]!.params.turn);
-  expect(ended.body).toEqual({ text: 'Hello' });
-});
-
-it('ends a turn failed when its process exits during it', async () => {
-  const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  hosted.input({ kind: 'message', text: '@say partial\n@exit 3', files: [], first: true });
-
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(ended.body).toEqual({ failed: expect.stringContaining('exited with 3') });
-  await until(() =>
-    hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false),
-  );
-});
-
-it.each(['codex-acp', 'claude-agent-acp'])(
-  'ends the %s process when a prompt fails with no turn left running, so the next message resumes the session in a fresh one',
-  async (kind) => {
-    const hosted = await hostKit([{ kind }]);
-    hosted.input({ kind: 'open' });
-    const { provider_session_id } = (await hosted.ack(lastInput())) as { provider_session_id: string };
-
-    hosted.input({ kind: 'message', text: '@fail The agent process exited unexpectedly', files: [], first: true });
-
-    expect(await ends(hosted, 1)).toEqual([{ failed: expect.stringContaining('exited unexpectedly') }]);
-    await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
-    hosted.input({ kind: 'message', text: '@say back', files: [], first: false, provider_session_id });
-    expect(await ends(hosted, 2)).toEqual([{ failed: expect.stringContaining('exited unexpectedly') }, { text: 'back' }]);
-    const log = await hosted.adapterLog();
-    expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: provider_session_id });
-    expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
-  },
-);
-
-it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
-  'ends a turn failed with the cause %s gives when it fails the prompt after it ends the turn',
-  async (kind) => {
-    const hosted = await hostKit([{ kind }]);
-    hosted.input({ kind: 'open' });
-    await hosted.ack(lastInput());
-
-    // The prompt fails a tenth of a second after the CLI ends its turn, so the failure arrives after the end.
-    hosted.input({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', files: [], first: true });
-
-    const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-    expect(ended.body).toEqual({ failed: expect.stringContaining('provider request failed') });
-    expect(hosted.turns.filter((turn) => turn.path.endsWith('/started')).map((turn) => turn.params.turn)).toEqual([
-      ended.params.turn,
-    ]);
-  },
-);
-
-it('ends a turn when Claude answers its prompt without an end notice, as it does for a local command', async () => {
-  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  hosted.input({ kind: 'message', text: '@say local output\n@answer', files: [], first: true });
-
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(ended.body).toEqual({ text: 'local output' });
-});
-
-it('ends the turn Grok runs for a message it queued failed when Grok fails that message', async () => {
-  const hosted = await hostKit([{ kind: 'grok-build' }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  // The first turn holds half a second, so the next message reaches the CLI while it runs and is queued.
-  hosted.input({ kind: 'message', text: '@hold 500\n@say first', files: [], first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  // The queued message fails a second after the CLI starts it, once the first turn has ended.
-  hosted.input({ kind: 'message', text: '@hold 1000\n@started\n@fail queued message refused', files: [], first: false });
-
-  const ends = await until(() => {
-    const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-    return ended.length === 2 ? ended : undefined;
-  });
-  expect(ends.map((turn) => turn.body)).toEqual([
-    { text: 'first' },
-    { failed: expect.stringContaining('queued message refused') },
-  ]);
-  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-  expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
-});
-
-it('reports a message Grok fails before it runs it as a failed turn of its own once the running turn ends', async () => {
-  const hosted = await hostKit([{ kind: 'grok-build' }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  // The first turn holds a second, so the CLI refuses the next message while it runs.
-  hosted.input({ kind: 'message', text: '@hold 1000\n@say first', files: [], first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.input({ kind: 'message', text: '@fail refused before it ran', files: [], first: false });
-
-  const sequence = await reports(hosted, 4);
-  const [first, second] = [0, 2].map((index) => sequence[index]![1]);
-  expect(first).not.toBe(second);
-  expect(sequence).toEqual([
-    ['started', first, {}],
-    ['ended', first, { text: 'first' }],
-    ['started', second, {}],
-    ['ended', second, { failed: expect.stringContaining('refused before it ran') }],
-  ]);
-});
-
-it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
-  'reports a turn the CLI starts by itself like any other and ends it when %s ends it',
-  async (kind) => {
-    const hosted = await hostKit([{ kind }]);
-    hosted.input({ kind: 'open' });
-    await hosted.ack(lastInput());
-
-    // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
-    hosted.input({ kind: 'message', text: '@later 500 by itself', files: [], first: true });
-
-    const ends = await until(() => {
-      const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-      return ended.length === 2 ? ended : undefined;
-    });
-    expect(ends.map((turn) => turn.body)).toEqual([{ text: '' }, { text: 'by itself' }]);
-    const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-    expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
-    const draft = await until(() =>
-      hosted.socket.frames.find((frame) => frame.type === 'draft' && JSON.stringify(frame.blocks).includes('by itself')),
-    );
-    expect(draft).toMatchObject({ turn_id: ends[1]!.params.turn, blocks: [{ type: 'paragraph', text: 'by itself' }] });
-  },
-);
-
-it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])(
-  'reports a turn %s starts by itself when it starts it, before it writes any text',
-  async (kind) => {
-    const hosted = await hostKit([{ kind }]);
-    hosted.input({ kind: 'open' });
-    await hosted.ack(lastInput());
-
-    // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
-    hosted.input({ kind: 'message', text: '@later 500', files: [], first: true });
-
-    const ends = await until(() => {
-      const ended = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-      return ended.length === 2 ? ended : undefined;
-    });
-    expect(ends.map((turn) => turn.body)).toEqual([{ text: '' }, { text: '' }]);
-    const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-    expect(starts.map((turn) => turn.params.turn)).toEqual(ends.map((turn) => turn.params.turn));
-  },
-);
-
-function startHeld(hosted: Hosted): () => void {
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  onTestFinished(release);
-  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async (request) => {
-    await held;
-    hosted.turns.push(request);
-    return { body: {} };
-  });
-  return release;
-}
-
-it('writes each message chunk as a draft frame with the next sequence and plan updates as plan frames', async () => {
-  const hosted = await hostKit();
-  const admit = startHeld(hosted);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  hosted.input({ kind: 'message', text: '@say Hello\n@say  world\n@say \\n\\n\n@say Next\n@plan first|second', files: [], first: true });
-
-  const turn = (await until(() => hosted.socket.frames.find((frame) => frame.type === 'plan'))).turn_id;
-  const drafts = hosted.socket.frames.filter((frame) => frame.type === 'draft');
-  expect(drafts).toEqual([
-    { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 1, from: 0, blocks: [{ type: 'paragraph', text: 'Hello' }] },
-    { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 2, from: 0, blocks: [{ type: 'paragraph', text: 'Hello world' }] },
-    { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 3, from: 1, blocks: [] },
-    { type: 'draft', conversation_id: 'conversation-1', turn_id: turn, sequence: 4, from: 1, blocks: [{ type: 'paragraph', text: 'Next' }] },
-  ]);
-  expect(hosted.socket.frames.filter((frame) => frame.type === 'plan')).toEqual([
-    {
-      type: 'plan',
-      conversation_id: 'conversation-1',
-      turn_id: turn,
-      sequence: 1,
-      from: 0,
-      steps: [
-        { label: 'first', priority: 'medium', status: 'pending' },
-        { label: 'second', priority: 'medium', status: 'pending' },
-      ],
-    },
-  ]);
-  admit();
-  const ended = await until(() => hosted.turns.find((report) => report.path.endsWith('/ended')));
-  expect(ended.params.turn).toBe(turn);
-  expect(ended.body).toEqual({ text: 'Hello world\n\nNext' });
-});
-
-it('writes an empty draft once House answers the turn start, before the turn has any text', async () => {
-  const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  // The turn holds a second before it writes, so its empty draft is seen before any text.
-  hosted.input({ kind: 'message', text: '@hold 1000\n@say Hello', files: [], first: true });
-
-  const started = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  expect(await until(() => drafts(hosted)[0])).toEqual({
-    type: 'draft',
-    conversation_id: 'conversation-1',
-    turn_id: started.params.turn,
-    sequence: 1,
-    from: 0,
-    blocks: [],
-  });
-  expect(await ends(hosted, 1)).toEqual([{ text: 'Hello' }]);
-  expect(drafts(hosted).map((frame) => [frame.sequence, frame.blocks])).toEqual([
-    [1, []],
-    [2, [{ type: 'paragraph', text: 'Hello' }]],
-  ]);
-});
-
-it("writes the turn's whole view as its next draft on a new socket", async () => {
-  const hosted = await hostKit();
-  startHeld(hosted);
-  // The turn holds four seconds, past the one to three seconds a closed socket takes to reopen, before it writes its suffix.
-  hosted.input({ kind: 'message', text: '@say first\\n\\nsecond\n@hold 4000\n@say  suffix', files: [], first: false });
-  await until(() => hosted.socket.frames.find((frame) => frame.type === 'draft'));
-
-  hosted.socket.close(1001, 'shutting_down');
-  const reopened = await until(() => hosted.house.sockets[1]);
-
-  expect(await until(() => reopened.frames.find((frame) => frame.type === 'draft'))).toMatchObject({
-    sequence: 2,
-    from: 0,
-    blocks: [
-      { type: 'paragraph', text: 'first' },
-      { type: 'paragraph', text: 'second suffix' },
-    ],
-  });
-});
-
-it("writes each chunk and plan update at once, then the turn's whole view once House answers its start report", async () => {
-  const hosted = await hostKit();
-  const admit = startHeld(hosted);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-
-  hosted.input({ kind: 'message', text: '@say one\n@say  two\n@plan first', files: [], first: true });
-
-  const plan = await until(() => hosted.socket.frames.find((frame) => frame.type === 'plan'));
-  expect(
-    hosted.socket.frames.filter((frame) => frame.type === 'draft').map((frame) => [frame.sequence, frame.blocks]),
-  ).toEqual([
-    [1, [{ type: 'paragraph', text: 'one' }]],
-    [2, [{ type: 'paragraph', text: 'one two' }]],
-  ]);
-  expect(plan).toMatchObject({ sequence: 1, steps: [{ label: 'first', priority: 'medium', status: 'pending' }] });
-  admit();
-  expect(
-    await until(() => hosted.socket.frames.find((frame) => frame.type === 'draft' && frame.sequence === 3)),
-  ).toMatchObject({ from: 0, blocks: [{ type: 'paragraph', text: 'one two' }] });
-  expect(
-    await until(() => hosted.socket.frames.find((frame) => frame.type === 'plan' && frame.sequence === 2)),
-  ).toMatchObject({ from: 0, steps: [{ label: 'first', priority: 'medium', status: 'pending' }] });
-  expect(await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')))).toMatchObject({
-    body: { text: 'one two' },
-  });
-});
-
-it("writes the turn's whole view and plan on the new socket once House answers its start report, though both came while the socket was closed", async () => {
-  const hosted = await hostKit();
-  const admit = startHeld(hosted);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: '@gate closed\n@say one\n@plan first\n@ping', files: [], first: true });
-  await hosted.ack(lastInput());
-  const reconnect = hosted.house.holdStreams();
-  const closed = new Promise((resolve) => hosted.socket.socket.once('close', resolve));
-
-  hosted.socket.close(1001, 'shutting_down');
-  await closed;
-  await writeFile(join(hosted.home, 'closed'), '');
-  await until(async () => (await hosted.adapterLog()).some((entry) => entry.pinged === true));
-  reconnect();
-  const reopened = await until(() => hosted.house.sockets[1]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-  admit();
-
-  expect(await until(() => reopened.frames.find((frame) => frame.type === 'draft'))).toMatchObject({
-    sequence: 1,
-    from: 0,
-    blocks: [{ type: 'paragraph', text: 'one' }],
-  });
-  expect(await until(() => reopened.frames.find((frame) => frame.type === 'plan'))).toMatchObject({
-    sequence: 1,
-    from: 0,
-    steps: [{ label: 'first', priority: 'medium', status: 'pending' }],
-  });
-});
-
-it('calls restarted before it opens its socket', async () => {
-  const hosted = await hostKit();
-
-  const order = hosted.house.requests.map((request) => request.path);
-  expect(order.indexOf('/kit/restarted')).toBeGreaterThanOrEqual(0);
-  expect(order.indexOf('/kit/restarted')).toBeLessThan(order.indexOf('/kit/stream'));
-});
-
 const KINDS = ['codex-acp', 'claude-agent-acp', 'grok-build'];
 
-async function opened(kind: string): Promise<Hosted> {
+async function opened(kind = 'codex-acp'): Promise<Hosted> {
   const hosted = await hostKit([{ kind }]);
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
@@ -784,146 +313,325 @@ async function ends(hosted: Hosted, count: number): Promise<unknown[]> {
     const reported = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
     return reported.length === count ? reported : undefined;
   });
-  return ended.map((turn) => turn.body);
+  return ended.map((turn) => outcome(turn.body));
 }
 
-function notes(hosted: Hosted): Record<string, unknown>[] {
-  return hosted.socket.frames.filter((frame) => frame.type === 'working-note');
+async function prompts(hosted: Hosted): Promise<string[]> {
+  return (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt').map((entry) => String(entry.text));
 }
 
-function drafts(hosted: Hosted): Record<string, unknown>[] {
-  return hosted.socket.frames.filter((frame) => frame.type === 'draft');
+function operations(hosted: Hosted, socket = hosted.house.sockets.at(-1)!): Record<string, unknown>[] {
+  return socket.frames.filter((frame) => frame.type === 'turn');
 }
 
-function note(text: string): Record<string, unknown> {
-  return { type: 'working-note', conversation_id: 'conversation-1', note_id: expect.stringMatching(UUID), text };
+function gated(hosted: Hosted, gate: string): () => Promise<void> {
+  return () => writeFile(join(hosted.home, gate), '');
 }
 
-it.each(KINDS)('sends each working note %s writes between actions as one complete frame and keeps it out of the answer', async (kind) => {
+it.each(KINDS)("holds a message that reaches %s mid-turn until that turn ends, then sends it as the next turn's prompt", async (kind) => {
   const hosted = await opened(kind);
+  const release = gated(hosted, 'first');
 
-  hosted.input({
-    kind: 'message',
-    text: '@note Let me check the config first\n@tool Read the config\n@note Now the tests\n@tool Run the tests\n@say The config\n@say  is fine.',
-    files: [],
-    first: true,
-  });
+  hosted.input({ kind: 'message', text: '@gate first\n@say first', files: [], first: false });
+  const first = lastInput();
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.input({ kind: 'message', text: '@say second', files: [], first: false });
+  const second = lastInput();
+  await hosted.ack(first);
+  await settle();
 
-  expect(await ends(hosted, 1)).toEqual([{ text: 'The config is fine.' }]);
-  expect(notes(hosted)).toEqual([note('Let me check the config first'), note('Now the tests')]);
-  expect(new Set(notes(hosted).map((frame) => frame.note_id)).size).toBe(2);
-  const answer = await until(() =>
-    drafts(hosted).find((frame) => JSON.stringify(frame.blocks).includes('The config is fine.')),
-  );
-  expect(answer).toMatchObject({ from: 0, blocks: [{ type: 'paragraph', text: 'The config is fine.' }] });
-  for (const draft of drafts(hosted).filter((frame) => (frame.blocks as unknown[]).length > 0)) {
-    expect(draft.blocks).toEqual([{ type: 'paragraph', text: expect.stringMatching(/^The config/) }]);
-  }
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first']);
+  expect(hosted.acks.map((ack) => ack.params.input)).not.toContain(second);
+  await release();
+  expect(await ends(hosted, 2)).toEqual([{ text: 'first' }, { text: 'second' }]);
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say second']);
+  expect(await hosted.ack(second)).toEqual({});
+  const [startedFirst, endedFirst, startedSecond] = hosted.turns.map((turn) => turn.path.split('/').at(-1));
+  expect([startedFirst, endedFirst, startedSecond]).toEqual(['started', 'ended', 'started']);
 });
 
-it('grows the draft from the answer chunks alone while Codex writes notes between them', async () => {
-  const hosted = await opened('codex-acp');
-  const admit = startHeld(hosted);
+it('sends two messages that arrived mid-turn as two turns in the order they arrived', async () => {
+  const hosted = await opened();
+  const release = gated(hosted, 'first');
+  hosted.input({ kind: 'message', text: '@gate first\n@say first', files: [], first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
 
-  hosted.input({ kind: 'message', text: '@note Reading it\n@tool Read the file\n@say one\n@say  two', files: [], first: true });
+  hosted.input({ kind: 'message', text: '@say second', files: [], first: false });
+  hosted.input({ kind: 'message', text: '@say third', files: [], first: false });
+  await settle();
+  await release();
 
-  await until(() => drafts(hosted)[1]);
-  expect(drafts(hosted).map((frame) => frame.blocks)).toEqual([
-    [{ type: 'paragraph', text: 'one' }],
-    [{ type: 'paragraph', text: 'one two' }],
+  expect(await ends(hosted, 3)).toEqual([{ text: 'first' }, { text: 'second' }, { text: 'third' }]);
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say second', '@say third']);
+  expect(new Set(hosted.turns.map((turn) => turn.params.turn)).size).toBe(3);
+});
+
+it('resumes the provider session for a message that waited while the process crashed and sends it as the next turn', async () => {
+  const hosted = await opened();
+  const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
+  const release = gated(hosted, 'crash');
+  hosted.input({ kind: 'message', text: '@gate crash\n@exit 3', files: [], first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.input({ kind: 'message', text: '@say after', files: [], first: false });
+  await settle();
+
+  await release();
+
+  expect(await ends(hosted, 2)).toEqual([{ failed: expect.stringContaining('exited with 3') }, { text: 'after' }]);
+  const log = await hosted.adapterLog();
+  expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: session });
+  expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
+});
+
+it("does not acknowledge a waiting message, so a restarted Kit receives it again at its socket's opening and sends it as the next turn", async () => {
+  const hosted = await opened();
+  const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
+  hosted.input({ kind: 'message', text: '@wait', files: [], first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.input({ kind: 'message', text: '@say again', files: [], first: false });
+  const waiting = lastInput();
+  await settle();
+  expect(hosted.acks.map((ack) => ack.params.input)).not.toContain(waiting);
+
+  await hosted.restart();
+  hosted.house.sockets.at(-1)!.send({
+    type: 'input',
+    input_id: waiting,
+    kind: 'message',
+    conversation_id: 'conversation-1',
+    agent_id: 'agent-1',
+    provider_session_id: session,
+    text: '@say again',
+    files: [],
+    first: false,
+  });
+
+  expect(await hosted.ack(waiting)).toEqual({});
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(outcome(ended.body)).toEqual({ text: 'again' });
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/resume').map((entry) => entry.params)).toEqual([
+    expect.objectContaining({ sessionId: session }),
   ]);
-  admit();
-  expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
-  expect(notes(hosted)).toEqual([note('Reading it')]);
 });
 
-it.each(KINDS)('ends a turn %s writes only notes in with an empty answer', async (kind) => {
-  const hosted = await opened(kind);
+it('reports a turn start and end once each under the turn id Kit gave it', async () => {
+  const hosted = await opened();
 
-  hosted.input({ kind: 'message', text: '@note Reading the logs\n@tool Read the logs', files: [], first: true });
+  hosted.input({ kind: 'message', text: '@say Hello', files: [], first: true });
 
-  expect(await ends(hosted, 1)).toEqual([{ text: '' }]);
-  expect(notes(hosted)).toEqual([note('Reading the logs')]);
-  expect(drafts(hosted).map((frame) => frame.blocks)).toEqual([[]]);
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const started = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+  expect(started).toHaveLength(1);
+  expect(started[0]!.params).toEqual({ conversation: 'conversation-1', turn: expect.stringMatching(UUID) });
+  expect(ended.params.turn).toBe(started[0]!.params.turn);
+  expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'Hello' }], context: null });
 });
 
-it.each(KINDS)('separates the notes and answer of a turn %s starts by itself like those of a prompted turn', async (kind) => {
-  const hosted = await opened(kind);
+it('ends a turn failed when its process exits during it, with the parts it had', async () => {
+  const hosted = await opened();
 
-  hosted.input({
-    kind: 'message',
-    // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
-    text: '@itself 500 @note Checking the job;@tool Read the job output;@say The job finished',
-    files: [],
-    first: true,
+  hosted.input({ kind: 'message', text: '@say partial\n@exit 3', files: [], first: true });
+
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(ended.body).toEqual({
+    parts: [{ type: 'text', text: 'partial' }],
+    context: null,
+    failed: expect.stringContaining('exited with 3'),
   });
-
-  expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: 'The job finished' }]);
-  expect(notes(hosted)).toEqual([note('Checking the job')]);
-  expect(JSON.stringify(drafts(hosted))).not.toContain('Checking');
+  await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
 });
 
-it.each(KINDS)('never sends the private thought %s writes before an action as a working note', async (kind) => {
+it.each(['codex-acp', 'claude-agent-acp'])(
+  'ends the %s process when a prompt fails with no turn left running, so the next message resumes the session in a fresh one',
+  async (kind) => {
+    const hosted = await opened(kind);
+    const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
+
+    hosted.input({ kind: 'message', text: '@fail The agent process exited unexpectedly', files: [], first: true });
+
+    expect(await ends(hosted, 1)).toEqual([{ failed: expect.stringContaining('exited unexpectedly') }]);
+    await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
+    hosted.input({ kind: 'message', text: '@say back', files: [], first: false, provider_session_id: session });
+    expect(await ends(hosted, 2)).toEqual([{ failed: expect.stringContaining('exited unexpectedly') }, { text: 'back' }]);
+    const log = await hosted.adapterLog();
+    expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: session });
+    expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
+  },
+);
+
+it('sends a message that waited on a prompt the CLI failed to a fresh process that resumes the session', async () => {
+  const hosted = await opened();
+  const release = gated(hosted, 'failing');
+  hosted.input({ kind: 'message', text: '@gate failing\n@fail provider request failed', files: [], first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.input({ kind: 'message', text: '@say next', files: [], first: false });
+  await settle();
+
+  await release();
+
+  expect(await ends(hosted, 2)).toEqual([{ failed: expect.stringContaining('provider request failed') }, { text: 'next' }]);
+  const log = await hosted.adapterLog();
+  expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
+});
+
+it.each(KINDS)('ends a turn failed with the cause %s gives when it fails the prompt after it ends the turn', async (kind) => {
   const hosted = await opened(kind);
 
-  hosted.input({ kind: 'message', text: '@think I should read the config\n@tool Read the config\n@say Done', files: [], first: true });
+  // The prompt fails a tenth of a second after the CLI ends its turn, so the failure arrives after the end.
+  hosted.input({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', files: [], first: true });
 
-  expect(await ends(hosted, 1)).toEqual([{ text: 'Done' }]);
-  expect(notes(hosted)).toEqual([]);
-  expect(JSON.stringify(drafts(hosted))).not.toContain('I should');
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(outcome(ended.body)).toEqual({ failed: expect.stringContaining('provider request failed') });
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started')).map((turn) => turn.params.turn)).toEqual([
+    ended.params.turn,
+  ]);
 });
 
-it("sends each message Codex marks as commentary as a note of its own, with no action after it", async () => {
-  const hosted = await opened('codex-acp');
-
-  hosted.input({ kind: 'message', text: '@note First look\n@note Second look\n@say Done', files: [], first: true });
-
-  expect(await ends(hosted, 1)).toEqual([{ text: 'Done' }]);
-  expect(notes(hosted)).toEqual([note('First look'), note('Second look')]);
-});
-
-it.each(['claude-agent-acp', 'grok-build'])('sends the text %s writes before a plan update as a working note', async (kind) => {
-  const hosted = await opened(kind);
-
-  hosted.input({ kind: 'message', text: '@note Let me plan this\n@plan read|fix\n@say Done', files: [], first: true });
-
-  expect(await ends(hosted, 1)).toEqual([{ text: 'Done' }]);
-  expect(notes(hosted)).toEqual([note('Let me plan this')]);
-});
-
-it.each([
-  ['@say Done', 'Done'],
-  ['@think All set', ''],
-])('sends the text Claude writes before a tool its adapter shows no update for as a working note, once %s opens its next message', async (next, answer) => {
+it('ends a turn when Claude answers its prompt without an end notice, as it does for a local command', async () => {
   const hosted = await opened('claude-agent-acp');
 
-  hosted.input({ kind: 'message', text: `@note Let me inspect the task\n@hidden\n${next}`, files: [], first: true });
+  hosted.input({ kind: 'message', text: '@say local output\n@answer', files: [], first: true });
 
-  expect(await ends(hosted, 1)).toEqual([{ text: answer }]);
-  expect(notes(hosted)).toEqual([note('Let me inspect the task')]);
-  expect(JSON.stringify(drafts(hosted))).not.toContain('inspect');
+  expect(await ends(hosted, 1)).toEqual([{ text: 'local output' }]);
 });
 
-it.each(['claude-agent-acp', 'grok-build'])('keeps the text %s writes with no action after it as the answer', async (kind) => {
+it.each(KINDS)('reports a turn the CLI starts by itself like any other and ends it when %s ends it', async (kind) => {
   const hosted = await opened(kind);
 
-  hosted.input({ kind: 'message', text: '@note Looking around\n@say  and done', files: [], first: true });
+  // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
+  hosted.input({ kind: 'message', text: '@later 500 by itself', files: [], first: true });
 
-  expect(await ends(hosted, 1)).toEqual([{ text: 'Looking around and done' }]);
-  expect(notes(hosted)).toEqual([]);
+  expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: 'by itself' }]);
+  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+  const finished = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+  expect(starts.map((turn) => turn.params.turn)).toEqual(finished.map((turn) => turn.params.turn));
 });
 
-it('sends a note finished before House answered the turn start once House answers it', async () => {
-  const hosted = await opened('codex-acp');
-  const admit = startHeld(hosted);
+it.each(KINDS)('reports a turn %s starts by itself when it starts it, before it writes any text', async (kind) => {
+  const hosted = await opened(kind);
 
-  hosted.input({ kind: 'message', text: '@note Reading it\n@tool Read the file\n@ping\n@say Done', files: [], first: true });
+  // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
+  hosted.input({ kind: 'message', text: '@later 500', files: [], first: true });
+
+  expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: '' }]);
+});
+
+it('writes no part operation while nobody watches, and still reports the turn start, its question and its finished parts', async () => {
+  const hosted = await opened();
+
+  hosted.input({ kind: 'message', text: '@say Hello\n@tool Read the file\n@ask', files: [], first: true });
+  const question = await until(() => hosted.interactions[0]);
+  hosted.input({
+    kind: 'answer',
+    interaction_id: (question.body as { interaction_id: string }).interaction_id,
+    response: { outcome: { outcome: 'selected', optionId: 'allow' } },
+  });
+
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect((ended.body as { parts: unknown[] }).parts).toEqual([
+    { type: 'text', text: 'Hello' },
+    { type: 'commands', count: 1 },
+    { type: 'text', text: expect.stringContaining('selected') },
+  ]);
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+  expect(operations(hosted)).toEqual([]);
+});
+
+it('writes the operations so far once when the owner becomes watched mid-turn, then each new one, and none once watching stops', async () => {
+  const hosted = await opened();
+  const release = gated(hosted, 'second');
+  const stopAgain = gated(hosted, 'third');
+  hosted.input({ kind: 'message', text: '@say one\n@tool Read it\n@gate second\n@say two\n@gate third\n@say three', files: [], first: true });
+  const turn = (await until(() => hosted.turns.find((report) => report.path.endsWith('/started')))).params.turn;
+  await settle();
+  expect(operations(hosted)).toEqual([]);
+
+  hosted.watch(true);
+  await until(() => operations(hosted).length === 2);
+  hosted.watch(true);
+  await release();
+  await until(() => operations(hosted).length === 3);
+  hosted.watch(false);
+  await stopAgain();
+
+  expect(await ends(hosted, 1)).toEqual([{ text: 'onetwothree' }]);
+  expect(operations(hosted)).toEqual([
+    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 0, part: { type: 'text', text: 'one' } },
+    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 1, part: { type: 'commands', count: 1 } },
+    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 2, part: { type: 'text', text: 'two' } },
+  ]);
+});
+
+it("writes the running turn's operations so far once on a socket that reopens watched, and none on one that reopens unwatched", async () => {
+  const hosted = await opened();
+  hosted.watch(true);
+  const release = gated(hosted, 'later');
+  hosted.input({ kind: 'message', text: '@say one\n@gate later\n@say  two', files: [], first: true });
+  const turn = (await until(() => operations(hosted)[0])).turn_id;
+
+  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  const unwatched = await until(() => hosted.house.sockets[1]);
+  await settle();
+  expect(operations(hosted, unwatched)).toEqual([]);
+  unwatched.close(1001, 'shutting_down');
+  const watched = await until(() => hosted.house.sockets[2]);
+  hosted.watch(true);
+  await until(() => operations(hosted, watched)[0]);
+  await release();
+
+  expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
+  expect(operations(hosted, watched)).toEqual([
+    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 0, part: { type: 'text', text: 'one' } },
+    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'append', index: 0, text: ' two' },
+  ]);
+});
+
+it('writes no operation of a turn before House answers its start report, then the operations so far', async () => {
+  const hosted = await opened();
+  hosted.watch(true);
+  let admit!: () => void;
+  const admitted = new Promise<void>((resolve) => {
+    admit = resolve;
+  });
+  onTestFinished(admit);
+  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async (request) => {
+    await admitted;
+    hosted.turns.push(request);
+    return { body: {} };
+  });
+
+  const release = gated(hosted, 'rest');
+  hosted.input({ kind: 'message', text: '@say one\n@plan read|fix\n@ping\n@gate rest\n@say  two', files: [], first: true });
   await until(async () => (await hosted.adapterLog()).some((entry) => entry.pinged === true));
-  // Two tenths of a second outlast the Kit taking the CLI's note, so a note not sent by then waits on House's answer.
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  expect(notes(hosted)).toEqual([]);
+  await settle();
+  expect(operations(hosted)).toEqual([]);
   admit();
+  await until(() => operations(hosted).length === 2);
+  await release();
 
-  expect(await until(() => notes(hosted)[0])).toEqual(note('Reading it'));
-  expect(await ends(hosted, 1)).toEqual([{ text: 'Done' }]);
+  expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
+  expect(operations(hosted).map(({ op, index, part, text }) => ({ op, index, part, text }))).toEqual([
+    { op: 'start', index: 0, part: { type: 'text', text: 'one' }, text: undefined },
+    {
+      op: 'start',
+      index: 1,
+      part: {
+        type: 'plan',
+        entries: [
+          { content: 'read', status: 'pending' },
+          { content: 'fix', status: 'pending' },
+        ],
+      },
+      text: undefined,
+    },
+    { op: 'start', index: 2, part: { type: 'text', text: ' two' }, text: undefined },
+  ]);
+});
+
+it('calls restarted before it opens its socket', async () => {
+  const hosted = await hostKit();
+
+  const order = hosted.house.requests.map((request) => request.path);
+  expect(order.indexOf('/kit/restarted')).toBeGreaterThanOrEqual(0);
+  expect(order.indexOf('/kit/restarted')).toBeLessThan(order.indexOf('/kit/stream'));
 });

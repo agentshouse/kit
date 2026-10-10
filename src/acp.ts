@@ -8,7 +8,8 @@ import {
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_VERSION, adapterCommand, withoutProxy, type Job, type Notice } from './clis.ts';
+import { CLIS, KIT_VERSION, adapterCommand, withoutProxy } from './clis.ts';
+import type { Message } from './events.ts';
 
 export interface Adapter {
   child: ChildProcess;
@@ -17,15 +18,12 @@ export interface Adapter {
   exited: Promise<string>;
 }
 
-export const TURN_STARTED = 'kit/turn_started';
-export const TURN_ENDED = 'kit/turn_ended';
-
 export async function startAdapter(
   kind: string,
   cli: string,
   cwd: string,
   app: ClientApp,
-  jobs: (job: Job) => void = () => undefined,
+  events: (message: Message) => void = () => undefined,
   added: Record<string, string> = {},
   signal?: AbortSignal,
 ): Promise<Adapter> {
@@ -59,12 +57,11 @@ export async function startAdapter(
     readable: stream.readable.pipeThrough(
       new TransformStream({
         transform(message, controller) {
-          const notice = message as Notice;
-          const job = CLIS[kind]!.job(notice);
-          if (job !== null) jobs(job);
-          if (!notice.params?.update?.sessionUpdate?.startsWith('async_task_')) controller.enqueue(message);
-          if (CLIS[kind]!.turnStarted(notice)) controller.enqueue({ jsonrpc: '2.0', method: TURN_STARTED });
-          if (CLIS[kind]!.turnEnded(notice)) controller.enqueue({ jsonrpc: '2.0', method: TURN_ENDED });
+          const read = message as Message;
+          events(read);
+          if (read.id !== undefined || (read.method !== 'session/update' && !read.method!.startsWith('_'))) {
+            controller.enqueue(message);
+          }
         },
       }),
     ),
@@ -77,7 +74,8 @@ export async function startAdapter(
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
         elicitation: { form: {} },
-        _meta: { jetbrains: { air: { version: 1, capabilities: ['asyncTasks'] } } },
+        session: { compaction: {}, notices: {} },
+        _meta: { jetbrains: { air: { version: 1, capabilities: CLIS[kind]!.air } } },
       },
       clientInfo: { name: '@agentshouse/kit', version: KIT_VERSION },
     });
@@ -153,6 +151,24 @@ function marked(marker: string): number[] {
       }
     })
     .map(Number);
+}
+
+function commandLine(pid: number): string {
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function processes(marker: string): Set<string> {
+  const pids = marked(marker);
+  const tree = [...pids, ...descendants(pids)];
+  const commands =
+    process.platform === 'darwin'
+      ? new Map(listed('-Aww').map(([pid, , command]) => [pid, command]))
+      : new Map(tree.map((pid) => [pid, commandLine(pid)]));
+  return new Set(tree.flatMap((pid) => (commands.get(pid) ? [`${pid} ${commands.get(pid)}`] : [])));
 }
 
 export function killTree(child: ChildProcess): void {

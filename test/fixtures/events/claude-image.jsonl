@@ -1,0 +1,7 @@
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Working."},"messageId":"msg_1"}}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"notice","severity":"warning","title":"Stop hook feedback","description":"Run the tests first."}}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC","mimeType":"image/png"},"messageId":"msg_2"}}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"session_info_update","title":"A title the CLI made","updatedAt":"2026-10-10T15:00:00.000Z"}}}
+{"method":"session/update","params":{"sessionId":"session-other","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"From another session."},"messageId":"msg_3"}}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done."},"messageId":"msg_4"}}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"usage_update","used":1200,"size":200000,"cost":{"amount":0.5,"currency":"USD"},"_meta":{"_claude/origin":{"kind":"human"}}}}}

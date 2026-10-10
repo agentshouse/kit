@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 import { BINS, RELEASES, placeUserCli } from './cli.ts';
 import { LOCATIONS } from './curl.ts';
 import { settle, until } from './double.ts';
-import { hostKit, lastInput, userBin, type Hosted } from './environment.ts';
+import { hostKit, lastInput, outcome, userBin, type Hosted } from './environment.ts';
 
 const KINDS = Object.keys(BINS);
 const EXECUTABLES: Record<string, string> = { 'codex-acp': 'CODEX_PATH', 'claude-agent-acp': 'CLAUDE_CODE_EXECUTABLE' };
@@ -34,7 +34,7 @@ async function answer(hosted: Hosted, conversation: string, text: string): Promi
       .slice(before)
       .find((turn) => turn.path.endsWith('/ended') && turn.params.conversation === conversation),
   );
-  return (ended.body as { text: string }).text;
+  return (outcome(ended.body) as { text: string }).text;
 }
 
 async function signIn(home: string, kind: string): Promise<void> {

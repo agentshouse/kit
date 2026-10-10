@@ -1,0 +1,5 @@
+{"method":"session/update","params":{"sessionId":"01a12648-2835-7713-bcb7-311b848b4dd3","update":{"sessionUpdate":"session_info_update","_meta":{"codex":{"threadStatus":{"type":"active","activeFlags":[]}}}}}}
+{"method":"session/update","params":{"sessionId":"01a12648-2835-7713-bcb7-311b848b4dd3","update":{"sessionUpdate":"compaction_update","compactionId":"01a12649-95d5-7e00-827d-c820ea49ba3a","status":"in_progress"}}}
+{"method":"session/update","params":{"sessionId":"01a12648-2835-7713-bcb7-311b848b4dd3","update":{"sessionUpdate":"usage_update","used":18219,"size":258400}}}
+{"method":"session/update","params":{"sessionId":"01a12648-2835-7713-bcb7-311b848b4dd3","update":{"sessionUpdate":"compaction_update","compactionId":"01a12649-95d5-7e00-827d-c820ea49ba3a","status":"completed"}}}
+{"method":"session/update","params":{"sessionId":"01a12648-2835-7713-bcb7-311b848b4dd3","update":{"sessionUpdate":"session_info_update","_meta":{"codex":{"threadStatus":{"type":"idle"}}}}}}

@@ -121,6 +121,7 @@ export async function resident(): Promise<void> {
       logged(copies.select());
     },
     frame: (arrived: Frame) => {
+      if (arrived.type === 'watching') conversations.watching(arrived.watching === true);
       if (arrived.type === 'work_available' && arrived.subject === 'agents') logged(agents.refresh());
       if (arrived.type === 'work_available' && arrived.subject === 'local_copy') logged(copies.select());
       if (arrived.type === 'entries') {

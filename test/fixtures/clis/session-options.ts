@@ -7,7 +7,7 @@ export interface CliModel {
 }
 
 type Choice = { value: string; name: string };
-type Build = (models: CliModel[], model: string, effort: string, mode?: string) => SessionConfigOption[];
+type Build = (models: CliModel[], model: string, effort: string, mode?: string, collaboration?: string) => SessionConfigOption[];
 
 export const MODELS: Record<string, CliModel[]> = {
   'codex-acp': [
@@ -43,14 +43,14 @@ function effortOption(id: string, name: string, models: CliModel[], model: strin
 }
 
 export const SESSION_OPTIONS: Record<string, Build> = {
-  'codex-acp': (models, model, effort, mode = 'agent') => [
+  'codex-acp': (models, model, effort, mode = 'agent', collaboration = 'default') => [
     select('mode', 'Mode', 'mode', mode, [
       { value: 'read-only', name: 'Read-only' },
       { value: 'workspace-write', name: 'Workspace access' },
       { value: 'agent', name: 'Auto review' },
       { value: 'agent-full-access', name: 'Full access' },
     ]),
-    select('collaboration_mode', 'Collaboration mode', 'collaboration_mode', 'default', [
+    select('collaboration_mode', 'Collaboration mode', 'collaboration_mode', collaboration, [
       { value: 'default', name: 'Default' },
       { value: 'plan', name: 'Plan' },
     ]),

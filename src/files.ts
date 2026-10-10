@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { House } from './api.ts';
+import { HouseRefusal, retrying, type House } from './api.ts';
 import { relayed } from './relay.ts';
 
 export interface MessageFile {
@@ -39,4 +39,23 @@ export async function placeFiles(
     paths.push(path);
   }
   return paths;
+}
+
+export interface SavedFile {
+  version: string;
+  save: { status: string; failure: string | null };
+  upload?: { url: string; operation: string };
+}
+
+export function uploadBytes(upload: { url: string; operation: string }, bytes: Buffer): Promise<SavedFile> {
+  return retrying(async () => {
+    const answer = await fetch(relayed(upload.url), {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream', 'x-house-byte-operation': upload.operation },
+      body: bytes,
+    });
+    const text = await answer.text();
+    if (!answer.ok) throw new HouseRefusal(upload.url, answer.status, text);
+    return JSON.parse(text) as SavedFile;
+  });
 }

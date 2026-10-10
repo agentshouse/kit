@@ -3,7 +3,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until, type Answer } from './double.ts';
-import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
+import { hostKit, installHeld, lastInput, outcome, type Hosted } from './environment.ts';
 import { alive, filesUnder } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
@@ -22,7 +22,9 @@ it('cancels the running turn on interrupt and keeps the process and session', as
 
   hosted.input({ kind: 'interrupt', turn_id: turn });
 
-  expect(await until(() => ended(hosted)[0])).toMatchObject({ params: { turn }, body: { text: '' } });
+  const interrupted = await until(() => ended(hosted)[0]);
+  expect(interrupted.params.turn).toBe(turn);
+  expect(outcome(interrupted.body)).toEqual({ text: '' });
   hosted.input({ kind: 'interrupt', turn_id: turn });
   await hosted.ack(lastInput());
   hosted.input({ kind: 'message', text: '@say again', files: [], first: false });
@@ -235,7 +237,7 @@ it('reports a question with the CLI request unchanged and passes the answer back
 
   hosted.input({ kind: 'answer', interaction_id, response });
 
-  expect((await until(() => ended(hosted)[0])).body).toEqual({ text: JSON.stringify(response) });
+  expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: JSON.stringify(response) });
   hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'cancelled' } } });
   expect(await hosted.ack(lastInput())).toEqual({});
 });
@@ -255,7 +257,7 @@ it('resumes the session for an answer no process waits on and writes the questio
   hosted.input({ kind: 'answer', provider_session_id: 'session-stored', interaction_id: 'interaction-1', request, response });
 
   expect(await hosted.ack(lastInput())).toEqual({});
-  expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'ok' });
+  expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'ok' });
   expect(started(hosted)).toHaveLength(1);
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: 'session-stored' });
@@ -289,13 +291,13 @@ it.each([0, 2500])(
 
     const abandoned = async () => (await hosted.adapterLog()).filter((entry) => 'abandoned' in entry);
     expect(await until(async () => (await abandoned())[0])).toMatchObject({ abandoned: 'cancelled' });
-    expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'after' });
+    expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'after' });
     const { interaction_id, request } = (await until(() => hosted.interactions[0])).body as { interaction_id: string; request: unknown };
     const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
     hosted.input({ kind: 'answer', interaction_id, request, response });
 
     expect(await hosted.ack(lastInput())).toEqual({});
-    expect((await until(() => ended(hosted)[1])).body).toEqual({ text: 'ok' });
+    expect(outcome((await until(() => ended(hosted)[1])).body)).toEqual({ text: 'ok' });
     await until(() => hosted.idles[3]);
     expect(await abandoned()).toHaveLength(1);
     const prompts = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
@@ -325,7 +327,7 @@ it('passes a secret from the held secret-input request to the CLI and keeps it n
     first: true,
   });
 
-  expect((await until(() => ended(hosted)[0])).body).toEqual({ text: 'secret matched' });
+  expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'secret matched' });
   const question = hosted.interactions[0]!.body as { interaction_id: string; secret: boolean };
   expect(question.secret).toBe(true);
   expect(holds).toEqual([

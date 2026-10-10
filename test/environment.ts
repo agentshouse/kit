@@ -142,11 +142,15 @@ export interface Hosted {
   acks: Received[];
   turns: Received[];
   interactions: Received[];
+  images: Received[];
+  uploads: Received[];
   idles: Received[];
   mcp: Received[];
   tools: Record<string, ToolAnswer>;
   reports: Record<string, unknown>[];
   input(fields: Record<string, unknown>): void;
+  watch(watching: boolean): void;
+  restart(): Promise<void>;
   transcribe(on: boolean): void;
   ack(inputId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
@@ -168,8 +172,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     for (const log of ['adapter.log', 'login.log']) {
       const lines = (await readFile(join(home, log), 'utf8').catch(() => '')).split('\n').filter((line) => line !== '');
       for (const line of lines) {
-        const { pid, spawned, clean } = JSON.parse(line) as { pid?: number; spawned?: number; clean?: number };
-        for (const target of [pid, spawned, clean]) if (target !== undefined) stop(target);
+        const { pid, spawned, clean, server } = JSON.parse(line) as { pid?: number; spawned?: number; clean?: number; server?: number };
+        for (const target of [pid, spawned, clean, server]) if (target !== undefined) stop(target);
       }
     }
   });
@@ -199,6 +203,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const acks: Received[] = [];
   const turns: Received[] = [];
   const interactions: Received[] = [];
+  const images: Received[] = [];
+  const uploads: Received[] = [];
   const idles: Received[] = [];
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
@@ -241,21 +247,41 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     interactions.push(request);
     return { body: {} };
   });
+  house.route('POST', '/kit/conversations/:conversation/turns/:turn/images', (request) => {
+    images.push(request);
+    return {
+      body: {
+        version: `version-${images.length}`,
+        save: { status: 'pending', failure: null },
+        upload: {
+          method: 'POST',
+          operation: `operation-${images.length}`,
+          url: `${house.origin}/bytes/image-${images.length}`,
+          expires_at: '2026-10-10T12:00:00Z',
+        },
+      },
+    };
+  });
+  house.route('POST', '/bytes/:grant', (request) => {
+    uploads.push(request);
+    return { body: { version: `version-${request.params.grant!.slice('image-'.length)}`, save: { status: 'saved', failure: null } } };
+  });
   house.route('POST', '/kit/idle', (request) => {
     idles.push(request);
     return { body: {} };
   });
-  const kit = runKit(['resident'], {
+  const environment = {
     HOUSE_KIT_HOME: home,
     PATH: await fakeBin(home),
     ...LOGIN_SHELL,
     ...GIT_IDENTITY,
     ...(hosting.tls ? { NODE_EXTRA_CA_CERTS: certificate().path } : {}),
     ...hosting.environment,
-  });
+  };
+  const kit = runKit(['resident'], environment);
   const socket = await until(() => house.sockets[0]);
   await until(() => house.requests.find((request) => request.path === '/kit/local-copy/selection'));
-  return {
+  const hosted: Hosted = {
     house,
     home,
     kit,
@@ -264,10 +290,20 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     acks,
     turns,
     interactions,
+    images,
+    uploads,
     idles,
     mcp,
     tools,
     reports,
+    watch: (watching) => house.sockets.at(-1)!.send({ type: 'watching', watching }),
+    restart: async () => {
+      const opened = house.sockets.length;
+      stop(hosted.kit.pid);
+      await hosted.kit.exited;
+      hosted.kit = runKit(['resident'], environment);
+      await until(() => house.sockets.length > opened);
+    },
     transcribe: (on) => {
       transcribe = on;
       house.sockets.at(-1)!.send({ type: 'work_available', subject: 'agents' });
@@ -303,6 +339,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
       }
     },
   };
+  return hosted;
 }
 
 export async function hostMac(hosting: Pick<Hosting, 'transcribe'> = {}): Promise<Hosted> {
@@ -321,6 +358,12 @@ export async function hostMac(hosting: Pick<Hosting, 'transcribe'> = {}): Promis
       NODE_OPTIONS: `--import=${fileURLToPath(new URL('./darwin.ts', import.meta.url))}`,
     },
   });
+}
+
+export function outcome(body: unknown): { text: string } | { failed: string } {
+  const ended = body as { parts: { type: string; text?: string }[]; failed?: string };
+  if (ended.failed !== undefined) return { failed: ended.failed };
+  return { text: ended.parts.flatMap((part) => (part.type === 'text' ? [part.text!] : [])).join('') };
 }
 
 export function lastInput(): string {

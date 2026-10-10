@@ -1,0 +1,13 @@
+{"method":"_x.ai/models/update","params":{"currentModelId":"grok-4.7","availableModels":[{"modelId":"grok-4.7","_meta":{"totalContextTokens":256000}},{"modelId":"grok-4.7-fast","_meta":{"totalContextTokens":2000000}}]}}
+{"method":"_x.ai/queue/changed","params":{"sessionId":"session-recorded","entries":[],"runningPromptId":"prompt-1","runningText":"go","runningKind":"prompt"}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"tool_call","toolCallId":"call-open","title":"run_terminal_command","rawInput":{"command":"npm test","description":"Run the tests"},"_meta":{"x.ai/tool":{"version":1,"name":"run_terminal_command","kind":"execute","namespace":"grok_build","label":"Run Command","read_only":false}}}}}
+{"method":"_x.ai/session_notification","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"model_auto_switched","previous_model_id":"grok-4.7","new_model_id":"grok-4.7-fast"}}}
+{"method":"_x.ai/session_notification","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"session_summary_generated","session_summary":"A title the CLI made"}}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"session_info_update","title":"A title the CLI made"}}}
+{"method":"session/update","params":{"sessionId":"session-other","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"From another session."}}}}
+{"method":"_x.ai/session_notification","params":{"sessionId":"session-other","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-other","stop_reason":"end_turn"}}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done."}}}}
+{"method":"_x.ai/session_notification","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"response_completed","usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":3000,"cache_creation_input_tokens":0,"reasoning_tokens":5}}}}
+{"method":"_x.ai/queue/changed","params":{"sessionId":"session-recorded","entries":[]}}
+{"method":"_x.ai/session_notification","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt-1","stop_reason":"end_turn"}}}
+{"method":"session/update","params":{"sessionId":"session-recorded","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-open","status":"completed","content":[{"type":"content","content":{"type":"text","text":"late"}}]}}}

@@ -353,7 +353,7 @@ it(
   60_000,
 );
 
-it('ends a running transcription on an interrupt and writes the message with its bare path before the interrupt cancels the turn', async () => {
+it('ends a running transcription on an interrupt and writes the message with its bare path once the interrupt has cancelled the turn', async () => {
   const hosted = await transcribing();
   await opened(hosted);
   hosted.input({ kind: 'message', text: '@wait', files: [], first: false });
@@ -374,7 +374,7 @@ it('ends a running transcription on an interrupt and writes the message with its
   await until(() => ended(hosted)[0]);
   const log = await hosted.adapterLog();
   const methods = log.filter((entry) => entry.method === 'session/prompt' || entry.method === 'session/cancel').map((entry) => entry.method);
-  expect(methods).toEqual(['session/prompt', 'session/prompt', 'session/cancel']);
+  expect(methods).toEqual(['session/prompt', 'session/cancel', 'session/prompt']);
 });
 
 it('ends a running transcription on a kill and refuses its message', async () => {
@@ -396,7 +396,8 @@ it('ends a running transcription on a kill and refuses its message', async () =>
 it('transcribes the next audio file after an interrupt whose cancel could not reach the CLI', async () => {
   const hosted = await transcribing();
   await opened(hosted);
-  hosted.input({ kind: 'message', text: '@deaf\n@wait', files: [], first: false });
+  // The deaf CLI exits three seconds in, so the next message goes to the resumed session once its transcription is done.
+  hosted.input({ kind: 'message', text: '@deaf\n@hold 3000\n@exit 0', files: [], first: false });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
   hosted.input({ kind: 'interrupt', turn_id: turn });
   // Half a second lets the first interrupt fail to reach the deaf CLI before the second is sent.

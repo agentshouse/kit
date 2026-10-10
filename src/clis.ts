@@ -1,32 +1,9 @@
-import type { ContentChunk } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { kitHome } from './home.ts';
-
-export interface Notice {
-  method?: string;
-  params?: {
-    runningPromptId?: string;
-    update?: {
-      sessionUpdate?: string;
-      asyncTaskId?: string;
-      state?: string;
-      task_id?: string;
-      task_snapshot?: { task_id?: string };
-      _meta?: { '_claude/origin'?: unknown; codex?: { threadStatus?: { type?: string } } } | null;
-    };
-  };
-}
-
-export interface Job {
-  id: string;
-  running: boolean;
-}
-
-export type Phase = 'note' | 'answer';
 
 export interface Cli {
   bin: string;
@@ -39,14 +16,8 @@ export interface Cli {
   allowHouse(): Promise<void>;
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
-  queues: boolean;
-  turnStarted(notice: Notice): boolean;
-  turnEnded(notice: Notice): boolean;
-  job(notice: Notice): Job | null;
-  phase(chunk: ContentChunk): Phase | null;
+  air: string[];
 }
-
-const RUNNING_JOB = new Set(['running', 'paused']);
 
 async function allowHouseInCodex(): Promise<void> {
   const rules = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'rules');
@@ -55,28 +26,6 @@ async function allowHouseInCodex(): Promise<void> {
 }
 
 async function nothing(): Promise<void> {}
-
-function threadStatus({ method, params }: Notice): string | undefined {
-  if (method !== 'session/update' || params?.update?.sessionUpdate !== 'session_info_update') return undefined;
-  return params.update._meta?.codex?.threadStatus?.type;
-}
-
-function asyncTask({ method, params }: Notice): Job | null {
-  const update = params?.update;
-  if (method !== 'session/update' || update?.asyncTaskId === undefined) return null;
-  if (update.sessionUpdate === 'async_task_spawned') return { id: update.asyncTaskId, running: true };
-  if (update.sessionUpdate === 'async_task_state_update' && !RUNNING_JOB.has(update.state ?? '')) {
-    return { id: update.asyncTaskId, running: false };
-  }
-  return null;
-}
-
-function airPhase({ _meta }: ContentChunk): Phase | null {
-  const phase = (_meta?.jetbrains as { air?: { phase?: unknown } } | undefined)?.air?.phase;
-  if (phase === 'commentary') return 'note';
-  if (phase === 'final_answer') return 'answer';
-  return null;
-}
 
 export const CLIS: Record<string, Cli> = {
   'codex-acp': {
@@ -90,11 +39,7 @@ export const CLIS: Record<string, Cli> = {
     allowHouse: allowHouseInCodex,
     signedIn: { command: ['login', 'status'] },
     login: { args: ['login', '--device-auth'], code: 'show' },
-    queues: false,
-    turnStarted: (notice) => threadStatus(notice) === 'active',
-    turnEnded: (notice) => threadStatus(notice) === 'idle',
-    job: asyncTask,
-    phase: airPhase,
+    air: ['asyncTasks', 'nativeSubagentSessions'],
   },
   'claude-agent-acp': {
     bin: 'claude',
@@ -108,18 +53,18 @@ export const CLIS: Record<string, Cli> = {
     },
     args: [],
     fullAccess: 'bypassPermissions',
-    sessionMeta: { claudeCode: { options: { allowedTools: ['Bash(house:*)'] } } },
+    sessionMeta: {
+      claudeCode: {
+        options: { allowedTools: ['Bash(house:*)'] },
+        emitRawSDKMessages: ['background_tasks_changed', 'session_state_changed', 'task_started', 'task_notification'].map(
+          (subtype) => ({ type: 'system', subtype }),
+        ),
+      },
+    },
     allowHouse: nothing,
     signedIn: { command: ['auth', 'status'] },
     login: { args: ['auth', 'login', '--claudeai'], code: 'collect', rejected: 'Invalid code' },
-    queues: false,
-    turnStarted: () => false,
-    turnEnded: ({ method, params }) =>
-      method === 'session/update' &&
-      params?.update?.sessionUpdate === 'usage_update' &&
-      params.update._meta?.['_claude/origin'] !== undefined,
-    job: asyncTask,
-    phase: () => null,
+    air: ['asyncTasks', 'sessionFailure'],
   },
   'grok-build': {
     bin: 'grok',
@@ -132,16 +77,7 @@ export const CLIS: Record<string, Cli> = {
     allowHouse: nothing,
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },
-    queues: true,
-    turnStarted: ({ method, params }) => method === '_x.ai/queue/changed' && params?.runningPromptId !== undefined,
-    turnEnded: ({ method, params }) =>
-      method === '_x.ai/session_notification' && params?.update?.sessionUpdate === 'turn_completed',
-    job: ({ method, params }) => {
-      if (method === '_x.ai/task_backgrounded') return { id: params!.update!.task_id!, running: true };
-      if (method === '_x.ai/task_completed') return { id: params!.update!.task_snapshot!.task_id!, running: false };
-      return null;
-    },
-    phase: () => null,
+    air: ['asyncTasks'],
   },
 };
 

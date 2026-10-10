@@ -1,5 +1,5 @@
 import { agent, ndJsonStream, RequestError, type AgentContext } from '@agentclientprotocol/sdk';
-import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { MODELS, SESSION_OPTIONS, type CliModel } from './fixtures/clis/session-
 import { recordStart } from './started.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
+const EVENTS = fileURLToPath(new URL('./fixtures/events/', import.meta.url));
 const kind = process.env.ADAPTER_KIND ?? 'codex-acp';
 const home = process.env.HOUSE_KIT_HOME ?? '/tmp';
 const signedIn = () => existsSync(join(home, 'signed-in', kind));
@@ -35,7 +36,8 @@ const models = existsSync(offered) ? (JSON.parse(readFileSync(offered, 'utf8')) 
 let model = models[0]!.id;
 let effort = 'medium';
 let mode: string | undefined;
-const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode);
+let collaboration: string | undefined;
+const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode, collaboration);
 const cancelled = new Map<string, () => void>();
 
 // A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.
@@ -45,6 +47,13 @@ const LAUNCHER = `const job = require('node:child_process').spawn(process.execPa
 
 function spawnJob(): void {
   log(JSON.parse(spawnSync(process.execPath, ['-e', LAUNCHER], { encoding: 'utf8' }).stdout) as Record<string, unknown>);
+}
+
+function serve(): void {
+  // A ten-minute sleep keeps the server alive past any spec that watches it.
+  const server = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' });
+  server.unref();
+  log({ server: server.pid });
 }
 
 function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): void {
@@ -302,7 +311,30 @@ async function directive(
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }
   if (name === 'spawn') spawnJob();
+  if (name === 'serve') serve();
+  if (name === 'emit') {
+    const { method, params } = JSON.parse(argument.split('$SESSION').join(sessionId)) as { method: string; params: unknown };
+    await client.notify(method as 'session/update', params as never);
+  }
+  if (name === 'replay') {
+    await replay(client, sessionId, argument);
+    return 'answered';
+  }
   return undefined;
+}
+
+async function replay(client: AgentContext, sessionId: string, fixture: string): Promise<void> {
+  const lines = readFileSync(join(EVENTS, `${fixture}.jsonl`), 'utf8').trim().split('\n');
+  const recorded = lines.map((line) => JSON.parse(line) as { params: { sessionId?: string } }).find((entry) => entry.params.sessionId)!;
+  for (const line of lines) {
+    const { request, method, params } = JSON.parse(line.split(recorded.params.sessionId!).join(sessionId)) as {
+      request?: true;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    if (request) await client.request(method as 'session/request_permission', params as never).catch(() => undefined);
+    else await client.notify(method as 'session/update', params as never);
+  }
 }
 
 const app = agent({ name: 'adapter-double' })
@@ -327,6 +359,7 @@ const app = agent({ name: 'adapter-double' })
       while (existsSync(probeHold)) await new Promise((resolve) => setTimeout(resolve, 20));
       log({ releasedProbe: models[0]!.id });
     }
+    if (existsSync(join(home, 'start-server'))) serve();
     if (existsSync(join(home, 'hold-open'))) {
       spawnJob();
       await new Promise(() => undefined);
@@ -351,6 +384,7 @@ const app = agent({ name: 'adapter-double' })
     if (option.category === 'model') model = String(params.value);
     if (option.category === 'thought_level') effort = String(params.value);
     if (option.category === 'mode') mode = String(params.value);
+    if (option.category === 'collaboration_mode') collaboration = String(params.value);
     return { configOptions: options() };
   })
   .onNotification('session/cancel', ({ params }) => {
