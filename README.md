@@ -37,10 +37,11 @@ them out; running it again without the flag brings them back.
 Environment's credential in `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is
 set. Pass `--manual` to paste the code by hand on a machine without a browser,
 and `--environment <id>` to reconnect an Environment you already have. It also
-connects your own agent: `house <tool>` run outside an Agent conversation calls
-House as you, until you revoke that connection on Connections. `house help`
-lists the Tools. `kit logout` disconnects this computer and stops House Kit; a
-later `kit login` reconnects the same Environment.
+connects your own agent: outside an Agent conversation, `house <tool>` calls
+House as you and `git` clones and pushes your Apps at `<house>/app/` as you,
+until you revoke that connection on Connections. `house help` lists the Tools.
+`kit logout` disconnects this computer, stops House Kit and ends that Git
+access; a later `kit login` reconnects the same Environment.
 
 `kit resident` keeps the Environment connected, and keeps the Rooms you chose
 for this Environment as Git repositories under `local-copies` in the
@@ -54,6 +55,4 @@ engine and model use about 425 MB in `~/.house-kit`; turning it off deletes them
 
 ## License
 
-MIT
-
-The skills come from [mattpocock/skills](https://github.com/mattpocock/skills); thank you, Matt Pocock.
+MIT. The skills come from [mattpocock/skills](https://github.com/mattpocock/skills); thank you, Matt Pocock.

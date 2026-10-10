@@ -394,7 +394,7 @@ it('gives every call it sends its own request id', async () => {
 it('carries the credential on a Git call to a House App source remote', async () => {
   const hosted = await hostKit();
   const commit = 'a'.repeat(40);
-  const credentials = appRemote(hosted, commit);
+  const credentials = appRemote(hosted.house, commit);
   await opened(hosted);
 
   directed(hosted, `@git ls-remote ${hosted.house.origin}/app/a_app.git`);

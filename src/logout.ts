@@ -1,9 +1,11 @@
 import { HouseRefusal, post } from './api.ts';
+import { forgetAppGit } from './app-git.ts';
 import { forgetEnrolment, readEnrolment } from './home.ts';
 
 export async function logout(): Promise<void> {
   const enrolled = await readEnrolment();
   if (enrolled === null) {
+    await forgetAppGit();
     process.stdout.write('This computer is not connected to House.\n');
     return;
   }
@@ -13,5 +15,6 @@ export async function logout(): Promise<void> {
     if (!(error instanceof HouseRefusal && error.status === 401)) throw error;
   }
   await forgetEnrolment(enrolled);
+  await forgetAppGit();
   process.stdout.write(`Environment ${enrolled.environment} is disconnected; kit login reconnects it.\n`);
 }

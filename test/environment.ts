@@ -379,13 +379,19 @@ function line(text: string): string {
   return `${(Buffer.byteLength(text) + 4).toString(16).padStart(4, '0')}${text}`;
 }
 
-export function appRemote(hosted: Hosted, commit: string): string[] {
+export function appRemote(house: House, commit: string): string[] {
   const credentials: string[] = [];
-  hosted.house.route('GET', '/app/:app/info/refs', (received) => {
+  house.route('GET', '/app/:app/info/refs', (received) => {
     const basic = /^Basic (.+)$/.exec(received.headers.authorization ?? '')?.[1];
     const presented = Buffer.from(basic ?? '', 'base64').toString('utf8');
     credentials.push(presented.slice(presented.indexOf(':') + 1));
-    if (basic === undefined) return { status: 401, bytes: { type: 'text/plain', content: 'authentication required\n' } };
+    if (basic === undefined) {
+      return {
+        status: 401,
+        headers: { 'www-authenticate': 'Basic realm="agents.house App source"' },
+        bytes: { type: 'text/plain', content: 'authentication required\n' },
+      };
+    }
     return {
       bytes: {
         type: 'application/x-git-upload-pack-advertisement',

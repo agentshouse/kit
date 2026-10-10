@@ -16,7 +16,7 @@ it.each([
   const proxy = await startProxy();
   const hosted = await hostKit([{}], { tls: true, environment: proxied ? variables(proxy) : {} });
   const commit = 'a'.repeat(40);
-  const credentials = appRemote(hosted, commit);
+  const credentials = appRemote(hosted.house, commit);
   const transfers = await attachmentDouble(hosted);
   await writeFile(join(hosted.workingDirectory, 'report.txt'), 'quarterly numbers\n');
   await opened(hosted);

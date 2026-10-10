@@ -11,6 +11,7 @@ import { received } from './bridge.ts';
 import { Conversations, type Input } from './conversations.ts';
 import { LocalCopies } from './copies.ts';
 import { agentBase, enrolled, kitHome } from './home.ts';
+import { quoted } from './shell.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
 import { holdStream, type Frame, type Stream } from './stream.ts';
@@ -22,10 +23,6 @@ function report(error: unknown): void {
 
 function logged(work: Promise<unknown>): void {
   work.catch(report);
-}
-
-function quoted(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 async function installShim(): Promise<void> {

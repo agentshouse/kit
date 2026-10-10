@@ -22,6 +22,7 @@ export interface Answer {
   status?: number;
   body?: unknown;
   bytes?: { type: string; content: Buffer | string };
+  headers?: Record<string, string>;
   drop?: boolean;
 }
 
@@ -151,7 +152,7 @@ export async function startHouse(tls?: Certificate): Promise<House> {
         return;
       }
       if (answer.bytes !== undefined) {
-        response.writeHead(answer.status ?? 200, { 'content-type': answer.bytes.type });
+        response.writeHead(answer.status ?? 200, { 'content-type': answer.bytes.type, ...answer.headers });
         response.end(answer.bytes.content);
         return;
       }

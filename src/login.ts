@@ -4,6 +4,7 @@ import { hostname } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { post } from './api.ts';
+import { placeAppGit } from './app-git.ts';
 import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
 
@@ -121,6 +122,7 @@ export async function login(argv: string[]): Promise<void> {
       process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
     }
   };
+  const placeGit = async () => placeAppGit(ownAgent, await readOwnAgent());
 
   if (values.manual) {
     const { start_url } = await post<{ start_url: string }>(house, '/kit', {
@@ -129,6 +131,7 @@ export async function login(argv: string[]): Promise<void> {
     });
     process.stdout.write(`Open this link and confirm: ${start_url}\n`);
     await exchange(await typed('Code: '));
+    await placeGit();
     return;
   }
 
@@ -150,4 +153,5 @@ export async function login(argv: string[]): Promise<void> {
   } finally {
     callback.close();
   }
+  await placeGit();
 }
