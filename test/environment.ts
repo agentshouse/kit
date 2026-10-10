@@ -80,8 +80,8 @@ export const LISTING: Listed[] = [
     inputSchema: { type: 'object', properties: { room_ref: { type: 'string' }, attachments: { type: 'array' } } },
   },
   {
-    name: 'upload_attachment',
-    description: 'Store a file to link from a document or an answer.',
+    name: 'upload',
+    description: 'Store a file of any kind in a Room; link it from a document for your User.',
     inputSchema: { type: 'object', properties: { path: { type: 'string' }, room_ref: { type: 'string' } } },
   },
   {
@@ -103,7 +103,7 @@ export const LISTING: Listed[] = [
   },
 ];
 
-const WRITES = new Set(['edit', 'append_record', 'upload_attachment', 'run_command']);
+const WRITES = new Set(['edit', 'append_record', 'upload', 'run_command']);
 
 export function conversationCredential(conversation: string): string {
   return `ahc_${conversation}`;
@@ -456,21 +456,26 @@ export async function attachmentDouble(
 ): Promise<{ operation: unknown; authorization: unknown; bytes: Buffer }[]> {
   const transfers: { operation: unknown; authorization: unknown; bytes: Buffer }[] = [];
   let declared = 0;
-  hosted.house.route('POST', '/kit/attachments/upload', () => {
+  hosted.tools.upload = () => {
     declared++;
     return {
-      body: {
-        attachment: `at_${declared}`,
-        save: { status: 'pending' },
-        upload: {
-          method: 'POST',
-          operation: `operation-${declared}`,
-          url: `${hosted.house.origin}/bytes/upload-${declared}`,
-          expires_at: '2026-10-03T12:00:00Z',
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            attachment: `at_${declared}`,
+            save: { status: 'pending' },
+            upload: {
+              method: 'POST',
+              operation: `operation-${declared}`,
+              url: `${hosted.house.origin}/bytes/upload-${declared}`,
+              expires_at: '2026-10-03T12:00:00Z',
+            },
+          }),
         },
-      },
+      ],
     };
-  });
+  };
   hosted.house.route('POST', '/bytes/:grant', (received) => {
     transfers.push({
       operation: received.headers['x-house-byte-operation'],

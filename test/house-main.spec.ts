@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { chmod, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -51,6 +52,42 @@ it("sends a Tool call outside a conversation to House's root under the User's ow
   const [call] = house.requests;
   expect(call).toMatchObject({ path: '/', headers: { authorization: 'Bearer ahp_own' } });
   expect((call!.body as McpCall).params).toMatchObject({ name: 'search', arguments: { query: 'invoice' } });
+});
+
+it("uploads a local file outside a conversation through the upload Tool and posts its bytes to the answered grant", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const content = Buffer.from([0, 1, 2, 255]);
+  const path = join(home, 'cover.bin');
+  await writeFile(path, content);
+  const posted: { operation: unknown; authorization: unknown; bytes: Buffer }[] = [];
+  house.route('POST', '/', ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    const text = JSON.stringify({
+      attachment: 'at_1.a',
+      upload: { method: 'POST', operation: 'operation-1', url: `${house.origin}/bytes/grant-1`, expires_at: '2026-10-10T12:00:00Z' },
+    });
+    return { body: { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text }] } } };
+  });
+  house.route('POST', '/bytes/:grant', (received) => {
+    posted.push({
+      operation: received.headers['x-house-byte-operation'],
+      authorization: received.headers.authorization,
+      bytes: received.body as Buffer,
+    });
+    return { body: { attachment: 'at_1.a' } };
+  });
+
+  const ran = await runHouse(home, ['upload', JSON.stringify({ path, room_ref: 'r_room' })]);
+
+  expect(ran).toEqual({ status: 0, stdout: '{"attachment":"at_1.a"}\n', stderr: '' });
+  const [call] = house.requests;
+  expect(call).toMatchObject({ path: '/', headers: { authorization: 'Bearer ahp_own' } });
+  expect((call!.body as McpCall).params).toMatchObject({
+    name: 'upload',
+    arguments: { room_ref: 'r_room', name: 'cover.bin', bytes: 4, sha256: createHash('sha256').update(content).digest('hex') },
+  });
+  expect(posted).toEqual([{ operation: 'operation-1', authorization: undefined, bytes: content }]);
 });
 
 it("lists the Tools House lists to the User's own agent as its help, and never sends the Kit credential", async () => {

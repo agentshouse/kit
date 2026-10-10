@@ -20,7 +20,7 @@ function refused(code: string): ToolResult {
 }
 
 const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
-const FILE_LINE = 'To give the User a file or a page, upload it with `house upload_attachment` and link it; never start a server.';
+const FILE_LINE = 'To give the User a file or a page, upload it with `house upload` and link it; never start a server.';
 const READ_LINE = 'Before working in a Room, read `/rooms/private/rooms/<handle>/AGENTS.md`.';
 
 function blockOf(prompt: Prompt): string[] {

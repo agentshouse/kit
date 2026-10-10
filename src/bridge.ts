@@ -19,7 +19,7 @@ import {
 } from './copies.ts';
 import { kitHome, readEnrolment } from './home.ts';
 import { callHouse, mcpBody, rpc, UNREACHABLE, type Forwarded, type Message } from './mcp.ts';
-import { operationId, uuidOf } from './operation.ts';
+import { operationId } from './operation.ts';
 import { refusalOf, retryable, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
 import { relayed } from './relay.ts';
@@ -36,7 +36,6 @@ export interface Bridge {
 }
 
 const MCP_REQUEST_BYTES = 4 * 1024 * 1024;
-const ATTACHMENTS = '/kit/attachments/upload';
 
 export async function received(request: IncomingMessage): Promise<string> {
   let text = '';
@@ -90,12 +89,6 @@ function resendAfter(forwarded: Forwarded | null, attempt: number): number | nul
   if (forwarded.status !== 200) return retryable(forwarded.text) === false ? null : retryDelay(attempt);
   const seconds = pendingSeconds(forwarded);
   return seconds === null ? null : seconds * 1000;
-}
-
-function versioned(conversationId: string, text: string): string {
-  const file = JSON.parse(text) as { room_ref?: string; name: string; sha256: string };
-  const identity = JSON.stringify([conversationId, file.room_ref ?? null, file.name, file.sha256]);
-  return JSON.stringify({ ...file, version: uuidOf(createHash('sha256').update(identity).digest(), 8) });
 }
 
 function editAnswer(forwarded: Forwarded): Submitted {
@@ -192,19 +185,10 @@ export async function openBridge(
     }
   };
 
-  const forward = async (path: string, text: string): Promise<Forwarded> => {
-    if (path === '/') {
-      const message = JSON.parse(text) as Message;
-      const tool = message.method === 'tools/call' ? String(message.params.name) : null;
-      return send(message, tool !== null && (await writes(tool)) ? operationId() : null);
-    }
-    const answer = await fetch(relayed(new URL(path, origin)), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
-      body: versioned(conversationId, text),
-      signal: closed.signal,
-    });
-    return { status: answer.status, text: await answer.text() };
+  const forward = async (text: string): Promise<Forwarded> => {
+    const message = JSON.parse(text) as Message;
+    const tool = message.method === 'tools/call' ? String(message.params.name) : null;
+    return send(message, tool !== null && (await writes(tool)) ? operationId() : null);
   };
 
   const caller: Caller = {
@@ -233,7 +217,7 @@ export async function openBridge(
       await copies.observed(JSON.parse(text) as Observed);
       return { status: 200, text: '{}' };
     }
-    return path === '/' || path === ATTACHMENTS ? forward(path, text) : { status: 404, text: '' };
+    return path === '/' ? forward(text) : { status: 404, text: '' };
   };
 
   const sockets = join(kitHome(), 'bridges');
@@ -282,10 +266,7 @@ export async function openBridge(
       GIT_CONFIG_VALUE_0: app,
     },
     tool: async (name, args) => {
-      const forwarded = await forward(
-        '/',
-        JSON.stringify(call(name, args)),
-      );
+      const forwarded = await forward(JSON.stringify(call(name, args)));
       if (forwarded.status !== 200) throw new Error(`House refused ${name} with ${forwarded.status}: ${forwarded.text}`);
       const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
       if (answer.error !== undefined) throw new Error(`House refused ${name}: ${answer.error.message}`);

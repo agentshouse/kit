@@ -7,6 +7,8 @@ import type { ToolResult } from './bridge.ts';
 import { kitHome, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
+import { relayed } from './relay.ts';
+import { parse } from 'yaml';
 
 interface Tool {
   name: string;
@@ -106,11 +108,23 @@ async function localFile(path: string): Promise<Buffer> {
   }
 }
 
+async function sent(url: string, bytes: Buffer, operation: string): Promise<string> {
+  const headers = { 'content-type': 'application/octet-stream', 'x-house-byte-operation': operation };
+  if (socketPath !== undefined) return bridged(url, bytes, headers);
+  setGlobalProxyFromEnv();
+  const answer = await fetch(relayed(url), { method: 'POST', headers, body: bytes }).catch(() => {
+    throw new Error(UNREACHABLE);
+  });
+  const text = await answer.text();
+  if (answer.status === 200) return text;
+  throw new Error(refused(url, answer.status, text));
+}
+
 async function upload(path: unknown, roomRef: unknown, missing: string): Promise<string> {
   if (typeof path !== 'string' || path === '') throw new Error(missing);
   const bytes = await localFile(path);
-  const declared = JSON.parse(
-    await bridged('/kit/attachments/upload', {
+  const declared = parse(
+    await called('upload', {
       ...(roomRef === undefined ? {} : { room_ref: roomRef }),
       name: basename(path),
       bytes: bytes.length,
@@ -118,12 +132,7 @@ async function upload(path: unknown, roomRef: unknown, missing: string): Promise
     }),
   ) as Declared;
   if (declared.upload === undefined) return declared.attachment;
-  const saved = JSON.parse(
-    await bridged(declared.upload.url, bytes, {
-      'content-type': 'application/octet-stream',
-      'x-house-byte-operation': declared.upload.operation,
-    }),
-  ) as Saved;
+  const saved = JSON.parse(await sent(declared.upload.url, bytes, declared.upload.operation)) as Saved;
   if (saved.upload_failure !== undefined) throw new Error(`${path} was not saved: ${saved.upload_failure}; call again later`);
   return saved.attachment;
 }
@@ -163,17 +172,21 @@ async function house([verb, argument]: string[]): Promise<string> {
     return [...(tool.description === undefined ? [] : [tool.description]), JSON.stringify(tool.inputSchema)].join('\n');
   }
   const args = argumentsOf(argument);
-  if (socketPath !== undefined && verb === 'upload_attachment') {
-    return JSON.stringify({ attachment: await upload(args.path, args.room_ref, 'upload_attachment needs "path", a local file') });
+  if (verb === 'upload') {
+    return JSON.stringify({ attachment: await upload(args.path, args.room_ref, 'upload needs "path", a local file') });
   }
-  if (socketPath !== undefined && verb === 'append_record' && Array.isArray(args.attachments)) {
+  if (verb === 'append_record' && Array.isArray(args.attachments)) {
     const attachments: string[] = [];
     for (const path of args.attachments) {
       attachments.push(await upload(path, args.room_ref, 'each attachments entry is the path of a local file'));
     }
     args.attachments = attachments;
   }
-  const result = await mcp<ToolResult>('tools/call', { name: verb, arguments: args });
+  return called(verb, args);
+}
+
+async function called(name: string, args: Record<string, unknown>): Promise<string> {
+  const result = await mcp<ToolResult>('tools/call', { name, arguments: args });
   const text = result.content.map((content) => content.text).join('\n');
   if (result.isError === true) throw new Error(text.replace(/\n+$/, ''));
   return text;

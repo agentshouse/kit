@@ -23,7 +23,7 @@ it.each([
 
   directed(
     hosted,
-    `@git ls-remote ${hosted.house.origin}/app/a_app.git\n@house upload_attachment {"path":"report.txt","room_ref":"r_room"}`,
+    `@git ls-remote ${hosted.house.origin}/app/a_app.git\n@house upload {"path":"report.txt","room_ref":"r_room"}`,
   );
   const [git, upload] = await runs(hosted, 2);
   hosted.socket.close(1012, 'restart');
