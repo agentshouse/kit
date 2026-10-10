@@ -312,39 +312,46 @@ it(
   60_000,
 );
 
-it("makes a second conversation's audio wait for the first conversation's transcription", async () => {
-  const hosted = await transcribing();
-  await opened(hosted, 'conversation-1');
-  await opened(hosted, 'conversation-2');
-  const files = sent(hosted, [
-    { name: 'first.wav', media_type: 'audio/wav', content: speech(20) },
-    { name: 'second.wav', media_type: 'audio/wav', content: speech(20) },
-  ]);
-  const seen = new Set<number>();
-  let most = 0;
-  // Sampling every twenty milliseconds sees each engine that runs, however briefly.
-  const sampling = setInterval(() => {
-    const running = engines(hosted);
-    for (const pid of running) seen.add(pid);
-    most = Math.max(most, running.length);
-  }, 20);
+it(
+  "makes a second conversation's audio wait for the first conversation's transcription",
+  async () => {
+    const hosted = await transcribing();
+    await opened(hosted, 'conversation-1');
+    await opened(hosted, 'conversation-2');
+    const files = sent(hosted, [
+      { name: 'first.wav', media_type: 'audio/wav', content: speech(20) },
+      { name: 'second.wav', media_type: 'audio/wav', content: speech(20) },
+    ]);
+    const seen = new Set<number>();
+    let most = 0;
+    // Sampling every twenty milliseconds sees each engine that runs, however briefly.
+    const sampling = setInterval(() => {
+      const running = engines(hosted);
+      for (const pid of running) seen.add(pid);
+      most = Math.max(most, running.length);
+    }, 20);
 
-  hosted.input({ kind: 'message', conversation_id: 'conversation-1', text: 'first', files: [files.described[0]], first: false });
-  const first = lastInput();
-  hosted.input({ kind: 'message', conversation_id: 'conversation-2', text: 'second', files: [files.described[1]], first: false });
-  const second = lastInput();
+    hosted.input({ kind: 'message', conversation_id: 'conversation-1', text: 'first', files: [files.described[0]], first: false });
+    const first = lastInput();
+    // Thirty seconds cover the first engine starting on a loaded runner.
+    await until(() => engines(hosted)[0], 30_000);
+    hosted.input({ kind: 'message', conversation_id: 'conversation-2', text: 'second', files: [files.described[1]], first: false });
+    const second = lastInput();
 
-  try {
-    const acked = (input: string) => hosted.acks.some((ack) => ack.params.input === input);
-    // A minute covers transcribing both samples one after the other.
-    await until(() => acked(first) && acked(second), 60_000);
-  } finally {
-    clearInterval(sampling);
-  }
-  expect(most).toBe(1);
-  expect(seen.size).toBe(2);
-  expect(await prompted(hosted, 1)).toEqual([expect.any(String), expect.any(String), expect.stringMatching(ENGLISH)]);
-});
+    try {
+      const acked = (input: string) => hosted.acks.some((ack) => ack.params.input === input);
+      // A minute covers transcribing both samples one after the other.
+      await until(() => acked(first) && acked(second), 60_000);
+    } finally {
+      clearInterval(sampling);
+    }
+    expect(most).toBe(1);
+    expect(seen.size).toBe(2);
+    expect(await prompted(hosted, 1)).toEqual([expect.any(String), expect.any(String), expect.stringMatching(ENGLISH)]);
+  },
+  // A minute covers two deliberate twenty-second samples on the loaded two-vCPU runner.
+  60_000,
+);
 
 it('ends a running transcription on an interrupt and writes the message with its bare path before the interrupt cancels the turn', async () => {
   const hosted = await transcribing();
