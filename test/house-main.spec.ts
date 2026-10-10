@@ -129,6 +129,21 @@ it("refuses a Tool call naming kit login once kit logout has ended the User's ow
   expect(ran.stderr).toMatch(/^house: [^\n]*kit login[^\n]*\n$/);
 });
 
+it("says the own agent's connection stays when House had already disconnected the computer, and still stops acting as the User", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  house.route('POST', '/kit/logout', () => ({ status: 401, body: { error: { code: 'kit_credential_rejected' } } }));
+
+  const logout = runKit(['logout'], { HOUSE_KIT_HOME: home });
+
+  expect(await logout.exited).toBe(0);
+  expect(logout.stdout()).toBe(
+    "Environment environment-one is disconnected; kit login reconnects it.\nHouse had already disconnected this computer, so its own agent's connection stays until you revoke it on Connections.\n",
+  );
+  await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await runHouse(home, ['search', '{"query":"invoice"}'])).stderr).toMatch(/kit login/);
+});
+
 it("never falls back to the User's own agent's connection when a conversation's bridge is gone", async () => {
   const house = await startHouse();
   const home = await connected(house, true);
