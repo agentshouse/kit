@@ -1,14 +1,14 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { chmod, writeFile } from 'node:fs/promises';
+import { access, chmod, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
 import { helpLine, LISTING, shelled, type McpCall } from './environment.ts';
-import { temporaryHome } from './kit.ts';
+import { runKit, temporaryHome } from './kit.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 
@@ -111,6 +111,22 @@ it("refuses a Tool call in one line naming kit login while Kit holds no connecti
   expect(ran.stdout).toBe('');
   expect(ran.stderr).toMatch(/^house: [^\n]*kit login[^\n]*\n$/);
   expect(house.requests).toEqual([]);
+});
+
+it("refuses a Tool call naming kit login once kit logout has ended the User's own agent's connection with the Kit's", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  house.route('POST', '/kit/logout', () => ({ body: {} }));
+
+  expect(await runKit(['logout'], { HOUSE_KIT_HOME: home }).exited).toBe(0);
+  const ran = await runHouse(home, ['search', '{"query":"invoice"}']);
+
+  expect(house.requests.map(({ path, headers, body }) => ({ path, authorization: headers.authorization, body }))).toEqual([
+    { path: '/kit/logout', authorization: 'Bearer ahk_kit', body: {} },
+  ]);
+  await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(ran.status).toBe(1);
+  expect(ran.stderr).toMatch(/^house: [^\n]*kit login[^\n]*\n$/);
 });
 
 it("never falls back to the User's own agent's connection when a conversation's bridge is gone", async () => {

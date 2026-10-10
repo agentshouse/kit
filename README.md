@@ -40,8 +40,9 @@ credential in `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is set. Pass
 connects your own agent: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you,
 until you revoke that connection on Connections. `house help` lists the Tools.
-`kit logout` disconnects this computer, stops House Kit and ends that Git
-access; a later `kit login` reconnects the same Environment.
+`kit logout` disconnects this computer, stops House Kit and ends your own
+agent's connection, so `house` and `git` no longer act as you here; a later
+`kit login` reconnects the same Environment.
 
 `kit resident` keeps the Environment connected, and keeps the Rooms you chose
 for this Environment as Git repositories under `local-copies` in the
