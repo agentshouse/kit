@@ -414,7 +414,7 @@ export class Conversations {
     conversation.opening = bridge;
     try {
       await unlessAborted(createHowWeWork(bridge), conversation.killed.signal);
-      await CLIS[route.kind]!.allowHouse();
+      await CLIS[route.kind]!.allowHouse(bridge.env.PATH!);
       conversation.busy.clear();
       const adapter = await startAdapter(
         route.kind,
@@ -427,7 +427,7 @@ export class Conversations {
       void adapter.exited.then(() => bridge.close());
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
-      const _meta = CLIS[route.kind]!.sessionMeta;
+      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!);
       const opened =
         sessionId === null
           ? await agent.request('session/new', { cwd, mcpServers: [], _meta })

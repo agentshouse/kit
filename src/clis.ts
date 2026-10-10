@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { constants, readFileSync } from 'node:fs';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { kitHome } from './home.ts';
 
 export interface Cli {
@@ -12,30 +12,56 @@ export interface Cli {
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
   fullAccess: string | null;
-  sessionMeta: Record<string, unknown>;
-  allowHouse(): Promise<void>;
+  sessionMeta(bridge: string): Record<string, unknown>;
+  allowHouse(path: string): Promise<void>;
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
   air: string[];
 }
 
-async function allowHouseInCodex(): Promise<void> {
+async function executable(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function allowHouseInCodex(path: string): Promise<void> {
+  const candidates = [...new Set(path.split(delimiter).filter((directory) => isAbsolute(directory)))].map((directory) =>
+    join(directory, 'house'),
+  );
+  const houses: string[] = [];
+  for (const candidate of candidates) if (await executable(candidate)) houses.push(candidate);
   const rules = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'rules');
   await mkdir(rules, { recursive: true });
-  await writeFile(join(rules, 'house.rules'), 'prefix_rule(pattern = ["house"], decision = "allow")\n');
+  await writeFile(
+    join(rules, 'house.rules'),
+    `prefix_rule(pattern = ["house"], decision = "allow")\nhost_executable(name = "house", paths = ${JSON.stringify(houses)})\n`,
+  );
 }
 
 async function nothing(): Promise<void> {}
+
+function bridgeInClaudeSandbox(bridge: string): Record<string, unknown> {
+  return process.platform === 'darwin' ? { allowUnixSockets: [bridge] } : { allowAllUnixSockets: true };
+}
 
 export const CLIS: Record<string, Cli> = {
   'codex-acp': {
     bin: 'codex',
     minimum: '0.159.1',
     install: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
-    adapter: { package: '@agentclientprotocol/codex-acp', bin: 'codex-acp', executable: 'CODEX_PATH', env: {} },
+    adapter: {
+      package: '@agentclientprotocol/codex-acp',
+      bin: 'codex-acp',
+      executable: 'CODEX_PATH',
+      env: { CODEX_CONFIG: JSON.stringify({ features: { shell_zsh_fork: true } }) },
+    },
     args: [],
     fullAccess: 'agent-full-access',
-    sessionMeta: {},
+    sessionMeta: () => ({}),
     allowHouse: allowHouseInCodex,
     signedIn: { command: ['login', 'status'] },
     login: { args: ['login', '--device-auth'], code: 'show' },
@@ -53,14 +79,17 @@ export const CLIS: Record<string, Cli> = {
     },
     args: [],
     fullAccess: 'bypassPermissions',
-    sessionMeta: {
+    sessionMeta: (bridge) => ({
       claudeCode: {
-        options: { allowedTools: ['Bash(house:*)'] },
+        options: {
+          allowedTools: ['Bash(house:*)'],
+          settings: { sandbox: { network: bridgeInClaudeSandbox(bridge) } },
+        },
         emitRawSDKMessages: ['background_tasks_changed', 'session_state_changed', 'task_started', 'task_notification'].map(
           (subtype) => ({ type: 'system', subtype }),
         ),
       },
-    },
+    }),
     allowHouse: nothing,
     signedIn: { command: ['auth', 'status'] },
     login: { args: ['auth', 'login', '--claudeai'], code: 'collect', rejected: 'Invalid code' },
@@ -73,7 +102,7 @@ export const CLIS: Record<string, Cli> = {
     adapter: null,
     args: ['agent', '--always-approve', '--no-leader', 'stdio'],
     fullAccess: null,
-    sessionMeta: {},
+    sessionMeta: () => ({}),
     allowHouse: nothing,
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },

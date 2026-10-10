@@ -124,7 +124,7 @@ it("never falls back to the User's own agent's connection when a conversation's 
   expect(house.requests).toEqual([]);
 });
 
-it("tells an Agent whose CLI sandbox refuses the bridge to run house as a command of its own", async () => {
+it('tells an Agent whose CLI sandbox refuses the bridge to run house directly', async () => {
   const house = await startHouse();
   const home = await connected(house, true);
   const socket = join(home, 'sandboxed.sock');
@@ -138,7 +138,7 @@ it("tells an Agent whose CLI sandbox refuses the bridge to run house as a comman
 
   expect(ran.status).toBe(1);
   expect(ran.stderr).toBe(
-    "house: your CLI's sandbox kept house from House; run house as a command of its own, with no pipe, chain or redirect\n",
+    "house: your CLI's sandbox kept house from House; run house directly, not through another program\n",
   );
   expect(house.requests).toEqual([]);
 });

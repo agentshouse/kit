@@ -3,7 +3,7 @@ import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until } from './double.ts';
-import { hostKit, installHeld, lastInput, outcome, type Hosted } from './environment.ts';
+import { hostKit, installHeld, lastInput, outcome, userBin, type Hosted } from './environment.ts';
 import { placeHostKey, temporaryHome } from './kit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -27,23 +27,31 @@ it('opens the provider session in the launch directory with the route settings a
   expect(hosted.socket.frames).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
 });
 
-it("opens the session in the mode the route names, and Codex runs `house` outside its sandbox by its own rule", async () => {
-  const hosted = await hostKit([{ mode: 'read-only', effort: null }]);
+it("opens the session in the mode the route names, and Codex runs each `house` on the conversation's PATH outside its sandbox whenever its shell starts it", async () => {
+  const hosted = await hostKit([{ mode: 'read-only', effort: null }], {
+    prepare: async (home) => {
+      await writeFile(join(userBin(home), 'house'), '#!/bin/sh\n', { mode: 0o755 });
+      await writeFile(join(home, '.profile'), `PATH="${userBin(home)}:/usr/bin:/bin"\n`);
+    },
+  });
 
   hosted.input({ kind: 'open' });
 
   await hosted.ack(lastInput());
-  const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
-  expect(settings.map((entry) => entry.params)).toEqual([
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'read-only' }),
     expect.objectContaining({ configId: 'model', value: 'route-model' }),
   ]);
+  expect(log.find((entry) => entry.method === 'initialize')!.env).toMatchObject({
+    CODEX_CONFIG: '{"features":{"shell_zsh_fork":true}}',
+  });
   expect(await readFile(join(hosted.home, '.codex', 'rules', 'house.rules'), 'utf8')).toBe(
-    'prefix_rule(pattern = ["house"], decision = "allow")\n',
+    `prefix_rule(pattern = ["house"], decision = "allow")\nhost_executable(name = "house", paths = ["${join(userBin(hosted.home), 'house')}"])\n`,
   );
 });
 
-it('opens a Claude Code session in bypass permissions with `house` allowed in every mode', async () => {
+it('opens a Claude Code session in bypass permissions with `house` allowed in every mode and its sandbox open to unix sockets', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp', model: 'default', effort: null }]);
 
   hosted.input({ kind: 'open' });
@@ -52,7 +60,14 @@ it('opens a Claude Code session in bypass permissions with `house` allowed in ev
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'initialize')!.env).toMatchObject({ IS_SANDBOX: '1' });
   expect(log.find((entry) => entry.method === 'session/new')!.params).toMatchObject({
-    _meta: { claudeCode: { options: { allowedTools: ['Bash(house:*)'] } } },
+    _meta: {
+      claudeCode: {
+        options: {
+          allowedTools: ['Bash(house:*)'],
+          settings: { sandbox: { network: { allowAllUnixSockets: true } } },
+        },
+      },
+    },
   });
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'bypassPermissions' }),

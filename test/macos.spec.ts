@@ -25,3 +25,18 @@ it('kills the process and every process it started on a Mac', async () => {
   expect(alive(spawned.pid as number)).toBe(false);
   await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
 });
+
+it("opens a Claude Code session whose sandbox lets through its conversation's bridge socket alone on a Mac", async () => {
+  const hosted = await hostMac({}, [{ kind: 'claude-agent-acp', model: 'default', effort: null }]);
+
+  hosted.input({ kind: 'open' });
+
+  await hosted.ack(lastInput());
+  const log = await hosted.adapterLog();
+  const bridge = log
+    .map((entry) => (entry.env as Record<string, string> | undefined)?.HOUSE_BRIDGE)
+    .find((socket) => socket !== undefined);
+  expect(log.find((entry) => entry.method === 'session/new')!.params).toMatchObject({
+    _meta: { claudeCode: { options: { settings: { sandbox: { network: { allowUnixSockets: [bridge] } } } } } },
+  });
+});

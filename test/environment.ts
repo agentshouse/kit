@@ -342,14 +342,14 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   return hosted;
 }
 
-export async function hostMac(hosting: Pick<Hosting, 'transcribe'> = {}): Promise<Hosted> {
+export async function hostMac(hosting: Pick<Hosting, 'transcribe'> = {}, routes: RouteOverrides[] = [{}]): Promise<Hosted> {
   const home = await temporaryHome();
   const bin = join(home, 'macos');
   await mkdir(bin);
   await writeFile(join(bin, 'ps'), `#!/bin/sh\nexec env -u NODE_OPTIONS ${process.execPath} ${fileURLToPath(new URL('./ps.ts', import.meta.url))} "$@"\n`);
   await writeFile(join(bin, 'sw_vers'), '#!/bin/sh\n[ "$*" = -productVersion ] && echo 27.0.1\n');
   await Promise.all(['ps', 'sw_vers'].map((tool) => chmod(join(bin, tool), 0o755)));
-  return hostKit([{}], {
+  return hostKit(routes, {
     ...hosting,
     home,
     skills: false,
