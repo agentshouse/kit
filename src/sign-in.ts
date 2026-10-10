@@ -9,6 +9,7 @@ import { holdSecretInput, type Step } from './secret-input.ts';
 export interface SignIn {
   input_id: string;
   cli: string;
+  ends_in: number;
 }
 
 const ESCAPE = /\u001b\[[\d;]*m/g;
@@ -21,6 +22,10 @@ function causeOf(error: unknown): string {
 
 function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
+}
+
+function endOf(signal: AbortSignal): Promise<true> {
+  return new Promise((resolve) => signal.addEventListener('abort', () => resolve(true), { once: true }));
 }
 
 export class SignIns {
@@ -43,10 +48,7 @@ export class SignIns {
     if (this.running.has(input.input_id)) return;
     this.running.add(input.input_id);
     this.changed();
-    this.login(input)
-      .then(() => this.agents.recheck(input.cli))
-      .then(() => this.house.deliver(`/kit/inputs/${input.input_id}/ack`, {}))
-      .then(() => this.agents.reread(input.cli))
+    this.signIn(input)
       .catch(logged)
       .finally(() => {
         this.running.delete(input.input_id);
@@ -54,14 +56,32 @@ export class SignIns {
       });
   }
 
-  private async login(input: SignIn): Promise<void> {
+  private async signIn(input: SignIn): Promise<void> {
+    const ending = new AbortController();
+    // House stops waiting for a sign-in ten minutes after it wrote it and sends the seconds left, so its install and login end with the page.
+    const timer = setTimeout(() => ending.abort(), input.ends_in * 1000);
+    const ended = await Promise.race([this.signedIn(input, ending.signal), endOf(ending.signal)]);
+    clearTimeout(timer);
+    if (ended) process.stderr.write(`kit: the ${input.cli} sign-in reached the end House set for it\n`);
+    await this.house.deliver(`/kit/inputs/${input.input_id}/ack`, {});
+    if (!ended) await this.agents.reread(input.cli);
+  }
+
+  private async signedIn(input: SignIn, signal: AbortSignal): Promise<false> {
+    await this.login(input, signal);
+    if (!signal.aborted) await this.agents.recheck(input.cli, signal);
+    return false;
+  }
+
+  private async login(input: SignIn, signal: AbortSignal): Promise<void> {
     let cli: string;
     try {
-      cli = await this.agents.located(input.cli);
+      cli = await this.agents.located(input.cli, signal);
     } catch (error) {
-      process.stderr.write(`kit: the ${input.cli} sign-in failed: ${causeOf(error)}\n`);
+      if (!signal.aborted) process.stderr.write(`kit: the ${input.cli} sign-in failed: ${causeOf(error)}\n`);
       return;
     }
+    if (signal.aborted) return;
     const login = CLIS[input.cli]!.login;
     const child = spawn(cli, login.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -69,6 +89,8 @@ export class SignIns {
       env: withoutProxy(),
     });
     const running = () => child.exitCode === null && child.signalCode === null;
+    const stop = () => killTree(child);
+    signal.addEventListener('abort', stop, { once: true });
     let link: string | undefined;
     let code: string | undefined;
     let last = '';
@@ -98,10 +120,11 @@ export class SignIns {
     for (const output of [child.stdout, child.stderr]) createInterface({ input: output }).on('line', read);
     const failed = await new Promise<string | null>((resolve) => {
       child.on('error', (error) => resolve(error.message));
-      child.on('close', (status, signal) =>
-        resolve(status === 0 ? null : `exited with ${status ?? signal}${last ? `: ${last}` : ''}`),
+      child.on('close', (status, killed) =>
+        resolve(status === 0 ? null : `exited with ${status ?? killed}${last ? `: ${last}` : ''}`),
       );
     });
-    if (failed !== null) process.stderr.write(`kit: the ${input.cli} sign-in failed: ${failed}\n`);
+    signal.removeEventListener('abort', stop);
+    if (failed !== null && !signal.aborted) process.stderr.write(`kit: the ${input.cli} sign-in failed: ${failed}\n`);
   }
 }

@@ -49,7 +49,7 @@ it('starts every process, a CLI install, a sign-in and a Conversation process, w
   const proxy = await startProxy();
   const hosted = await hostKit([{}], { tls: true, environment: variables(proxy) });
   await rm(await installHeld(hosted));
-  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'codex-acp' });
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 600 });
 
   await opened(hosted, 'conversation-1', 'agent-2');
 

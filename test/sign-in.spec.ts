@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { settle, until } from './double.ts';
+import { CLIS } from '../src/clis.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
 import { alive, filesUnder, temporaryHome } from './kit.ts';
 
@@ -28,7 +29,7 @@ async function signingIn(
     await new Promise((resolve) => setTimeout(resolve, 100));
     return { status, body: answer(holds.length) };
   });
-  hosted.input({ kind: 'sign_in', conversation_id: null, cli: kind });
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: kind, ends_in: 600 });
   return { hosted, holds, input: lastInput() };
 }
 
@@ -164,7 +165,7 @@ it('holds the page again after House answers its hold with a refusal it marks re
   ];
   let holds = 0;
   hosted.house.route('POST', '/kit/secret-input/:subject', () => answers[holds++] ?? { body: HELD });
-  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'grok-build' });
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'grok-build', ends_in: 600 });
 
   expect(await hosted.ack(lastInput())).toEqual({});
 
@@ -201,7 +202,7 @@ it('starts no second login for a sign-in input sent again while it runs', async 
   hosted.socket.close(1001, 'shutting_down');
   await until(() => hosted.house.sockets[1]);
 
-  hosted.input({ input_id: input, kind: 'sign_in', conversation_id: null, cli: 'codex-acp' });
+  hosted.input({ input_id: input, kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 600 });
   await settle();
   await finish(hosted, 'codex-acp');
 
@@ -222,4 +223,40 @@ it('reports no idle while a sign-in runs and reports idle after its acknowledgem
   await until(() => hosted.idles[1]);
   const idled = hosted.house.requests.lastIndexOf(hosted.idles[1]!);
   expect(idled).toBeGreaterThan(at(hosted, `/kit/inputs/${input}/ack`));
+});
+
+it('ends a login that never prints its link when the time House gave the sign-in runs out, and acknowledges the input', async () => {
+  const home = await temporaryHome();
+  await writeFile(join(home, 'device-login-silent'), '');
+  const hosted = await hostKit([{ kind: 'codex-acp' }], { home });
+
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 5 });
+  const [login] = await until(async () => {
+    const started = await logins(hosted).catch(() => []);
+    return started.length > 0 && started;
+  });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  await until(() => !alive(login!.pid as number));
+  expect(hosted.kit.stderr()).toContain('the codex-acp sign-in reached the end House set for it');
+});
+
+it('ends the install a sign-in started when the time House gave the sign-in runs out, and acknowledges the input', async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }]);
+  const hold = join(hosted.home, 'npm-hold');
+  await writeFile(hold, '');
+  onTestFinished(() => rm(hold, { force: true }));
+
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'claude-agent-acp', ends_in: 2 });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(hosted.kit.stderr()).toContain('the claude-agent-acp sign-in reached the end House set for it');
+  const child = Number(await readFile(join(hosted.home, 'npm-child'), 'utf8'));
+  await until(() => !alive(child));
+  await rm(hold);
+  await settle();
+  const adapter = CLIS['claude-agent-acp']!.adapter!.package;
+  await expect(access(join(hosted.home, 'agents', 'claude-agent-acp', 'node_modules', adapter, 'package.json'))).rejects.toThrow();
+  await expect(access(join(hosted.home, 'login.log'))).rejects.toThrow();
+  expect(hosted.kit.stderr()).not.toContain('claude-agent-acp did not install');
 });

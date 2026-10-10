@@ -200,8 +200,19 @@ export function run(
       timeout: timeoutMs,
       env: withoutProxy(),
       detached,
-      signal,
+      signal: detached ? undefined : signal,
     });
+    const stop = () => {
+      try {
+        process.kill(-child.pid!, 'SIGKILL');
+      } catch {}
+    };
+    if (detached && signal?.aborted) stop();
+    if (detached) signal?.addEventListener('abort', stop, { once: true });
+    const ended = (ran: Ran) => {
+      signal?.removeEventListener('abort', stop);
+      resolve(ran);
+    };
     let stdout = '';
     let output = '';
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
@@ -211,8 +222,8 @@ export function run(
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
       output += chunk;
     });
-    child.on('error', (error) => resolve({ status: null, stdout, output: error.message }));
-    child.on('close', (status) => resolve({ status, stdout, output }));
+    child.on('error', (error) => ended({ status: null, stdout, output: error.message }));
+    child.on('close', (status) => ended({ status, stdout, output }));
   });
 }
 
@@ -220,7 +231,7 @@ export function failureOf(ran: Ran, program: string): string {
   return ran.output.trim().slice(-CAUSE_CHARACTERS) || `${program} exited with ${ran.status ?? 'a signal'}`;
 }
 
-export async function installAdapter(kind: string): Promise<string | null> {
+export async function installAdapter(kind: string, signal?: AbortSignal): Promise<string | null> {
   const adapter = CLIS[kind]!.adapter;
   if (adapter === null) return null;
   const release = KIT_PACKAGE.peerDependencies[adapter.package]!;
@@ -229,12 +240,14 @@ export async function installAdapter(kind: string): Promise<string | null> {
     'npm',
     ['install', '--prefix', prefix(kind), '--no-save', '--no-audit', '--no-fund', '--omit=optional', `${adapter.package}@${release}`],
     INSTALL_MS,
+    true,
+    signal,
   );
   return ran.status === 0 ? null : failureOf(ran, 'npm');
 }
 
-export async function installCli(kind: string): Promise<string | null> {
-  const ran = await run('bash', ['-o', 'pipefail', '-c', CLIS[kind]!.install], INSTALL_MS, true);
+export async function installCli(kind: string, signal?: AbortSignal): Promise<string | null> {
+  const ran = await run('bash', ['-o', 'pipefail', '-c', CLIS[kind]!.install], INSTALL_MS, true, signal);
   return ran.status === 0 ? null : failureOf(ran, 'the install');
 }
 
@@ -246,12 +259,12 @@ const FOUND = 'house-kit-cli ';
 const LOOKUP = `found=$(command -v "$1") || exit 0; case $found in /*) ;; *) found=$(pwd -P)/$found ;; esac; printf "${FOUND}%s\\n" "$found"`;
 const USER_BIN = 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin" ;; esac; export PATH';
 
-function inLoginShell(script: string, argument = ''): Promise<Ran> {
-  return run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${USER_BIN}; ${script}' sh ${argument}`], READ_MS, true);
+function inLoginShell(script: string, argument = '', signal?: AbortSignal): Promise<Ran> {
+  return run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${USER_BIN}; ${script}' sh ${argument}`], READ_MS, true, signal);
 }
 
-export async function locate(kind: string): Promise<string | null> {
-  const ran = await inLoginShell(LOOKUP, CLIS[kind]!.bin);
+export async function locate(kind: string, signal?: AbortSignal): Promise<string | null> {
+  const ran = await inLoginShell(LOOKUP, CLIS[kind]!.bin, signal);
   return ran.stdout.split('\n').findLast((line) => line.startsWith(FOUND))?.slice(FOUND.length) ?? null;
 }
 
@@ -261,8 +274,8 @@ export async function loginPath(): Promise<string> {
   return ran.stdout.split('\n').findLast((line) => line.startsWith(marker))!.slice(marker.length);
 }
 
-export async function versionOf(path: string): Promise<string | null> {
-  return VERSION.exec((await run(path, ['--version'], READ_MS)).stdout)?.[0] ?? null;
+export async function versionOf(path: string, signal?: AbortSignal): Promise<string | null> {
+  return VERSION.exec((await run(path, ['--version'], READ_MS, false, signal)).stdout)?.[0] ?? null;
 }
 
 function numbers(version: string): number[] {

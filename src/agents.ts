@@ -94,27 +94,35 @@ async function models(kind: string, adapter: Adapter, known: Model[]): Promise<P
   return { models: offered, modes };
 }
 
-async function signedIn(kind: string, cli: string, known: Offer): Promise<boolean> {
+async function signedIn(kind: string, cli: string, known: Offer, signal: AbortSignal): Promise<boolean> {
   const probe = CLIS[kind]!.signedIn;
   // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
-  if ('command' in probe) return (await run(cli, probe.command, 30_000)).status === 0;
-  return (await offer(kind, cli, known)).signed_in;
+  if ('command' in probe) return (await run(cli, probe.command, 30_000, false, signal)).status === 0;
+  return (await offer(kind, cli, known, signal)).signed_in;
 }
 
-async function offer(kind: string, cli: string, known: Offer): Promise<Offer> {
+function ended(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+}
+
+async function offer(kind: string, cli: string, known: Offer, signal?: AbortSignal): Promise<Offer> {
   const probe = CLIS[kind]!.signedIn;
   // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
-  if ('command' in probe && (await run(cli, probe.command, 30_000)).status !== 0) return SIGNED_OUT;
+  if ('command' in probe && (await run(cli, probe.command, 30_000, false, signal)).status !== 0) return SIGNED_OUT;
   let adapter: Adapter | undefined;
   try {
-    adapter = await startAdapter(kind, cli, kitHome(), client({ name: '@agentshouse/kit' }));
+    adapter = await startAdapter(kind, cli, kitHome(), client({ name: '@agentshouse/kit' }), () => undefined, {}, signal);
+    signal?.throwIfAborted();
     if ('initializeMeta' in probe) {
       const method = adapter.initialized._meta?.[probe.initializeMeta];
       if (typeof method !== 'string' || method.length === 0) return SIGNED_OUT;
     }
     return { signed_in: true, ...(await models(kind, adapter, known.models)) };
   } catch (error) {
-    process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
+    if (!signal?.aborted) process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
     return {
       signed_in: adapter === undefined && 'initializeMeta' in probe ? known.signed_in : true,
       models: known.models,
@@ -222,8 +230,8 @@ export class Agents {
     });
   }
 
-  located(kind: string): Promise<string> {
-    return this.queue(kind, () => this.ensure(kind));
+  located(kind: string, signal: AbortSignal): Promise<string> {
+    return this.queue(kind, () => this.ensure(kind, signal), signal);
   }
 
   async reread(kind: string): Promise<void> {
@@ -231,12 +239,15 @@ export class Agents {
     await this.report();
   }
 
-  async recheck(kind: string): Promise<void> {
+  async recheck(kind: string, signal: AbortSignal): Promise<void> {
     const known = this.readings.get(kind) ?? SIGNED_OUT;
-    await this.examine(kind, known, async (kind, cli) =>
-      (await signedIn(kind, cli, known)) ? { ...known, signed_in: true } : SIGNED_OUT,
+    await this.examine(
+      kind,
+      known,
+      async (kind, cli) => ((await signedIn(kind, cli, known, signal)) ? { ...known, signed_in: true } : SIGNED_OUT),
+      signal,
     );
-    await this.report();
+    if (!signal.aborted) await this.report();
   }
 
   report(): Promise<void> {
@@ -256,39 +267,42 @@ export class Agents {
     this.report().catch(logged);
   }
 
-  private queue<T>(kind: string, work: () => Promise<T>): Promise<T> {
-    const queued = (this.queues.get(kind) ?? Promise.resolve()).then(work);
+  private queue<T>(kind: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const queued = (this.queues.get(kind) ?? Promise.resolve()).then(() => {
+      signal?.throwIfAborted();
+      return work();
+    });
     this.queues.set(
       kind,
       queued.catch(() => undefined),
     );
-    return queued;
+    return signal === undefined ? queued : Promise.race([queued, ended(signal)]);
   }
 
-  private async ensure(kind: string): Promise<string> {
-    const failed = await installAdapter(kind);
+  private async ensure(kind: string, signal?: AbortSignal): Promise<string> {
+    const failed = await installAdapter(kind, signal);
     if (failed !== null) throw new Error(failed);
-    const found = await locate(kind);
+    const found = await locate(kind, signal);
     if (found !== null) return found;
-    const installing = this.installing.catch(() => undefined).then(() => installCli(kind));
+    const installing = this.installing.catch(() => undefined).then(() => installCli(kind, signal));
     this.installing = installing;
     const failure = await installing;
     if (failure !== null) throw new Error(failure);
-    const installed = await locate(kind);
+    const installed = await locate(kind, signal);
     if (installed === null) throw new Error(`the login shell does not find ${CLIS[kind]!.bin} after its install`);
     return installed;
   }
 
-  private async resolve(kind: string): Promise<{ cli: string; release: string } | Reading> {
+  private async resolve(kind: string, signal?: AbortSignal): Promise<{ cli: string; release: string } | Reading> {
     let cli: string;
     try {
-      cli = await realpath(await this.ensure(kind));
+      cli = await realpath(await this.ensure(kind, signal));
     } catch (error) {
       const failure = causeOf(error);
       process.stderr.write(`kit: ${kind} did not install: ${failure}\n`);
       return { release: null, failure, ...SIGNED_OUT };
     }
-    const release = await versionOf(cli);
+    const release = await versionOf(cli, signal);
     if (release === null) return { release: null, failure: `${cli} --version names no version`, ...SIGNED_OUT };
     const minimum = CLIS[kind]!.minimum;
     if (below(release, minimum)) return { release, minimum, failure: null, ...SIGNED_OUT };
@@ -299,12 +313,13 @@ export class Agents {
     kind: string,
     known: Offer,
     read: (kind: string, cli: string, known: Offer) => Promise<Offer>,
+    signal?: AbortSignal,
   ): Promise<void> {
     const current = this.nextRead(kind);
-    const resolved = await this.queue(kind, () => this.resolve(kind));
+    const resolved = await this.queue(kind, () => this.resolve(kind, signal), signal);
     const reading =
       'cli' in resolved ? { release: resolved.release, failure: null, ...(await read(kind, resolved.cli, known)) } : resolved;
-    if (this.reads.get(kind) === current) this.readings.set(kind, reading);
+    if (this.reads.get(kind) === current && !signal?.aborted) this.readings.set(kind, reading);
   }
 
   private async load(kind: string): Promise<void> {

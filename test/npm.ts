@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,8 +27,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const spec = argv.at(-1)!;
   const at = spec.lastIndexOf('@');
   const name = spec.slice(0, at);
+  const hold = join(home, 'npm-hold');
+  if (existsSync(hold)) {
+    const child = spawn(
+      process.execPath,
+      // Fifty milliseconds ends the held install's own child as soon as the spec removes the hold file.
+      ['-e', 'setInterval(() => require("fs").existsSync(process.argv[1]) || process.exit(), 50)', hold],
+      { stdio: 'ignore' },
+    );
+    writeFileSync(join(home, 'npm-child'), String(child.pid));
+  }
   // Fifty milliseconds resumes the held install as soon as the spec removes its file.
-  while (existsSync(join(home, 'npm-hold'))) await new Promise((resolve) => setTimeout(resolve, 50));
+  while (existsSync(hold)) await new Promise((resolve) => setTimeout(resolve, 50));
   const muted = join(home, 'npm-mute');
   if (existsSync(muted) && readFileSync(muted, 'utf8').includes(name)) process.exit(1);
   const failing = join(home, 'npm-fail');

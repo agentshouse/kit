@@ -80,6 +80,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.stderr.write(`unknown arguments: ${argv.join(' ')}\n`);
     process.exit(2);
   }
+  if (existsSync(join(home, 'device-login-silent'))) {
+    // An idle tick each minute keeps a login that never prints its link running, until the Kit ends it.
+    await new Promise(() => setInterval(() => undefined, 60_000));
+  }
   process.stdout.write(login.output);
   if (login.code === null) {
     const pasted = await new Promise<string>((resolve) => createInterface({ input: process.stdin }).once('line', resolve));

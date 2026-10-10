@@ -27,6 +27,7 @@ export async function startAdapter(
   app: ClientApp,
   jobs: (job: Job) => void = () => undefined,
   added: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<Adapter> {
   const adapter = CLIS[kind]!.adapter;
   const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args, {
@@ -35,6 +36,9 @@ export async function startAdapter(
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
+  const stop = () => killTree(child);
+  signal?.addEventListener('abort', stop, { once: true });
+  child.on('exit', () => signal?.removeEventListener('abort', stop));
   let stderr = '';
   child.stderr.on('data', (chunk: Buffer) => {
     stderr = (stderr + chunk.toString('utf8')).slice(-4000);
