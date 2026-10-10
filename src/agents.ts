@@ -4,6 +4,7 @@ import { killTree, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_VERSION, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
+import { holdTranscription, transcriptionReport } from './transcription.ts';
 
 export interface Route {
   agent_id: string;
@@ -18,6 +19,7 @@ export interface Route {
 export interface Desired {
   agents: string[];
   routes: Route[];
+  transcribe: boolean;
 }
 
 interface Model {
@@ -155,7 +157,7 @@ async function operatingSystem(): Promise<string> {
 }
 
 export class Agents {
-  desired: Desired = { agents: [], routes: [] };
+  desired: Desired = { agents: [], routes: [], transcribe: false };
   private readonly house: House;
   private reading: Promise<unknown> = Promise.resolve();
   private readonly queues = new Map<string, Promise<unknown>>();
@@ -186,7 +188,10 @@ export class Agents {
       return this.desired;
     });
     this.reading = reading;
-    return reading.then(({ agents }) => {
+    return reading.then(({ agents, transcribe }) => {
+      holdTranscription(transcribe)
+        .then((changed) => (changed ? this.report() : undefined))
+        .catch(logged);
       Promise.all(agents.map((kind) => this.load(kind)))
         .then(() => this.report())
         .catch(logged);
@@ -319,6 +324,7 @@ export class Agents {
       kit_version: KIT_VERSION,
       agent_base: agentBase(),
       agents,
+      transcription: transcriptionReport(),
       ...(hostKey === null ? {} : { ssh_host_key: hostKey }),
     };
     const state = JSON.stringify(body);

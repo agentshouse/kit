@@ -280,7 +280,7 @@ export class Conversations {
       if (files[index]!.media_type?.startsWith('audio/') !== true) continue;
       try {
         const text = await transcribe(path, AbortSignal.any([conversation.killed.signal, conversation.interrupted.signal]));
-        if (text !== '') lines.push(`Transcript: ${text}`);
+        if (text !== null && text !== '') lines.push(`Transcript: ${text}`);
       } catch (error) {
         if (conversation.kills > 0) throw error;
         logged(new Error(`${files[index]!.name} was not transcribed: ${causeOf(error)}`));

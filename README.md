@@ -49,8 +49,9 @@ commit to House; in the container, run it through the install command from the
 copy's directory. Inside an Agent conversation the Agent runs `house push`.
 
 House Kit turns each audio file of your message to an Agent into text on this
-computer before the Agent reads the message. The first audio file downloads the
-speech engine and model, about 425 MB, into `~/.house-kit`.
+computer before the Agent reads the message. While transcription is on for this
+Environment, House Kit keeps the speech engine and model, about 425 MB, in
+`~/.house-kit`, and deletes them when you turn it off.
 
 ## License
 

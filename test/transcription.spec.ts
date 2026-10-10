@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { beforeAll, expect, it } from 'vitest';
 import { cacheArtifacts, pinnedArtifacts } from './curl.ts';
 import { until } from './double.ts';
-import { hostKit, hostMac, lastInput, opened, type Hosted } from './environment.ts';
+import type { TranscriptionReport } from '../src/transcription.ts';
+import { hostKit, hostMac, lastInput, opened, type Hosted, type Hosting } from './environment.ts';
 import { alive } from './kit.ts';
 
 interface Sent {
@@ -87,11 +88,31 @@ function engines(hosted: Hosted): number[] {
 }
 
 async function downloads(hosted: Hosted): Promise<string[]> {
-  return (await readFile(join(hosted.home, 'curl.log'), 'utf8')).trim().split('\n');
+  return (await readFile(join(hosted.home, 'curl.log'), 'utf8').catch(() => '')).split('\n').filter((line) => line !== '');
+}
+
+function reported(hosted: Hosted, after = 0): TranscriptionReport[] {
+  return hosted.reports.slice(after).flatMap((report) => (report.transcription === undefined ? [] : [report.transcription as TranscriptionReport]));
+}
+
+function settled(hosted: Hosted, wanted: TranscriptionReport | ((report: TranscriptionReport) => boolean), after = 0): Promise<TranscriptionReport> {
+  const met = typeof wanted === 'function' ? wanted : (report: TranscriptionReport) => JSON.stringify(report) === JSON.stringify(wanted);
+  // A minute covers checking the three pinned artifacts the curl double copies into Kit home on a loaded runner.
+  return until(() => reported(hosted, after).find(met), 60_000);
+}
+
+async function transcribing(hosting: Hosting = {}): Promise<Hosted> {
+  const hosted = await hostKit([{}], { ...hosting, transcribe: true });
+  await settled(hosted, { installed: true, failure: null });
+  return hosted;
+}
+
+function desiredReads(hosted: Hosted): number {
+  return hosted.house.requests.filter((request) => request.path === '/kit/agents/desired').length;
 }
 
 it('follows each audio path with its transcript in the prompt and leaves every other path bare', async () => {
-  const hosted = await hostKit();
+  const hosted = await transcribing();
   const { described, paths } = sent(hosted, [
     { name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') },
     { name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') },
@@ -117,7 +138,7 @@ it('follows each audio path with its transcript in the prompt and leaves every o
 it.each([['en.ogg', 'audio/ogg'], ['en.webm', 'audio/webm'], ['en.m4a', 'audio/mp4'], ['en.mp3', 'audio/mpeg'], ['en.wav', 'audio/wav']])(
   'transcribes %s',
   async (name, mediaType) => {
-    const hosted = await hostKit();
+    const hosted = await transcribing();
     const { described, paths } = sent(hosted, [{ name, media_type: mediaType, content: fixture(name) }]);
 
     hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
@@ -126,16 +147,15 @@ it.each([['en.ogg', 'audio/ogg'], ['en.webm', 'audio/webm'], ['en.m4a', 'audio/m
   },
 );
 
-it('downloads the pinned engine, decoder and model into Kit home once, deleting any artifact the release no longer pins', async () => {
-  const hosted = await hostKit();
+it('downloads the pinned engine, decoder and model into Kit home at its start, before any message, deleting any artifact the release no longer pins', async () => {
+  const hosted = await transcribing({
+    prepare: async (home) => {
+      await mkdir(join(home, 'transcription'));
+      await writeFile(join(home, 'transcription', '0'.repeat(64)), 'an artifact an earlier release pinned');
+    },
+  });
   const directory = join(hosted.home, 'transcription');
-  await mkdir(directory);
-  await writeFile(join(directory, '0'.repeat(64)), 'an artifact an earlier release pinned');
-  const first = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
 
-  hosted.input({ kind: 'message', text: 'first', files: first.described, first: false });
-
-  expect(await prompted(hosted, 0)).toEqual(['first', first.paths[0], expect.stringMatching(RUSSIAN)]);
   expect(new Set(await downloads(hosted)).size).toBe(3);
   const installed = await readdir(directory);
   expect(installed).toHaveLength(3);
@@ -144,40 +164,112 @@ it('downloads the pinned engine, decoder and model into Kit home once, deleting 
     expect(createHash('sha256').update(await readFile(join(directory, name))).digest('hex')).toBe(name);
   }
 
-  const second = sent(hosted, [{ name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') }]);
-  hosted.input({ kind: 'message', text: 'second', files: second.described, first: false });
+  const { described, paths } = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
+  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
 
-  expect(await prompted(hosted, 1)).toEqual(['second', second.paths[0], expect.stringMatching(ENGLISH)]);
+  expect(await prompted(hosted, 0)).toEqual(['listen', paths[0], expect.stringMatching(RUSSIAN)]);
   expect(await downloads(hosted)).toHaveLength(3);
   expect((await readdir(directory)).sort()).toEqual(installed.sort());
 });
 
+it('deletes the three artifacts when the setting turns off, keeps a later audio path bare with no download, and downloads them again when it turns on without a restart', async () => {
+  const hosted = await transcribing();
+  const directory = join(hosted.home, 'transcription');
+  const reports = hosted.reports.length;
+
+  hosted.transcribe(false);
+
+  await settled(hosted, { installed: false, failure: null }, reports);
+  expect(existsSync(directory)).toBe(false);
+  const off = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
+  hosted.input({ kind: 'message', text: 'off', files: off.described, first: false });
+  expect(await prompted(hosted, 0)).toEqual(['off', off.paths[0]]);
+  expect(await downloads(hosted)).toHaveLength(3);
+
+  const again = hosted.reports.length;
+  hosted.transcribe(true);
+
+  await settled(hosted, { installed: true, failure: null }, again);
+  expect(await downloads(hosted)).toHaveLength(6);
+  expect(await readdir(directory)).toHaveLength(3);
+  const on = sent(hosted, [{ name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') }]);
+  hosted.input({ kind: 'message', text: 'on', files: on.described, first: false });
+  expect(await prompted(hosted, 1)).toEqual(['on', on.paths[0], expect.stringMatching(ENGLISH)]);
+});
+
+it('ends a running download and deletes the artifacts when the setting turns off, reporting no failure', async () => {
+  const stalled = pinnedArtifacts()[1]!.url;
+  const hosted = await hostKit([{}], {
+    transcribe: true,
+    prepare: (home) => writeFile(join(home, 'curl-stall'), stalled),
+  });
+  const directory = join(hosted.home, 'transcription');
+  await until(async () => (await downloads(hosted)).includes(stalled));
+
+  hosted.transcribe(false);
+
+  await until(() => !existsSync(directory));
+  await rm(join(hosted.home, 'curl-stall'));
+  const again = hosted.reports.length;
+  hosted.transcribe(true);
+  await settled(hosted, { installed: true, failure: null }, again);
+  expect(reported(hosted).filter((report) => report.failure !== null)).toEqual([]);
+});
+
+it('sends no report when a read of the setting changes neither whether the engine is installed nor its failure', async () => {
+  const hosted = await transcribing();
+  const reports = hosted.reports.length;
+  const reads = desiredReads(hosted);
+
+  hosted.transcribe(true);
+
+  await until(() => desiredReads(hosted) > reads);
+  // Half a second outlasts the Kit reporting a change it read, so a report not sent by then is not coming.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(hosted.reports).toHaveLength(reports);
+  expect(await downloads(hosted)).toHaveLength(3);
+});
+
 it('installs the engine and the decoder built for Apple silicon on a Mac', async () => {
-  const hosted = await hostMac();
-  const { described } = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
+  const hosted = await hostMac({ transcribe: true });
 
-  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+  await settled(hosted, { installed: true, failure: null });
 
-  await hosted.ack(lastInput());
   const directory = join(hosted.home, 'transcription');
   const installed = await Promise.all((await readdir(directory)).map((name) => readFile(join(directory, name))));
   expect(installed).toHaveLength(3);
   expect(installed.filter((content) => content.subarray(0, 8).equals(MACH_O_ARM64))).toHaveLength(2);
 });
 
-it('refuses an artifact that does not match its hash, installs nothing, keeps the bare path and tries again on the next audio file', async () => {
-  const hosted = await hostKit();
-  const corrupt = join(hosted.home, 'curl-corrupt');
-  await writeFile(corrupt, pinnedArtifacts()[2]!.url);
+it('refuses an artifact that does not match its hash, installs nothing, reports why, keeps audio paths bare and tries again only when the setting next turns on', async () => {
+  const corrupt = pinnedArtifacts()[2]!.url;
+  const hosted = await hostKit([{}], {
+    transcribe: true,
+    prepare: (home) => writeFile(join(home, 'curl-corrupt'), corrupt),
+  });
+
+  await settled(hosted, { installed: false, failure: `${corrupt} does not match its sha256` });
+  expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
+  const tried = (await downloads(hosted)).length;
   const first = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
-
   hosted.input({ kind: 'message', text: 'first', files: first.described, first: false });
-
   expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
   expect(await prompted(hosted, 0)).toEqual(['first', first.paths[0]]);
-  expect(await readdir(join(hosted.home, 'transcription'))).toEqual([]);
 
-  await rm(corrupt);
+  const reads = desiredReads(hosted);
+  hosted.transcribe(true);
+  await until(() => desiredReads(hosted) > reads);
+  // Half a second outlasts the Kit starting a download it read a reason for, so one not started by then is not coming.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(await downloads(hosted)).toHaveLength(tried);
+
+  await rm(join(hosted.home, 'curl-corrupt'));
+  const cleared = hosted.reports.length;
+  hosted.transcribe(false);
+  await settled(hosted, { installed: false, failure: null }, cleared);
+  const again = hosted.reports.length;
+  hosted.transcribe(true);
+  await settled(hosted, { installed: true, failure: null }, again);
   const second = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
   hosted.input({ kind: 'message', text: 'second', files: second.described, first: false });
 
@@ -185,7 +277,7 @@ it('refuses an artifact that does not match its hash, installs nothing, keeps th
 });
 
 it('keeps the bare path of an audio file it cannot decode', async () => {
-  const hosted = await hostKit();
+  const hosted = await transcribing();
   const { described, paths } = sent(hosted, [
     { name: 'broken.ogg', media_type: 'audio/ogg', content: Buffer.from('not audio at all') },
     { name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') },
@@ -199,7 +291,7 @@ it('keeps the bare path of an audio file it cannot decode', async () => {
 it(
   'reports no idle while a transcription runs',
   async () => {
-    const hosted = await hostKit();
+    const hosted = await transcribing();
     await opened(hosted);
     await until(() => hosted.idles[1]);
     const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(40) }]);
@@ -221,7 +313,7 @@ it(
 );
 
 it("makes a second conversation's audio wait for the first conversation's transcription", async () => {
-  const hosted = await hostKit();
+  const hosted = await transcribing();
   await opened(hosted, 'conversation-1');
   await opened(hosted, 'conversation-2');
   const files = sent(hosted, [
@@ -255,7 +347,7 @@ it("makes a second conversation's audio wait for the first conversation's transc
 });
 
 it('ends a running transcription on an interrupt and writes the message with its bare path before the interrupt cancels the turn', async () => {
-  const hosted = await hostKit();
+  const hosted = await transcribing();
   await opened(hosted);
   hosted.input({ kind: 'message', text: '@wait', files: [], first: false });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
@@ -279,7 +371,7 @@ it('ends a running transcription on an interrupt and writes the message with its
 });
 
 it('ends a running transcription on a kill and refuses its message', async () => {
-  const hosted = await hostKit();
+  const hosted = await transcribing();
   await opened(hosted);
   const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(240) }]);
   hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
@@ -295,7 +387,7 @@ it('ends a running transcription on a kill and refuses its message', async () =>
 });
 
 it('transcribes the next audio file after an interrupt whose cancel could not reach the CLI', async () => {
-  const hosted = await hostKit();
+  const hosted = await transcribing();
   await opened(hosted);
   hosted.input({ kind: 'message', text: '@deaf\n@wait', files: [], first: false });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
@@ -309,5 +401,5 @@ it('transcribes the next audio file after an interrupt whose cancel could not re
   hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
 
   await hosted.ack(lastInput());
-  expect(await readdir(join(hosted.home, 'transcription'))).toHaveLength(3);
+  expect(hosted.kit.stderr()).not.toContain('voice.ogg was not transcribed');
 });

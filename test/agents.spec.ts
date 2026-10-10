@@ -84,7 +84,7 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
   expect(await logged('curl.log')).toEqual([]);
 });
 
-it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system and the Kit version', async () => {
+it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit version and its transcription engine', async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -146,6 +146,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
         full_access: null,
       },
     ],
+    transcription: { installed: false, failure: null },
   });
 });
 

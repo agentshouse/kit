@@ -126,6 +126,7 @@ export interface RouteOverrides {
 
 export interface Hosting {
   tls?: boolean;
+  transcribe?: boolean;
   environment?: Record<string, string>;
   home?: string;
   skills?: boolean;
@@ -144,7 +145,9 @@ export interface Hosted {
   idles: Received[];
   mcp: Received[];
   tools: Record<string, ToolAnswer>;
+  reports: Record<string, unknown>[];
   input(fields: Record<string, unknown>): void;
+  transcribe(on: boolean): void;
   ack(inputId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
 }
@@ -217,8 +220,13 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   }));
   house.route('POST', '/kit/restarted', () => ({ body: {} }));
   house.route('POST', '/kit/local-copy/selection', () => ({ body: { local_copy: null } }));
-  house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved } }));
-  house.route('POST', '/kit/agents/report', () => ({ body: {} }));
+  let transcribe = hosting.transcribe ?? false;
+  const reports: Record<string, unknown>[] = [];
+  house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved, transcribe } }));
+  house.route('POST', '/kit/agents/report', (request) => {
+    reports.push(request.body as Record<string, unknown>);
+    return { body: {} };
+  });
   house.route('POST', '/kit/inputs/:input/ack', (request) => {
     acks.push(request);
     return { body: {} };
@@ -259,6 +267,11 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     idles,
     mcp,
     tools,
+    reports,
+    transcribe: (on) => {
+      transcribe = on;
+      house.sockets.at(-1)!.send({ type: 'work_available', subject: 'agents' });
+    },
     input: (fields) => {
       inputs++;
       house.sockets.at(-1)!.send({
@@ -292,7 +305,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   };
 }
 
-export async function hostMac(): Promise<Hosted> {
+export async function hostMac(hosting: Pick<Hosting, 'transcribe'> = {}): Promise<Hosted> {
   const home = await temporaryHome();
   const bin = join(home, 'macos');
   await mkdir(bin);
@@ -300,6 +313,7 @@ export async function hostMac(): Promise<Hosted> {
   await writeFile(join(bin, 'sw_vers'), '#!/bin/sh\n[ "$*" = -productVersion ] && echo 27.0.1\n');
   await Promise.all(['ps', 'sw_vers'].map((tool) => chmod(join(bin, tool), 0o755)));
   return hostKit([{}], {
+    ...hosting,
     home,
     skills: false,
     environment: {

@@ -44,7 +44,16 @@ export const ENGINES: Record<string, Engine> = {
 
 const CHUNK_SECONDS = 20;
 
+export interface TranscriptionReport {
+  installed: boolean;
+  failure: string | null;
+}
+
 let held: Promise<unknown> = Promise.resolve();
+let holding: Promise<unknown> = Promise.resolve();
+let setting: boolean | null = null;
+let downloading: AbortController | null = null;
+let readiness: TranscriptionReport = { installed: false, failure: null };
 
 function directory(): string {
   return join(kitHome(), 'transcription');
@@ -54,8 +63,8 @@ function installed(artifact: Artifact): string {
   return join(directory(), artifact.sha256);
 }
 
-async function executed(command: string, args: string[], signal: AbortSignal): Promise<string> {
-  // A download or a transcription runs as long as its size needs; the conversation's interrupt or end aborts it instead.
+async function executed(command: string, args: string[], signal?: AbortSignal): Promise<string> {
+  // A download or a transcription runs as long as its size needs; the setting turning off or the turn's interrupt or end aborts it instead.
   const ran = await run(command, args, 0, false, signal);
   if (ran.status !== 0) throw new Error(failureOf(ran, basename(command)));
   return ran.stdout;
@@ -80,6 +89,14 @@ async function sha256(path: string): Promise<string> {
   return hash.digest('hex');
 }
 
+function causeOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function pinnedHere(): Engine {
+  return ENGINES[`${process.platform}-${process.arch}`]!;
+}
+
 async function install(artifacts: Artifact[], signal: AbortSignal): Promise<void> {
   await mkdir(directory(), { recursive: true });
   const pinned = new Set(artifacts.map((artifact) => artifact.sha256));
@@ -91,7 +108,7 @@ async function install(artifacts: Artifact[], signal: AbortSignal): Promise<void
   try {
     for (const artifact of missing) {
       const part = `${installed(artifact)}.part`;
-      // Three retries carry a large download past a dropped connection before the transcription fails.
+      // Three retries carry a large download past a dropped connection before the download fails.
       await executed('curl', ['-fsSL', '--retry', '3', '-o', part, artifact.url], signal);
       if ((await sha256(part)) !== artifact.sha256) throw new Error(`${artifact.url} does not match its sha256`);
     }
@@ -104,11 +121,46 @@ async function install(artifacts: Artifact[], signal: AbortSignal): Promise<void
   }
 }
 
+function reported(next: TranscriptionReport): boolean {
+  const changed = next.installed !== readiness.installed || next.failure !== readiness.failure;
+  readiness = next;
+  return changed;
+}
+
+async function settle(transcribe: boolean): Promise<boolean> {
+  if (transcribe === setting) return false;
+  setting = transcribe;
+  if (!transcribe) {
+    await rm(directory(), { recursive: true, force: true });
+    return reported({ installed: false, failure: null });
+  }
+  const download = new AbortController();
+  downloading = download;
+  try {
+    const pinned = pinnedHere();
+    await install([pinned.decoder, pinned.engine, MODEL], download.signal);
+    return reported({ installed: true, failure: null });
+  } catch (error) {
+    await rm(directory(), { recursive: true, force: true });
+    return reported({ installed: false, failure: download.signal.aborted ? null : causeOf(error) });
+  } finally {
+    downloading = null;
+  }
+}
+
+export function holdTranscription(transcribe: boolean): Promise<boolean> {
+  if (!transcribe) downloading?.abort();
+  const settled = holding.then(() => settle(transcribe));
+  holding = settled.catch(() => undefined);
+  return settled;
+}
+
+export function transcriptionReport(): TranscriptionReport {
+  return readiness;
+}
+
 async function transcribed(path: string, signal: AbortSignal): Promise<string> {
-  const platform = `${process.platform}-${process.arch}`;
-  const pinned = ENGINES[platform];
-  if (pinned === undefined) throw new Error(`no transcription engine is pinned for ${platform}`);
-  await install([pinned.decoder, pinned.engine, MODEL], signal);
+  const pinned = pinnedHere();
   const work = await mkdtemp(join(tmpdir(), 'kit-transcription-'));
   try {
     await executed(
@@ -133,7 +185,8 @@ async function transcribed(path: string, signal: AbortSignal): Promise<string> {
   }
 }
 
-export async function transcribe(path: string, signal: AbortSignal): Promise<string> {
+export async function transcribe(path: string, signal: AbortSignal): Promise<string | null> {
+  if (!readiness.installed) return null;
   const before = held;
   let release!: () => void;
   const mine = new Promise<void>((resolve) => {
@@ -142,7 +195,7 @@ export async function transcribe(path: string, signal: AbortSignal): Promise<str
   held = Promise.all([before, mine]);
   try {
     await unlessAborted(before, signal);
-    return await transcribed(path, signal);
+    return readiness.installed ? await transcribed(path, signal) : null;
   } finally {
     release();
   }

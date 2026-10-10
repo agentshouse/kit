@@ -36,11 +36,19 @@ export function cacheArtifacts(platform?: string): void {
   }
 }
 
+function listed(name: string, artifact: Artifact): boolean {
+  const list = join(process.env.HOUSE_KIT_HOME!, name);
+  return existsSync(list) && readFileSync(list, 'utf8').includes(artifact.url);
+}
+
 function serve(artifact: Artifact, output: string): void {
-  const corrupt = join(process.env.HOUSE_KIT_HOME!, 'curl-corrupt');
-  if (existsSync(corrupt) && readFileSync(corrupt, 'utf8').includes(artifact.url)) {
+  if (listed('curl-corrupt', artifact)) {
     writeFileSync(output, 'not the pinned artifact');
     return;
+  }
+  if (listed('curl-stall', artifact)) {
+    writeFileSync(output, 'the start of a download that never ends');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
   }
   copyFileSync(join(CACHE, artifact.sha256), output);
 }
