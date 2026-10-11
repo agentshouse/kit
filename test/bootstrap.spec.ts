@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { closeSync, existsSync, openSync, realpathSync } from 'node:fs';
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -194,12 +194,14 @@ updating() { printf '%s\\n' "$1" >> ${log}; [ "$1" != /home/u/.grok/bin/grok ]; 
 update_clis listing updating
 `;
   await writeFile(join(home, 'run.sh'), script);
+  await writeFile(join(home, 'answers'), answers);
   const command = terminal ? ['script', ['-qec', `bash ${join(home, 'run.sh')}`, '/dev/null']] as const : ['bash', [join(home, 'run.sh')]] as const;
-  const child = spawn(command[0], [...command[1]], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const typed = openSync(join(home, 'answers'), 'r');
+  const child = spawn(command[0], [...command[1]], { stdio: [typed, 'pipe', 'pipe'] });
+  closeSync(typed);
   let output = '';
-  child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
-  child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
-  child.stdin.end(answers);
+  child.stdout!.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
+  child.stderr!.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
   await new Promise((resolve) => child.on('close', resolve));
   const updated = (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean);
   return { output: output.replaceAll('\r', ''), updated, restartAsked: existsSync(join(home, 'restart')) };

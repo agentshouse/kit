@@ -579,7 +579,7 @@ export class Conversations {
     conversation.open--;
     if (conversation.turn === turn) conversation.turn = null;
     const body = Promise.allSettled(turn.uploads).then(() => ({
-      parts: turn.parts.parts,
+      parts: turn.parts.saved(),
       context: turn.parts.context,
       ...failed,
     }));
@@ -728,7 +728,7 @@ export class Conversations {
         turn.parts.plan(event.entries);
         return;
       case 'image':
-        turn.uploads.push(this.image(conversation, turn, event.data, event.mediaType));
+        turn.uploads.push(this.image(conversation, turn, turn.parts.reserve(), event.data, event.mediaType));
         this.kit.changed();
         return;
     }
@@ -747,7 +747,7 @@ export class Conversations {
     else conversation.turn.parts.start(part);
   }
 
-  private async image(conversation: Conversation, turn: Turn, data: string, mediaType: string): Promise<void> {
+  private async image(conversation: Conversation, turn: Turn, reserved: number, data: string, mediaType: string): Promise<void> {
     const bytes = Buffer.from(data, 'base64');
     const name = `image-${++turn.images}.${mediaType.split('/')[1]}`;
     try {
@@ -759,9 +759,9 @@ export class Conversations {
       })) as SavedFile;
       const saved = declared.upload === undefined ? declared : await uploadBytes(declared.upload, bytes);
       if (saved.save.status !== 'saved') throw new Error(saved.save.failure ?? saved.save.status);
-      turn.parts.start({ type: 'image', file: saved.version, name, media_type: mediaType });
+      turn.parts.arrive({ type: 'image', file: saved.version, name, media_type: mediaType }, reserved);
     } catch (error) {
-      turn.parts.start({ type: 'marker', marker: 'retry', text: `${name} was not saved: ${causeOf(error)}` });
+      turn.parts.arrive({ type: 'marker', marker: 'retry', text: `${name} was not saved: ${causeOf(error)}` }, reserved);
     }
   }
 }

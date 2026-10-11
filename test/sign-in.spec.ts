@@ -119,7 +119,7 @@ it('ends a Claude Code sign-in whose pasted code Claude rejects, names the cause
 
   const [login] = await logins(hosted);
   await until(() => !alive(login!.pid as number));
-  expect(hosted.kit.stderr()).toContain('Invalid code. Please make sure the full code was copied.');
+  await until(() => hosted.kit.stderr().includes('Invalid code. Please make sure the full code was copied.'));
 });
 
 it('acknowledges a sign-in whose login fails and names the cause in the log', async () => {
@@ -129,7 +129,7 @@ it('acknowledges a sign-in whose login fails and names the cause in the log', as
   await finish(hosted, 'codex-acp', 'device authorization was denied');
 
   expect(await hosted.ack(input)).toEqual({});
-  expect(hosted.kit.stderr()).toContain('device authorization was denied');
+  await until(() => hosted.kit.stderr().includes('device authorization was denied'));
 });
 
 it('ends the login and acknowledges the input when the page releases the hold for good', async () => {
@@ -140,7 +140,7 @@ it('ends the login and acknowledges the input when the page releases the hold fo
   expect(holds).toHaveLength(1);
   const [login] = await logins(hosted);
   await until(() => !alive(login!.pid as number));
-  expect(hosted.kit.stderr()).toContain('grok-build sign-in');
+  await until(() => hosted.kit.stderr().includes('grok-build sign-in'));
 });
 
 it('ends the login and acknowledges the input when House refuses its hold', async () => {
@@ -238,7 +238,7 @@ it('ends a login that never prints its link when the time House gave the sign-in
 
   expect(await hosted.ack(lastInput())).toEqual({});
   await until(() => !alive(login!.pid as number));
-  expect(hosted.kit.stderr()).toContain('the codex-acp sign-in reached the end House set for it');
+  await until(() => hosted.kit.stderr().includes('the codex-acp sign-in reached the end House set for it'));
 });
 
 it('ends the install a sign-in started when the time House gave the sign-in runs out, and acknowledges the input', async () => {
@@ -250,7 +250,7 @@ it('ends the install a sign-in started when the time House gave the sign-in runs
   hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'claude-agent-acp', ends_in: 2 });
 
   expect(await hosted.ack(lastInput())).toEqual({});
-  expect(hosted.kit.stderr()).toContain('the claude-agent-acp sign-in reached the end House set for it');
+  await until(() => hosted.kit.stderr().includes('the claude-agent-acp sign-in reached the end House set for it'));
   const child = Number(await readFile(join(hosted.home, 'npm-child'), 'utf8'));
   await until(() => !alive(child));
   await rm(hold);

@@ -7,7 +7,7 @@ import { cacheArtifacts, pinnedArtifacts } from './curl.ts';
 import { until } from './double.ts';
 import type { TranscriptionReport } from '../src/transcription.ts';
 import { hostKit, hostMac, lastInput, opened, type Hosted, type Hosting } from './environment.ts';
-import { alive } from './kit.ts';
+import { alive, stop } from './kit.ts';
 
 interface Sent {
   name: string;
@@ -288,29 +288,22 @@ it('keeps the bare path of an audio file it cannot decode', async () => {
   expect(await prompted(hosted, 0)).toEqual(['listen', paths[0], paths[1], expect.stringMatching(ENGLISH)]);
 });
 
-it(
-  'reports no idle while a transcription runs',
-  async () => {
-    const hosted = await transcribing();
-    await opened(hosted);
-    await until(() => hosted.idles[1]);
-    const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(40) }]);
+it('reports no idle while a transcription runs and reports idle once it has ended', async () => {
+  const hosted = await transcribing();
+  await opened(hosted);
+  await until(() => hosted.idles[1]);
+  const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(240) }]);
 
-    hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+  const message = lastInput();
 
-    // Thirty seconds cover the engine starting on a loaded runner.
-    await until(() => engines(hosted)[0], 30_000);
-    // Half a second outlasts the Kit reporting idle, so a report not sent by then is not coming.
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    expect(engines(hosted)).toHaveLength(1);
-    expect(hosted.idles).toHaveLength(2);
-    await hosted.ack(lastInput());
-    // Thirty seconds cover transcribing the forty-second sample before the Kit reports idle.
-    await until(() => hosted.idles[2], 30_000);
-  },
-  // Transcribing the deliberate 40-second sample can exceed the default on the two-vCPU runner.
-  60_000,
-);
+  // Thirty seconds cover the engine starting on a loaded runner.
+  stop(await until(() => engines(hosted)[0], 30_000));
+
+  await hosted.ack(message);
+  const idled = hosted.house.requests.indexOf(await until(() => hosted.idles[2]));
+  expect(idled).toBeGreaterThan(hosted.house.requests.findIndex((request) => request.path === `/kit/inputs/${message}/ack`));
+});
 
 it(
   "makes a second conversation's audio wait for the first conversation's transcription",
@@ -396,17 +389,17 @@ it('ends a running transcription on a kill and refuses its message', async () =>
 it('transcribes the next audio file after an interrupt whose cancel could not reach the CLI', async () => {
   const hosted = await transcribing();
   await opened(hosted);
-  // The deaf CLI exits three seconds in, so the next message goes to the resumed session once its transcription is done.
-  hosted.input({ kind: 'message', text: '@deaf\n@hold 3000\n@exit 0', files: [], first: false });
+  hosted.input({ kind: 'message', text: '@deaf\n@gate exit\n@exit 0', files: [], first: false });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
+  await until(async () => (await hosted.adapterLog()).some((entry) => entry.deaf === true));
   hosted.input({ kind: 'interrupt', turn_id: turn });
-  // Half a second lets the first interrupt fail to reach the deaf CLI before the second is sent.
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await hosted.ack(lastInput());
   hosted.input({ kind: 'interrupt', turn_id: turn });
   await until(() => hosted.kit.stderr().includes('EPIPE'));
   const { described } = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
 
   hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+  await writeFile(join(hosted.home, 'exit'), '');
 
   await hosted.ack(lastInput());
   expect(hosted.kit.stderr()).not.toContain('voice.ogg was not transcribed');

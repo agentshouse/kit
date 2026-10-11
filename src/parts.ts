@@ -39,7 +39,10 @@ export class Parts {
   readonly parts: Part[] = [];
   context: Context | null = null;
   private readonly emit: (operation: Operation) => void;
-  private writing: { type: 'text' | 'reasoning'; id: string | null } | null = null;
+  private readonly made: number[] = [];
+  private events = 0;
+  private writing: { type: 'text' | 'reasoning'; id: string | null; index: number } | null = null;
+  private counting: number | null = null;
   private planned: number | null = null;
 
   constructor(emit: (operation: Operation) => void) {
@@ -48,34 +51,38 @@ export class Parts {
 
   write(type: 'text' | 'reasoning', id: string | null, text: string): void {
     if (text === '') return;
-    const last = this.parts.length - 1;
-    const part = this.parts[last];
-    if (this.writing?.type === type && this.writing.id === id && part?.type === type) {
-      part.text += text;
-      this.emit({ op: 'append', index: last, text });
+    if (this.writing?.type === type && this.writing.id === id) {
+      (this.parts[this.writing.index] as { text: string }).text += text;
+      this.emit({ op: 'append', index: this.writing.index, text });
       return;
     }
-    this.start({ type, text });
-    this.writing = { type, id };
+    this.writing = { type, id, index: this.start({ type, text }) };
   }
 
   command(): void {
-    const last = this.parts.length - 1;
-    const part = this.parts[last];
-    if (part?.type !== 'commands') {
-      this.start({ type: 'commands', count: 1 });
+    if (this.counting === null) {
+      this.counting = this.start({ type: 'commands', count: 1 });
       return;
     }
+    const part = this.parts[this.counting] as { count: number };
     part.count++;
-    this.emit({ op: 'count', index: last, count: part.count });
+    this.emit({ op: 'count', index: this.counting, count: part.count });
   }
 
   start(part: Part): number {
     this.writing = null;
-    this.parts.push(part);
-    const index = this.parts.length - 1;
-    this.emit({ op: 'start', index, part });
-    return index;
+    this.counting = null;
+    return this.add(part, ++this.events);
+  }
+
+  reserve(): number {
+    this.writing = null;
+    this.counting = null;
+    return ++this.events;
+  }
+
+  arrive(part: Part, reserved: number): void {
+    this.add(part, reserved);
   }
 
   done(index: number, result: string | null): void {
@@ -99,10 +106,25 @@ export class Parts {
     this.emit({ op: 'context', ...context });
   }
 
+  saved(): Part[] {
+    return this.parts
+      .map((part, index) => ({ part, made: this.made[index]! }))
+      .sort((a, b) => a.made - b.made)
+      .map(({ part }) => part);
+  }
+
   operations(): Operation[] {
     return [
       ...this.parts.map((part, index): Operation => ({ op: 'start', index, part })),
       ...(this.context === null ? [] : [{ op: 'context' as const, ...this.context }]),
     ];
+  }
+
+  private add(part: Part, made: number): number {
+    this.parts.push(part);
+    this.made.push(made);
+    const index = this.parts.length - 1;
+    this.emit({ op: 'start', index, part });
+    return index;
   }
 }

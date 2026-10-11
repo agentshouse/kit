@@ -79,6 +79,15 @@ function chunks(fixture: string): string {
     .join('');
 }
 
+function emittedImage(): string {
+  const image = recorded('claude-image').find((event) => event.params.update?.content?.type === 'image')!;
+  return `@emit ${JSON.stringify(image).split('session-recorded').join('$SESSION')}`;
+}
+
+function streamed(hosted: Hosted, type: string): boolean {
+  return hosted.socket.frames.some((frame) => frame.type === 'turn' && frame.op === 'start' && (frame.part as { type: string }).type === type);
+}
+
 function kinds(turn: Ended): string[] {
   return turn.parts.map((part) => (part.type === 'marker' ? `marker:${part.marker}` : String(part.type)));
 }
@@ -119,9 +128,9 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
     'subagent',
     'reasoning',
     'reasoning',
+    'image',
     'reasoning',
     'text',
-    'image',
   ]);
   const parts = turns[0]!.parts;
   expect(parts.filter((part) => part.type === 'commands')).toEqual([
@@ -142,7 +151,7 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
   });
   expect(JSON.stringify(parts)).not.toContain('inspect only the current directory');
   expect(written(turns)).toBe(chunks('codex-tools'));
-  expect(parts.at(-1)).toEqual({ type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' });
+  expect(parts.find((part) => part.type === 'image')).toEqual({ type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' });
   expect(hosted.images.map((image) => image.body)).toEqual([
     { name: 'image-1.png', media_type: 'image/png', bytes: 69, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
   ]);
@@ -307,8 +316,8 @@ it("keeps a Claude Code image block and drops its notice and another session's t
   expect(turns[0]).toEqual({
     parts: [
       { type: 'text', text: 'Working.' },
-      { type: 'text', text: 'Done.' },
       { type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' },
+      { type: 'text', text: 'Done.' },
     ],
     context: { used: 1200, window: 200000 },
   });
@@ -322,13 +331,55 @@ it("marks an image House did not save with the Kit's cause in place of its image
   }));
   hosted.input({ kind: 'open' });
   await hosted.ack(lastInput());
-  const image = recorded('claude-image').find((event) => event.params.update?.content?.type === 'image')!;
 
-  hosted.input({ kind: 'message', text: `@emit ${JSON.stringify(image).split('session-recorded').join('$SESSION')}`, files: [], first: false });
+  hosted.input({ kind: 'message', text: emittedImage(), files: [], first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([
     { type: 'marker', marker: 'retry', text: 'image-1.png was not saved: storage unavailable' },
+  ]);
+});
+
+it('streams the text after an image and declares the next image while the first one uploads, and saves every image where its CLI produced it', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+  hosted.house.route('POST', '/bytes/:grant', async (request) => {
+    if (request.params.grant === 'image-1') await until(() => hosted.images[1] && streamed(hosted, 'text'));
+    return { body: { version: `version-${request.params.grant!.slice('image-'.length)}`, save: { status: 'saved', failure: null } } };
+  });
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  hosted.watch(true);
+
+  hosted.input({ kind: 'message', text: `${emittedImage()}\n${emittedImage()}\n@say Done.\n@gate streamed`, files: [], first: false });
+  await until(() => streamed(hosted, 'image'));
+  await writeFile(join(hosted.home, 'streamed'), '');
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+
+  expect((ended.body as Ended).parts).toEqual([
+    { type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' },
+    { type: 'image', file: 'version-2', name: 'image-2.png', media_type: 'image/png' },
+    { type: 'text', text: 'Done.' },
+  ]);
+});
+
+it('keeps writing the text an image was saved in the middle of, and saves the image where its CLI produced it', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+  hosted.house.route('POST', '/bytes/:grant', async () => {
+    await until(() => streamed(hosted, 'text'));
+    return { body: { version: 'version-1', save: { status: 'saved', failure: null } } };
+  });
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  hosted.watch(true);
+
+  hosted.input({ kind: 'message', text: `${emittedImage()}\n@say All nine\n@gate saved\n@say  steps completed.`, files: [], first: false });
+  await until(() => streamed(hosted, 'image'));
+  await writeFile(join(hosted.home, 'saved'), '');
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+
+  expect((ended.body as Ended).parts).toEqual([
+    { type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' },
+    { type: 'text', text: 'All nine steps completed.' },
   ]);
 });
 

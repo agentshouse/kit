@@ -197,6 +197,7 @@ async function directive(
   if (name === 'deaf') {
     process.stdin.destroy();
     closeSync(0);
+    log({ deaf: true });
     // An idle tick each minute keeps the deaf CLI alive after it stops reading, as a hung one stays.
     setInterval(() => undefined, 60_000);
   }
