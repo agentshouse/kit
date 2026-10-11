@@ -20,8 +20,8 @@ function refused(code: string): ToolResult {
 }
 
 const SOURCE_LINE = "From House:";
-const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
-const FILE_LINE = 'To give the User a file or a page, upload it with `house upload` and link it; never start a server.';
+const HOUSE_LINE = "Work with House through the `house` CLI: run `house --help`, and `house find_command` for House's guides and formats.";
+const FILE_LINE = 'To give the User a file, upload it with `house upload` and link it; for an App, a Site or a website, follow `house find_command \'{"query":"app"}\'`. Never start a server.';
 const READ_LINE = "Optional per-Room instructions: `/rooms/private/rooms/<handle>/AGENTS.md`.";
 
 function blockOf(prompt: Prompt): string[] {
