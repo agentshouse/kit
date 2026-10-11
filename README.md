@@ -1,14 +1,12 @@
 # House Kit
 
-House Kit connects an Environment, a Linux computer or server, to
-[agents.house](https://agents.house). It runs your Agents' conversations
-through the agent CLIs you chose and gives each Agent the `house` command.
+House Kit connects an Environment, a Linux computer or server, to [agents.house](https://agents.house). It runs
+your Agents' conversations through the agent CLIs you chose and gives each Agent the `house` command.
 
 ## Install
 
-Run `curl -fsSL agents.house/kit | sh`, or `irm agents.house/kit.ps1 | iex` on
-Windows, and again to update; options follow `sh -s --`. On macOS and Linux it
-installs House Kit natively under your own account, without an admin password,
+Run `curl -fsSL agents.house/kit | sh`, or `irm agents.house/kit.ps1 | iex` on Windows, and again to update;
+options follow `sh -s --`. On macOS and Linux it installs House Kit natively under your own account, without an admin password,
 as a service that runs while you are logged in. `kit` and `house` are then on
 your login shell's `PATH`, and your workspace is `~/AgentsHouse` unless you
 pass `--workspace <path>`.
@@ -37,8 +35,9 @@ them out; running it again without the flag brings them back.
 or another, continues on its own and keeps the Environment's credential in
 `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is set. `--environment <id>`
 reconnects an Environment you already have; `--rooms <ref>[,<ref>...]` gives it
-only those Rooms and `--no-private` every Room but your Private Room. It also
-connects your own agent: outside an Agent conversation, `house <tool>` calls
+only those Rooms and `--no-private` every Room but your Private Room;
+`--code <code>` connects immediately without a link.
+A login also connects your own agent: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you,
 until you revoke that connection on Connections. `house help` lists the Tools.
 `kit logout` disconnects this computer, stops House Kit and ends your own

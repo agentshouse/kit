@@ -125,7 +125,7 @@ export async function startProxy(): Promise<Proxy> {
   };
 }
 
-export async function startHouse(tls?: Certificate): Promise<House> {
+export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'): Promise<House> {
   const routes: { method: string; pattern: string; handler: Route }[] = [];
   const requests: Received[] = [];
   const sockets: KitSocket[] = [];
@@ -164,13 +164,13 @@ export async function startHouse(tls?: Certificate): Promise<House> {
   const streams = new WebSocketServer({ noServer: true, handleProtocols: (offered) => [...offered][0] ?? false });
   let streamsHeld = Promise.resolve();
   server.on('upgrade', async (request, duplex, head) => {
-    if (new URL(request.url ?? '/', 'http://house').pathname !== '/kit/stream') {
+    if (new URL(request.url ?? '/', 'http://house').pathname !== streamPath) {
       duplex.destroy();
       return;
     }
     const received: Received = {
       method: 'UPGRADE',
-      path: '/kit/stream',
+      path: streamPath,
       params: {},
       headers: request.headers,
       body: null,

@@ -23,6 +23,7 @@ export async function published(): Promise<string> {
 export interface Platform {
   system: 'Linux' | 'Darwin';
   machine: string;
+  server?: boolean;
   appleSilicon?: boolean;
   macos?: string;
   shell?: string;
@@ -126,6 +127,7 @@ cp "$FAKE/kit" "$prefix/bin/house"
 `;
 
 const KIT = `printf '%s %s HOUSE_KIT_HOME=%s%s\\n' "\${0##*/}" "$*" "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+ HOUSE_KIT_REPLACES=$HOUSE_KIT_REPLACES}" >> "$FAKE/log"
+[ -z "\${HOUSE_KIT_RELAY-}" ] || printf 'relay %s\\n' "$HOUSE_KIT_RELAY" >> "$FAKE/log"
 if [ "$1" = login ]; then set -- "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+environment-two}"; ${LOGIN}fi
 `;
 
@@ -139,7 +141,8 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   const fake = await temporaryHome();
   const bin = join(fake, 'bin');
   await mkdir(bin);
-  for (const [tool, body] of Object.entries(TOOLS)) await script(join(bin, tool), body);
+  for (const [tool, body] of Object.entries(TOOLS))
+    await script(join(bin, tool), platform.server === true && tool === 'sudo' ? `${LOGGED}exec "$@"\n` : body);
   await script(join(fake, 'kit'), KIT);
   const system = platform.system === 'Darwin' ? 'darwin' : 'linux';
   const unpacked = `node-v24.21.0-${system}-${/arm64|aarch64/.test(platform.machine) ? 'arm64' : 'x64'}`;
@@ -148,6 +151,21 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   await script(join(fake, unpacked, 'bin', 'npm'), NPM);
   spawnSync('tar', ['-czf', join(fake, 'node.tar.gz'), '-C', fake, unpacked]);
   const bootstrap = await published();
+  if (platform.server === true) {
+    const osRelease = join(fake, 'os-release');
+    const server = join(fake, 'server');
+    await writeFile(osRelease, "ID=ubuntu\nVERSION_ID=26.04\nPRETTY_NAME='Ubuntu 26.04 LTS'\n");
+    await writeFile(
+      bootstrap,
+      (await readFile(bootstrap, 'utf8'))
+        .replaceAll('/etc/os-release', osRelease)
+        .replace('SERVER_PREFIX=/opt/house-kit', `SERVER_PREFIX=${server}/house-kit`)
+        .replace('PLACING_OWNER=root:root', `PLACING_OWNER=${process.getuid!()}:${process.getgid!()}`)
+        .replace('NATIVE_BIN=/usr/local/bin', `NATIVE_BIN=${server}/bin`)
+        .replace('NATIVE_UNIT=/etc/systemd/system/house-kit.service', `NATIVE_UNIT=${server}/house-kit.service`)
+        .replace('NATIVE_WORKSPACE=/agents/house', `NATIVE_WORKSPACE=${server}/workspace`),
+    );
+  }
   const environment = {
     HOME: home,
     SHELL: platform.shell === 'zsh' ? join(bin, 'zsh') : (platform.shell ?? '/bin/bash'),

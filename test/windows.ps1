@@ -113,7 +113,7 @@ foreach ($fails in @($false, $true)) {
   if (($script:Ran -join '|') -cne 'run --rm --hostname pc --mount home --mount workspace image login --house https://agents.house') { $findings += "Invoke-Login ran: $($script:Ran -join '|')" }
   if (($script:Opened -join '|') -cne 'https://agents.house/kit/ahk_login_one') { $findings += "Invoke-Login opened: $($script:Opened -join '|')" }
 }
-foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Connect-Kit')) {
+foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Connect-Kit')) {
   $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
   . ([scriptblock]::Create($found.Extent.Text))
 }
@@ -135,7 +135,6 @@ function Test-Container { $script:Installed }
 function Test-Path { $true }
 function Set-Configuration { $false }
 function Update-Clis { }
-function Start-Resident { }
 function Write-Host { }
 function Read-Inspect([string] $Format) {
   if ($Format -ceq '{{.Config.Image}}') { return $Image }
@@ -159,8 +158,10 @@ function docker {
 foreach ($case in @(
   @($false, @('--rooms', 'r_k2v.4,r_9qd.x'), 'login --rooms r_k2v.4,r_9qd.x'),
   @($false, @('--no-private', '--house', 'https://agents.house'), 'login --no-private --house https://agents.house'),
+  @($false, @('--code', 'ahk_code_one'), 'login --code ahk_code_one'),
   @($true, @('kit', 'login', '--rooms', 'r_k2v.4'), 'login --rooms r_k2v.4'),
-  @($true, @('kit', 'login', '--no-private'), 'login --no-private')
+  @($true, @('kit', 'login', '--no-private'), 'login --no-private'),
+  @($true, @('kit', 'login', '--code', 'ahk_code_one'), 'login --code ahk_code_one')
 )) {
   $script:Installed = $case[0]
   $script:Enrolment = @{}
@@ -171,5 +172,28 @@ foreach ($case in @(
   $logins = @($script:Ran | Where-Object { $_ -match ' login( |$)' })
   if ($logins.Count -ne 1 -or -not $logins[0].EndsWith(" $Image $($case[2])")) { $findings += "the bootstrap $($case[1] -join ' ') ran kit login as: $($logins -join '|')" }
 }
+$script:Installed = $true
+$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+$BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse', '--code', 'ahk_code_unused')
+$script:Ran = @()
+try { Connect-Kit } catch { $findings += "an enrolled bootstrap with a code refused with: $($_.Exception.Message)" }
+$logins = @($script:Ran | Where-Object { $_ -match ' login( |$)' })
+if ($logins.Count -ne 0) { $findings += "the enrolled bootstrap used the login code: $($logins -join '|')" }
+
+$env:HOUSE_KIT_RELAY = 'https://kit-relay.example'
+$script:Installed = $false
+$script:Enrolment = @{}
+$BootstrapArguments = @('--code', 'ahk_code_one')
+$script:Ran = @()
+try { Connect-Kit } catch { $findings += "a relayed bootstrap refused with: $($_.Exception.Message)" }
+$loginRun = @($script:Ran | Where-Object { $_ -match '^run .* login( |$)' })
+$residentRun = @($script:Ran | Where-Object { $_ -match '^run .* resident( |$)' })
+if ($loginRun.Count -ne 1 -or -not $loginRun[0].Contains('--env HOUSE_KIT_RELAY=https://kit-relay.example')) {
+  $findings += "the relayed bootstrap ran login as: $($loginRun -join '|')"
+}
+if ($residentRun.Count -ne 1 -or $residentRun[0].Contains('HOUSE_KIT_RELAY')) {
+  $findings += "the relayed bootstrap ran resident as: $($residentRun -join '|')"
+}
+Remove-Item Env:HOUSE_KIT_RELAY
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }

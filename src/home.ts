@@ -2,9 +2,11 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { selectRelay } from './relay.ts';
 
 export interface Enrolment {
   house: string;
+  relay?: string;
   environment: string;
   credential: string;
 }
@@ -53,8 +55,10 @@ export async function writeHome(name: string, value: unknown): Promise<void> {
   await rename(temporary, join(home, name));
 }
 
-export function readEnrolment(): Promise<Enrolment | null> {
-  return readHome<Enrolment>(ENROLMENT);
+export async function readEnrolment(): Promise<Enrolment | null> {
+  const enrolment = await readHome<Enrolment>(ENROLMENT);
+  if (enrolment !== null) selectRelay(process.env.HOUSE_KIT_RELAY || enrolment.relay);
+  return enrolment;
 }
 
 export async function writeEnrolment(enrolment: Enrolment): Promise<void> {

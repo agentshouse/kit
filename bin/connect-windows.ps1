@@ -320,6 +320,10 @@ function Connect-Kit {
       $Login += @('--rooms', $Arguments[$index])
     } elseif ($argument -ceq '--no-private') {
       $Login += @('--no-private')
+    } elseif ($argument -ceq '--code') {
+      if ($index + 1 -ge $Arguments.Count) { Stop-Bootstrap "$argument requires one value" }
+      $index++
+      $Login += @('--code', $Arguments[$index])
     } elseif ($argument -ceq '--no-skills') {
       $NoSkills = @('--no-skills')
     } elseif ($argument -ceq '--update-clis') {
@@ -380,7 +384,9 @@ function Connect-Kit {
   if ($House -notmatch '^(https://|http://127\.0\.0\.1:|http://localhost:)') { Stop-Bootstrap 'House origin must use HTTPS or local loopback HTTP' }
   $Network = @('--network', 'host')
   if ($House.StartsWith('https://')) { $Network = @() }
-  $Common = @('--hostname', [Net.Dns]::GetHostName(), '--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
+  $Relay = @()
+  if ($env:HOUSE_KIT_RELAY) { $Relay = @('--env', "HOUSE_KIT_RELAY=$($env:HOUSE_KIT_RELAY)") }
+  $Common = @('--hostname', [Net.Dns]::GetHostName()) + $Relay + @('--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
 
   if (Test-Container) {
     $installed = Read-Inspect '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}'
@@ -406,7 +412,7 @@ function Connect-Kit {
       $terminal = @()
       if (-not [Console]::IsInputRedirected) { $terminal = @('-t') }
       if ((Read-Inspect '{{.State.Running}}') -ceq 'true') {
-        & docker exec -i @terminal @placed $Name $Forwarded @Forward
+        & docker exec -i @terminal @placed @Relay $Name $Forwarded @Forward
       } else {
         & docker run -i @terminal @placed @entry --rm @Network @Common @Forward
       }

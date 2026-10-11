@@ -5,7 +5,7 @@ import { request, setGlobalProxyFromEnv } from 'node:http';
 import { basename, join } from 'node:path';
 import type { ToolResult } from './bridge.ts';
 import { HOUSE_REF } from './git.ts';
-import { kitHome, readOwnAgent } from './home.ts';
+import { kitHome, readEnrolment, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
@@ -77,6 +77,7 @@ function bridged(
 async function direct(message: Message): Promise<string> {
   const ownAgent = await readOwnAgent();
   if (ownAgent === null) throw new Error(UNCONNECTED);
+  await readEnrolment();
   setGlobalProxyFromEnv();
   const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
     throw new Error(UNREACHABLE);

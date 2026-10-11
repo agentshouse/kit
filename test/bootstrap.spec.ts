@@ -7,7 +7,7 @@ import { expect, it } from 'vitest';
 import { placeUserCli } from './cli.ts';
 import { startHouse } from './double.ts';
 import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
-import { published } from './host.ts';
+import { fakeHost, published } from './host.ts';
 import { temporaryHome } from './kit.ts';
 
 const LINUX = fileURLToPath(new URL('../bin/connect-linux.sh', import.meta.url));
@@ -172,6 +172,17 @@ async function steps(...names: string[]): Promise<string> {
   const linux = await readFile(LINUX, 'utf8');
   return names.map((name) => new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0]).join('');
 }
+
+it('passes a login code and the Kit relay through the native server bootstrap entry', async () => {
+  const relay = 'https://kit-relay.example';
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true, environment: { HOUSE_KIT_RELAY: relay } });
+
+  const ran = host.run(['--linux', '--house', 'https://agents.house', '--code', 'ahk_code_one']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(host.calls('kit')).toEqual([expect.stringMatching(/^login --house https:\/\/agents\.house --code ahk_code_one /)]);
+  expect(host.calls('relay')).toEqual([relay]);
+});
 
 const LISTED = [
   ['codex', '/home/u/.local/bin/codex', '0.150.0', '0.159.1', 'old'],

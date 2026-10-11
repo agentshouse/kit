@@ -6,6 +6,7 @@ import { post, retrying } from './api.ts';
 import { placeAppGit } from './app-git.ts';
 import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
+import { selectRelay } from './relay.ts';
 
 const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -37,11 +38,12 @@ async function accepted(house: string, credential: string): Promise<boolean> {
   throw new Error(`House answered ${checked.status} when Kit checked this computer's own agent's connection: ${checked.text}`);
 }
 
-const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms <ref>[,<ref>...] | --no-private]
+const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms <ref>[,<ref>...] | --no-private] [--code <code>]
   --house <origin>          the House to connect to, ${DEFAULT_HOUSE} unless one is stored
   --environment <id>        reconnect this Environment
   --rooms <ref>[,<ref>...]  give this Environment only these Rooms
   --no-private              give this Environment every Room but your Private Room
+  --code <code>             connect this machine with a login code
 `;
 
 function chosenRooms(rooms: string | undefined, noPrivate: boolean): object {
@@ -58,6 +60,7 @@ export async function login(argv: string[]): Promise<void> {
       environment: { type: 'string' },
       rooms: { type: 'string' },
       'no-private': { type: 'boolean', default: false },
+      code: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
@@ -65,38 +68,57 @@ export async function login(argv: string[]): Promise<void> {
     process.stdout.write(USAGE);
     return;
   }
+  if (values.code !== undefined && values.rooms !== undefined) throw new Error('--code cannot be used with --rooms');
+  if (values.code !== undefined && values['no-private']) throw new Error('--code cannot be used with --no-private');
+  if (values.code !== undefined && values.environment !== undefined) throw new Error('--code cannot be used with --environment');
   const rooms = chosenRooms(values.rooms, values['no-private']);
   const enrolled = (await readEnrolment()) ?? (await readDisconnected());
+  if (values.code !== undefined && enrolled !== null) {
+    throw new Error(`--code connects a new machine; this Kit home records Environment ${enrolled.environment}, so run kit login to reconnect it`);
+  }
+  const relay = process.env.HOUSE_KIT_RELAY || undefined;
+  selectRelay(relay);
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
   const replaces = process.env.HOUSE_KIT_REPLACES;
   const environment =
     replaces === undefined ? (values.environment ?? (enrolled?.house === house ? enrolled.environment : undefined)) : undefined;
   const ownAgent = await readOwnAgent();
-  const held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
-  const verifier = randomBytes(32).toString('base64url');
-  const started = await retrying(() =>
-    post<Started>(house, '/kit', {
-      ...(environment === undefined
-        ? { act: 'new_environment', label: hostname(), ...(replaces === undefined ? {} : { replaces }) }
-        : { act: 'existing_environment', environment_id: environment }),
-      ...rooms,
-      code_challenge: createHash('sha256').update(verifier).digest('base64url'),
-      ...(held ? {} : { headless: true }),
-    }),
-  );
-  process.stdout.write(`Open this link and confirm: ${started.start_url}\n`);
-  open(started.start_url);
+  let held = false;
+  let exchanged: Exchanged;
+  if (values.code !== undefined) {
+    exchanged = await post<Exchanged>(house, '/kit/token', { code: values.code, label: hostname() });
+  } else {
+    held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
+    const verifier = randomBytes(32).toString('base64url');
+    const started = await retrying(() =>
+      post<Started>(house, '/kit', {
+        ...(environment === undefined
+          ? { act: 'new_environment', label: hostname(), ...(replaces === undefined ? {} : { replaces }) }
+          : { act: 'existing_environment', environment_id: environment }),
+        ...rooms,
+        code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+        ...(held ? {} : { headless: true }),
+      }),
+    );
+    process.stdout.write(`Open this link and confirm: ${started.start_url}\n`);
+    open(started.start_url);
 
-  const exchanged = await retrying(
-    () => post<Exchanged>(house, '/kit/token', { login: started.login, code_verifier: verifier }),
-    undefined,
-    () => POLL_INTERVAL_MS,
-  );
-  await writeEnrolment({ house, environment: exchanged.environment, credential: exchanged.credential });
+    exchanged = await retrying(
+      () => post<Exchanged>(house, '/kit/token', { login: started.login, code_verifier: verifier }),
+      undefined,
+      () => POLL_INTERVAL_MS,
+    );
+  }
+  await writeEnrolment({
+    house,
+    ...(relay === undefined ? {} : { relay }),
+    environment: exchanged.environment,
+    credential: exchanged.credential,
+  });
   process.stdout.write(`Environment ${exchanged.environment} is connected to ${house}.\n`);
   if (exchanged.headless_credential !== undefined) {
     await writeOwnAgent({ house, user: exchanged.user, credential: exchanged.headless_credential });
-  } else if (held && ownAgent.user !== exchanged.user) {
+  } else if (held && ownAgent !== null && ownAgent.user !== exchanged.user) {
     await forgetOwnAgent();
     process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
   }

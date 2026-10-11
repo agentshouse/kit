@@ -18,6 +18,7 @@ FORWARDED=kit
 FORWARD=()
 NO_SKILLS=()
 ROOMS=()
+CODE=()
 CONFIGURED=''
 UPDATE_CLIS=0
 UBUNTU_RELEASES=(jammy noble resolute)
@@ -99,6 +100,7 @@ login_arguments() {
   LOGIN=()
   if ((HOUSE_SELECTED)); then LOGIN+=(--house "$HOUSE"); fi
   LOGIN+=(${ROOMS[@]+"${ROOMS[@]}"})
+  LOGIN+=(${CODE[@]+"${CODE[@]}"})
 }
 
 prepare_directory() {
@@ -700,7 +702,7 @@ forward_kit() {
     stty -echo
   fi
   if kit_running; then
-    docker exec -i ${terminal[@]+"${terminal[@]}"} ${placed[@]+"${placed[@]}"} "$NAME" "$FORWARDED" ${FORWARD[@]+"${FORWARD[@]}"}
+    docker exec -i ${terminal[@]+"${terminal[@]}"} ${placed[@]+"${placed[@]}"} ${RELAY[@]+"${RELAY[@]}"} "$NAME" "$FORWARDED" ${FORWARD[@]+"${FORWARD[@]}"}
   else
     "${DOCKER_RUN[@]:0:2}" -i ${terminal[@]+"${terminal[@]}"} ${placed[@]+"${placed[@]}"} ${entry[@]+"${entry[@]}"} "${DOCKER_RUN[@]:2}" ${FORWARD[@]+"${FORWARD[@]}"}
   fi
@@ -801,6 +803,11 @@ while (($#)); do
     --no-private)
       ROOMS+=(--no-private)
       shift
+      ;;
+    --code)
+      (($# >= 2)) || refuse "$1 requires one value"
+      CODE+=(--code "$2")
+      shift 2
       ;;
     --no-skills)
       NO_SKILLS=(--no-skills)
@@ -910,7 +917,9 @@ if ((FORWARDING == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
 
 if [[ "$RUNTIME" == 'Docker Desktop' ]]; then NAMED=(--hostname "$(hostname)"); fi
 if [[ "$RUNTIME" == 'Docker Desktop' && "$HOUSE" == https://* ]]; then NETWORK=(); fi
-DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${NAMED[@]+"${NAMED[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
+RELAY=()
+if [[ -n "${HOUSE_KIT_RELAY:-}" ]]; then RELAY=(--env "HOUSE_KIT_RELAY=$HOUSE_KIT_RELAY"); fi
+DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${NAMED[@]+"${NAMED[@]}"} ${RELAY[@]+"${RELAY[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
 LOGIN_KIT=("${DOCKER_RUN[@]:0:2}" ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
 AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/authority-main.js")
 CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/configure-main.js")

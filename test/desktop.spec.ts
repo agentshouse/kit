@@ -332,16 +332,16 @@ async function heldByAnotherAccount(): Promise<Host> {
   return host;
 }
 
-it('asks from the terminal, while the script arrives on standard input, whether to replace a Kit of another House account, and installs afresh on yes', async () => {
+it('asks from the terminal whether to replace another account, clears it on yes and redeems the login code', async () => {
   const host = await heldByAnotherAccount();
 
-  const ran = host.terminal(HOUSE, 'y\n');
+  const ran = host.terminal([...HOUSE, '--code', 'ahk_code_one'], 'y\n');
 
   expect(ran.status).toBe(0);
   expect(ran.stdout.match(/Replace it\?/g)).toHaveLength(1);
   expect(ran.stdout).toContain(OTHER_ACCOUNT);
   expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
-  expect(host.calls('kit')).toEqual([`login --house https://agents.house HOUSE_KIT_HOME=${host.home}/.house-kit`]);
+  expect(host.calls('kit')).toEqual([`login --house https://agents.house --code ahk_code_one HOUSE_KIT_HOME=${host.home}/.house-kit`]);
   expect(host.calls('systemctl')).toEqual(expect.arrayContaining(['--user stop house-kit.service', '--user --quiet enable --now house-kit.service']));
   await expect(access(join(host.home, '.house-kit', 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readFile(join(host.home, 'AgentsHouse', 'notes.md'), 'utf8')).toBe('kept\n');
@@ -481,6 +481,76 @@ it.each([
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   const logins = placement.length === 0 ? host.calls('kit') : host.calls('docker').filter((call) => / login( |$)/.test(call));
   expect(logins).toEqual([expect.stringMatching(new RegExp(`(^| )login ${rooms.join(' ')}( |$)`))]);
+});
+
+it.each([
+  ['natively on Linux', { system: 'Linux', machine: 'x86_64' }, []],
+  ['natively on macOS', { system: 'Darwin', machine: 'arm64' }, []],
+  ['in the container on Linux', { system: 'Linux', machine: 'x86_64' }, ['--container']],
+  ['in the container on macOS', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, ['--container']],
+] as const)('passes a login code through to kit login %s', async (_name, platform, placement) => {
+  const host = await fakeHost(platform);
+
+  const ran = host.run(['--code', 'ahk_code_one', ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  const logins = placement.length === 0 ? host.calls('kit') : host.calls('docker').filter((call) => / login( |$)/.test(call));
+  expect(logins).toEqual([expect.stringMatching(/(^| )login --code ahk_code_one( |$)/)]);
+});
+
+it.each([
+  ['natively on Linux', { system: 'Linux', machine: 'x86_64' }, []],
+  ['natively on macOS', { system: 'Darwin', machine: 'arm64' }, []],
+  ['in the container on Linux', { system: 'Linux', machine: 'x86_64' }, ['--container']],
+  ['in the container on macOS', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, ['--container']],
+] as const)('leaves a login code unused when House accepts the enrolled Kit %s', async (_name, platform, placement) => {
+  const host = await fakeHost(platform);
+  expect(host.run([...placement])).toMatchObject({ status: 0 });
+  await host.forget();
+
+  const ran = host.run(['--code', 'ahk_code_unused', ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout).toContain('House Kit is already installed.');
+  expect(host.calls('kit')).toEqual([]);
+  expect(host.calls('docker').filter((call) => / login( |$)/.test(call))).toEqual([]);
+});
+
+it.each([
+  ['natively on Linux', { system: 'Linux', machine: 'x86_64' }, []],
+  ['natively on macOS', { system: 'Darwin', machine: 'arm64' }, []],
+  ['in the container on Linux', { system: 'Linux', machine: 'x86_64' }, ['--container']],
+  ['in the container on macOS', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, ['--container']],
+] as const)('passes the Kit relay to login and container runs %s', async (_name, platform, placement) => {
+  const relay = 'https://kit-relay.example';
+  const host = await fakeHost({ ...platform, environment: { HOUSE_KIT_RELAY: relay } });
+
+  const ran = host.run(['--code', 'ahk_code_one', ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  if (placement.length === 0) {
+    expect(host.calls('relay')).toEqual([relay]);
+  } else {
+    const runs = host.calls('docker').filter((call) => call.startsWith('run '));
+    expect(runs.length).toBeGreaterThan(1);
+    const resident = runs.find((call) => call.endsWith(' resident'))!;
+    expect(resident).not.toContain('HOUSE_KIT_RELAY');
+    expect(runs.filter((call) => call !== resident).every((call) => call.includes(`--env HOUSE_KIT_RELAY=${relay}`))).toBe(true);
+  }
+});
+
+it('passes the Kit relay to a command forwarded into the running Linux container', async () => {
+  const relay = 'https://kit-relay.example';
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', environment: { HOUSE_KIT_RELAY: relay } });
+  expect(host.run(['--container'])).toMatchObject({ status: 0 });
+  await host.forget();
+
+  const ran = host.run(['--container', 'house', 'list_environments']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(host.calls('docker').filter((call) => call.startsWith('exec '))).toEqual([
+    expect.stringMatching(new RegExp(`^exec -i --workdir \\S+ --env HOUSE_KIT_RELAY=${relay} house-kit house list_environments$`)),
+  ]);
 });
 
 it.each([[['--rooms', 'r_k2v.4']], [['--no-private']]])('forwards kit login %j into the container', async (rooms) => {
