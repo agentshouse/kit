@@ -72,7 +72,7 @@ it('refuses a native install on any host but the one selected Linux platform bef
 
   expect(refused.status).toBe(1);
   expect(refused.stdout).toBe('');
-  expect(refused.stderr).toMatch(/^kit_bootstrap_refused: --linux runs only on Ubuntu 26\.04 LTS on amd64, not Debian GNU\/Linux 12 \(bookworm\) on (amd64|arm64)\n$/);
+  expect(refused.stderr).toMatch(/^kit_bootstrap_refused: --linux runs only on Ubuntu, not Debian GNU\/Linux 12 \(bookworm\)\n$/);
 });
 
 it('leaves a native host its own kit and house rather than forwarding to them', async () => {

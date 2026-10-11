@@ -281,14 +281,12 @@ establish_docker_engine() {
 }
 
 check_native_host() {
-  local distribution='' release='' described=Linux
+  local distribution='' described=Linux
   if [[ -r /etc/os-release ]]; then
     distribution=$(. /etc/os-release && printf '%s' "${ID:-}")
-    release=$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")
     described=$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-$described}")
   fi
-  [[ "$distribution" == ubuntu && "$release" == "$NATIVE_RELEASE" && "$ARCH" == "$NATIVE_ARCHITECTURE" ]] ||
-    refuse "--linux runs only on Ubuntu $NATIVE_RELEASE LTS on $NATIVE_ARCHITECTURE, not $described on $ARCH"
+  [[ "$distribution" == ubuntu ]] || refuse "--linux runs only on Ubuntu, not $described"
 }
 
 service_manager() {
@@ -870,7 +868,7 @@ case "$(uname -s)" in
     [[ "$ARCH" == amd64 || "$ARCH" == arm64 ]] || ((NATIVE == 0 && CONTAINER == 0)) || refuse "unsupported Linux architecture $(uname -m)"
     ;;
   Darwin)
-    ((NATIVE == 0)) || refuse "--linux runs only on Ubuntu $NATIVE_RELEASE LTS on $NATIVE_ARCHITECTURE, not macOS"
+    ((NATIVE == 0)) || refuse "--linux runs only on Ubuntu, not macOS"
     MACOS=1
     PATH="$PATH:$DOCKER_APP/Contents/Resources/bin"
     RUNTIME='Docker Desktop'
