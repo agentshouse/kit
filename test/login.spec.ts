@@ -348,7 +348,7 @@ it('reconnects the same Environment on a second login', async () => {
 
   expect(exit).toBe(0);
   expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
-  expect(started).not.toHaveProperty('label');
+  expect(typeof started.label).toBe('string');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,
     environment: 'environment-one',

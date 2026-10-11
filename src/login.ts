@@ -93,8 +93,9 @@ export async function login(argv: string[]): Promise<void> {
     const verifier = randomBytes(32).toString('base64url');
     const started = await retrying(() =>
       post<Started>(house, '/kit', {
+        label: hostname(),
         ...(environment === undefined
-          ? { act: 'new_environment', label: hostname(), ...(replaces === undefined ? {} : { replaces }) }
+          ? { act: 'new_environment', ...(replaces === undefined ? {} : { replaces }) }
           : { act: 'existing_environment', environment_id: environment }),
         ...rooms,
         code_challenge: createHash('sha256').update(verifier).digest('base64url'),
