@@ -67,14 +67,6 @@ it('takes --update-clis as a bootstrap option', async () => {
   });
 });
 
-it('refuses a native install on any host but the one selected Linux platform before changing it', async () => {
-  const refused = bootstrap(await published(), ['--linux', '--house', 'https://agents.house', '--enroll', 'environment-one']);
-
-  expect(refused.status).toBe(1);
-  expect(refused.stdout).toBe('');
-  expect(refused.stderr).toMatch(/^kit_bootstrap_refused: --linux runs only on Ubuntu, not Debian GNU\/Linux 12 \(bookworm\)\n$/);
-});
-
 it('leaves a native host its own kit and house rather than forwarding to them', async () => {
   expect(bootstrap(await published(), ['--linux', 'house', 'push', '--owner'])).toMatchObject({
     status: 1,

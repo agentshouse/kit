@@ -280,15 +280,6 @@ establish_docker_engine() {
   docker_answers || refuse "Docker Engine does not answer: $(docker_cause)"
 }
 
-check_native_host() {
-  local distribution='' described=Linux
-  if [[ -r /etc/os-release ]]; then
-    distribution=$(. /etc/os-release && printf '%s' "${ID:-}")
-    described=$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-$described}")
-  fi
-  [[ "$distribution" == ubuntu ]] || refuse "--linux runs only on Ubuntu, not $described"
-}
-
 service_manager() {
   [[ -d /run/systemd/system ]]
 }
@@ -386,7 +377,6 @@ containerized() {
 connect_native() {
   local connected=updated
   RECONNECT="run $NATIVE_BIN/kit login"
-  check_native_host
   if containerized; then
     refuse "House Kit runs in the container $NAME on this computer; remove that container, then rerun this bootstrap with --linux"
   fi
