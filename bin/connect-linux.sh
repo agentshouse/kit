@@ -288,7 +288,7 @@ establish_native_packages() {
   local present
   present=$(installed_packages "${NATIVE_PACKAGES[@]}" | wc -l)
   ((present == ${#NATIVE_PACKAGES[@]})) && return
-  printf 'Installing ca-certificates, curl and git from Ubuntu'\''s apt repository; sudo may ask for your password.\n'
+  printf 'Installing ca-certificates, curl and git with apt; sudo may ask for your password.\n'
   elevated "${DIRECT[@]}" apt-get update -qq >/dev/null || refuse 'apt could not refresh its package lists'
   elevated "${DIRECT[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${NATIVE_PACKAGES[@]}" >/dev/null || refuse 'apt could not install ca-certificates, curl and git'
 }
