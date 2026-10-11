@@ -4,7 +4,15 @@ import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
 import { post, retrying } from './api.ts';
 import { placeAppGit } from './app-git.ts';
-import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
+import {
+  forgetOwnAgent,
+  readDisconnected,
+  readEnrolment,
+  readOwnAgent,
+  writeEnrolment,
+  writeOwnAgent,
+  type OwnAgent,
+} from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
 
 const DEFAULT_HOUSE = 'https://agents.house';
@@ -42,6 +50,7 @@ const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms
   --environment <id>        reconnect this Environment
   --rooms <ref>[,<ref>...]  give this Environment only these Rooms
   --no-private              give this Environment every Room but your Private Room
+  --code <code>             connect with the login code House gave, with no link to confirm
 `;
 
 function chosenRooms(rooms: string | undefined, noPrivate: boolean): object {
@@ -58,12 +67,16 @@ export async function login(argv: string[]): Promise<void> {
       environment: { type: 'string' },
       rooms: { type: 'string' },
       'no-private': { type: 'boolean', default: false },
+      code: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
   if (values.help) {
     process.stdout.write(USAGE);
     return;
+  }
+  if (values.code !== undefined && (values.rooms !== undefined || values['no-private'] || values.environment !== undefined)) {
+    throw new Error('--code carries its Environment and Rooms; pass it without --rooms, --no-private and --environment');
   }
   const rooms = chosenRooms(values.rooms, values['no-private']);
   const enrolled = (await readEnrolment()) ?? (await readDisconnected());
@@ -72,7 +85,13 @@ export async function login(argv: string[]): Promise<void> {
   const environment =
     replaces === undefined ? (values.environment ?? (enrolled?.house === house ? enrolled.environment : undefined)) : undefined;
   const ownAgent = await readOwnAgent();
-  const held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
+  if (values.code !== undefined) {
+    if (environment !== undefined) throw new Error(`this computer records Environment ${environment}; kit login without --code reconnects it`);
+    const exchange = { code: values.code, label: hostname() };
+    await connected(house, await retrying(() => post<Exchanged>(house, '/kit/token', exchange)), ownAgent, null);
+    return;
+  }
+  const held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential)) ? ownAgent : null;
   const verifier = randomBytes(32).toString('base64url');
   const started = await retrying(() =>
     post<Started>(house, '/kit', {
@@ -92,11 +111,15 @@ export async function login(argv: string[]): Promise<void> {
     undefined,
     () => POLL_INTERVAL_MS,
   );
+  await connected(house, exchanged, ownAgent, held);
+}
+
+async function connected(house: string, exchanged: Exchanged, ownAgent: OwnAgent | null, held: OwnAgent | null): Promise<void> {
   await writeEnrolment({ house, environment: exchanged.environment, credential: exchanged.credential });
   process.stdout.write(`Environment ${exchanged.environment} is connected to ${house}.\n`);
   if (exchanged.headless_credential !== undefined) {
     await writeOwnAgent({ house, user: exchanged.user, credential: exchanged.headless_credential });
-  } else if (held && ownAgent.user !== exchanged.user) {
+  } else if (held !== null && held.user !== exchanged.user) {
     await forgetOwnAgent();
     process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
   }

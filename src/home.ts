@@ -7,6 +7,7 @@ export interface Enrolment {
   house: string;
   environment: string;
   credential: string;
+  relay?: string;
 }
 
 export interface Configuration {
@@ -57,8 +58,9 @@ export function readEnrolment(): Promise<Enrolment | null> {
   return readHome<Enrolment>(ENROLMENT);
 }
 
-export async function writeEnrolment(enrolment: Enrolment): Promise<void> {
-  await writeHome(ENROLMENT, enrolment);
+export async function writeEnrolment(enrolment: Omit<Enrolment, 'relay'>): Promise<void> {
+  const relay = process.env.HOUSE_KIT_RELAY;
+  await writeHome(ENROLMENT, relay ? { ...enrolment, relay } : enrolment);
   await rm(join(kitHome(), DISCONNECTED), { force: true });
 }
 

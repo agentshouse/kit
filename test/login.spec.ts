@@ -1,7 +1,8 @@
 import { access, readFile, stat, writeFile } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { startHouse, until } from './double.ts';
+import { startHouse, until, type Answer, type House } from './double.ts';
 import { runKit, temporaryHome } from './kit.ts';
 import { answerOwnAgent, LOGIN, logIn, loginLink, opener, ownAgent, serveLogin } from './login.ts';
 
@@ -354,4 +355,121 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   const reconnected = await until(() => house.sockets[1]);
   expect(reconnected.headers.authorization).toBe('Bearer ahk_second');
+});
+
+const CODE = `ahk_code_${'0'.repeat(32)}${'a'.repeat(43)}`;
+
+function serveCode(house: House, answer: Answer) {
+  house.route('POST', '/kit/token', () => answer);
+}
+
+const EXCHANGED = { body: { credential: 'ahk_coded', environment: 'environment-coded', user: 'user-one', headless_credential: 'ahp_coded' } };
+
+it('connects with a login code in one token exchange carrying the code and the label, storing both credentials with no link and no wait', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveCode(house, EXCHANGED);
+  const { path, opened } = await opener(home);
+
+  const login = runKit(['login', '--house', house.origin, '--code', CODE], { HOUSE_KIT_HOME: home, PATH: path });
+
+  expect(await login.exited).toBe(0);
+  expect(house.requests.map((request) => `${request.method} ${request.path}`)).toEqual(['POST /kit/token']);
+  expect(house.requests[0]!.body).toEqual({ code: CODE, label: hostname() });
+  expect(login.stdout()).toBe(`Environment environment-coded is connected to ${house.origin}.\n`);
+  expect(await opened()).toBeUndefined();
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
+    house: house.origin,
+    environment: 'environment-coded',
+    credential: 'ahk_coded',
+  });
+  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_coded' });
+});
+
+it.each(['kit_code_used', 'kit_code_cancelled', 'kit_code_expired'])('ends a login whose code House refuses as %s with that cause and no credential', async (cause) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveCode(house, { status: 400, body: { error: { code: cause, retryable: false } } });
+
+  const login = runKit(['login', '--house', house.origin, '--code', CODE], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toContain(cause);
+  expect(house.requests).toHaveLength(1);
+  await expect(access(join(home, 'credential.json'))).rejects.toThrow();
+});
+
+it.each([
+  ['--rooms', ['--rooms', 'r_k2v.4']],
+  ['--no-private', ['--no-private']],
+  ['--environment', ['--environment', 'environment-one']],
+])('refuses --code beside %s before any request', async (_name, argv) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+
+  const login = runKit(['login', '--house', house.origin, '--code', CODE, ...argv], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toBe('kit: --code carries its Environment and Rooms; pass it without --rooms, --no-private and --environment\n');
+  expect(house.requests).toEqual([]);
+});
+
+it.each([
+  ['a connected Environment', 'credential.json'],
+  ['a disconnected Environment', 'disconnected.json'],
+])('refuses --code where Kit home records %s, naming the kit login that reconnects it, before any request', async (_name, file) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, file), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_first' }));
+
+  const login = runKit(['login', '--house', house.origin, '--code', CODE], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toBe('kit: this computer records Environment environment-one; kit login without --code reconnects it\n');
+  expect(house.requests).toEqual([]);
+});
+
+it('names --code in kit login --help', async () => {
+  const login = runKit(['login', '--help'], { HOUSE_KIT_HOME: await temporaryHome() });
+
+  expect(await login.exited).toBe(0);
+  expect(login.stdout()).toMatch(/^ +--code <code> +\S/m);
+});
+
+it('carries the code exchange through the Kit relay, records the relay for the resident started without it, and a later login with no relay clears it', async () => {
+  const house = await startHouse();
+  const relay = await startHouse();
+  const home = await temporaryHome();
+  const host = new URL(house.origin).host;
+  relay.route('POST', `/${host}/kit/token`, () => EXCHANGED);
+
+  const login = runKit(['login', '--house', house.origin, '--code', CODE], { HOUSE_KIT_HOME: home, HOUSE_KIT_RELAY: relay.origin });
+
+  expect(await login.exited).toBe(0);
+  expect(relay.requests.map((request) => `${request.method} ${request.path}`)).toEqual([`POST /${host}/kit/token`]);
+  expect(house.requests).toEqual([]);
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
+    house: house.origin,
+    environment: 'environment-coded',
+    credential: 'ahk_coded',
+    relay: relay.origin,
+  });
+
+  const resident = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => relay.requests.some((request) => request.path === `/${host}/kit/restarted`));
+  resident.input.end();
+  process.kill(resident.pid, 'SIGKILL');
+  await resident.exited;
+  expect(house.requests).toEqual([]);
+
+  answerOwnAgent(house, 'ahp_coded');
+  serveLogin(house, 'environment-coded', 'ahk_second');
+  const { exit } = await logIn(house, home);
+
+  expect(exit).toBe(0);
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
+    house: house.origin,
+    environment: 'environment-coded',
+    credential: 'ahk_second',
+  });
 });

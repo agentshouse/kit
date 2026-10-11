@@ -9,7 +9,7 @@ import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations, type Input } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
-import { agentBase, enrolled, kitHome } from './home.ts';
+import { agentBase, enrolled, kitHome, readEnrolment } from './home.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
@@ -75,6 +75,8 @@ function connected(): Promise<void> {
 
 export async function resident(): Promise<void> {
   await connected();
+  const { relay } = (await readEnrolment())!;
+  if (relay !== undefined) process.env.HOUSE_KIT_RELAY ||= relay;
   watch(kitHome(), () => {
     if (enrolled()) return;
     killDescendants();
