@@ -19,10 +19,10 @@ function refused(code: string): ToolResult {
   return { isError: true, content: [{ type: 'text', text: `${code}: you read no Room there\n` }] };
 }
 
-const SOURCE_LINE = "From House, not the User's message:";
+const SOURCE_LINE = "From House:";
 const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
 const FILE_LINE = 'To give the User a file or a page, upload it with `house upload` and link it; never start a server.';
-const READ_LINE = "Your User's instructions for a Room, if any: `/rooms/private/rooms/<handle>/AGENTS.md`.";
+const READ_LINE = "Optional per-Room instructions: `/rooms/private/rooms/<handle>/AGENTS.md`.";
 
 function blockOf(prompt: Prompt): string[] {
   expect(prompt).toHaveLength(2);
