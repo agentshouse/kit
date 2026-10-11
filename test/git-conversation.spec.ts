@@ -126,7 +126,18 @@ it('sends no rename for a failed, undone or uncommitted move', async () => {
   expect(room.files.get('p2.md')!.revision).not.toBe(plan);
 });
 
-it("names each Local copy in a conversation's first prompt", async () => {
+it("fetches House's changes onto the House ref from a Conversation process", async () => {
+  const { hosted, room } = await copied();
+  room.put('plan.md', 'one, from House\n');
+
+  const fetched = await shell(hosted, 'house fetch');
+
+  expect(fetched).toMatchObject({ status: 0, stdout: expect.stringMatching(/^\/rooms\/notes: refs\/house\/received is at [0-9a-f]{12}\n$/) });
+  expect(git(room.repository, 'show', 'refs/house/received:plan.md')).toBe('one, from House\n');
+  expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('one\n');
+});
+
+it("names each Local copy, house fetch before work and house push after in a conversation's first prompt", async () => {
   const { hosted, room } = await copied();
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
@@ -136,7 +147,7 @@ it("names each Local copy in a conversation's first prompt", async () => {
   );
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
   expect(block.slice(3)).toEqual([
-    'House Local copies; commit, then `house push`:',
+    'House Local copies; before work run `house fetch` and rebase onto `refs/house/received`; after it commit, then `house push`:',
     `/rooms/notes: ${room.repository}`,
   ]);
 });
@@ -290,7 +301,7 @@ it('drops an expired rename House never applied when another writer took both of
   expect(await readFile(join(room.repository, 'b.md'), 'utf8')).toBe('Alpha\n');
 });
 
-it('names the copies of a selection still being read in a first prompt that arrives meanwhile', async () => {
+it('names the copies a fetch is still reading in a first prompt that arrives meanwhile', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -303,14 +314,14 @@ it('names the copies of a selection still being read in a first prompt that arri
     await held;
     return { body: { scopes: [room.bundle()] } };
   });
-  rooms.selection = { rooms: [{ room_ref: room.ref, room_handle: room.handle }] };
-  hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
+  const fetched = rooms.select([room]);
   await until(() => hosted.house.requests.some((request) => request.path === '/kit/door/bootstrap'));
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
   // Three tenths of a second let the message reach the Kit while the copy it reads is still held.
   await new Promise((resolve) => setTimeout(resolve, 300));
   release();
+  expect((await fetched).status).toBe(0);
 
   const prompt = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');

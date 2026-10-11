@@ -172,7 +172,7 @@ it('tells an Agent whose CLI sandbox refuses the bridge to run house directly', 
   expect(house.requests).toEqual([]);
 });
 
-it('prints the same help for house help as for house --help, listing help and push, a Tool without a description by its name alone, and no Git verb', async () => {
+it('prints the same help for house help as for house --help, listing help, push and fetch, a Tool without a description by its name alone, and no Git verb', async () => {
   const house = await startHouse();
   const home = await connected(house, true);
   house.route('POST', '/', ({ body }) => {
@@ -186,10 +186,11 @@ it('prints the same help for house help as for house --help, listing help and pu
   expect(help).toEqual(dashed);
   expect(help.status).toBe(0);
   const lines = help.stdout.split('\n');
-  expect(lines.slice(0, 3)).toEqual([
+  expect(lines.slice(0, 4)).toEqual([
     "usage: house <tool> ['<arguments as JSON>']",
     'help',
     "push [commit]: sends the Local copy's committed changes to House",
+    "fetch: records House's changes on each Local copy's refs/house/received",
   ]);
   expect(lines).toContain('about_house');
   expect(help.stdout).not.toMatch(/\bgit\b/);

@@ -103,7 +103,6 @@ export const LISTING: Listed[] = [
   },
 ];
 
-const WRITES = new Set(['edit', 'append_record', 'upload', 'run_command']);
 
 export function conversationCredential(conversation: string): string {
   return `ahc_${conversation}`;
@@ -218,14 +217,11 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     const result = message.method === 'tools/list' ? { tools: LISTING } : answer(message.params.arguments ?? {}, request);
     return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });
-  house.route('POST', '/kit/tools/mutations', () => ({
-    body: { tools: LISTING.map((tool) => ({ name: tool.name, writes: WRITES.has(tool.name) })) },
-  }));
   house.route('POST', '/kit/conversations/:conversation/credential', (request) => ({
     body: { credential: conversationCredential(request.params.conversation!) },
   }));
   house.route('POST', '/kit/restarted', () => ({ body: {} }));
-  house.route('POST', '/kit/local-copy/selection', () => ({ body: { local_copy: null } }));
+  house.route('POST', '/kit/local-copy/selection', () => ({ body: { local_copy: { rooms: [] } } }));
   let transcribe = hosting.transcribe ?? false;
   const reports: Record<string, unknown>[] = [];
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved, transcribe } }));

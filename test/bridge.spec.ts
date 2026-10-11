@@ -75,6 +75,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       "usage: house <tool> ['<arguments as JSON>']",
       'help',
       "push [commit]: sends the Local copy's committed changes to House",
+      "fetch: records House's changes on each Local copy's refs/house/received",
       ...LISTING.map(helpLine),
     ].join('\n') + '\n',
   );
@@ -88,7 +89,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   ]);
 });
 
-it('attaches a fresh operation id to each mutation and none to a read', async () => {
+it('attaches a fresh operation id to every Tool call, a read included, and never asks House which Tools write', async () => {
   const hosted = await hostKit();
   await opened(hosted);
   const record = '{"room_ref":"r_room","source_ref":"s_source","body":"hello"}';
@@ -102,13 +103,9 @@ it('attaches a fresh operation id to each mutation and none to a read', async ()
 
   await runs(hosted, 4);
   const operations = hosted.mcp.map((received) => called(received).params._meta[OPERATION]);
-  expect(operations).toEqual([
-    expect.stringMatching(UUID_V7),
-    expect.stringMatching(UUID_V7),
-    expect.stringMatching(UUID_V7),
-    undefined,
-  ]);
-  expect(new Set(operations.slice(0, 3)).size).toBe(3);
+  expect(operations).toEqual(Array(4).fill(expect.stringMatching(UUID_V7)));
+  expect(new Set(operations).size).toBe(4);
+  expect(hosted.house.requests.filter((received) => received.path.startsWith('/kit/tools/'))).toEqual([]);
 });
 
 it('resends a write House answers pending, and one whose answer is lost, as the same request until its outcome arrives', async () => {
@@ -130,22 +127,6 @@ it('resends a write House answers pending, and one whose answer is lost, as the 
   expect(hosted.mcp).toHaveLength(3);
   expect(hosted.mcp.map((received) => received.body)).toEqual(Array(3).fill(hosted.mcp[0]!.body));
   expect(called(hosted.mcp[0]!).params._meta[OPERATION]).toMatch(UUID_V7);
-});
-
-it('asks House which tools write once per conversation, however many calls it forwards', async () => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  const record = '{"room_ref":"r_room","source_ref":"s_source","body":"hello"}';
-
-  directed(hosted, `@house search {"query":"one"}\n@house append_record ${record}\n@house search {"query":"two"}`);
-
-  await runs(hosted, 3);
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/tools/mutations')).toHaveLength(1);
-  expect(hosted.mcp.map((received) => called(received).params._meta[OPERATION])).toEqual([
-    undefined,
-    expect.stringMatching(UUID_V7),
-    undefined,
-  ]);
 });
 
 it('declares a local file through the upload Tool and sends its bytes before upload answers', async () => {
@@ -232,14 +213,14 @@ it("prints House's own line for a refused call, and no route, status or body", a
       return { body: { jsonrpc: '2.0', id: message.id, result: hosted.tools.search!(message.params.arguments ?? {}, request) } };
     }
     return {
-      status: 503,
+      status: 500,
       body: {
         jsonrpc: '2.0',
         id: message.id,
         error: {
           code: -32000,
-          message: 'house_overloaded: House is busy; call again in 5 s',
-          data: { code: 'house_overloaded', retryable: true },
+          message: 'internal_error: House failed on this call; call again once',
+          data: { code: 'internal_error', retryable: false },
         },
       },
     };
@@ -249,7 +230,7 @@ it("prints House's own line for a refused call, and no route, status or body", a
 
   expect((await runs(hosted, 2)).map((ran) => [ran.status, ran.stderr])).toEqual([
     [1, 'house: room_not_found: you have no Room with that room_ref; pass an r_… ref from list_rooms, not a handle\n'],
-    [1, 'house: house_overloaded: House is busy; call again in 5 s\n'],
+    [1, 'house: internal_error: House failed on this call; call again once\n'],
   ]);
 });
 

@@ -44,11 +44,11 @@ until you revoke that connection on Connections. `house help` lists the Tools.
 agent's connection, so `house` and `git` no longer act as you here; a later
 `kit login` reconnects the same Environment.
 
-`kit resident` keeps the Environment connected, and keeps the Rooms you chose
-for this Environment as Git repositories under `local-copies` in the
-workspace. Commit in one and run `house push --owner` there to send the
-commit to House; in the container, run it through the install command from the
-copy's directory. Inside an Agent conversation the Agent runs `house push`.
+`kit resident` keeps the Environment connected and the Rooms you chose for it
+as Git repositories under `local-copies` in the workspace. `house fetch`
+records House's changes on each copy's `refs/house/received`; rebase onto it,
+commit and run `house push --owner` in the copy, through the install command in
+the container. An Agent runs both, without `--owner`.
 
 House Kit turns each audio file of your message to an Agent into text on this
 computer before the Agent reads it. While transcription is on, the speech

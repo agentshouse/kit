@@ -74,7 +74,7 @@ it.each([
 
 it('refuses a first message with the cause when House cannot answer the document read', async () => {
   const hosted = await hostKit();
-  hosted.house.route('POST', '/', () => ({ status: 503, body: { error: { code: 'house_unavailable' } } }));
+  hosted.house.route('POST', '/', () => ({ status: 503, body: { error: { code: 'house_unavailable', retryable: false } } }));
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 

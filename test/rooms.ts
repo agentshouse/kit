@@ -1,13 +1,12 @@
 import { apply, parse, serialize, type Change } from '@agentshouse/mdmodel';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
-import { until, type Answer, type Received } from './double.ts';
+import type { Answer, Received } from './double.ts';
 import { GIT_IDENTITY, type Hosted, type ToolResult } from './environment.ts';
 import { stop } from './kit.ts';
 
@@ -155,11 +154,12 @@ export class Room {
     };
   }
 
-  enumerated(after: number): Record<string, unknown> {
-    const paths = [...new Set(this.log.filter((entry) => entry.position > after).flatMap((entry) => entry.paths))].sort();
+  enumerated(after: number, pass: number): Record<string, unknown> {
+    const entries = this.log.filter((entry) => entry.position > after).slice(0, pass);
+    const paths = [...new Set(entries.flatMap((entry) => entry.paths))].sort();
     return {
       authority: this.ref,
-      position: String(this.position),
+      position: String(entries.at(-1)?.position ?? this.position),
       log_epoch: this.logEpoch,
       changes: paths.map((path) => {
         const file = this.files.get(path);
@@ -249,17 +249,17 @@ function answered(writes: Write[]): Write[] {
 }
 
 export interface Rooms {
-  selection: { rooms: { room_ref: string; room_handle: string | null }[] } | null;
+  selection: { rooms: { room_ref: string; room_handle: string }[] };
   room(handle: string): Room;
-  select(rooms: Room[]): Promise<void>;
+  select(rooms: Room[]): Promise<HouseRun>;
   denied: Set<string>;
   expired: Set<string>;
-  behind: Set<string>;
   dropping: number;
   dropsEdits: number;
   refusesBatches: Answer[];
   refusesUploads: Answer[];
   reads: boolean[];
+  pass: number;
   prepared: unknown[];
   uploaded: Buffer[];
   edits(): Received[];
@@ -277,15 +277,15 @@ export function serveRooms(hosted: Hosted): Rooms {
   const rooms: Room[] = [];
   const receipts = new Map<string, unknown>();
   const state: Rooms = {
-    selection: null,
+    selection: { rooms: [] },
     denied: new Set(),
     expired: new Set(),
-    behind: new Set(),
     dropping: 0,
     dropsEdits: 0,
     refusesBatches: [],
     refusesUploads: [],
     reads: [],
+    pass: Infinity,
     prepared: [],
     uploaded: [],
     room: (handle) => {
@@ -298,12 +298,9 @@ export function serveRooms(hosted: Hosted): Rooms {
       });
       return room;
     },
-    select: async (selected) => {
+    select: (selected) => {
       state.selection = { rooms: selected.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) };
-      hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
-      for (const room of selected) {
-        await until(() => existsSync(join(hosted.home, 'local-copies', 'rooms', `${room.ref}.json`)));
-      }
+      return house(hosted, '/', 'fetch');
     },
     edits: () => hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'edit'),
   };
@@ -338,14 +335,15 @@ export function serveRooms(hosted: Hosted): Rooms {
   });
   hosted.house.route('POST', '/kit/door/enumerate', (request) => {
     const { positions } = request.body as { positions: { authority: string; position: string; log_epoch: string }[] };
-    const [known] = positions;
-    const room = rooms.find((candidate) => candidate.ref === known!.authority)!;
     if (state.reads.shift() === false) return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
-    if (state.behind.has(room.ref)) return { status: 409, body: { error: { code: 'replica_behind', retryable: true } } };
-    if (state.expired.delete(room.ref) || known!.log_epoch !== room.logEpoch) {
-      return { status: 410, body: { error: { code: 'position_expired', retryable: false } } };
+    const known = positions.map((position) => ({ ...position, room: rooms.find((candidate) => candidate.ref === position.authority)! }));
+    const expired = known.find(({ room, log_epoch }) => state.expired.has(room.ref) || log_epoch !== room.logEpoch);
+    if (expired !== undefined) {
+      state.expired.delete(expired.room.ref);
+      const { authority, position } = expired;
+      return { status: 409, body: { error: { code: 'position_expired', authority, position, retryable: false } } };
     }
-    return { body: { authorities: [room.enumerated(Number(known!.position))] } };
+    return { body: { authorities: known.map(({ room, position }) => room.enumerated(Number(position), state.pass)) } };
   });
   hosted.house.route('POST', '/kit/door/revisions', (request) => {
     const { path, revision } = request.body as { path: string; revision: string };

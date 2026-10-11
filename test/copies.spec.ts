@@ -1,13 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it, vi } from 'vitest';
-import { HouseRefusal, type House } from '../src/api.ts';
-import { LocalCopies } from '../src/copies.ts';
+import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, type Hosted } from './environment.ts';
+import { hostKit, lastInput, type Hosted } from './environment.ts';
 import { temporaryHome } from './kit.ts';
-import { commitAll, git, house, serveRooms, type Room } from './rooms.ts';
+import { commitAll, git, house, serveRooms, tryGit, type Room } from './rooms.ts';
 
 function received(room: Room): string {
   return git(room.repository, 'rev-parse', 'refs/house/received').trim();
@@ -17,29 +15,53 @@ function tracked(room: Room): string[] {
   return git(room.repository, 'ls-files').trim().split('\n');
 }
 
-async function deliveredTo(hosted: Hosted, room: Room): Promise<void> {
-  const before = received(room);
-  hosted.socket.send({
-    type: 'entries',
-    authority: room.ref,
-    position: String(room.position),
-    log_epoch: room.logEpoch,
-    entries: [],
-  });
-  await until(() => received(room) !== before);
+function enumerations(hosted: Hosted): unknown[] {
+  return hosted.house.requests.filter((request) => request.path === '/kit/door/enumerate').map((request) => request.body);
 }
 
-it('copies nothing while the Environment keeps no saved choice', async () => {
+it('changes no Local copy on a stream frame, and still takes the agents signal and inputs', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
-  room.put('plan.md', 'plan\n');
+  room.put('a.md', 'a\n');
+  await rooms.select([room]);
+  const before = received(room);
+  const asked = hosted.house.requests.length;
 
+  room.put('a.md', 'a, from House\n');
+  hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
   hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
+  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.input({ kind: 'open' });
 
-  await until(() => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection').length >= 2);
-  expect(hosted.house.requests.filter((request) => request.path.startsWith('/kit/door/'))).toEqual([]);
-  expect(existsSync(room.repository)).toBe(false);
+  expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
+  expect(hosted.house.requests.slice(asked).some((request) => request.path === '/kit/agents/desired')).toBe(true);
+  expect(
+    hosted.house.requests
+      .slice(asked)
+      .filter((request) => request.path === '/kit/local-copy/selection' || request.path.startsWith('/kit/door/')),
+  ).toEqual([]);
+  expect(received(room)).toBe(before);
+});
+
+it('copies a Room it may sync as soon as it connects and leaves a copy it holds for house fetch', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const held = rooms.room('held');
+  held.put('a.md', 'a\n');
+  await rooms.select([held]);
+  const before = received(held);
+  const added = rooms.room('added');
+  added.put('b.md', 'b\n');
+  held.put('a.md', 'a, from House\n');
+  rooms.selection = { rooms: [held, added].map((room) => ({ room_ref: room.ref, room_handle: room.handle })) };
+
+  await hosted.restart();
+
+  await until(() => existsSync(join(added.repository, 'b.md')));
+  expect(tracked(added)).toEqual(['b.md']);
+  expect(received(held)).toBe(before);
+  expect(enumerations(hosted)).toEqual([]);
 });
 
 it("keeps a selected Room's documents at the copy's root beside capture/ and collaboration/, and Git tracks only the documents", async () => {
@@ -151,36 +173,83 @@ it('copies the Private Room at /rooms/private like any selected Room', async () 
   ]);
 });
 
-it('delivers House changes to the House ref and read-only content and leaves the branch, the index and working files alone', async () => {
+it('fetches every changed Room in one enumeration onto its House ref and read-only content, and leaves the branch, the index and working files alone', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
   room.put('b.md', 'b\n');
   room.put('capture/mail/one.md', 'one\n');
-  await rooms.select([room]);
+  const other = rooms.room('design');
+  other.put('brief.md', 'Brief\n');
+  await rooms.select([room, other]);
   await writeFile(join(room.repository, 'a.md'), 'a, committed locally\n');
   const local = commitAll(room.repository, 'local work');
   await writeFile(join(room.repository, 'b.md'), 'b, staged\n');
   git(room.repository, 'add', 'b.md');
   await writeFile(join(room.repository, 'b.md'), 'b, unstaged\n');
+  await writeFile(join(room.repository, 'draft.md'), 'draft\n');
   const status = git(room.repository, 'status', '--porcelain');
+  const houseRefs = [received(room), received(other)];
+  const positions = [room, other].map((copied) => ({ authority: copied.ref, position: String(copied.position), log_epoch: copied.logEpoch }));
 
   room.put('a.md', 'a, from House\n');
   room.put('c.md', 'c, new in House\n');
   room.put('capture/mail/two.md', 'two\n');
   room.remove('capture/mail/one.md');
-  await deliveredTo(hosted, room);
+  other.put('brief.md', 'Brief, from House\n');
+  const fetched = await house(hosted, '/', 'fetch');
 
+  expect(fetched).toMatchObject({
+    status: 0,
+    stdout: expect.stringMatching(/^\/rooms\/notes: refs\/house\/received is at [0-9a-f]{12}\n\/rooms\/design: refs\/house\/received is at [0-9a-f]{12}\n$/),
+  });
+  expect(enumerations(hosted)).toEqual([{ prefixes: ['/rooms/notes', '/rooms/design'], positions }]);
+  expect(git(room.repository, 'rev-parse', 'refs/house/received^').trim()).toBe(houseRefs[0]);
+  expect(git(other.repository, 'rev-parse', 'refs/house/received^').trim()).toBe(houseRefs[1]);
   expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, from House\n');
   expect(git(room.repository, 'show', 'refs/house/received:c.md')).toBe('c, new in House\n');
+  expect(git(other.repository, 'show', 'refs/house/received:brief.md')).toBe('Brief, from House\n');
   expect(git(room.repository, 'rev-parse', 'main').trim()).toBe(local);
   expect(git(room.repository, 'status', '--porcelain')).toBe(status);
   expect(await readFile(join(room.repository, 'a.md'), 'utf8')).toBe('a, committed locally\n');
   expect(git(room.repository, 'show', ':b.md')).toBe('b, staged\n');
+  expect(await readFile(join(room.repository, 'b.md'), 'utf8')).toBe('b, unstaged\n');
+  expect(await readFile(join(room.repository, 'draft.md'), 'utf8')).toBe('draft\n');
   expect(existsSync(join(room.repository, 'c.md'))).toBe(false);
   expect(await readFile(join(room.repository, 'capture/mail/two.md'), 'utf8')).toBe('two\n');
   expect(existsSync(join(room.repository, 'capture/mail/one.md'))).toBe(false);
+
+  const fetchedHouseRefs = [received(room), received(other)];
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+  expect([received(room), received(other)]).toEqual(fetchedHouseRefs);
+  expect(git(room.repository, 'status', '--porcelain')).toBe(status);
+});
+
+it('fetches one pass House bounds and the next fetch continues from it, and says when only read-only files changed', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('a.md', 'a\n');
+  await rooms.select([room]);
+  rooms.pass = 1;
+  room.put('a.md', 'a, first\n');
+  room.put('b.md', 'b\n');
+
+  expect((await house(hosted, '/', 'fetch')).stdout).toMatch(/^\/rooms\/notes: refs\/house\/received is at [0-9a-f]{12}\n$/);
+  expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, first\n');
+  expect(tryGit(room.repository, 'cat-file', '-e', 'refs/house/received:b.md').status).not.toBe(0);
+  expect(enumerations(hosted)).toHaveLength(1);
+
+  await house(hosted, '/', 'fetch');
+  expect(git(room.repository, 'show', 'refs/house/received:b.md')).toBe('b\n');
+  expect(enumerations(hosted)).toHaveLength(2);
+
+  const ref = received(room);
+  room.put('capture/mail/one.md', 'one\n');
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: '/rooms/notes: read-only files refreshed\n' });
+  expect(received(room)).toBe(ref);
+  expect(await readFile(join(room.repository, 'capture/mail/one.md'), 'utf8')).toBe('one\n');
 });
 
 it('keeps a copy where it is through a handle change, stops it on deselection and refreshes only received state on reselection', async () => {
@@ -193,20 +262,19 @@ it('keeps a copy where it is through a handle change, stops it on deselection an
 
   room.handle = 'renamed-notes';
   await rooms.select([room]);
-  await until(async () => (await readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8')).includes('renamed-notes'));
+  expect(await readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8')).toContain('renamed-notes');
   expect(existsSync(room.repository)).toBe(true);
 
   await writeFile(join(room.repository, 'a.md'), 'a, local\n');
   const local = commitAll(room.repository, 'local');
   await writeFile(join(room.repository, 'draft.md'), 'draft\n');
+  expect(await rooms.select([])).toMatchObject({
+    status: 0,
+    stdout: '/rooms/renamed-notes: no longer synced to this Environment; its files stay\n',
+  });
   const deselected = hosted.house.requests.length;
-  rooms.selection = { rooms: [] };
-  hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
-  await until(async () => (await readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8')).includes('"active":false'));
   room.put('a.md', 'a, from House\n');
-  hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
-  // Three tenths of a second outlast the Kit taking an entries frame, so a read it has not made by then is not coming.
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
   expect(hosted.house.requests.slice(deselected).filter((request) => request.path.startsWith('/kit/door/'))).toEqual([]);
   expect(git(room.repository, 'rev-parse', 'HEAD').trim()).toBe(local);
   expect(await readFile(join(room.repository, 'draft.md'), 'utf8')).toBe('draft\n');
@@ -215,108 +283,31 @@ it('keeps a copy where it is through a handle change, stops it on deselection an
     stderr: 'house: /rooms/renamed-notes is no longer synced to this Environment, so House takes no push from it\n',
   });
 
-  const before = received(room);
   await rooms.select([room]);
-  await until(() => received(room) !== before);
   expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, from House\n');
   expect(git(room.repository, 'rev-parse', 'HEAD').trim()).toBe(local);
   expect(await readFile(join(room.repository, 'a.md'), 'utf8')).toBe('a, local\n');
   expect(await readFile(join(room.repository, 'draft.md'), 'utf8')).toBe('draft\n');
 });
 
-it('reads the Room whole again when House no longer holds the copy position', async () => {
+it('reads the Room whole again when House no longer holds the copy position, and fetches the other Rooms beside it', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
-  await rooms.select([room]);
+  const other = rooms.room('design');
+  other.put('brief.md', 'Brief\n');
+  await rooms.select([room, other]);
 
   room.put('a.md', 'a, much later\n');
+  other.put('brief.md', 'Brief, later\n');
   rooms.expired.add(room.ref);
-  await deliveredTo(hosted, room);
+  expect((await house(hosted, '/', 'fetch')).status).toBe(0);
 
   expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, much later\n');
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap')).toHaveLength(2);
-});
-
-it('does not ask House again on a timer after its replica is behind the copy position', async () => {
-  const home = await temporaryHome();
-  const previousHome = process.env.HOUSE_KIT_HOME;
-  process.env.HOUSE_KIT_HOME = home;
-  vi.useFakeTimers();
-  try {
-    const key = 'rooms/r_replica.x';
-    const roomRef = 'r_replica.x';
-    const logEpoch = '0192f0e4-1c2d-7000-8000-000000000001';
-    await mkdir(join(home, 'local-copies', 'rooms'), { recursive: true });
-    await writeFile(
-      join(home, 'local-copies', 'rooms', `${roomRef}.json`),
-      JSON.stringify({
-        key,
-        room_ref: roomRef,
-        room_handle: 'notes',
-        repository: '/unused',
-        active: true,
-        house: 'commit',
-        position: '1',
-        log_epoch: logEpoch,
-        write: [''],
-        protected: [],
-        read_only: [],
-        manifests: { commit: { parent: null, files: {} } },
-        moves: [],
-      }),
-    );
-    let enumerations = 0;
-    const house: House = {
-      post: async () => {
-        enumerations++;
-        throw new HouseRefusal('/kit/door/enumerate', 409, '{"error":{"code":"replica_behind"}}');
-      },
-      deliver: async () => {
-        throw new Error('unexpected delivery');
-      },
-    };
-    const copies = new LocalCopies(house);
-    await copies.load();
-
-    copies.entries({ authority: roomRef, position: '2', log_epoch: logEpoch });
-    const queues = (copies as unknown as { queues: Map<string, Promise<unknown>> }).queues;
-    const first = queues.get(key);
-    expect(first).toBeDefined();
-    await first;
-    expect(enumerations).toBe(1);
-
-    // Thirty seconds is the removed replica-behind retry deadline, so advancing through it proves the 409 schedules no retry.
-    await vi.advanceTimersByTimeAsync(30_000);
-    await queues.get(key);
-    expect(enumerations).toBe(1);
-  } finally {
-    vi.useRealTimers();
-    if (previousHome === undefined) delete process.env.HOUSE_KIT_HOME;
-    else process.env.HOUSE_KIT_HOME = previousHome;
-  }
-});
-
-it('asks a replica behind the copy position once and catches the copy up at the next entries frame', async () => {
-  const hosted = await hostKit();
-  const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
-  room.put('a.md', 'a\n');
-  await rooms.select([room]);
-  const enumerations = () => hosted.house.requests.filter((request) => request.path === '/kit/door/enumerate');
-  const before = received(room);
-
-  room.put('a.md', 'a, from House\n');
-  rooms.behind.add(room.ref);
-  hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
-  await until(() => enumerations()[0]);
-  expect(enumerations()).toHaveLength(1);
-  expect(received(room)).toBe(before);
-
-  rooms.behind.delete(room.ref);
-  await deliveredTo(hosted, room);
-  expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, from House\n');
+  expect(git(other.repository, 'show', 'refs/house/received:brief.md')).toBe('Brief, later\n');
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap')).toHaveLength(3);
+  expect(enumerations(hosted)).toHaveLength(2);
 });
 
 it('reads a bundle House hands over through a transfer address', async () => {

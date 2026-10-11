@@ -83,7 +83,6 @@ it('kills a process still opening its session and refuses the open, and the next
 
 it.each([
   ['its tool call', '/', {}, []],
-  ['the tool list its call is classified by', '/kit/tools/mutations', { tools: [] }, []],
   ['the file it attaches', '/kit/conversation/originals/get', {}, [{ version: 'version-1', name: 'file.txt' }]],
 ])(
   'kills a running process the moment the kill arrives while House holds %s for its first message, and refuses that message',

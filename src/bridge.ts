@@ -130,7 +130,7 @@ export async function openBridge(
       });
       const after = resendAfter(forwarded, attempt);
       if (after === null) return forwarded!;
-      // A write House did not settle is sent again on the jittered curve, or after the wait House names for a pending one.
+      // A Tool call House did not settle is sent again on the jittered curve, or after the wait House names for a pending one.
       await delay(after, undefined, { signal: closed.signal });
     }
   };
@@ -172,23 +172,9 @@ export async function openBridge(
     return { url: held.url, operation: held.operation, bytes: bytes.length, sha256 };
   };
 
-  let mutations: Promise<ReadonlySet<string>> | null = null;
-  const writes = async (tool: string): Promise<boolean> => {
-    mutations ??= house
-      .post<{ tools: { name: string; writes: boolean }[] }>('/kit/tools/mutations', {}, closed.signal)
-      .then(({ tools }) => new Set(tools.filter((listed) => listed.writes).map((listed) => listed.name)));
-    try {
-      return (await mutations).has(tool);
-    } catch (error) {
-      mutations = null;
-      throw error;
-    }
-  };
-
-  const forward = async (text: string): Promise<Forwarded> => {
+  const forward = (text: string): Promise<Forwarded> => {
     const message = JSON.parse(text) as Message;
-    const tool = message.method === 'tools/call' ? String(message.params.name) : null;
-    return send(message, tool !== null && (await writes(tool)) ? operationId() : null);
+    return send(message, message.method === 'tools/call' ? operationId() : null);
   };
 
   const caller: Caller = {
@@ -213,6 +199,7 @@ export async function openBridge(
       const { cwd, commit } = JSON.parse(text) as { cwd: string; commit: string };
       return { status: 200, text: JSON.stringify(await copies.push(cwd, commit, caller)) };
     }
+    if (path === '/git/fetch') return { status: 200, text: JSON.stringify(await copies.fetch()) };
     if (path === '/git/observed') {
       await copies.observed(JSON.parse(text) as Observed);
       return { status: 200, text: '{}' };
@@ -237,7 +224,8 @@ export async function openBridge(
         response.writeHead(error.status, { 'content-type': 'application/json' }).end(error.text);
         return;
       }
-      response.writeHead(502).end(request.url === '/git/push' && error instanceof Error ? error.message : UNREACHABLE);
+      const verb = request.url === '/git/push' || request.url === '/git/fetch';
+      response.writeHead(502).end(verb && error instanceof Error ? error.message : UNREACHABLE);
     }
   });
   bridge.listen(socketPath);

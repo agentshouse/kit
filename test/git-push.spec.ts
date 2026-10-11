@@ -215,6 +215,29 @@ it('refuses a stale component or whole-file base as one batch, records House sta
   expect(room.files.get('ROOM.md')!.content).toBe('Mine too\n');
 });
 
+it("reads every pass House has before it says a refused push left House's current state on the House ref", async () => {
+  const { hosted, rooms, room } = await copied();
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\nmine\n');
+  commitAll(room.repository, 'mine');
+  rooms.pass = 1;
+  room.put('docs/other.md', 'other\n');
+  room.put('docs/third.md', 'third\n');
+  room.put('docs/plan.md', 'one\ntheirs\n');
+
+  const refused = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(refused.status).toBe(1);
+  expect(refused.stderr).toContain("refs/house/received holds House's current state; rebase onto it and push again");
+  expect(git(room.repository, 'show', 'refs/house/received:docs/plan.md')).toBe('one\ntheirs\n');
+  expect(tryGit(room.repository, 'rebase', 'refs/house/received').status).not.toBe(0);
+  await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntheirs\nmine\n');
+  git(room.repository, 'add', 'docs/plan.md');
+  git(room.repository, 'rebase', '--continue');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0, stdout: `House accepted ${short(head(room))}.\n` });
+  expect(room.files.get('docs/plan.md')!.content).toBe('one\ntheirs\nmine\n');
+});
+
 it('refuses a change to a read-only path whatever the ignore file says and changes nothing in House', async () => {
   const { hosted, room } = await copied();
   await writeFile(join(room.repository, '.gitignore'), '');
@@ -416,7 +439,8 @@ it('picks its copies up again when the resident starts anew', async () => {
 
   expect(pushed).toMatchObject({ status: 0, stdout: `House accepted ${short(pushedCommit)}.\n` });
   expect(room.files.get('docs/plan.md')!.content).toBe('one\ntwo\nthree\n');
-  await until(() => git(room.repository, 'show', 'refs/house/received:docs/memo.md').includes('owner: grace'));
+  expect((await house(hosted, '/', 'fetch')).status).toBe(0);
+  expect(git(room.repository, 'show', 'refs/house/received:docs/memo.md')).toContain('owner: grace');
 });
 
 it('finishes a push whose operation expired when House holds its component changes beside a remote one', async () => {
@@ -444,8 +468,8 @@ it('keeps newer House text on the House ref when it finishes a push whose answer
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
   room.put('docs/plan.md', 'one\ntwo\nmine\nlater\n');
-  hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
-  await until(() => git(room.repository, 'show', 'refs/house/received:docs/plan.md') === 'one\ntwo\nmine\nlater\n');
+  expect((await house(hosted, '/', 'fetch')).status).toBe(0);
+  expect(git(room.repository, 'show', 'refs/house/received:docs/plan.md')).toBe('one\ntwo\nmine\nlater\n');
   hosted.house.route('POST', '/kit/door/enumerate', () => ({ status: 503, body: { error: { code: 'house_unavailable', retryable: true } } }));
 
   const recovered = await house(hosted, room.repository, 'push', '--owner');
@@ -463,7 +487,7 @@ it('keeps a pushed operation whose outcome it could not yet read and finishes it
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
   hosted.house.route('POST', '/kit/door/batch', () => ({ status: 410, body: { error: { code: 'operation_expired', retryable: false } } }));
-  rooms.reads = [true, false];
+  rooms.reads = [false];
 
   const unread = await house(hosted, room.repository, 'push', '--owner');
   const finished = await house(hosted, room.repository, 'push', '--owner');

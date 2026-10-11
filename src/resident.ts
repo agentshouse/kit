@@ -8,7 +8,7 @@ import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations, type Input } from './conversations.ts';
-import { LocalCopies } from './copies.ts';
+import { LocalCopies, type Pushed } from './copies.ts';
 import { agentBase, enrolled, kitHome } from './home.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
@@ -37,13 +37,18 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
   await rm(socketPath, { force: true });
   const server = createServer(async (request, response) => {
     try {
-      if (request.url !== '/git/push') {
+      const text = await received(request);
+      let answered: Pushed;
+      if (request.url === '/git/fetch') {
+        answered = await copies.fetch();
+      } else if (request.url === '/git/push') {
+        const { cwd, commit } = JSON.parse(text) as { cwd: string; commit: string };
+        answered = await copies.push(cwd, commit, copies.owner);
+      } else {
         response.writeHead(404).end();
         return;
       }
-      const { cwd, commit } = JSON.parse(await received(request)) as { cwd: string; commit: string };
-      const pushed = await copies.push(cwd, commit, copies.owner);
-      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(pushed));
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(answered));
     } catch (error) {
       response.writeHead(502).end(error instanceof Error ? error.message : String(error));
     }
@@ -123,10 +128,6 @@ export async function resident(): Promise<void> {
     frame: (arrived: Frame) => {
       if (arrived.type === 'watching') conversations.watching(arrived.watching === true);
       if (arrived.type === 'work_available' && arrived.subject === 'agents') logged(agents.refresh());
-      if (arrived.type === 'work_available' && arrived.subject === 'local_copy') logged(copies.select());
-      if (arrived.type === 'entries') {
-        copies.entries(arrived as unknown as { authority: string; position: string; log_epoch: string });
-      }
       if (arrived.type === 'input') {
         reported = false;
         if (arrived.kind === 'sign_in') signIns.start(arrived as unknown as SignIn);

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { request, setGlobalProxyFromEnv } from 'node:http';
 import { basename, join } from 'node:path';
 import type { ToolResult } from './bridge.ts';
+import { HOUSE_REF } from './git.ts';
 import { kitHome, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
@@ -29,6 +30,8 @@ interface Saved {
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
 const PUSH_USAGE = 'usage: house push [commit] [--owner]';
 const PUSH = "push [commit]: sends the Local copy's committed changes to House";
+const FETCH_USAGE = 'usage: house fetch';
+const FETCH = `fetch: records House's changes on each Local copy's ${HOUSE_REF}`;
 const ARGUMENTS = `the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'`;
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
@@ -150,6 +153,16 @@ async function push(args: string[]): Promise<string> {
   return pushed.text;
 }
 
+async function fetched(args: string[]): Promise<string> {
+  if (args.includes('--help')) return FETCH_USAGE;
+  const answer = JSON.parse(await bridged('/git/fetch', {}, undefined, socketPath ?? join(kitHome(), 'owner.sock'))) as {
+    refused: boolean;
+    text: string;
+  };
+  if (answer.refused) throw new Error(answer.text);
+  return answer.text;
+}
+
 function argumentsOf(argument: string | undefined): Record<string, unknown> {
   if (argument === undefined) return {};
   let parsed: unknown;
@@ -164,7 +177,7 @@ function argumentsOf(argument: string | undefined): Record<string, unknown> {
 
 async function house([verb, argument]: string[]): Promise<string> {
   if (verb === undefined || verb === '--help' || verb === 'help') {
-    return [USAGE, 'help', PUSH, ...(await tools()).map((tool) => (tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`))].join('\n');
+    return [USAGE, 'help', PUSH, FETCH, ...(await tools()).map((tool) => (tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`))].join('\n');
   }
   if (argument === '--help') {
     const tool = (await tools()).find((listed) => listed.name === verb);
@@ -193,7 +206,7 @@ async function called(name: string, args: Record<string, unknown>): Promise<stri
 }
 
 const argv = process.argv.slice(2);
-(argv[0] === 'push' ? push(argv.slice(1)) : house(argv)).then(
+(argv[0] === 'push' ? push(argv.slice(1)) : argv[0] === 'fetch' ? fetched(argv.slice(1)) : house(argv)).then(
   (text) => {
     process.stdout.write(`${text}\n`);
     if (argv[0] === 'shell') process.exitCode = Number(/^exit: (\d+)(?:\n|$)/.exec(text)?.[1] ?? 0);

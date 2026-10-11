@@ -1,10 +1,11 @@
 import type { Bridge } from './bridge.ts';
+import { HOUSE_REF } from './git.ts';
 import { HOW_WE_WORK } from './skills.ts';
 
 const HOUSE_LINE = 'Work with House through the `house` CLI: run `house --help`.';
 const FILE_LINE = 'To give the User a file or a page, upload it with `house upload` and link it; never start a server.';
 const READ_LINE = 'Before working in a Room, read `/rooms/private/rooms/<handle>/AGENTS.md`.';
-const COPIES_LINE = 'House Local copies; commit, then `house push`:';
+const COPIES_LINE = `House Local copies; before work run \`house fetch\` and rebase onto \`${HOUSE_REF}\`; after it commit, then \`house push\`:`;
 const UNREADABLE = /^(?:\S+: )?(?:path_not_found|room_not_found|operation_denied)\b/;
 const FAILED = /^exit: [1-9]\d*$/;
 const CUT = /^stderr: shell: output_cut (\d+) of \d+ bytes; continue with: (.+)$/;

@@ -25,11 +25,6 @@ const BRANCH = 'main';
 const PROVENANCE = '_provenance';
 const IDENTITY = { GIT_COMMITTER_NAME: 'House Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
 
-interface Selected {
-  key: string;
-  handle: string;
-}
-
 interface Manifest {
   parent: string | null;
   files: Record<string, string | null>;
@@ -88,7 +83,6 @@ interface Copy {
 
 interface Authority {
   room_ref: string;
-  managed_replication: string;
   protected_paths: string[];
   operations: { write: string[] };
   position: string;
@@ -166,6 +160,21 @@ function rebaseFixes(refusal: Refusal): boolean {
 
 function short(commit: string): string {
   return commit.slice(0, 12);
+}
+
+function moved(before: Copy, after: Copy): string[] {
+  if (before.house !== after.house) return [`${rootOf(after.room_handle)}: ${HOUSE_REF} is at ${short(after.house)}`];
+  return before.position === after.position ? [] : [`${rootOf(after.room_handle)}: read-only files refreshed`];
+}
+
+function expiredAuthority(error: unknown): string | undefined {
+  if (!(error instanceof HouseRefusal)) return undefined;
+  try {
+    const { error: refused } = JSON.parse(error.text) as { error?: { code?: unknown; authority?: unknown } };
+    return refused?.code === 'position_expired' && typeof refused.authority === 'string' ? refused.authority : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function covers(path: string, prefix: string): boolean {
@@ -318,7 +327,6 @@ export class LocalCopies {
   private readonly house: House;
   private readonly copies = new Map<string, Copy>();
   private readonly queues = new Map<string, Promise<unknown>>();
-  private readonly delivering = new Set<string>();
   private selecting: Promise<unknown> = Promise.resolve();
 
   constructor(house: House) {
@@ -360,39 +368,61 @@ export class LocalCopies {
       .sort();
   }
 
-  select(): Promise<void> {
-    const selected = this.selecting.then(() => this.reselect());
+  async select(): Promise<void> {
+    const selected = await this.selected(() => this.fetched(false));
+    if (selected.refused) logged(selected.text);
+  }
+
+  fetch(): Promise<Pushed> {
+    return this.selected(() => this.fetched(true));
+  }
+
+  private selected<T>(work: () => Promise<T>): Promise<T> {
+    const selected = this.selecting.then(work);
     this.selecting = selected.catch(() => undefined);
     return selected;
   }
 
-  private async reselect(): Promise<void> {
+  private async fetched(refreshing: boolean): Promise<Pushed> {
     const { local_copy: chosen } = await this.house.post<{
-      local_copy: { rooms: { room_ref: string; room_handle: string | null }[] } | null;
+      local_copy: { rooms: { room_ref: string; room_handle: string }[] };
     }>('/kit/local-copy/selection', {});
-    const selected: Selected[] = (chosen?.rooms ?? []).flatMap((room) =>
-      room.room_handle === null ? [] : [{ key: `rooms/${room.room_ref}`, handle: room.room_handle }],
-    );
-    const keys = new Set(selected.map((scope) => scope.key));
-    const work: Promise<unknown>[] = [];
-    for (const key of this.copies.keys()) {
-      if (keys.has(key)) continue;
-      work.push(
-        this.exclusive(key, async () => {
-          const copy = this.copies.get(key)!;
-          if (copy.active) await this.save({ ...copy, active: false });
-        }),
-      );
-    }
-    for (const scope of selected) work.push(this.exclusive(scope.key, () => this.apply(scope)).catch(logged));
-    await Promise.all(work);
-  }
-
-  entries(frame: { authority: string; position: string; log_epoch: string }): void {
-    const copy = [...this.copies.values()].find((held) => held.active && held.room_ref === frame.authority);
-    if (copy === undefined) return;
-    if (copy.log_epoch === frame.log_epoch && BigInt(frame.position) <= BigInt(copy.position)) return;
-    this.deliver(copy.key);
+    const selected = new Map(chosen.rooms.map((room) => [`rooms/${room.room_ref}`, room.room_handle]));
+    return this.holding([...new Set([...this.copies.keys(), ...selected.keys()])].sort(), async () => {
+      const said: string[] = [];
+      let refused = false;
+      for (const copy of this.copies.values()) {
+        if (selected.has(copy.key) || !copy.active) continue;
+        await this.save({ ...copy, active: false });
+        said.push(`${rootOf(copy.room_handle)}: no longer synced to this Environment; its files stay`);
+      }
+      const current: Copy[] = [];
+      for (const [key, handle] of selected) {
+        try {
+          const held = this.copies.get(key);
+          if (held === undefined || !(await exists(held.repository))) {
+            said.push(await this.materialize(key, handle));
+            continue;
+          }
+          const copy = held.room_handle === handle ? held : await this.save({ ...held, room_handle: handle });
+          if (copy.active) current.push(copy);
+          else said.push(...moved(copy, await this.save(await this.received({ ...copy, active: true }))));
+        } catch (error) {
+          refused = true;
+          said.push(`${rootOf(handle)}: ${causeOf(error)}`);
+        }
+      }
+      if (refreshing && current.length > 0) {
+        try {
+          const refreshed = await this.refreshed(current);
+          current.forEach((copy, index) => said.push(...moved(copy, refreshed[index]!)));
+        } catch (error) {
+          refused = true;
+          said.push(error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error));
+        }
+      }
+      return { refused, text: said.length === 0 ? 'Nothing new from House.' : said.join('\n') };
+    });
   }
 
   async observed(report: Observed): Promise<void> {
@@ -444,14 +474,9 @@ export class LocalCopies {
     return queued;
   }
 
-  private deliver(key: string): void {
-    if (this.delivering.has(key)) return;
-    this.delivering.add(key);
-    void this.exclusive(key, async () => {
-      this.delivering.delete(key);
-      const copy = this.copies.get(key)!;
-      if (copy.active) await this.save(await this.caughtUp(copy));
-    }).catch(logged);
+  private holding<T>(keys: readonly string[], work: () => Promise<T>): Promise<T> {
+    const [key, ...rest] = keys;
+    return key === undefined ? work() : this.exclusive(key, () => this.holding(rest, work));
   }
 
   private async save(copy: Copy): Promise<Copy> {
@@ -496,47 +521,11 @@ export class LocalCopies {
     return read;
   }
 
-  private async apply(scope: Selected): Promise<void> {
-    let copy = this.copies.get(scope.key);
-    if (copy === undefined || !(await exists(copy.repository))) {
-      await this.materialize(scope);
-      return;
-    }
-    if (copy.room_handle !== scope.handle) copy = await this.save({ ...copy, room_handle: scope.handle });
-    if (!copy.active) {
-      await this.save(await this.received({ ...copy, active: true }));
-      return;
-    }
-    const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', {
-      prefixes: [rootOf(copy.room_handle)],
-    });
-    const authority = discovery.authorities.find((entry) => entry.room_ref === copy.room_ref);
-    if (authority === undefined) return;
-    if (authority.managed_replication !== 'admitted') {
-      logged(`operation_denied: ${rootOf(copy.room_handle)} is not synchronized to this Environment`);
-      return;
-    }
-    if (
-      JSON.stringify([authority.operations.write, authority.protected_paths]) !==
-      JSON.stringify([copy.write, copy.protected])
-    ) {
-      await this.save(await this.received(copy));
-      return;
-    }
-    await this.save(await this.caughtUp(copy));
-  }
-
-  private async materialize(scope: Selected): Promise<void> {
-    const read = await this.read(scope.handle);
-    if (read === null) {
-      logged(`House serves nothing of ${rootOf(scope.handle)} to copy`);
-      return;
-    }
+  private async materialize(key: string, handle: string): Promise<string> {
+    const read = await this.read(handle);
+    if (read === null) throw new Error('House serves nothing of it to copy');
     const repository = join(localCopies(), 'rooms', read.anchor);
-    if (await exists(repository)) {
-      logged(`${repository} already exists and House Kit leaves it as it is`);
-      return;
-    }
+    if (await exists(repository)) throw new Error(`${repository} already exists and House Kit leaves it as it is`);
     const staging = join(dirname(repository), `.${randomUUID()}`);
     await mkdir(staging, { recursive: true });
     let house: string;
@@ -544,7 +533,7 @@ export class LocalCopies {
     try {
       await git(staging, ['init', '-q', '-b', BRANCH]);
       house = await importCommits(staging, [
-        { message: `House ${rootOf(scope.handle)}`, from: null, files: read.writable },
+        { message: `House ${rootOf(handle)}`, from: null, files: read.writable },
       ]);
       await git(staging, ['update-ref', `refs/heads/${BRANCH}`, house]);
       await git(staging, ['reset', '-q', '--hard']);
@@ -556,9 +545,9 @@ export class LocalCopies {
       throw error;
     }
     await this.save({
-      key: scope.key,
+      key,
       room_ref: read.anchor,
-      room_handle: scope.handle,
+      room_handle: handle,
       repository,
       active: true,
       house,
@@ -570,6 +559,7 @@ export class LocalCopies {
       manifests: { [house]: { parent: null, files: read.revisions } },
       moves: [],
     });
+    return `${rootOf(handle)}: copied to ${repository}`;
   }
 
   private async received(copy: Copy): Promise<Copy> {
@@ -594,25 +584,52 @@ export class LocalCopies {
     return next;
   }
 
-  private async caughtUp(start: Copy): Promise<Copy> {
-    let copy = start;
-    for (;;) {
+  private async refreshed(copies: readonly Copy[]): Promise<Copy[]> {
+    const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', {
+      prefixes: copies.map((copy) => rootOf(copy.room_handle)),
+    });
+    const regranted = new Map<string, Copy>();
+    for (const copy of copies) {
+      const authority = discovery.authorities.find((entry) => entry.room_ref === copy.room_ref);
+      if (
+        authority !== undefined &&
+        JSON.stringify([authority.operations.write, authority.protected_paths]) !== JSON.stringify([copy.write, copy.protected])
+      ) {
+        regranted.set(copy.key, await this.save(await this.received(copy)));
+      }
+    }
+    const caught = await this.caughtUp(copies.filter((copy) => !regranted.has(copy.key)), false);
+    return copies.map((copy) => regranted.get(copy.key) ?? caught.find((held) => held.key === copy.key)!);
+  }
+
+  private async caughtUp(copies: readonly Copy[], whole: boolean): Promise<Copy[]> {
+    const caught = new Map(copies.map((copy) => [copy.key, copy]));
+    let asking = [...copies];
+    while (asking.length > 0) {
       let answer: { authorities: { authority: string; position: string; log_epoch: string; changes: Change[] }[] };
       try {
         answer = await this.house.post('/kit/door/enumerate', {
-          prefixes: [rootOf(copy.room_handle)],
-          positions: [{ authority: copy.room_ref, position: copy.position, log_epoch: copy.log_epoch }],
+          prefixes: asking.map((copy) => rootOf(copy.room_handle)),
+          positions: asking.map((copy) => ({ authority: copy.room_ref, position: copy.position, log_epoch: copy.log_epoch })),
         });
       } catch (error) {
-        const code = error instanceof HouseRefusal ? (refusalOf(error.text)?.code ?? null) : null;
-        if (code === 'position_expired') return this.received(copy);
-        if (code !== 'replica_behind') throw error;
-        return copy;
+        const expired = asking.find((copy) => copy.room_ref === expiredAuthority(error));
+        if (expired === undefined) throw error;
+        caught.set(expired.key, await this.save(await this.received(expired)));
+        asking = asking.filter((copy) => copy !== expired);
+        continue;
       }
-      const view = answer.authorities.find((entry) => entry.authority === copy.room_ref);
-      if (view === undefined || (view.position === copy.position && view.log_epoch === copy.log_epoch)) return copy;
-      copy = await this.save(await this.incorporated(copy, view.changes, view.position, view.log_epoch));
+      const advanced: Copy[] = [];
+      for (const copy of asking) {
+        const view = answer.authorities.find((entry) => entry.authority === copy.room_ref);
+        if (view === undefined || (view.position === copy.position && view.log_epoch === copy.log_epoch)) continue;
+        const next = await this.save(await this.incorporated(copy, view.changes, view.position, view.log_epoch));
+        caught.set(copy.key, next);
+        advanced.push(next);
+      }
+      asking = whole ? advanced : [];
     }
+    return copies.map((copy) => caught.get(copy.key)!);
   }
 
   private async incorporated(copy: Copy, changes: readonly Change[], position: string, logEpoch: string): Promise<Copy> {
@@ -762,7 +779,7 @@ export class LocalCopies {
       const rebased = rebaseFixes(outcome.refused);
       let settled = await this.save(without(copy));
       try {
-        settled = await this.save(await this.caughtUp(settled));
+        settled = (await this.caughtUp([settled], true))[0]!;
       } catch {
         return {
           refused: true,
@@ -781,7 +798,7 @@ export class LocalCopies {
 
   private async recovered(copy: Copy): Promise<Pushed> {
     const push = copy.push!;
-    const current = await this.save(await this.caughtUp(copy));
+    const current = (await this.caughtUp([copy], true))[0]!;
     const house = await tree(copy.repository, current.house);
     const root = rootOf(current.room_handle);
     if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit)))) {
@@ -824,7 +841,7 @@ export class LocalCopies {
     const push = copy.push!;
     let written = push.written!;
     if (push.changes.some((change) => change.op === 'rename')) {
-      copy = await this.save(await this.caughtUp(copy));
+      copy = (await this.caughtUp([copy], true))[0]!;
       const house = await tree(copy.repository, copy.house);
       const sent = await tree(copy.repository, push.house);
       if (push.changes.some((change) => change.op === 'rename' && !house.has(relative(change.to)))) {
