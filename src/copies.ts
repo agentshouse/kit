@@ -327,7 +327,7 @@ export class LocalCopies {
   private readonly house: House;
   private readonly copies = new Map<string, Copy>();
   private readonly queues = new Map<string, Promise<unknown>>();
-  private selecting: Promise<unknown> = Promise.resolve();
+  private answering: Promise<unknown> = Promise.resolve();
 
   constructor(house: House) {
     this.house = house;
@@ -361,43 +361,43 @@ export class LocalCopies {
   }
 
   async mapping(): Promise<string[]> {
-    await this.selecting;
+    await this.answering;
     return [...this.copies.values()]
       .filter((copy) => copy.active)
       .map((copy) => `${rootOf(copy.room_handle)}: ${copy.repository}`)
       .sort();
   }
 
-  async select(): Promise<void> {
-    const selected = await this.selected(() => this.fetched(false));
-    if (selected.refused) logged(selected.text);
+  async connected(): Promise<void> {
+    const copied = await this.answered(() => this.fetched(false));
+    if (copied.refused) logged(copied.text);
   }
 
   fetch(): Promise<Pushed> {
-    return this.selected(() => this.fetched(true));
+    return this.answered(() => this.fetched(true));
   }
 
-  private selected<T>(work: () => Promise<T>): Promise<T> {
-    const selected = this.selecting.then(work);
-    this.selecting = selected.catch(() => undefined);
-    return selected;
+  private answered<T>(work: () => Promise<T>): Promise<T> {
+    const answered = this.answering.then(work);
+    this.answering = answered.catch(() => undefined);
+    return answered;
   }
 
   private async fetched(refreshing: boolean): Promise<Pushed> {
-    const { local_copy: chosen } = await this.house.post<{
+    const { local_copy: answer } = await this.house.post<{
       local_copy: { rooms: { room_ref: string; room_handle: string }[] };
     }>('/kit/local-copy/selection', {});
-    const selected = new Map(chosen.rooms.map((room) => [`rooms/${room.room_ref}`, room.room_handle]));
-    return this.holding([...new Set([...this.copies.keys(), ...selected.keys()])].sort(), async () => {
+    const synced = new Map(answer.rooms.map((room) => [`rooms/${room.room_ref}`, room.room_handle]));
+    return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
       const said: string[] = [];
       let refused = false;
       for (const copy of this.copies.values()) {
-        if (selected.has(copy.key) || !copy.active) continue;
+        if (synced.has(copy.key) || !copy.active) continue;
         await this.save({ ...copy, active: false });
         said.push(`${rootOf(copy.room_handle)}: no longer synced to this Environment; its files stay`);
       }
       const current: Copy[] = [];
-      for (const [key, handle] of selected) {
+      for (const [key, handle] of synced) {
         try {
           const held = this.copies.get(key);
           if (held === undefined || !(await exists(held.repository))) {

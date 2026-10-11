@@ -249,9 +249,10 @@ function answered(writes: Write[]): Write[] {
 }
 
 export interface Rooms {
-  selection: { rooms: { room_ref: string; room_handle: string }[] };
+  answered: Room[];
   room(handle: string): Room;
-  select(rooms: Room[]): Promise<HouseRun>;
+  fetch(rooms: Room[]): Promise<HouseRun>;
+  unreadable: Set<string>;
   denied: Set<string>;
   expired: Set<string>;
   dropping: number;
@@ -265,7 +266,7 @@ export interface Rooms {
   edits(): Received[];
 }
 
-function selectedRooms(rooms: Room[], prefixes: string[]): Room[] {
+function prefixed(rooms: Room[], prefixes: string[]): Room[] {
   return rooms.filter((room) => prefixes.includes(room.root));
 }
 
@@ -277,7 +278,8 @@ export function serveRooms(hosted: Hosted): Rooms {
   const rooms: Room[] = [];
   const receipts = new Map<string, unknown>();
   const state: Rooms = {
-    selection: { rooms: [] },
+    answered: [],
+    unreadable: new Set(),
     denied: new Set(),
     expired: new Set(),
     dropping: 0,
@@ -298,8 +300,8 @@ export function serveRooms(hosted: Hosted): Rooms {
       });
       return room;
     },
-    select: (selected) => {
-      state.selection = { rooms: selected.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) };
+    fetch: (answer) => {
+      state.answered = answer;
       return house(hosted, '/', 'fetch');
     },
     edits: () => hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'edit'),
@@ -319,19 +321,25 @@ export function serveRooms(hosted: Hosted): Rooms {
       })),
     };
   };
-  hosted.house.route('POST', '/kit/local-copy/selection', () => ({ body: { local_copy: state.selection } }));
+  hosted.house.route('POST', '/kit/local-copy/selection', () => ({
+    body: { local_copy: { rooms: state.answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) } },
+  }));
   hosted.house.route('POST', '/kit/door/discover', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
     return {
       body: {
         md_model_version: '0.1.0-alpha.19',
-        authorities: selectedRooms(rooms, prefixes).map((room) => room.authority()),
+        authorities: prefixed(rooms, prefixes).map((room) => room.authority()),
       },
     };
   });
   hosted.house.route('POST', '/kit/door/bootstrap', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
-    return { body: { scopes: selectedRooms(rooms, prefixes).map((room) => room.bundle()) } };
+    const read = prefixed(rooms, prefixes);
+    if (read.some((room) => state.unreadable.has(room.ref))) {
+      return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
+    }
+    return { body: { scopes: read.map((room) => room.bundle()) } };
   });
   hosted.house.route('POST', '/kit/door/enumerate', (request) => {
     const { positions } = request.body as { positions: { authority: string; position: string; log_epoch: string }[] };

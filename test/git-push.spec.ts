@@ -34,7 +34,7 @@ async function copied(): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
   room.put('docs/plan.md', 'one\ntwo\n');
   room.put('docs/memo.md', MEMO);
   room.put('capture/mail/one.md', 'one\n');
-  await rooms.select([room]);
+  await rooms.fetch([room]);
   return { hosted, rooms, room };
 }
 
@@ -101,7 +101,7 @@ it('sends a changed schema as one whole-text replacement against its revision', 
   room.protected = ['agents', 'house'];
   const schema = 'types:\n  note:\n    fields:\n      title: { kind: string }\n';
   room.put('settings/schema.yaml', schema);
-  await rooms.select([room]);
+  await rooms.fetch([room]);
   const revision = room.revision('settings/schema.yaml');
   const widened = `${schema}      status: { kind: string }\n`;
   await writeFile(join(room.repository, 'settings/schema.yaml'), widened);

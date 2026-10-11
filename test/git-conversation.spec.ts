@@ -34,7 +34,7 @@ async function copied(
   room.put('a.md', 'Alpha\n');
   room.put('index.md', 'See [alpha](a.md).\n');
   room.put('plan.md', 'one\n');
-  await rooms.select([room]);
+  await rooms.fetch([room]);
   return {
     hosted,
     rooms,
@@ -314,7 +314,7 @@ it('names the copies a fetch is still reading in a first prompt that arrives mea
     await held;
     return { body: { scopes: [room.bundle()] } };
   });
-  const fetched = rooms.select([room]);
+  const fetched = rooms.fetch([room]);
   await until(() => hosted.house.requests.some((request) => request.path === '/kit/door/bootstrap'));
 
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });

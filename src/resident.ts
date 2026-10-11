@@ -123,7 +123,7 @@ export async function resident(): Promise<void> {
     opened: () => {
       conversations.opened();
       changed();
-      logged(copies.select());
+      logged(copies.connected());
     },
     frame: (arrived: Frame) => {
       if (arrived.type === 'watching') conversations.watching(arrived.watching === true);
