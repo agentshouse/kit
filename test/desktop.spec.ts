@@ -10,7 +10,7 @@ const LINK_LINE = `Open this link and confirm: ${LOGIN_LINK}`;
 const UID = process.getuid!();
 
 function acts(host: Host): string[] {
-  return [...host.calls('systemctl'), ...host.calls('launchctl')].filter((call) => !/^(--user is-active|print) /.test(call));
+  return [...host.calls('systemctl'), ...host.calls('launchctl')].filter((call) => !/^((--user )?is-(active|enabled)|print) /.test(call));
 }
 
 function notices(stdout: string): string[] {
@@ -151,6 +151,36 @@ it.each([
 );
 
 it.each([
+  ['Linux', { system: 'Linux', machine: 'x86_64' }, ['--user start house-kit.service']],
+  ['macOS', { system: 'Darwin', machine: 'arm64' }, [`kickstart gui/${UID}/house-kit`]],
+] as const)('starts the %s service it finds loaded but not running when a rerun finds nothing else to change', async (_name, platform, start) => {
+  const host = await fakeHost(platform);
+  expect(host.run()).toMatchObject({ status: 0 });
+  await host.clear('active');
+  await host.forget();
+
+  const ran = host.run();
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout).toContain('House Kit restarted for Environment environment-one.\n');
+  expect(host.calls('node')).toContain('service-main.js');
+  expect(acts(host)).toEqual(start);
+});
+
+it('stops a running Linux service that is no longer enabled before it replaces the Kit release', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run()).toMatchObject({ status: 0 });
+  await host.clear('enabled');
+  await writeFile(join(host.home, '.local', 'share', 'house-kit', 'release'), '@agentshouse/kit@0.2.1-alpha.0 node@24.21.0\n');
+  await host.forget();
+
+  const ran = host.run();
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(acts(host)).toEqual(['--user stop house-kit.service', '--user --quiet enable --now house-kit.service']);
+});
+
+it.each([
   ['Linux', { system: 'Linux', machine: 'x86_64' }, ['--user daemon-reload', '--user restart house-kit.service']],
   ['macOS', { system: 'Darwin', machine: 'arm64' }, [`bootout gui/${UID}/house-kit`, `enable gui/${UID}/house-kit`, expect.stringMatching(/^bootstrap /)]],
 ] as const)('restarts the %s service in place when a rerun moves the workspace root', async (_name, platform, restart) => {
@@ -239,21 +269,45 @@ it('restarts the running service when a rerun changes the Kit configuration', as
   expect(acts(host)).toEqual(['--user restart house-kit.service']);
 });
 
-it("updates every chosen CLI the native placement's Kit names with its own update command under --update-clis, and leaves the running service alone", async () => {
+it.each([
+  ['Linux', { system: 'Linux', machine: 'x86_64' }],
+  ['macOS', { system: 'Darwin', machine: 'arm64' }],
+] as const)(
+  "updates every chosen CLI the native placement's Kit names with its own update command under --update-clis, and asks the running %s Kit to restart once idle instead of restarting it",
+  async (_name, platform) => {
+    const host = await fakeHost(platform);
+    expect(host.run()).toMatchObject({ status: 0 });
+    const codex = join(host.home, 'codex');
+    await writeFile(codex, '#!/bin/sh\nprintf \'codex %s\\n\' "$*" >> "$FAKE/log"\n', { mode: 0o755 });
+    await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.160.0\t0.159.1\tcurrent\n`);
+    await host.forget();
+
+    const ran = host.run(['--update-clis']);
+
+    expect(ran).toMatchObject({ status: 0, stderr: '' });
+    expect(ran.stdout).toContain('Updating codex 0.160.0.\n');
+    expect(ran.stdout).toContain('House Kit is already installed.\n');
+    expect(host.calls('node')).toContain('clis-main.js');
+    expect(host.calls('codex')).toEqual(['update']);
+    expect(acts(host)).toEqual([]);
+    await expect(access(join(host.home, '.house-kit', 'restart'))).resolves.toBeUndefined();
+  },
+);
+
+it('asks the Kit for no restart when the one CLI update it tried failed', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   expect(host.run()).toMatchObject({ status: 0 });
   const codex = join(host.home, 'codex');
-  await writeFile(codex, '#!/bin/sh\nprintf \'codex %s\\n\' "$*" >> "$FAKE/log"\n', { mode: 0o755 });
+  await writeFile(codex, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.160.0\t0.159.1\tcurrent\n`);
   await host.forget();
 
   const ran = host.run(['--update-clis']);
 
-  expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout).toContain('Updating codex 0.160.0.\n');
-  expect(host.calls('node')).toContain('clis-main.js');
-  expect(host.calls('codex')).toEqual(['update']);
+  expect(ran).toMatchObject({ status: 0, stderr: 'codex could not be updated; it stays at 0.160.0.\n' });
+  expect(ran.stdout).toContain('House Kit is already installed.\n');
   expect(acts(host)).toEqual([]);
+  await expect(access(join(host.home, '.house-kit', 'restart'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 it.each([
@@ -342,7 +396,7 @@ it('asks from the terminal whether to replace another account, clears it on yes 
   expect(ran.stdout).toContain(OTHER_ACCOUNT);
   expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
   expect(host.calls('kit')).toEqual([`login --house https://agents.house --code ahk_code_one HOUSE_KIT_HOME=${host.home}/.house-kit`]);
-  expect(host.calls('systemctl')).toEqual(expect.arrayContaining(['--user stop house-kit.service', '--user --quiet enable --now house-kit.service']));
+  expect(host.calls('systemctl')).toEqual(expect.arrayContaining(['--user stop house-kit.service', '--user start house-kit.service']));
   await expect(access(join(host.home, '.house-kit', 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readFile(join(host.home, 'AgentsHouse', 'notes.md'), 'utf8')).toBe('kept\n');
 });

@@ -9,7 +9,8 @@ import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations, type Input } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
-import { agentBase, enrolled, kitHome } from './home.ts';
+import { restart } from './end.ts';
+import { agentBase, enrolled, forgetRestart, kitHome, restartAsked } from './home.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
@@ -75,6 +76,7 @@ function connected(): Promise<void> {
 
 export async function resident(): Promise<void> {
   await connected();
+  await forgetRestart();
   watch(kitHome(), () => {
     if (enrolled()) return;
     killDescendants();
@@ -95,6 +97,8 @@ export async function resident(): Promise<void> {
   const changed = () => {
     if (!idle()) {
       reported = false;
+    } else if (restartAsked() && conversations.quiet()) {
+      restart('restarting for an updated CLI');
     } else if (!reported) {
       reported = true;
       logged(house.deliver('/kit/idle', {}, idle));

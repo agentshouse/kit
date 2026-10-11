@@ -325,7 +325,7 @@ export class Agents {
 
   private async load(kind: string): Promise<void> {
     const known = this.readings.get(kind);
-    if (known !== undefined && known.failure === null) return;
+    if (known !== undefined && known.failure === null && known.minimum === undefined) return;
     await this.examine(kind, SIGNED_OUT, offer);
   }
 

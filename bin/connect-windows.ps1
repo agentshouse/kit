@@ -264,7 +264,11 @@ function Update-Clis {
     $terminal = @()
     if ($Interactive) { $terminal = @('-t') }
     & docker run -i @terminal --rm @Network --entrypoint $path @Common update | Out-Host
-    if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("$name could not be updated; it stays at $release.") }
+    if ($LASTEXITCODE -ne 0) {
+      [Console]::Error.WriteLine("$name could not be updated; it stays at $release.")
+      continue
+    }
+    Invoke-Docker run --rm --network none --mount $KitHomeMount --entrypoint touch $Image /kit-home/restart | Out-Null
   }
 }
 
@@ -420,7 +424,7 @@ function Connect-Kit {
       if ($status -eq 0 -and $Forwarded -ceq 'kit' -and $Forward.Count -gt 0 -and $Forward[0] -ceq 'logout') { Invoke-Docker stop $Name | Out-Null }
       Exit-Bootstrap $status
     }
-    if ($enrolment.ContainsKey('environment')) { Test-Authority } else { Clear-KitHome }
+    if ($enrolment.ContainsKey('environment')) { Test-Authority } else { Invoke-Docker rm -f $Name | Out-Null }
   }
 
   if (Test-Container) {

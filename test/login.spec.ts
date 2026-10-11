@@ -1,7 +1,8 @@
-import { access, readFile, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { certificate, startHouse, until } from './double.ts';
+import { certificate, startHouse, until, type House } from './double.ts';
 import { runKit, temporaryHome } from './kit.ts';
 import { answerOwnAgent, LOGIN, logIn, loginLink, opener, ownAgent, serveLogin } from './login.ts';
 
@@ -520,4 +521,84 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   const reconnected = await until(() => house.sockets[1]);
   expect(reconnected.headers.authorization).toBe('Bearer ahk_second');
+});
+
+const MACOS = ['--import', fileURLToPath(new URL('./darwin.ts', import.meta.url))];
+const UID = process.getuid!();
+
+const SYSTEMD = (scope: string, running: boolean) => `case "$1" in --user) held=user; shift ;; *) held=system ;; esac
+[ "$held" = ${scope} ] || exit 1
+case "$1" in
+  is-enabled) ;;
+  is-active) ${running ? 'exit 0' : 'exit 3'} ;;
+  start) ;;
+  *) exit 1 ;;
+esac
+`;
+
+const LAUNCHD = (running: boolean) => `case "$1" in
+  print) printf 'gui/%s/house-kit = {\\n\\tactive count = 0\\n\\tstate = ${running ? 'running' : 'not running'}\\n\\n\\tprogram = kit\\n}\\n' "$(id -u)" ;;
+  kickstart) ;;
+  *) exit 1 ;;
+esac
+`;
+
+async function serviceManager(home: string, tool: string, script: string): Promise<{ path: string; starts: () => Promise<string[]> }> {
+  const bin = join(home, 'manager');
+  await mkdir(bin);
+  const log = join(home, 'manager.log');
+  await writeFile(join(bin, tool), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\n${script}`);
+  await chmod(join(bin, tool), 0o755);
+  const starts = async () =>
+    (await readFile(log, 'utf8').catch(() => ''))
+      .split('\n')
+      .filter((call) => /^(--user )?(start|kickstart) /.test(call));
+  return { path: `${bin}:${process.env.PATH}`, starts };
+}
+
+async function loginWithCode(house: House, home: string, path: string, node: string[] = []) {
+  house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' } }));
+  return runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOUSE_KIT_HOME: home, PATH: path }, node);
+}
+
+it.each([
+  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', false), [], ['--user start house-kit.service']],
+  ["server's systemd service", 'systemctl', SYSTEMD('system', false), [], ['start house-kit.service']],
+  ['LaunchAgent on macOS', 'launchctl', LAUNCHD(false), MACOS, [`kickstart gui/${UID}/house-kit`]],
+] as const)('starts the loaded %s that is not running once it stores the credential', async (_name, tool, script, node, started) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const { path, starts } = await serviceManager(home, tool, script);
+
+  const login = await loginWithCode(house, home, path, [...node]);
+
+  expect(await login.exited).toBe(0);
+  expect(await starts()).toEqual(started);
+});
+
+it.each([
+  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', true), []],
+  ['LaunchAgent on macOS', 'launchctl', LAUNCHD(true), MACOS],
+] as const)('leaves the running %s alone, for it reads the stored credential itself', async (_name, tool, script, node) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const { path, starts } = await serviceManager(home, tool, script);
+
+  const login = await loginWithCode(house, home, path, [...node]);
+
+  expect(await login.exited).toBe(0);
+  expect(await starts()).toEqual([]);
+});
+
+it('keeps the stored credential and names the cause when the stopped service does not start', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const refusing = SYSTEMD('user', false).replace('  start) ;;', "  start) echo 'Failed to start house-kit.service: Unit house-kit.service is masked.' >&2; exit 1 ;;");
+  const { path } = await serviceManager(home, 'systemctl', refusing);
+
+  const login = await loginWithCode(house, home, path);
+
+  expect(await login.exited).toBe(0);
+  expect(login.stderr()).toBe('kit: the House Kit service could not be started: Failed to start house-kit.service: Unit house-kit.service is masked.\n');
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_code_credential' });
 });

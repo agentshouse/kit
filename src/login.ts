@@ -7,6 +7,7 @@ import { placeAppGit } from './app-git.ts';
 import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
 import { selectRelay } from './relay.ts';
+import { startService } from './service.ts';
 
 const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -123,4 +124,9 @@ export async function login(argv: string[]): Promise<void> {
     process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
   }
   await placeAppGit(ownAgent, await readOwnAgent());
+  try {
+    startService();
+  } catch (error) {
+    process.stderr.write(`kit: ${(error as Error).message}\n`);
+  }
 }

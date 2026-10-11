@@ -157,7 +157,11 @@ update_clis() {
       [[ -z "$answer" || "$answer" == [Yy]* ]] || continue
     fi
     printf 'Updating %s %s.\n' "$name" "$release"
-    "$2" "$path" || printf '%s could not be updated; it stays at %s.\n' "$name" "$release" >&2
+    if "$2" "$path"; then
+      : > "$KIT_HOME/restart"
+    else
+      printf '%s could not be updated; it stays at %s.\n' "$name" "$release" >&2
+    fi
   done 3<<< "$listed"
 }
 
@@ -502,11 +506,11 @@ define_desktop_service() {
   fi
 }
 
-desktop_running() {
+desktop_loaded() {
   if ((MACOS)); then
     launchctl print "gui/$(id -u)/$SERVICE" >/dev/null 2>&1
   else
-    systemctl --user is-active --quiet "$SERVICE.service"
+    systemctl --user is-enabled --quiet "$SERVICE.service" || systemctl --user is-active --quiet "$SERVICE.service"
   fi
 }
 
@@ -518,8 +522,8 @@ stop_desktop_service() {
   fi
 }
 
-stop_running_desktop() {
-  if desktop_running; then stop_desktop_service; fi
+stop_loaded_desktop() {
+  if desktop_loaded; then stop_desktop_service; fi
 }
 
 start_desktop_service() {
@@ -530,6 +534,12 @@ start_desktop_service() {
     { ((REDEFINED == 0)) || systemctl --user daemon-reload; } && systemctl --user --quiet enable --now "$SERVICE.service" ||
       refuse 'the House Kit service could not be started'
   fi
+}
+
+start_stopped_desktop() {
+  local started
+  started=$("$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/service-main.js") || refuse 'the House Kit service could not be started'
+  [[ -n "$started" ]]
 }
 
 restart_desktop_service() {
@@ -604,7 +614,7 @@ remove_container() {
 
 remove_native() {
   if [[ -e "$LAUNCH_AGENT" || -e "$USER_UNIT" ]]; then
-    stop_running_desktop
+    stop_loaded_desktop
     if ((MACOS)); then
       rm -f "$LAUNCH_AGENT" || refuse "$LAUNCH_AGENT could not be removed"
     else
@@ -616,7 +626,7 @@ remove_native() {
 }
 
 connect_desktop() {
-  local connected=updated
+  local connected=running
   NATIVE_PREFIX="$DESKTOP_PREFIX"
   NATIVE_PACKAGE="$DESKTOP_PREFIX/lib/node_modules/@agentshouse/kit/dist"
   NATIVE_BIN="$DESKTOP_BIN"
@@ -629,15 +639,12 @@ connect_desktop() {
   take_placement native
   remove_container
   prepare_roots
-  bind_house stop_running_desktop
+  bind_house stop_loaded_desktop
   if [[ "$(cat "$NATIVE_PREFIX/release" 2>/dev/null || true)" != "$RELEASE" ]]; then
+    connected=updated
     stage_native_kit
-    stop_running_desktop
+    stop_loaded_desktop
     place_native_kit
-  elif desktop_running; then
-    connected=running
-  else
-    connected=restarted
   fi
   add_path_line
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
@@ -653,12 +660,15 @@ connect_desktop() {
   configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
   update_clis native_clis native_cli_update
   define_desktop_service
-  if ! desktop_running; then
+  if ! desktop_loaded; then
     start_desktop_service
   elif ((REDEFINED)) || [[ -n "$CONFIGURED" ]]; then
     restart_desktop_service
-    [[ "$connected" != running ]] || connected=restarted
+  elif ! start_stopped_desktop; then
+    announce "$connected"
+    return
   fi
+  [[ "$connected" != running ]] || connected=restarted
   announce "$connected"
 }
 

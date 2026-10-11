@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
+import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -195,6 +195,7 @@ async function updatingClis(flag: 0 | 1, terminal: boolean, answers = '') {
   const log = join(home, 'updates.log');
   const script = `set -u
 UPDATE_CLIS=${flag}
+KIT_HOME=${home}
 ${await steps('terminal', 'update_clis')}
 listing() { printf '%s\\n' ${LISTED.map((line) => `'${line.join('\t')}'`).join(' ')}; }
 updating() { printf '%s\\n' "$1" >> ${log}; [ "$1" != /home/u/.grok/bin/grok ]; }
@@ -209,7 +210,7 @@ update_clis listing updating
   child.stdin.end(answers);
   await new Promise((resolve) => child.on('close', resolve));
   const updated = (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean);
-  return { output: output.replaceAll('\r', ''), updated };
+  return { output: output.replaceAll('\r', ''), updated, restartAsked: existsSync(join(home, 'restart')) };
 }
 
 it('asks once for each CLI below its minimum, updates one on Enter, leaves one it is refused and asks nothing about a current one', async () => {
@@ -222,19 +223,21 @@ it('asks once for each CLI below its minimum, updates one on Enter, leaves one i
   expect(updated).toEqual(['/home/u/.local/bin/codex']);
 });
 
-it('updates every chosen CLI without asking when --update-clis is given, and names one whose update failed', async () => {
-  const { output, updated } = await updatingClis(1, false);
+it('updates every chosen CLI without asking when --update-clis is given, names one whose update failed, and asks the Kit to restart once idle', async () => {
+  const { output, updated, restartAsked } = await updatingClis(1, false);
 
   expect(updated).toEqual(LISTED.map((line) => line[1]));
   expect(output).not.toContain('Update it?');
   expect(output).toContain('grok could not be updated; it stays at 1.0.50.');
+  expect(restartAsked).toBe(true);
 });
 
-it('updates nothing and asks nothing without a terminal and without --update-clis', async () => {
-  const { output, updated } = await updatingClis(0, false, '\n\n');
+it('updates nothing, asks nothing and asks the Kit for no restart without a terminal and without --update-clis', async () => {
+  const { output, updated, restartAsked } = await updatingClis(0, false, '\n\n');
 
   expect(updated).toEqual([]);
   expect(output).toBe('');
+  expect(restartAsked).toBe(false);
 });
 
 it("runs a CLI's own update command in place natively without the proxy variables, and in a container of the installed image", async () => {
@@ -269,7 +272,7 @@ container_cli_update /kit-home/.local/bin/codex </dev/null`,
   ]);
 });
 
-it('leaves a running container Kit and its conversations running after it updated a CLI', async () => {
+it('leaves a running container Kit and its conversations running after it updated a CLI, and asks it to restart once idle', async () => {
   const home = await temporaryHome();
   const ran = spawnSync(
     'bash',
@@ -279,6 +282,7 @@ it('leaves a running container Kit and its conversations running after it update
 NAME=house-kit
 CONFIGURED=''
 UPDATE_CLIS=1
+KIT_HOME=${home}
 kit_running() { true; }
 enrolled() { printf environment-one; }
 docker() { printf 'docker %s\\n' "$*" >&2; }
@@ -293,6 +297,29 @@ resume_kit`,
 
   expect(ran.stderr).toBe('updated /kit-home/.local/bin/codex\n');
   expect(ran.stdout).toBe('Updating codex 0.150.0.\nHouse Kit is already installed.\n');
+  await expect(access(join(home, 'restart'))).resolves.toBeUndefined();
+});
+
+it.each([
+  ['holding its credential', false],
+  ['whose rejected credential it forgot', true],
+])('asks the server Kit %s to restart once idle when a rerun updates a CLI, and restarts no service itself', async (_name, rejected) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true });
+  await host.mark('systemd');
+  expect(host.run(['--linux'])).toMatchObject({ status: 0, stderr: '' });
+  if (rejected) await rm(join(host.home, '.house-kit', 'credential.json'));
+  const codex = join(host.home, 'codex');
+  await writeFile(codex, '#!/bin/sh\nprintf \'codex %s\\n\' "$*" >> "$FAKE/log"\n', { mode: 0o755 });
+  await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.160.0\t0.159.1\tcurrent\n`);
+  await host.forget();
+
+  const ran = host.run(['--linux', '--update-clis']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(host.calls('kit')).toHaveLength(rejected ? 1 : 0);
+  expect(host.calls('codex')).toEqual(['update']);
+  expect(host.calls('systemctl')).not.toContain('restart house-kit.service');
+  await expect(access(join(host.home, '.house-kit', 'restart'))).resolves.toBeUndefined();
 });
 
 function listClis(home: string, cwd: string): Promise<{ status: number | null; listed: string[][] }> {

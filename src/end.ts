@@ -1,10 +1,23 @@
+import { forgetRejected } from './home.ts';
 import { killDescendants } from './scope.ts';
 
 export const REPLACED = 'another Kit started for this Environment';
-export const SIGN_IN_AGAIN = 'sign in again';
 
-export function end(reason: string): never {
+function exit(reason: string, status: number): never {
   process.stderr.write(`kit: ${reason}\n`);
   killDescendants();
-  process.exit(0);
+  process.exit(status);
+}
+
+export function end(reason: string): never {
+  exit(reason, 0);
+}
+
+export function restart(reason: string): never {
+  exit(reason, 1);
+}
+
+export async function signInAgain(rejected: string): Promise<never> {
+  await forgetRejected(rejected);
+  restart('sign in again');
 }

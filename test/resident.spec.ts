@@ -1,8 +1,12 @@
-import { writeFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
 import { runKit, temporaryHome, type KitRun } from './kit.ts';
+import { logIn, serveLogin } from './login.ts';
+
+const RACING_LOGIN = fileURLToPath(new URL('./racing-login.ts', import.meta.url));
 
 async function enrol(house: House, home: string, credential: string) {
   await writeFile(
@@ -11,8 +15,8 @@ async function enrol(house: House, home: string, credential: string) {
   );
 }
 
-async function resident(house: House): Promise<KitRun> {
-  const home = await temporaryHome();
+async function resident(house: House, home?: string): Promise<KitRun> {
+  home ??= await temporaryHome();
   await enrol(house, home, 'ahk_held');
   return runKit(['resident'], { HOUSE_KIT_HOME: home });
 }
@@ -76,35 +80,79 @@ it('ends, left stopped, when House replaces its socket with another Kit of its E
   expect(openings(house)).toBe(1);
 });
 
-it('ends, left stopped, asking to sign in again when House closes its socket for a rejected credential', async () => {
+async function forgotten(house: House, home: string): Promise<void> {
+  await expect(access(join(home, 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(JSON.parse(await readFile(join(home, 'disconnected.json'), 'utf8'))).toEqual({ house: house.origin, environment: 'environment-one' });
+}
+
+it('forgets its credential and ends with a failure its service restarts when House closes its socket for a rejected credential, and the restarted one waits for a login that reconnects its Environment', async () => {
   const house = await startHouse();
-  const kit = await resident(house);
+  const home = await temporaryHome();
+  const kit = await resident(house, home);
 
   (await until(() => house.sockets[0])).close(1008, 'credential_rejected');
 
-  expect(await ended(kit)).toBe(0);
+  expect(await ended(kit)).toBe(1);
   expect(kit.stderr()).toContain('kit: sign in again\n');
   expect(openings(house)).toBe(1);
+  await forgotten(house, home);
+  const restarted = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => restarted.stderr().includes('run kit login'));
+  serveLogin(house, 'environment-one', 'ahk_second');
+  const { started, exit } = await logIn(house, home);
+  expect(exit).toBe(0);
+  expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
+  expect((await until(() => house.sockets[1])).headers.authorization).toBe('Bearer ahk_second');
 });
 
-it('ends, left stopped, asking to sign in again when House refuses its socket opening with 401', async () => {
+it('forgets its credential and ends with a failure its service restarts when House refuses its socket opening with 401', async () => {
   const house = await startHouse();
   house.route('UPGRADE', '/kit/stream', () => ({ status: 401, body: { error: { code: 'token_rejected', retryable: false } } }));
-  const kit = await resident(house);
+  const home = await temporaryHome();
+  const kit = await resident(house, home);
 
-  expect(await ended(kit)).toBe(0);
+  expect(await ended(kit)).toBe(1);
   expect(kit.stderr()).toContain('kit: sign in again\n');
   expect(house.sockets).toEqual([]);
+  await forgotten(house, home);
 });
 
-it('ends, left stopped, asking to sign in again when House refuses any of its calls with 401', async () => {
+it('forgets its credential and ends with a failure its service restarts when House refuses any of its calls with 401', async () => {
   const house = await startHouse();
   house.route('POST', '/kit/restarted', () => ({ status: 401, body: { error: { code: 'token_rejected', retryable: false } } }));
-  const kit = await resident(house);
+  const home = await temporaryHome();
+  const kit = await resident(house, home);
 
-  expect(await ended(kit)).toBe(0);
+  expect(await ended(kit)).toBe(1);
   expect(kit.stderr()).toContain('kit: sign in again\n');
   expect(openings(house)).toBe(0);
+  await forgotten(house, home);
+});
+
+it('keeps the credential a later login stored when House rejects the one it held', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const kit = await resident(house, home);
+  const socket = await until(() => house.sockets[0]);
+  await enrol(house, home, 'ahk_second');
+
+  socket.close(1008, 'credential_rejected');
+
+  expect(await ended(kit)).toBe(1);
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_second' });
+});
+
+it('keeps the credential a login stores while it forgets the rejected one', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await enrol(house, home, 'ahk_held');
+  const kit = runKit(['resident'], { HOUSE_KIT_HOME: home, KIT_RACING_CREDENTIAL: 'ahk_second' }, ['--import', RACING_LOGIN]);
+
+  (await until(() => house.sockets[0])).close(1008, 'credential_rejected');
+
+  expect(await ended(kit)).toBe(1);
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_second' });
+  await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 function delivered(house: House, path: string): number {

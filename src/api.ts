@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { end, SIGN_IN_AGAIN } from './end.ts';
+import { signInAgain } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { retryable } from './refusals.ts';
 import { relayed } from './relay.ts';
@@ -67,7 +67,7 @@ async function enrolledPost<T>(path: string, body: unknown, signal?: AbortSignal
   try {
     return await post<T>(house, path, body, credential, signal);
   } catch (error) {
-    if (error instanceof HouseRefusal && error.status === 401) end(SIGN_IN_AGAIN);
+    if (error instanceof HouseRefusal && error.status === 401) await signInAgain(credential);
     throw error;
   }
 }

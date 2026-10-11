@@ -282,6 +282,21 @@ it('reports a CLI below its minimum with the version found and the minimum, and 
   expect(await probes()).toBe(0);
 });
 
+it('reads a CLI below its minimum again at a later work frame and reports the release the User updated it to', async () => {
+  desired = ['codex-acp'];
+  await start(async () => {
+    placeUserCli(userBin(home), 'codex-acp', '0.150.0');
+  });
+  expect((await until(() => reports[0])).agents).toEqual([expect.objectContaining({ kind: 'codex-acp', release: '0.150.0', minimum: '0.159.1' })]);
+
+  placeUserCli(userBin(home), 'codex-acp', '0.160.0');
+  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+
+  const [current] = (await until(() => reports[1])).agents as Record<string, unknown>[];
+  expect(current).toMatchObject({ kind: 'codex-acp', release: '0.160.0', failure: null });
+  expect(current).not.toHaveProperty('minimum');
+});
+
 it('reports a model its CLI refuses to select with no efforts before the Kit read any for it', async () => {
   desired = ['claude-agent-acp'];
   await signIn('claude-agent-acp');

@@ -208,6 +208,10 @@ export class Conversations {
     );
   }
 
+  quiet(): boolean {
+    return this.idle() && [...this.conversations.values()].every((conversation) => conversation.open === 0);
+  }
+
   private look(): void {
     for (const conversation of this.conversations.values()) {
       for (const scope of conversation.leftovers) {

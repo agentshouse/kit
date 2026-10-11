@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { temporaryHome } from './kit.ts';
 
 const LINUX = fileURLToPath(new URL('../bin/connect-linux.sh', import.meta.url));
+const SERVICE_MAIN = fileURLToPath(new URL('../src/service-main.ts', import.meta.url));
+const DARWIN = fileURLToPath(new URL('./darwin.ts', import.meta.url));
 
 export const PUBLISHED_VERSION = '0.2.1-alpha.1';
 export const LOGIN_LINK = 'https://agents.house/kit/login/one';
@@ -49,7 +51,7 @@ export interface Host {
   restartPolicy(policy: string): Promise<void>;
 }
 
-type Mark = 'changed' | 'container' | 'docker-down' | 'login-fails' | 'opener-fails' | 'refused';
+type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-fails' | 'opener-fails' | 'refused' | 'systemd';
 
 const LOGGED = 'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n';
 
@@ -66,14 +68,22 @@ const TOOLS: Record<string, string> = {
   sha256sum: `${LOGGED}cat >/dev/null\n`,
   shasum: `${LOGGED}cat >/dev/null\n`,
   systemctl: `${LOGGED}case "$*" in
+  *is-enabled*) [ -e "$FAKE/enabled" ] ;;
   *is-active*) [ -e "$FAKE/active" ] ;;
-  *enable*|*restart*) touch "$FAKE/active" ;;
+  *disable*) rm -f "$FAKE/enabled" ;;
+  *enable*) touch "$FAKE/enabled" "$FAKE/active" ;;
+  *start*) touch "$FAKE/active" ;;
   *stop*) rm -f "$FAKE/active" ;;
 esac\n`,
   launchctl: `${LOGGED}case "$1" in
-  print) [ -e "$FAKE/loaded" ] ;;
-  bootstrap) [ ! -e "$FAKE/loaded" ] && touch "$FAKE/loaded" ;;
-  bootout) rm "$FAKE/loaded" ;;
+  print)
+    [ -e "$FAKE/loaded" ] || exit 113
+    if [ -e "$FAKE/active" ]; then state=running; else state='not running'; fi
+    printf '%s = {\\n\\tactive count = 0\\n\\tstate = %s\\n\\n\\tprogram = kit\\n}\\n' "$2" "$state"
+    ;;
+  bootstrap) [ ! -e "$FAKE/loaded" ] && touch "$FAKE/loaded" "$FAKE/active" ;;
+  bootout) rm -f "$FAKE/active" && rm "$FAKE/loaded" ;;
+  kickstart) [ -e "$FAKE/loaded" ] && touch "$FAKE/active" ;;
 esac\n`,
   docker: `${LOGGED}[ ! -e "$FAKE/docker-down" ] || exit 1
 case "$1" in
@@ -109,6 +119,7 @@ case "$1" in
     ;;
 esac\n`,
   sudo: `${LOGGED}exit 1\n`,
+  id: '[ "$*" != -un ] || { echo owner; exit 0; }\nexec /usr/bin/id "$@"\n',
   'xdg-open': `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
   open: `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
   zsh: '[ ! -f "${ZDOTDIR:-$HOME}/.zshenv" ] || . "${ZDOTDIR:-$HOME}/.zshenv"\n[ "$1" != -c ] || eval "$2"\n',
@@ -118,6 +129,10 @@ const NODE = `printf 'node %s\\n' "\${1##*/}" >> "$FAKE/log"
 [ "\${1##*/}" != authority-main.js ] || [ ! -e "$FAKE/refused" ] || exit 1
 [ "\${1##*/}" != configure-main.js ] || [ ! -e "$FAKE/changed" ] || echo changed
 [ "\${1##*/}" != clis-main.js ] || [ ! -e "$HOME/.clis" ] || cat "$HOME/.clis"
+if [ "\${1##*/}" = service-main.js ]; then
+  [ "$FAKE_SYSTEM" != Darwin ] || exec ${process.execPath} --import ${DARWIN} ${SERVICE_MAIN}
+  exec ${process.execPath} ${SERVICE_MAIN}
+fi
 `;
 
 const NPM = `${LOGGED}while [ $# -gt 0 ]; do [ "$1" != --prefix ] || prefix=$2; shift; done
@@ -163,7 +178,8 @@ export async function fakeHost(platform: Platform): Promise<Host> {
         .replace('PLACING_OWNER=root:root', `PLACING_OWNER=${process.getuid!()}:${process.getgid!()}`)
         .replace('NATIVE_BIN=/usr/local/bin', `NATIVE_BIN=${server}/bin`)
         .replace('NATIVE_UNIT=/etc/systemd/system/house-kit.service', `NATIVE_UNIT=${server}/house-kit.service`)
-        .replace('NATIVE_WORKSPACE=/agents/house', `NATIVE_WORKSPACE=${server}/workspace`),
+        .replace('NATIVE_WORKSPACE=/agents/house', `NATIVE_WORKSPACE=${server}/workspace`)
+        .replace('[[ -d /run/systemd/system ]]', '[[ -e "$FAKE/systemd" ]]'),
     );
   }
   const environment = {

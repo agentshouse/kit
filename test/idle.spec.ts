@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { access, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { settle, until } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
-import { stop } from './kit.ts';
+import { alive, stop } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 
@@ -26,6 +28,60 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
 
   await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);
+});
+
+it('restarts with a failure at its first idle moment after a CLI update asks it to, and not while a turn runs', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  await until(() => hosted.idles[1]);
+  let code: number | null | undefined;
+  void hosted.kit.exited.then((exited) => {
+    code = exited;
+  });
+
+  // The turn holds four seconds, outlasting the two seconds after which the Kit looks at its work again.
+  hosted.input({ kind: 'message', text: '@hold 4000\n@say done', files: [], first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await writeFile(join(hosted.home, 'restart'), '');
+  // Two and a half seconds outlast the Kit's next look at its work while the turn still runs.
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  expect(code).toBeUndefined();
+
+  await until(() => ended(hosted)[0]);
+  expect(await hosted.kit.exited).toBe(1);
+  expect(hosted.kit.stderr()).toContain('kit: restarting for an updated CLI\n');
+});
+
+it('restarts for a CLI update not while a turn it reports idle waits on a question, only once that turn ends', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  await until(() => hosted.idles[1]);
+  let code: number | null | undefined;
+  void hosted.kit.exited.then((exited) => {
+    code = exited;
+  });
+  hosted.input({ kind: 'message', text: '@ask', files: [], first: true });
+  const question = await until(() => hosted.interactions[0]);
+  await until(() => hosted.idles[2]);
+
+  await writeFile(join(hosted.home, 'restart'), '');
+  // Two and a half seconds outlast the Kit's next look at its work while the turn waits on its question.
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  expect(code).toBeUndefined();
+
+  const { interaction_id } = question.body as { interaction_id: string };
+  hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
+  await until(() => ended(hosted)[0]);
+  expect(await hosted.kit.exited).toBe(1);
+  expect(hosted.kit.stderr()).toContain('kit: restarting for an updated CLI\n');
+});
+
+it('forgets a restart a CLI update asked for before it connected', async () => {
+  const hosted = await hostKit([{}], { prepare: (home) => writeFile(join(home, 'restart'), '') });
+
+  await until(() => hosted.idles[0]);
+  await expect(access(join(hosted.home, 'restart'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(alive(hosted.kit.pid)).toBe(true);
 });
 
 it('reports idle only after it acknowledges the input it carried out', async () => {

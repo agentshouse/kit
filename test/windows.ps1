@@ -16,8 +16,10 @@ $findings += @($ast.FindAll({ param($node)
   $node.Value.Contains([char]34) -and ($node.Value.Contains('{{') -or $node.Value.Contains('require('))
 }, $true) | ForEach-Object { "double quote in a native argument $($_.Extent.StartLineNumber)" })
 
-$definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Update-Clis' }, $true)
-. ([scriptblock]::Create($definition.Extent.Text))
+foreach ($name in @('Update-Clis', 'Invoke-Docker')) {
+  $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+  . ([scriptblock]::Create($definition.Extent.Text))
+}
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
@@ -35,6 +37,8 @@ function Read-Host([string] $Prompt) {
 $ClisMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js'
 $Network = @('--network', 'host')
 $Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
+$KitHomeMount = 'home'
+$Image = 'image'
 function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected) {
   $script:UpdateClis = $Flag
   $script:Interactive = $Terminal
@@ -43,6 +47,8 @@ function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $
   $script:Ran = @()
   Update-Clis
   $updates = @($script:Ran | Where-Object { $_.EndsWith(' update') })
+  $restarts = @($script:Ran | Where-Object { $_ -ceq 'run --rm --network none --mount home --entrypoint touch image /kit-home/restart' })
+  if ($restarts.Count -ne $Expected.Count) { "Update-Clis asked the Kit to restart $($restarts.Count) times after $($Expected.Count) updates" }
   if ($script:Ran[0] -ne "run --rm --network host --entrypoint node --hostname pc --mount home --mount workspace image $ClisMain") { "Update-Clis read the CLIs with: $($script:Ran[0])" }
   if ($script:Prompts.Count -ne $Asked) { "Update-Clis asked $($script:Prompts.Count) times, not $Asked" }
   if (($updates -join '|') -ne ($Expected -join '|')) { "Update-Clis ran: $($updates -join '|')" }
@@ -113,7 +119,7 @@ foreach ($fails in @($false, $true)) {
   if (($script:Ran -join '|') -cne 'run --rm --hostname pc --mount home --mount workspace image login --house https://agents.house') { $findings += "Invoke-Login ran: $($script:Ran -join '|')" }
   if (($script:Opened -join '|') -cne 'https://agents.house/kit/ahk_login_one') { $findings += "Invoke-Login opened: $($script:Opened -join '|')" }
 }
-foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Connect-Kit')) {
+foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Clear-KitHome', 'Connect-Kit')) {
   $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
   . ([scriptblock]::Create($found.Extent.Text))
 }
@@ -150,6 +156,7 @@ function Read-Inspect([string] $Format) {
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
+  if ($args[0] -ceq 'rm') { $script:Installed = $false }
   if ($args -contains 'login') {
     $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
     $printed
@@ -195,5 +202,13 @@ if ($residentRun.Count -ne 1 -or $residentRun[0].Contains('HOUSE_KIT_RELAY')) {
   $findings += "the relayed bootstrap ran resident as: $($residentRun -join '|')"
 }
 Remove-Item Env:HOUSE_KIT_RELAY
+$script:Installed = $true
+$script:Enrolment = @{}
+$BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse')
+$script:Ran = @()
+try { Connect-Kit } catch { $findings += "a bootstrap whose Kit forgot its credential refused with: $($_.Exception.Message)" }
+if (@($script:Ran | Where-Object { $_ -ceq "rm -f $Name" }).Count -ne 1 -or @($script:Ran | Where-Object { $_.StartsWith('volume rm') }).Count -ne 0 -or @($script:Ran | Where-Object { $_ -match ' login( |$)' }).Count -ne 1) {
+  $findings += "the bootstrap whose Kit forgot its credential ran: $($script:Ran -join '|')"
+}
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }

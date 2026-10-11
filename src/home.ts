@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, linkSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +25,7 @@ const ENROLMENT = 'credential.json';
 const DISCONNECTED = 'disconnected.json';
 const CONFIGURATION = 'kit.json';
 const OWN_AGENT = 'own-agent.json';
+const RESTART = 'restart';
 
 export function kitHome(): string {
   return process.env.HOUSE_KIT_HOME ?? join(homedir(), '.house-kit');
@@ -75,8 +76,39 @@ export async function forgetEnrolment({ house, environment }: Enrolment): Promis
   await rm(join(kitHome(), ENROLMENT), { force: true });
 }
 
+export async function forgetRejected(rejected: string): Promise<void> {
+  const held = await readHome<Enrolment>(ENROLMENT);
+  if (held?.credential !== rejected) return;
+  await writeHome(DISCONNECTED, { house: held.house, environment: held.environment });
+  const enrolment = join(kitHome(), ENROLMENT);
+  const taken = `${enrolment}.${process.pid}`;
+  try {
+    renameSync(enrolment, taken);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if ((JSON.parse(readFileSync(taken, 'utf8')) as Enrolment).credential !== rejected) {
+    try {
+      linkSync(taken, enrolment);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    rmSync(join(kitHome(), DISCONNECTED), { force: true });
+  }
+  rmSync(taken);
+}
+
 export function enrolled(): boolean {
   return existsSync(join(kitHome(), ENROLMENT));
+}
+
+export function restartAsked(): boolean {
+  return existsSync(join(kitHome(), RESTART));
+}
+
+export function forgetRestart(): Promise<void> {
+  return rm(join(kitHome(), RESTART), { force: true });
 }
 
 export function readOwnAgent(): Promise<OwnAgent | null> {
