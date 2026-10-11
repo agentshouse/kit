@@ -327,10 +327,7 @@ export function serveRooms(hosted: Hosted): Rooms {
   hosted.house.route('POST', '/kit/door/discover', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
     return {
-      body: {
-        md_model_version: '0.1.0-alpha.19',
-        authorities: prefixed(rooms, prefixes).map((room) => room.authority()),
-      },
+      body: { authorities: prefixed(rooms, prefixes).map((room) => room.authority()) },
     };
   });
   hosted.house.route('POST', '/kit/door/bootstrap', (request) => {

@@ -99,11 +99,11 @@ it('sends a changed schema as one whole-text replacement against its revision', 
   const rooms = serveRooms(hosted);
   const room = rooms.room('private');
   room.protected = ['agents', 'house'];
-  const schema = 'types:\n  note:\n    fields:\n      title: { kind: string }\n';
+  const schema = 'note:\n  properties:\n    title: { type: string }\n';
   room.put('settings/schema.yaml', schema);
   await rooms.fetch([room]);
   const revision = room.revision('settings/schema.yaml');
-  const widened = `${schema}      status: { kind: string }\n`;
+  const widened = `${schema}    status: { type: string }\n`;
   await writeFile(join(room.repository, 'settings/schema.yaml'), widened);
   commitAll(room.repository, 'widen');
 
@@ -165,6 +165,51 @@ it('sends a changed field, section and preamble against its own prior value, so 
   expect(tryGit(room.repository, 'merge-base', '--is-ancestor', pushedCommit, 'HEAD').status).toBe(0);
   expect(git(room.repository, 'rev-parse', 'HEAD')).toBe(git(room.repository, 'rev-parse', 'refs/house/received^2'));
   expect(git(room.repository, 'status', '--porcelain')).toBe('');
+});
+
+it('sends a changed object field in the text its author wrote, so House holds that text', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  const shipped = MEMO.replace('status: draft\n', 'status: draft\nshipping:\n  city: Paris\n  country: FR\n');
+  room.put('docs/memo.md', shipped);
+  await rooms.fetch([room]);
+  const revision = room.revision('docs/memo.md');
+  const local = shipped.replace('city: Paris', 'city: Lyon');
+  await writeFile(join(room.repository, 'docs/memo.md'), local);
+  commitAll(room.repository, 'ship to Lyon');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0, stderr: '' });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [{ op: 'replace', path: '/rooms/notes/docs/memo.md', base: revision, content: local }],
+  ]);
+  expect(room.files.get('docs/memo.md')!.content).toBe(local);
+});
+
+it('sends a changed object field written in the form the MD model writes as one field edit carrying the object', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  const shipped = MEMO.replace('status: draft\n', 'status: draft\nshipping:\n  {city: Paris, country: FR}\n');
+  room.put('docs/memo.md', shipped);
+  await rooms.fetch([room]);
+  const local = shipped.replace('city: Paris', 'city: Lyon');
+  await writeFile(join(room.repository, 'docs/memo.md'), local);
+  commitAll(room.repository, 'ship to Lyon');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0, stderr: '' });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [
+      {
+        op: 'set_field',
+        path: '/rooms/notes/docs/memo.md',
+        field: 'shipping',
+        base: { city: 'Paris', country: 'FR' },
+        value: { city: 'Lyon', country: 'FR' },
+      },
+    ],
+  ]);
+  expect(room.files.get('docs/memo.md')!.content).toBe(local);
 });
 
 it('refuses a stale component or whole-file base as one batch, records House state on the House ref, and a native Git resolution then pushes', async () => {
