@@ -33,10 +33,11 @@ them out; running it again without the flag brings them back.
 
 ## Commands
 
-`kit login` opens or prints a link you confirm in any browser, on this
-computer or another, continues on its own and keeps the Environment's
-credential in `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is set. Pass
-`--environment <id>` to reconnect an Environment you already have. It also
+`kit login` opens or prints a link you confirm in any browser, on this computer
+or another, continues on its own and keeps the Environment's credential in
+`~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is set. `--environment <id>`
+reconnects an Environment you already have; `--rooms <ref>[,<ref>...]` gives it
+only those Rooms and `--no-private` every Room but your Private Room. It also
 connects your own agent: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you,
 until you revoke that connection on Connections. `house help` lists the Tools.
@@ -45,7 +46,7 @@ agent's connection, so `house` and `git` no longer act as you here; a later
 `kit login` reconnects the same Environment.
 
 `kit resident` keeps the Environment connected and, as it connects, copies each
-Room you may sync here as a Git repository in the workspace's `local-copies`.
+Room you chose for it as a Git repository in the workspace's `local-copies`.
 `house fetch` records House's changes on each copy's `refs/house/received`;
 rebase onto it, commit and run `house push --owner` in the copy, through the
 install command in the container. An Agent runs both, without `--owner`.

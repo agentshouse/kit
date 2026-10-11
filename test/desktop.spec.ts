@@ -468,6 +468,34 @@ it('opens the link of a kit login forwarded into the container in the host brows
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
 });
 
+it.each([
+  ['natively on Linux', { system: 'Linux', machine: 'x86_64' }, [], ['--rooms', 'r_k2v.4,r_9qd.x']],
+  ['natively on macOS', { system: 'Darwin', machine: 'arm64' }, [], ['--no-private']],
+  ['in the container on Linux', { system: 'Linux', machine: 'x86_64' }, ['--container'], ['--no-private']],
+  ['in the container on macOS', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, ['--container'], ['--rooms', 'r_k2v.4,r_9qd.x']],
+] as const)('passes the choice of Rooms through to kit login %s', async (_name, platform, placement, rooms) => {
+  const host = await fakeHost(platform);
+
+  const ran = host.run([...rooms, ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  const logins = placement.length === 0 ? host.calls('kit') : host.calls('docker').filter((call) => / login( |$)/.test(call));
+  expect(logins).toEqual([expect.stringMatching(new RegExp(`(^| )login ${rooms.join(' ')}( |$)`))]);
+});
+
+it.each([[['--rooms', 'r_k2v.4']], [['--no-private']]])('forwards kit login %j into the container', async (rooms) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run(['--container'])).toMatchObject({ status: 0 });
+  await host.forget();
+
+  const ran = host.run(['--container', 'kit', 'login', ...rooms]);
+
+  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\n`, stderr: '' });
+  expect(host.calls('docker').filter((call) => / login( |$)/.test(call))).toEqual([
+    expect.stringMatching(new RegExp(`^run --rm --network host --user \\S+ --mount .* login ${rooms.join(' ')}$`)),
+  ]);
+});
+
 it('ends a kit login forwarded into the container with the status its login ended with', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   expect(host.run(['--container'])).toMatchObject({ status: 0 });

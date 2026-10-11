@@ -75,9 +75,9 @@ export async function opener(home: string, fails = false): Promise<{ path: strin
   return { path: `${bin}:${process.env.PATH}`, opened: () => readFile(log, 'utf8').catch(() => undefined) };
 }
 
-export async function logIn(house: House, home: string, environment: Record<string, string> = {}) {
+export async function logIn(house: House, home: string, environment: Record<string, string> = {}, argv: string[] = []) {
   house.requests.length = 0;
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home, ...environment });
+  const login = runKit(['login', '--house', house.origin, ...argv], { HOUSE_KIT_HOME: home, ...environment });
   const exit = await login.exited;
   const started = house.requests.find((request) => request.path === '/kit');
   return { started: started?.body as Record<string, unknown>, exit, login };

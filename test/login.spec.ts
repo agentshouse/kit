@@ -24,6 +24,7 @@ it('prints the link, opens it with the host opener, waits for the confirmation a
   expect(started).not.toHaveProperty('environment_id');
   expect(started).not.toHaveProperty('presentation');
   expect(started).not.toHaveProperty('loopback_uri');
+  expect(started).not.toHaveProperty('rooms');
   const polls = house.requests.filter((request) => request.path === '/kit/token').map((request) => request.body);
   expect(polls.length).toBeGreaterThan(1);
   expect(new Set(polls.map((poll) => JSON.stringify(poll))).size).toBe(1);
@@ -90,6 +91,82 @@ it('refuses --manual as an unknown option before starting a login', async () => 
 
   expect(await login.exited).toBe(1);
   expect(login.stderr()).toContain("Unknown option '--manual'");
+  expect(house.requests).toEqual([]);
+});
+
+it.each([
+  ['--rooms with their references', ['--rooms', 'r_k2v.4,r_9qd.x'], { reach: 'selected', refs: ['r_k2v.4', 'r_9qd.x'] }],
+  ['--no-private with every Room but the Private Room', ['--no-private'], { reach: 'all_but_private' }],
+])('gives a new Environment the Rooms of %s', async (_name, argv, rooms) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const { started, exit } = await logIn(house, home, {}, argv);
+
+  expect(exit).toBe(0);
+  expect(started).toMatchObject({ act: 'new_environment', rooms });
+});
+
+it('refuses --rooms beside --no-private before starting a login', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const login = runKit(['login', '--house', house.origin, '--rooms', 'r_k2v.4', '--no-private'], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toBe('kit: --rooms and --no-private are two choices of Rooms; pass one\n');
+  expect(house.requests).toEqual([]);
+});
+
+it('sets the Rooms again on a reconnect with --rooms, and a plain reconnect names none', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  await logIn(house, home);
+
+  serveLogin(house, 'environment-one', 'ahk_second');
+  const chosen = await logIn(house, home, {}, ['--rooms', 'r_k2v.4']);
+  serveLogin(house, 'environment-one', 'ahk_third');
+  const plain = await logIn(house, home);
+
+  expect([chosen.exit, plain.exit]).toEqual([0, 0]);
+  expect(chosen.started).toMatchObject({
+    act: 'existing_environment',
+    environment_id: 'environment-one',
+    rooms: { reach: 'selected', refs: ['r_k2v.4'] },
+  });
+  expect(plain.started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
+  expect(plain.started).not.toHaveProperty('rooms');
+});
+
+it('ends with the cause and no credential when House refuses a Room the login names', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  house.route('POST', '/kit/token', () => ({
+    status: 404,
+    body: { error: { code: 'room_not_found', retryable: false, room_ref: 'r_gone' } },
+  }));
+
+  const { exit, login } = await logIn(house, home, {}, ['--rooms', 'r_gone']);
+
+  expect(exit).toBe(1);
+  expect(login.stderr()).toContain('room_not_found');
+  expect(login.stderr()).toContain('r_gone');
+  await expect(access(join(home, 'credential.json'))).rejects.toThrow();
+});
+
+it('names --rooms and --no-private in kit login --help and starts no login', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+
+  const login = runKit(['login', '--house', house.origin, '--help'], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(0);
+  expect(login.stdout()).toMatch(/^ +--rooms <ref>\[,<ref>\.\.\.\] +\S/m);
+  expect(login.stdout()).toMatch(/^ +--no-private +\S/m);
   expect(house.requests).toEqual([]);
 });
 

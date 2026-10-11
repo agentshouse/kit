@@ -98,12 +98,13 @@ case "$1" in
         *dst=/agents/house) workspace=\${argument#*src=}; workspace=\${workspace%%\\",dst=*} ;;
         HOUSE_KIT_REPLACES=*) replacing=environment-two ;;
         -d) detached=1 ;;
+        login) login=1 ;;
       esac
       image=$previous
       previous=$argument
     done
     [ -z "$detached" ] || printf 'image=%s\\npolicy=%s\\nhome=%s\\nworkspace=%s\\nlabel=%s\\n' "$image" "$policy" "$home" "$workspace" "$label" > "$FAKE/container"
-    if [ "$previous" = login ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
+    if [ -n "$login" ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
     ;;
 esac\n`,
   sudo: `${LOGGED}exit 1\n`,

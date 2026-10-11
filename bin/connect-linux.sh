@@ -17,6 +17,7 @@ FORWARDING=0
 FORWARDED=kit
 FORWARD=()
 NO_SKILLS=()
+ROOMS=()
 CONFIGURED=''
 UPDATE_CLIS=0
 UBUNTU_RELEASES=(jammy noble resolute)
@@ -97,6 +98,7 @@ login_kit() {
 login_arguments() {
   LOGIN=()
   if ((HOUSE_SELECTED)); then LOGIN+=(--house "$HOUSE"); fi
+  LOGIN+=(${ROOMS[@]+"${ROOMS[@]}"})
 }
 
 prepare_directory() {
@@ -789,6 +791,15 @@ while (($#)); do
       ;;
     --container)
       CONTAINER=1
+      shift
+      ;;
+    --rooms)
+      (($# >= 2)) || refuse "$1 requires one value"
+      ROOMS+=(--rooms "$2")
+      shift 2
+      ;;
+    --no-private)
+      ROOMS+=(--no-private)
       shift
       ;;
     --no-skills)

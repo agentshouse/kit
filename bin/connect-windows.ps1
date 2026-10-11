@@ -166,6 +166,7 @@ function Initialize-DockerDesktop {
 }
 
 function Protect-Directory([string] $Path) {
+  $User = [Security.Principal.WindowsIdentity]::GetCurrent().User
   if ($Path.Contains(',')) { Stop-Bootstrap "$Path contains a comma, which this bootstrap cannot pass to a Docker mount from Windows PowerShell" }
   $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
   if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { Stop-Bootstrap "$Path is a symbolic link" }
@@ -289,6 +290,7 @@ function Connect-Kit {
   $Forwarded = 'kit'
   $Forward = @()
   $NoSkills = @()
+  $Login = @()
   $UpdateClis = $false
   $Interactive = -not [Console]::IsInputRedirected
   $Arguments = $BootstrapArguments
@@ -310,7 +312,14 @@ function Connect-Kit {
         if ($HouseSelected) { Stop-Bootstrap 'supply exactly one House origin' }
         $House = $Arguments[$index]
         $HouseSelected = $true
+        $Login += @('--house', $House)
       }
+    } elseif ($argument -ceq '--rooms') {
+      if ($index + 1 -ge $Arguments.Count) { Stop-Bootstrap "$argument requires one value" }
+      $index++
+      $Login += @('--rooms', $Arguments[$index])
+    } elseif ($argument -ceq '--no-private') {
+      $Login += @('--no-private')
     } elseif ($argument -ceq '--no-skills') {
       $NoSkills = @('--no-skills')
     } elseif ($argument -ceq '--update-clis') {
@@ -353,7 +362,6 @@ function Connect-Kit {
   }
   if (-not $Workspace) { $Workspace = Join-Path $env:USERPROFILE 'AgentsHouse' }
 
-  $User = [Security.Principal.WindowsIdentity]::GetCurrent().User
   $Workspace = Protect-Directory $Workspace
   $WorkspaceMount = "type=bind,src=$Workspace,dst=/agents/house"
   $enrolment = Read-Enrolment
@@ -433,9 +441,7 @@ function Connect-Kit {
   if ($enrolment.ContainsKey('environment')) {
     Test-Authority
   } else {
-    $login = @()
-    if ($HouseSelected) { $login += @('--house', $House) }
-    Invoke-Login $login
+    Invoke-Login $Login
     $enrolment = Read-Enrolment
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
   }

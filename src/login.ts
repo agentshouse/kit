@@ -37,14 +37,35 @@ async function accepted(house: string, credential: string): Promise<boolean> {
   throw new Error(`House answered ${checked.status} when Kit checked this computer's own agent's connection: ${checked.text}`);
 }
 
+const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms <ref>[,<ref>...] | --no-private]
+  --house <origin>          the House to connect to, ${DEFAULT_HOUSE} unless one is stored
+  --environment <id>        reconnect this Environment
+  --rooms <ref>[,<ref>...]  give this Environment only these Rooms
+  --no-private              give this Environment every Room but your Private Room
+`;
+
+function chosenRooms(rooms: string | undefined, noPrivate: boolean): object {
+  if (rooms !== undefined && noPrivate) throw new Error('--rooms and --no-private are two choices of Rooms; pass one');
+  if (rooms !== undefined) return { rooms: { reach: 'selected', refs: rooms.split(',') } };
+  return noPrivate ? { rooms: { reach: 'all_but_private' } } : {};
+}
+
 export async function login(argv: string[]): Promise<void> {
   const { values } = parseArgs({
     args: argv,
     options: {
       house: { type: 'string' },
       environment: { type: 'string' },
+      rooms: { type: 'string' },
+      'no-private': { type: 'boolean', default: false },
+      help: { type: 'boolean', default: false },
     },
   });
+  if (values.help) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  const rooms = chosenRooms(values.rooms, values['no-private']);
   const enrolled = (await readEnrolment()) ?? (await readDisconnected());
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
   const replaces = process.env.HOUSE_KIT_REPLACES;
@@ -58,6 +79,7 @@ export async function login(argv: string[]): Promise<void> {
       ...(environment === undefined
         ? { act: 'new_environment', label: hostname(), ...(replaces === undefined ? {} : { replaces }) }
         : { act: 'existing_environment', environment_id: environment }),
+      ...rooms,
       code_challenge: createHash('sha256').update(verifier).digest('base64url'),
       ...(held ? {} : { headless: true }),
     }),

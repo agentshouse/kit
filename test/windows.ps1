@@ -113,5 +113,63 @@ foreach ($fails in @($false, $true)) {
   if (($script:Ran -join '|') -cne 'run --rm --hostname pc --mount home --mount workspace image login --house https://agents.house') { $findings += "Invoke-Login ran: $($script:Ran -join '|')" }
   if (($script:Opened -join '|') -cne 'https://agents.house/kit/ahk_login_one') { $findings += "Invoke-Login opened: $($script:Opened -join '|')" }
 }
+foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Connect-Kit')) {
+  $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+  . ([scriptblock]::Create($found.Extent.Text))
+}
+$Image = 'ghcr.io/agentshouse/kit@sha256:' + ('a' * 64)
+$Name = 'house-kit'
+$KitHome = 'house-kit-home'
+$KitHomeMount = 'home'
+$MinimumBuild = 22631
+$env:OS = 'Windows_NT'
+$env:USERPROFILE = '/tmp'
+function Get-CimInstance([string] $ClassName) {
+  if ($ClassName -eq 'Win32_OperatingSystem') { return [pscustomobject]@{ ProductType = 1; BuildNumber = '26100'; Caption = 'Windows 11 Pro' } }
+  [pscustomobject]@{ Architecture = 9 }
+}
+function Initialize-DockerDesktop { [pscustomobject]@{ Platform = 'linux/x86_64'; System = 'Docker Desktop'; Kernel = '6.6.87.2-microsoft-standard-WSL2' } }
+function Protect-Directory([string] $Path) { $Path }
+function Read-Enrolment { $script:Enrolment }
+function Test-Container { $script:Installed }
+function Test-Path { $true }
+function Set-Configuration { $false }
+function Update-Clis { }
+function Start-Resident { }
+function Write-Host { }
+function Read-Inspect([string] $Format) {
+  if ($Format -ceq '{{.Config.Image}}') { return $Image }
+  if ($Format -ceq '{{.State.Running}}') { return 'true' }
+  if ($Format.Contains('.Source')) { return 'C:\Users\u\AgentsHouse' }
+  if ($Format.Contains('.Name')) { return $KitHome }
+  if ($Format.Contains('/kit-home') -and $Format.Contains('.Type')) { return 'volume/true' }
+  if ($Format.Contains('.Type')) { return 'bind/true' }
+  if ($Format.Contains('agentshouse.house')) { return 'https://agents.house' }
+  if ($Format -ceq '{{len .Mounts}}') { return '2' }
+  "$Image on-failure"
+}
+function docker {
+  $script:Ran += , ($args -join ' ')
+  $global:LASTEXITCODE = 0
+  if ($args -contains 'login') {
+    $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+    $printed
+  }
+}
+foreach ($case in @(
+  @($false, @('--rooms', 'r_k2v.4,r_9qd.x'), 'login --rooms r_k2v.4,r_9qd.x'),
+  @($false, @('--no-private', '--house', 'https://agents.house'), 'login --no-private --house https://agents.house'),
+  @($true, @('kit', 'login', '--rooms', 'r_k2v.4'), 'login --rooms r_k2v.4'),
+  @($true, @('kit', 'login', '--no-private'), 'login --no-private')
+)) {
+  $script:Installed = $case[0]
+  $script:Enrolment = @{}
+  if ($case[0]) { $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' } }
+  $BootstrapArguments = $case[1]
+  $script:Ran = @()
+  try { Connect-Kit } catch { $findings += "Connect-Kit $($case[1] -join ' ') refused with: $($_.Exception.Message)" }
+  $logins = @($script:Ran | Where-Object { $_ -match ' login( |$)' })
+  if ($logins.Count -ne 1 -or -not $logins[0].EndsWith(" $Image $($case[2])")) { $findings += "the bootstrap $($case[1] -join ' ') ran kit login as: $($logins -join '|')" }
+}
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }
