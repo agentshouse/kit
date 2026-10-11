@@ -495,7 +495,7 @@ it('finishes a push whose operation expired when House holds its component chang
   room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 410, body: { error: { code: 'operation_expired', retryable: false } } }));
+  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
 
   const recovered = await house(hosted, room.repository, 'push', '--owner');
 
@@ -531,7 +531,7 @@ it('keeps a pushed operation whose outcome it could not yet read and finishes it
   const pushedCommit = commitAll(room.repository, 'three');
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 410, body: { error: { code: 'operation_expired', retryable: false } } }));
+  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
   rooms.reads = [false];
 
   const unread = await house(hosted, room.repository, 'push', '--owner');

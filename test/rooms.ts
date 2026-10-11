@@ -346,7 +346,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     if (expired !== undefined) {
       state.expired.delete(expired.room.ref);
       const { authority, position } = expired;
-      return { status: 409, body: { error: { code: 'position_expired', authority, position, retryable: false } } };
+      return { status: 409, body: { error: { code: 'expired', authority, position, retryable: false } } };
     }
     return { body: { authorities: known.map(({ room, position }) => room.enumerated(Number(position), state.pass)) } };
   });

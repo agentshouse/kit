@@ -13,7 +13,7 @@ interface Shelled {
   stderr: string;
 }
 
-const EXPIRED = 'operation_expired: this operation is over 7 days old and its outcome is gone; read the current files and send again\n';
+const EXPIRED = 'expired: this has expired; read the files again and start over\n';
 
 async function shell(hosted: Hosted, command: string, conversation = 'conversation-1', agent = 'agent-1'): Promise<Shelled> {
   const before = (await hosted.adapterLog()).filter((entry) => 'sh' in entry).length;

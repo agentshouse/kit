@@ -171,7 +171,7 @@ function expiredAuthority(error: unknown): string | undefined {
   if (!(error instanceof HouseRefusal)) return undefined;
   try {
     const { error: refused } = JSON.parse(error.text) as { error?: { code?: unknown; authority?: unknown } };
-    return refused?.code === 'position_expired' && typeof refused.authority === 'string' ? refused.authority : undefined;
+    return refused?.code === 'expired' && typeof refused.authority === 'string' ? refused.authority : undefined;
   } catch {
     return undefined;
   }
@@ -775,7 +775,7 @@ export class LocalCopies {
         const { upload, ...unstaged } = copy.push!;
         return this.settle(await this.save({ ...copy, push: unstaged }), caller, true);
       }
-      if (outcome.refused.code === 'operation_expired') return this.recovered(copy);
+      if (outcome.refused.code === 'expired') return this.recovered(copy);
       const rebased = rebaseFixes(outcome.refused);
       let settled = await this.save(without(copy));
       try {
