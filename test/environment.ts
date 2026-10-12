@@ -304,10 +304,12 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     watch: (watching) => house.sockets.at(-1)!.send({ type: 'watching', watching }),
     restart: async () => {
       const opened = house.sockets.length;
+      const idled = idles.length;
       stop(hosted.kit.pid);
       await hosted.kit.exited;
       hosted.kit = runKit(['resident'], environment);
       await until(() => house.sockets.length > opened);
+      await until(() => idles.length > idled);
     },
     transcribe: (on) => {
       transcribe = on;
@@ -344,6 +346,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
       }
     },
   };
+  await until(() => idles[0]);
   return hosted;
 }
 

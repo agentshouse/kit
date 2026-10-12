@@ -199,10 +199,9 @@ it('deletes the three artifacts when the setting turns off, keeps a later audio 
 
 it('ends a running download and deletes the artifacts when the setting turns off, reporting no failure', async () => {
   const stalled = pinnedArtifacts()[1]!.url;
-  const hosted = await hostKit([{}], {
-    transcribe: true,
-    prepare: (home) => writeFile(join(home, 'curl-stall'), stalled),
-  });
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'curl-stall'), stalled);
+  hosted.transcribe(true);
   const directory = join(hosted.home, 'transcription');
   await until(async () => (await downloads(hosted)).includes(stalled));
 

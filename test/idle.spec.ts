@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { access, writeFile } from 'node:fs/promises';
+import { access, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
+import { RELEASES } from './cli.ts';
 import { settle, until } from './double.ts';
-import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
 import { alive, stop } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
@@ -28,6 +29,31 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
 
   await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);
+});
+
+it('does not report idle while a CLI House asks for installs, and reports it once that CLI is reported', async () => {
+  const hosted = await hostKit();
+  const hold = await installHeld(hosted);
+  await settle();
+  expect(hosted.idles).toHaveLength(1);
+
+  await rm(hold);
+  await until(() => hosted.idles[1]);
+
+  const paths = hosted.house.requests.map((request) => request.path);
+  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.lastIndexOf('/kit/agents/report'));
+  expect(hosted.reports.at(-1)!.agents).toContainEqual(expect.objectContaining({ kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'] }));
+});
+
+it('reports idle again once it has loaded the agents House asked it to refresh after its last idle report', async () => {
+  const hosted = await hostKit();
+  await until(() => hosted.idles[0]);
+
+  hosted.transcribe(false);
+
+  await until(() => hosted.idles[1]);
+  const paths = hosted.house.requests.map((request) => request.path);
+  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.lastIndexOf('/kit/agents/desired'));
 });
 
 it('restarts with a failure at its first idle moment after a CLI update asks it to, and not while a turn runs', async () => {

@@ -177,9 +177,16 @@ export class Agents {
   private readonly reads = new Map<string, number>();
   private sending: Promise<void> = Promise.resolve();
   private sent: string | null = null;
+  private refreshing = 0;
+  private readonly changed: () => void;
 
-  constructor(house: House) {
+  constructor(house: House, changed: () => void = () => undefined) {
     this.house = house;
+    this.changed = changed;
+  }
+
+  idle(): boolean {
+    return this.refreshing === 0;
   }
 
   read(): Promise<void> {
@@ -194,19 +201,30 @@ export class Agents {
   }
 
   refresh(): Promise<void> {
+    this.refreshing++;
+    this.changed();
     const reading = this.read().then(async () => {
       this.desired = await this.house.deliver<Desired>('/kit/agents/desired', {});
       return this.desired;
     });
     this.reading = reading;
-    return reading.then(({ agents, transcribe }) => {
-      holdTranscription(transcribe)
-        .then((changed) => (changed ? this.report() : undefined))
-        .catch(logged);
-      Promise.all(agents.map((kind) => this.load(kind)))
-        .then(() => this.report())
-        .catch(logged);
-    });
+    reading
+      .then(({ agents, transcribe }) =>
+        Promise.all([
+          holdTranscription(transcribe)
+            .then((changed) => (changed ? this.report() : undefined))
+            .catch(logged),
+          Promise.all(agents.map((kind) => this.load(kind)))
+            .then(() => this.report())
+            .catch(logged),
+        ]),
+      )
+      .catch(() => undefined)
+      .finally(() => {
+        this.refreshing--;
+        this.changed();
+      });
+    return reading.then(() => undefined);
   }
 
   cli(kind: string): Promise<string> {

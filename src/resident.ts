@@ -85,7 +85,7 @@ export async function resident(): Promise<void> {
   await placeSkillSet();
   await mkdir(agentBase(), { recursive: true });
   process.env.HOUSE_KIT_RESIDENT = String(process.pid);
-  const agents = new Agents(house);
+  const agents = new Agents(house, () => changed());
   const copies = new LocalCopies(house);
   await copies.load();
   await installShim(join(kitHome(), 'shim', 'git'), 'git-main');
@@ -93,7 +93,7 @@ export async function resident(): Promise<void> {
   await serveOwner(copies);
   let stream: Stream | null = null;
   let reported = false;
-  const idle = () => conversations.idle() && signIns.idle();
+  const idle = () => conversations.idle() && signIns.idle() && agents.idle();
   const changed = () => {
     if (!idle()) {
       reported = false;
