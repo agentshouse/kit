@@ -51,9 +51,13 @@ export async function fakeBin(home: string): Promise<string> {
     await writeFile(join(bin, tool), `#!/bin/sh\nexec ${process.execPath} ${fileURLToPath(new URL(`./${tool}.ts`, import.meta.url))} "$@"\n`);
     await chmod(join(bin, tool), 0o755);
   }
+  await placeKitHouse(bin);
+  return `${bin}:${process.env.PATH}`;
+}
+
+export async function placeKitHouse(bin: string): Promise<void> {
   await writeFile(join(bin, 'house'), `#!/bin/sh\nexec ${process.execPath} ${HOUSE} "$@"\n`);
   await chmod(join(bin, 'house'), 0o755);
-  return `${bin}:${process.env.PATH}`;
 }
 
 export const HOST_KEY = 'SHA256:kOo3WBbkkD4lemUHYroV3Ndz9eyygFTzdlqlS/+yLlE';
@@ -85,4 +89,8 @@ export function stop(pid: number): void {
 export async function filesUnder(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { recursive: true, withFileTypes: true });
   return entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
+}
+
+export async function entriesUnder(directory: string): Promise<string[]> {
+  return (await readdir(directory, { recursive: true })).sort();
 }

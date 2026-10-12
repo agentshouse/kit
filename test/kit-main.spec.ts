@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
@@ -21,8 +21,21 @@ it('prints its usage on standard output for kit --help', async () => {
   const kit = runKit(['--help'], { HOUSE_KIT_HOME: await temporaryHome() });
 
   expect(await kit.exited).toBe(0);
-  expect(kit.stdout()).toBe('usage: kit <login|logout|resident|codex>\n');
+  expect(kit.stdout()).toBe('usage: kit <login|logout|resident|chatgpt>\n');
   expect(kit.stderr()).toBe('');
+});
+
+it('prints its usage on standard error for a command it does not have, such as codex, asking House nothing and writing nothing', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+
+  const kit = runKit(['codex', '--key', 'ahp_script_key', '--house', house.origin, 'exec', 'hello'], { HOME: home });
+
+  expect(await kit.exited).toBe(2);
+  expect(kit.stdout()).toBe('');
+  expect(kit.stderr()).toBe('usage: kit <login|logout|resident|chatgpt>\n');
+  expect(house.requests).toEqual([]);
+  expect(await readdir(home)).toEqual([]);
 });
 
 it('refuses kit --help with anything after it and prints no usage', async () => {
@@ -33,7 +46,7 @@ it('refuses kit --help with anything after it and prints no usage', async () => 
   expect(kit.stderr()).toMatch(/^kit: /);
 });
 
-it.each(['logout', 'resident', 'git-credential', 'codex'])(
+it.each(['logout', 'resident', 'git-credential', 'chatgpt'])(
   'prints kit %s --help on standard output and leaves an enrolled home and its House untouched',
   async (command) => {
     const house = await startHouse();
@@ -51,7 +64,7 @@ it.each(['logout', 'resident', 'git-credential', 'codex'])(
   },
 );
 
-it.each([[['logout', '--force']], [['resident', 'now']], [['git-credential', 'get', 'store']]])(
+it.each([[['logout', '--force']], [['resident', 'now']], [['git-credential', 'get', 'store']], [['chatgpt', '--key', 'ahp_script_key', 'now']]])(
   'refuses kit %j, an argument its command does not take, and leaves an enrolled home and its House untouched',
   async (argv) => {
     const house = await startHouse();

@@ -36,7 +36,7 @@ const RAW_SUBTYPES = [
   'hook_response',
 ];
 
-export async function executable(path: string): Promise<boolean> {
+async function executable(path: string): Promise<boolean> {
   try {
     await access(path, constants.X_OK);
     return true;

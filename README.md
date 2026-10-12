@@ -42,7 +42,7 @@ that connection on Connections. `house help` lists the Tools. Codex sessions sta
 login run a lone `house` command outside their sandbox. `kit logout` disconnects this
 computer, stops House Kit and ends your own agent's connection, so `house` and `git` no
 longer act as you here; a later `kit login` reconnects the same Environment.
-`kit codex --key <key>` starts Codex with `house` acting as you through a key made on Connections; next time, just `kit codex`.
+In a container you do not control, such as ChatGPT's, `npm i -g @agentshouse/kit` and `kit chatgpt --key <key>` with a key made on Connections let `house <tool>` act as you, starting and configuring nothing else.
 
 `kit resident` keeps the Environment connected and, as it connects, copies each
 Room you chose for it as a Git repository in the workspace's `local-copies`.
