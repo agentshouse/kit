@@ -161,10 +161,24 @@ async function upload({ file, ...destination }: Record<string, unknown>): Promis
   return stringify(written, { lineWidth: 0 }).trimEnd();
 }
 
+function unexpected(argument: string, usage: string): Error {
+  return new Error(`unexpected argument ${argument}; ${usage}`);
+}
+
+function accepted(args: string[], flags: string[], positionals: number, usage: string): { flags: Set<string>; positionals: string[] } {
+  const given = { flags: new Set<string>(), positionals: [] as string[] };
+  for (const arg of args) {
+    if (flags.includes(arg)) given.flags.add(arg);
+    else if (!arg.startsWith('-') && given.positionals.length < positionals) given.positionals.push(arg);
+    else throw unexpected(arg, usage);
+  }
+  return given;
+}
+
 async function push(args: string[]): Promise<string> {
-  if (args.includes('--help')) return PUSH_USAGE;
-  const owner = args.includes('--owner');
-  const commit = args.find((arg) => arg !== '--owner') ?? 'HEAD';
+  const { flags, positionals: [commit = 'HEAD'] } = accepted(args, ['--help', '--owner'], 1, PUSH_USAGE);
+  if (flags.has('--help')) return PUSH_USAGE;
+  const owner = flags.has('--owner');
   if (owner && socketPath !== undefined) throw new Error('--owner is not for Agent conversations; run house push without it');
   if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house push needs --owner');
   const pushed = JSON.parse(
@@ -175,7 +189,7 @@ async function push(args: string[]): Promise<string> {
 }
 
 async function fetched(args: string[]): Promise<string> {
-  if (args.includes('--help')) return FETCH_USAGE;
+  if (accepted(args, ['--help'], 0, FETCH_USAGE).flags.has('--help')) return FETCH_USAGE;
   const answer = JSON.parse(await bridged('/git/fetch', {}, undefined, socketPath ?? join(kitHome(), 'owner.sock'))) as {
     refused: boolean;
     text: string;
@@ -196,17 +210,20 @@ function argumentsOf(argument: string | undefined): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-async function house([verb, argument]: string[]): Promise<string> {
-  if (verb === undefined || verb === '--help' || verb === 'help') {
+async function house(args: string[]): Promise<string> {
+  const { flags, positionals: [verb, argument] } = accepted(args, ['--help'], 2, USAGE);
+  if (verb === 'help' && argument !== undefined) throw unexpected(argument, USAGE);
+  if (flags.has('--help') && argument !== undefined) throw unexpected('--help', USAGE);
+  if (verb === undefined || verb === 'help') {
     return [USAGE, 'help', PUSH, FETCH, ...(await tools()).map((tool) => (tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`))].join('\n');
   }
-  if (argument === '--help') {
+  if (flags.has('--help')) {
     const tool = (await tools()).find((listed) => listed.name === verb);
     if (tool === undefined) throw new Error(`${verb} is no Tool; house find_command '{"query":"${verb}"}' finds Commands`);
     return [...(tool.description === undefined ? [] : [tool.description]), JSON.stringify(tool.inputSchema)].join('\n');
   }
-  const args = argumentsOf(argument);
-  return verb === 'upload' ? upload(args) : called(verb, args);
+  const parsed = argumentsOf(argument);
+  return verb === 'upload' ? upload(parsed) : called(verb, parsed);
 }
 
 async function called(name: string, args: Record<string, unknown>): Promise<string> {
@@ -217,7 +234,9 @@ async function called(name: string, args: Record<string, unknown>): Promise<stri
 }
 
 const argv = process.argv.slice(2);
-(argv[0] === 'push' ? push(argv.slice(1)) : argv[0] === 'fetch' ? fetched(argv.slice(1)) : house(argv)).then(
+const named = argv.findIndex((arg) => !arg.startsWith('-'));
+const rest = argv.filter((_arg, index) => index !== named);
+(argv[named] === 'push' ? push(rest) : argv[named] === 'fetch' ? fetched(rest) : house(argv)).then(
   (text) => {
     process.stdout.write(`${text}\n`);
     if (argv[0] === 'shell') process.exitCode = Number(/^exit: (\d+)(?:\n|$)/.exec(text)?.[1] ?? 0);

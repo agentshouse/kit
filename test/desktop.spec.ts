@@ -629,6 +629,31 @@ it('ends a kit login forwarded into the container with the status its login ende
   expect(host.run(['--container', 'kit', 'login'])).toMatchObject({ status: 7 });
 });
 
+it('stops the container after a kit logout forwarded into it, and leaves it running after kit logout --help', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run(['--container'])).toMatchObject({ status: 0 });
+  await host.forget();
+
+  expect(host.run(['--container', 'kit', 'logout', '--help'])).toMatchObject({ status: 0 });
+  expect(host.calls('docker').filter((call) => /^(exec|stop) /.test(call))).toEqual(['exec -i house-kit kit logout --help']);
+  await host.forget();
+
+  expect(host.run(['--container', 'kit', 'logout'])).toMatchObject({ status: 0 });
+  expect(host.calls('docker').filter((call) => /^(exec|stop) /.test(call))).toEqual(['exec -i house-kit kit logout', 'stop house-kit']);
+});
+
+it('forwards kit login --help into a stopped container alone, leaving it stopped', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+  expect(host.run(['--container'])).toMatchObject({ status: 0 });
+  await host.mark('stopped');
+  await host.forget();
+
+  expect(host.run(['--container', 'kit', 'login', '--help'])).toMatchObject({ status: 0, stderr: '' });
+  expect(host.calls('docker').filter((call) => / login( |$)|^(start|stop) /.test(call))).toEqual([
+    expect.stringMatching(/^run -i --rm .* login --help$/),
+  ]);
+});
+
 it('keeps an installed container on the pinned image and on-failure, and replaces one under another restart policy on a rerun', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   expect(host.run(['--container'])).toMatchObject({ status: 0 });

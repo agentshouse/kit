@@ -42,7 +42,8 @@ async function accepted(house: string, credential: string): Promise<boolean> {
   throw new Error(`House answered ${checked.status} when Kit checked this computer's own agent's connection: ${checked.text}`);
 }
 
-const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms <ref>[,<ref>...] | --no-private] [--code <code>]
+const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms <ref>[,<ref>...] | --no-private]
+       kit login [--house <origin>] --code <code>
   --house <origin>          the House to connect to, ${DEFAULT_HOUSE} unless one is stored
   --environment <id>        reconnect this Environment
   --rooms <ref>[,<ref>...]  give this Environment only these Rooms

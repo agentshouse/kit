@@ -142,9 +142,10 @@ function Test-Path { $true }
 function Set-Configuration { $false }
 function Update-Clis { }
 function Write-Host { }
+$script:Running = 'true'
 function Read-Inspect([string] $Format) {
   if ($Format -ceq '{{.Config.Image}}') { return $Image }
-  if ($Format -ceq '{{.State.Running}}') { return 'true' }
+  if ($Format -ceq '{{.State.Running}}') { return $script:Running }
   if ($Format.Contains('.Source')) { return 'C:\Users\u\AgentsHouse' }
   if ($Format.Contains('.Name')) { return $KitHome }
   if ($Format.Contains('/kit-home') -and $Format.Contains('.Type')) { return 'volume/true' }
@@ -210,5 +211,31 @@ try { Connect-Kit } catch { $findings += "a bootstrap whose Kit forgot its crede
 if (@($script:Ran | Where-Object { $_ -ceq "rm -f $Name" }).Count -ne 1 -or @($script:Ran | Where-Object { $_.StartsWith('volume rm') }).Count -ne 0 -or @($script:Ran | Where-Object { $_ -match ' login( |$)' }).Count -ne 1) {
   $findings += "the bootstrap whose Kit forgot its credential ran: $($script:Ran -join '|')"
 }
+foreach ($case in @(
+  @(@('kit', 'logout', '--help'), 0),
+  @(@('kit', 'logout'), 1)
+)) {
+  $script:Installed = $true
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $BootstrapArguments = $case[0]
+  $script:Ran = @()
+  try { Connect-Kit } catch {
+    if ($_.Exception.Message -cne 'kit_bootstrap_exit: 0') { $findings += "the bootstrap forwarding $($case[0] -join ' ') ended with: $($_.Exception.Message)" }
+  }
+  $stops = @($script:Ran | Where-Object { $_ -ceq "stop $Name" })
+  if ($stops.Count -ne $case[1]) { $findings += "the bootstrap forwarding $($case[0] -join ' ') stopped the container $($stops.Count) times" }
+}
+$script:Running = 'false'
+$script:Installed = $true
+$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+$BootstrapArguments = @('kit', 'login', '--help')
+$script:Ran = @()
+try { Connect-Kit } catch {
+  if ($_.Exception.Message -cne 'kit_bootstrap_exit: 0') { $findings += "the bootstrap forwarding kit login --help ended with: $($_.Exception.Message)" }
+}
+if (@($script:Ran | Where-Object { $_ -match ' login( |$)' -or $_ -match '^(start|stop) ' }).Count -ne 1 -or -not $script:Ran[-1].EndsWith(' login --help')) {
+  $findings += "the bootstrap forwarding kit login --help into a stopped container ran: $($script:Ran -join '|')"
+}
+$script:Running = 'true'
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }

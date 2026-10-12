@@ -374,7 +374,7 @@ it('ends with the cause and no credential when House refuses a Room the login na
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
 });
 
-it('names --code, --rooms and --no-private in kit login --help and starts no login', async () => {
+it('names --code, --rooms and --no-private in kit login --help, --code in a form apart from the other choices, and starts no login', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
 
@@ -384,6 +384,9 @@ it('names --code, --rooms and --no-private in kit login --help and starts no log
   expect(login.stdout()).toMatch(/^ +--code <code> +\S/m);
   expect(login.stdout()).toMatch(/^ +--rooms <ref>\[,<ref>\.\.\.\] +\S/m);
   expect(login.stdout()).toMatch(/^ +--no-private +\S/m);
+  const forms = login.stdout().split('\n').filter((line) => line.includes('kit login'));
+  expect(forms).toContainEqual(expect.stringMatching(/kit login \[--house <origin>\] --code <code>$/));
+  expect(forms.filter((form) => form.includes('--code') && /--environment|--rooms|--no-private/.test(form))).toEqual([]);
   expect(house.requests).toEqual([]);
 });
 

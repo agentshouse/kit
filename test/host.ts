@@ -51,7 +51,7 @@ export interface Host {
   restartPolicy(policy: string): Promise<void>;
 }
 
-type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-fails' | 'opener-fails' | 'refused' | 'systemd';
+type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-fails' | 'opener-fails' | 'refused' | 'stopped' | 'systemd';
 
 const LOGGED = 'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n';
 
@@ -91,11 +91,13 @@ case "$1" in
   container) [ -e "$FAKE/container" ] ;;
   inspect)
     . "$FAKE/container"
+    running=true
+    [ ! -e "$FAKE/stopped" ] || running=false
     printf '%s\\n' "$3" | sed -e "s|{{.Config.Image}}|$image|" -e "s|{{.HostConfig.RestartPolicy.Name}}|$policy|" -e 's|{{len .Mounts}}|2|' \\
       -e "s|{{range .Mounts}}{{if eq .Destination \\"/kit-home\\"}}{{.Source}}{{end}}{{end}}|$home|" \\
       -e "s|{{range .Mounts}}{{if eq .Destination \\"/agents/house\\"}}{{.Source}}{{end}}{{end}}|$workspace|" \\
       -e 's|{{range .Mounts}}{{if eq .Destination "[^"]*"}}{{.Type}}/{{.RW}}{{end}}{{end}}|bind/true|' \\
-      -e "s|{{index .Config.Labels \\"agentshouse.house\\"}}|$label|" -e 's|{{.State.Running}}|true|'
+      -e "s|{{index .Config.Labels \\"agentshouse.house\\"}}|$label|" -e "s|{{.State.Running}}|$running|"
     ;;
   rm) rm "$FAKE/container" ;;
   run)
@@ -110,12 +112,13 @@ case "$1" in
         HOUSE_KIT_REPLACES=*) replacing=environment-two ;;
         -d) detached=1 ;;
         login) login=1 ;;
+        --help) help=1 ;;
       esac
       image=$previous
       previous=$argument
     done
     [ -z "$detached" ] || printf 'image=%s\\npolicy=%s\\nhome=%s\\nworkspace=%s\\nlabel=%s\\n' "$image" "$policy" "$home" "$workspace" "$label" > "$FAKE/container"
-    if [ -n "$login" ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
+    if [ -n "$login" ] && [ -z "$help" ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
     ;;
 esac\n`,
   sudo: `${LOGGED}exit 1\n`,

@@ -401,12 +401,13 @@ function Connect-Kit {
     if ((Read-Inspect '{{range .Mounts}}{{if eq .Destination `/agents/house`}}{{.Type}}/{{.RW}}{{end}}{{end}}') -cne 'bind/true') { Stop-Bootstrap 'the installed workspace is not a writable bind mount' }
     if ((Read-Inspect '{{index .Config.Labels `agentshouse.house`}}') -cne $House) { Stop-Bootstrap 'the installed Kit uses another House origin' }
     if ($Forwarding) {
-      if ($Forwarded -ceq 'kit' -and $Forward.Count -gt 0 -and $Forward[0] -ceq 'login') {
+      $help = $Forward -ccontains '--help'
+      if (-not $help -and $Forwarded -ceq 'kit' -and $Forward.Count -gt 0 -and $Forward[0] -ceq 'login') {
         Invoke-Login @($Forward | Select-Object -Skip 1)
         if ((Read-Inspect '{{.State.Running}}') -cne 'true') { Invoke-Docker start $Name | Out-Null }
         return
       }
-      if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'the installed Kit has no enrolled authority' }
+      if (-not $help -and -not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'the installed Kit has no enrolled authority' }
       $placed = @()
       $entry = @()
       if ($Forwarded -ceq 'house') {
@@ -421,7 +422,7 @@ function Connect-Kit {
         & docker run -i @terminal @placed @entry --rm @Network @Common @Forward
       }
       $status = $LASTEXITCODE
-      if ($status -eq 0 -and $Forwarded -ceq 'kit' -and $Forward.Count -gt 0 -and $Forward[0] -ceq 'logout') { Invoke-Docker stop $Name | Out-Null }
+      if ($status -eq 0 -and $Forwarded -ceq 'kit' -and ($Forward -join ' ') -ceq 'logout') { Invoke-Docker stop $Name | Out-Null }
       Exit-Bootstrap $status
     }
     if ($enrolment.ContainsKey('environment')) { Test-Authority } else { Invoke-Docker rm -f $Name | Out-Null }

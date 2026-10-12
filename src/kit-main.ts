@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { setGlobalProxyFromEnv } from 'node:http';
+import { parseArgs } from 'node:util';
 import { answerGitCredential } from './app-git.ts';
 import { login } from './login.ts';
 import { logout } from './logout.ts';
@@ -9,16 +10,67 @@ declare module 'node:http' {
   function setGlobalProxyFromEnv(proxyEnv?: NodeJS.ProcessEnv): () => void;
 }
 
+interface Command {
+  usage: string;
+  about: string;
+  operands: number;
+  run(operands: string[]): Promise<void>;
+}
+
+const USAGE = 'usage: kit <login|logout|resident>\n';
+const COMMANDS = new Map<string, Command>([
+  [
+    'logout',
+    {
+      usage: 'usage: kit logout',
+      about: "disconnects this computer, stops House Kit and ends your own agent's connection",
+      operands: 0,
+      run: logout,
+    },
+  ],
+  [
+    'resident',
+    {
+      usage: 'usage: kit resident',
+      about: "keeps this Environment connected; House Kit's service runs it",
+      operands: 0,
+      run: resident,
+    },
+  ],
+  [
+    'git-credential',
+    {
+      usage: 'usage: kit git-credential <get|store|erase>',
+      about: "answers git with your own agent's House credential; git runs it",
+      operands: 1,
+      run: ([operation]) => answerGitCredential(operation),
+    },
+  ],
+]);
+
 const [command, ...argv] = process.argv.slice(2);
 setGlobalProxyFromEnv();
 
 async function run(): Promise<void> {
   if (command === 'login') return login(argv);
-  if (command === 'logout') return logout();
-  if (command === 'resident') return resident();
-  if (command === 'git-credential') return answerGitCredential(argv[0]);
-  process.stderr.write('usage: kit <login|logout|resident>\n');
-  process.exitCode = 2;
+  if (command === '--help') {
+    parseArgs({ args: argv });
+    process.stdout.write(USAGE);
+    return;
+  }
+  const chosen = COMMANDS.get(command ?? '');
+  if (chosen === undefined) {
+    process.stderr.write(USAGE);
+    process.exitCode = 2;
+    return;
+  }
+  const { values, positionals } = parseArgs({ args: argv, options: { help: { type: 'boolean', default: false } }, allowPositionals: true });
+  if (positionals.length > chosen.operands) throw new Error(`unexpected argument ${positionals[chosen.operands]}; ${chosen.usage}`);
+  if (values.help) {
+    process.stdout.write(`${chosen.usage}\n  ${chosen.about}\n`);
+    return;
+  }
+  return chosen.run(positionals);
 }
 
 run().catch((error: unknown) => {

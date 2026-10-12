@@ -687,6 +687,14 @@ house_workdir() {
   fi
 }
 
+asks_help() {
+  local argument
+  for argument in ${FORWARD[@]+"${FORWARD[@]}"}; do
+    [[ "$argument" != --help ]] || return 0
+  done
+  return 1
+}
+
 forward_kit() {
   local placed=() entry=() terminal=()
   if [[ "$FORWARDED" == house ]]; then
@@ -926,14 +934,14 @@ if kit_installed; then
   check_installation
   if ((FORWARDING)); then
     [[ "$(docker inspect --format '{{.Config.Image}}' "$NAME")" == "$IMAGE" ]] || refuse "an installed Kit uses a different image; rerun this command without $FORWARDED and its arguments to update it"
-    if [[ "$FORWARDED" == kit && "${FORWARD[0]:-}" == login ]]; then
+    if ! asks_help && [[ "$FORWARDED" == kit && "${FORWARD[0]:-}" == login ]]; then
       login_kit ${FORWARD[@]+"${FORWARD[@]:1}"}
       kit_running || docker start "$NAME" >/dev/null
       exit 0
     fi
-    [[ -f "$KIT_HOME/credential.json" ]] || refuse 'the installed Kit has no enrolled authority'
+    asks_help || [[ -f "$KIT_HOME/credential.json" ]] || refuse 'the installed Kit has no enrolled authority'
     forward_kit
-    if [[ "$FORWARDED" == kit && "${FORWARD[0]:-}" == logout ]]; then docker stop "$NAME" >/dev/null; fi
+    if [[ "$FORWARDED" == kit && "${FORWARD[*]:-}" == logout ]]; then docker stop "$NAME" >/dev/null; fi
     exit 0
   fi
   if [[ -f "$KIT_HOME/credential.json" ]]; then check_authority "${AUTHORITY[@]}"; fi

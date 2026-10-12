@@ -5,7 +5,7 @@ import { access, chmod, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { startHouse, type House } from './double.ts';
 import { declaredUpload, helpLine, LISTING, shelled, type McpCall, type Transfer } from './environment.ts';
 import { runKit, temporaryHome } from './kit.ts';
@@ -212,6 +212,62 @@ it('prints the same help for house help as for house --help, listing help, push 
   expect(lines).toContain('about_house');
   expect(help.stdout).not.toMatch(/\bgit\b/);
   expect((await runHouse(home, ['about_house', '--help'])).stdout).toBe('{"type":"object"}\n');
+});
+
+it.each([
+  [['edit', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
+  [['list_rooms', '{}', '--bogus'], '--bogus'],
+  [['--version'], '--version'],
+])('refuses house %j with its usage before it calls House', async (argv, unexpected) => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+
+  const ran = await runHouse(home, argv);
+
+  expect(ran).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: `house: unexpected argument ${unexpected}; usage: house <tool> ['<arguments as JSON>']\n`,
+  });
+  expect(house.requests).toEqual([]);
+});
+
+it.each([
+  [['--help', 'push'], 'usage: house push [commit] [--owner]'],
+  [['--help', 'push', 'HEAD', '--owner'], 'usage: house push [commit] [--owner]'],
+  [['--help', 'fetch'], 'usage: house fetch'],
+])('prints house %j as the usage of the command it names and calls nothing', async (argv, usage) => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+
+  const ran = await runHouse(home, argv);
+
+  expect(ran).toEqual({ status: 0, stdout: `${usage}\n`, stderr: '' });
+  expect(house.requests).toEqual([]);
+});
+
+it.each([
+  [['push', '--dry-run'], true, '--dry-run', 'usage: house push [commit] [--owner]'],
+  [['push', '--owner', '--dry-run'], false, '--dry-run', 'usage: house push [commit] [--owner]'],
+  [['push', 'HEAD', '--owner', '--dry-run'], false, '--dry-run', 'usage: house push [commit] [--owner]'],
+  [['fetch', '--x'], false, '--x', 'usage: house fetch'],
+])('refuses house %j with its usage before it opens a socket', async (argv, conversation, unexpected, usage) => {
+  const home = await temporaryHome();
+  const opened: string[] = [];
+  for (const socket of ['owner.sock', 'bridge.sock']) {
+    const listener = createServer((connection) => {
+      opened.push(socket);
+      connection.destroy();
+    });
+    listener.listen(join(home, socket));
+    await once(listener, 'listening');
+    onTestFinished(() => new Promise<void>((resolve) => listener.close(() => resolve())));
+  }
+
+  const ran = await runHouse(home, argv, conversation ? join(home, 'bridge.sock') : undefined);
+
+  expect(ran).toEqual({ status: 1, stdout: '', stderr: `house: unexpected argument ${unexpected}; ${usage}\n` });
+  expect(opened).toEqual([]);
 });
 
 it("exits with the status House's shell answer names, and 0 when it names none", async () => {
