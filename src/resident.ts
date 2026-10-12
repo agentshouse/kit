@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { received } from './bridge.ts';
-import { Conversations, type Input } from './conversations.ts';
+import { CONVERSATION_INPUTS, Conversations, type Input } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
 import { restart } from './end.ts';
 import { agentBase, enrolled, forgetRestart, kitHome, restartAsked } from './home.ts';
@@ -136,7 +136,11 @@ export async function resident(): Promise<void> {
         reported = false;
         if (arrived.kind === 'sign_in') signIns.start(arrived as unknown as SignIn);
         else if (arrived.kind === 'update') updates.start(arrived as unknown as Update);
-        else conversations.input(arrived as unknown as Input);
+        else if (CONVERSATION_INPUTS.has(arrived.kind as string)) conversations.input(arrived as unknown as Input);
+        else {
+          const refused = { refused: `This Kit does not know ${arrived.kind}; update the Kit` };
+          logged(house.deliver(`/kit/inputs/${arrived.input_id}/ack`, refused).finally(changed));
+        }
       }
     },
   });

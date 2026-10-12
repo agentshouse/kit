@@ -347,22 +347,21 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   return hosted;
 }
 
-export async function hostMac(hosting: Pick<Hosting, 'transcribe'> = {}, routes: RouteOverrides[] = [{}]): Promise<Hosted> {
-  const home = await temporaryHome();
+export async function macOS(home: string): Promise<Record<string, string>> {
   const bin = join(home, 'macos');
   await mkdir(bin);
   await writeFile(join(bin, 'ps'), `#!/bin/sh\nexec env -u NODE_OPTIONS ${process.execPath} ${fileURLToPath(new URL('./ps.ts', import.meta.url))} "$@"\n`);
   await writeFile(join(bin, 'sw_vers'), '#!/bin/sh\n[ "$*" = -productVersion ] && echo 27.0.1\n');
   await Promise.all(['ps', 'sw_vers'].map((tool) => chmod(join(bin, tool), 0o755)));
-  return hostKit(routes, {
-    ...hosting,
-    home,
-    skills: false,
-    environment: {
-      PATH: `${bin}:${join(home, 'bin')}:${process.env.PATH}`,
-      NODE_OPTIONS: `--import=${fileURLToPath(new URL('./darwin.ts', import.meta.url))}`,
-    },
-  });
+  return {
+    PATH: `${bin}:${join(home, 'bin')}:${process.env.PATH}`,
+    NODE_OPTIONS: `--import=${fileURLToPath(new URL('./darwin.ts', import.meta.url))}`,
+  };
+}
+
+export async function hostMac(hosting: Pick<Hosting, 'transcribe'> = {}, routes: RouteOverrides[] = [{}]): Promise<Hosted> {
+  const home = await temporaryHome();
+  return hostKit(routes, { ...hosting, home, skills: false, environment: await macOS(home) });
 }
 
 export function outcome(body: unknown): { text: string } | { failed: string } {

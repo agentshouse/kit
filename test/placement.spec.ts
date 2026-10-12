@@ -29,6 +29,14 @@ async function keptTheRest(host: Host): Promise<void> {
   expect(await readFile(join(host.home, 'AgentsHouse', 'notes.md'), 'utf8')).toBe('kept\n');
 }
 
+it('records the placement of a Kit installed natively on a server', async () => {
+  const host = await fakeHost({ ...NATIVE, server: true });
+
+  expect(host.run(['--linux'])).toMatchObject({ status: 0, stderr: '' });
+
+  expect(await placement(host)).toBe('server\n');
+});
+
 async function native(): Promise<Host> {
   const host = await fakeHost(NATIVE);
   expect(host.run()).toMatchObject({ status: 0 });

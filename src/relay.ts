@@ -4,7 +4,7 @@ export function selectRelay(relay: string | undefined): void {
   selected = relay === undefined || relay === '' ? null : relay;
 }
 
-function relayOrigin(): string | undefined {
+export function relayOrigin(): string | undefined {
   if (selected !== undefined) return selected ?? undefined;
   const ambient = process.env.HOUSE_KIT_RELAY;
   return ambient === undefined || ambient === '' ? undefined : ambient;

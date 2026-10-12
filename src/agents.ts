@@ -4,8 +4,10 @@ import { startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_VERSION, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
+import { updatesItself } from './placement.ts';
 import { killTree } from './scope.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
+import { KIT_WIRE } from './wire.ts';
 
 export interface Route {
   agent_id: string;
@@ -338,6 +340,8 @@ export class Agents {
     const body = {
       os: await operatingSystem(),
       kit_version: KIT_VERSION,
+      wire: KIT_WIRE,
+      updates_itself: await updatesItself(),
       agent_base: agentBase(),
       agents,
       transcription: transcriptionReport(),

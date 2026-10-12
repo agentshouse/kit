@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it } from 'vitest';
 import { RELEASES, placeUserCli } from './cli.ts';
 import { startHouse, until, type House } from './double.ts';
-import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
+import { LOGIN_SHELL, macOS, placeUserClis, userBin } from './environment.ts';
 import { HOST_KEY, fakeBin, placeHostKey, runKit, temporaryHome, type KitRun } from './kit.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -14,6 +14,9 @@ const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.
 };
 const PINNED = KIT_PACKAGE.peerDependencies;
 const FAST_INTERVALS = ['--import', fileURLToPath(new URL('./fast-intervals.ts', import.meta.url))];
+const ROOT = ['--import', fileURLToPath(new URL('./root.ts', import.meta.url))];
+const USER_SERVICE = { INVOCATION_ID: 'invocation', MANAGERPID: '1' };
+const SYSTEM_SERVICE = { INVOCATION_ID: 'invocation' };
 
 let house: House;
 let kit: KitRun | undefined;
@@ -84,7 +87,7 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
   expect(await logged('curl.log')).toEqual([]);
 });
 
-it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit version and its transcription engine', async () => {
+it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit version, its wire, whether it updates itself and its transcription engine', async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -94,6 +97,8 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
   expect(report).toEqual({
     os: expect.stringMatching(/\S/),
     kit_version: KIT_PACKAGE.version,
+    wire: 1,
+    updates_itself: false,
     agent_base: '/agents/house/agents',
     agents: [
       {
@@ -356,4 +361,27 @@ it('creates and reports the agents folder of the native workspace root as its Ag
 
   expect(report.agent_base).toBe(join(workspace, 'agents'));
   expect((await stat(join(workspace, 'agents'))).isDirectory()).toBe(true);
+});
+
+it.each([
+  ['as a user service', [], USER_SERVICE, null, true],
+  ['as a system service it runs as root', ROOT, SYSTEM_SERVICE, null, true],
+  ['as a system service of an account sudo lets act without a password', [], SYSTEM_SERVICE, 0, true],
+  ['as a system service of an account sudo asks for a password', [], SYSTEM_SERVICE, 1, false],
+  ['outside a service manager', [], {}, null, false],
+])('reports whether it updates itself when it runs on Linux %s', async (_, node, environment, sudo, updates) => {
+  desired = [];
+  const placeSudo = async () => {
+    if (sudo !== null) await writeFile(join(home, 'bin', 'sudo'), `#!/bin/sh\nexit ${sudo}\n`, { mode: 0o755 });
+  };
+  await start(placeSudo, node, environment);
+
+  expect((await until(() => reports[0])).updates_itself).toBe(updates);
+});
+
+it('reports that it does not update itself on macOS', async () => {
+  desired = [];
+  await start(undefined, [], { ...USER_SERVICE, ...(await macOS(home)) });
+
+  expect(await until(() => reports[0])).toMatchObject({ os: 'macOS 27.0.1', updates_itself: false });
 });

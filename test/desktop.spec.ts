@@ -215,6 +215,20 @@ it.each([
   );
 });
 
+it.each([
+  ['LaunchAgent', { system: 'Darwin', machine: 'arm64' }, 'Library/LaunchAgents/house-kit.plist'],
+  ['systemd unit', { system: 'Linux', machine: 'x86_64' }, '.config/systemd/user/house-kit.service'],
+] as const)('keeps the workspace root its %s names when a rerun names none', async (_name, platform, definition) => {
+  const host = await fakeHost(platform);
+  expect(host.run(['--workspace', join(host.home, 'R&D <50%> "a\\b"')])).toMatchObject({ status: 0, stderr: '' });
+  const written = await readFile(join(host.home, definition), 'utf8');
+
+  expect(host.run()).toMatchObject({ status: 0, stderr: '' });
+
+  expect(await readFile(join(host.home, definition), 'utf8')).toBe(written);
+  await expect(access(join(host.home, 'AgentsHouse'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 it('adds the path line to the login file bash reads when there is a .bash_login and no .bash_profile', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   await writeFile(join(host.home, '.bash_login'), '');

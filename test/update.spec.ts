@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { chmod, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, type Hosted } from './environment.ts';
 import { fakeBin, runKit } from './kit.ts';
@@ -51,8 +52,43 @@ it('reruns the verified bootstrap with --linux outside its own service and ackno
   expect(await ran(hosted)).toBe('--linux\n');
   const launched = await readFile(join(hosted.home, 'systemd-run.log'), 'utf8');
   expect(launched).toMatch(
-    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" --linux "\$@"; printf %s "\$\?" > "\$outcome"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome\n$/,
+    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --linux\n$/,
   );
+});
+
+it('reruns the bootstrap of its desktop placement in its workspace through the user service manager when it runs as a user service', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'kit-workspace-'));
+  onTestFinished(() => rm(workspace, { recursive: true, force: true }));
+  const hosted = await hostKit([{}], {
+    environment: { INVOCATION_ID: 'invocation', MANAGERPID: '1', HOUSE_KIT_WORKSPACE: workspace },
+  });
+  await writeFile(join(hosted.home, 'bin', 'systemctl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOUSE_KIT_HOME/systemctl.log"\n');
+  await chmod(join(hosted.home, 'bin', 'systemctl'), 0o755);
+  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
+
+  update(hosted, 'update-user', { ...pin, update_clis: true });
+
+  expect(await hosted.ack('update-user')).toEqual({});
+  expect(await ran(hosted)).toBe(`--workspace ${workspace} --update-clis\n`);
+  expect(await readFile(join(hosted.home, 'systemd-run.log'), 'utf8')).toMatch(
+    /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+ --update-clis\n$/,
+  );
+  expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('--user start house-kit.service\n');
+});
+
+it('reruns the bootstrap with --linux as its own account through sudo when it runs as the system service of an account that is not root', async () => {
+  const hosted = await hostKit([{}], { environment: { INVOCATION_ID: 'invocation' } });
+  await writeFile(join(hosted.home, 'bin', 'sudo'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOUSE_KIT_HOME/sudo.log"\nshift\nexec "$@"\n', { mode: 0o755 });
+  await writeFile(join(hosted.home, 'bin', 'systemctl'), '#!/bin/sh\n', { mode: 0o755 });
+  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
+
+  update(hosted, 'update-sudo', pin);
+
+  expect(await hosted.ack('update-sudo')).toEqual({});
+  expect(await ran(hosted)).toBe('--linux\n');
+  const elevated = (await readFile(join(hosted.home, 'sudo.log'), 'utf8')).split('\n');
+  expect(elevated).toContainEqual(expect.stringMatching(new RegExp(`^-n systemd-run --uid=${process.getuid!()} --gid=${process.getgid!()} --wait `)));
+  expect(elevated).toContain('-n systemctl start house-kit.service');
 });
 
 it.each([

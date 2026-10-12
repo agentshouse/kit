@@ -5,7 +5,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { House } from './api.ts';
 import { run } from './clis.ts';
-import { kitHome } from './home.ts';
+import { kitHome, workspaceRoot } from './home.ts';
+import { service, throughSudo } from './placement.ts';
 
 export interface Update {
   input_id: string;
@@ -15,8 +16,6 @@ export interface Update {
 }
 
 type Ack = Record<string, never> | { refused: string };
-
-const RECORD = 'outcome=$1; shift; bash "$0" --linux "$@"; printf %s "$?" > "$outcome"; systemctl start house-kit.service';
 
 function logged(error: unknown): void {
   process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -38,6 +37,26 @@ function unit(inputId: string): string {
   return `house-kit-update-${inputId}`;
 }
 
+function manager(): string[] {
+  return service() === 'user' ? ['--user'] : [];
+}
+
+function elevated(): string[] {
+  return throughSudo() ? ['sudo', '-n'] : [];
+}
+
+function account(): string[] {
+  return throughSudo() ? [`--uid=${process.getuid!()}`, `--gid=${process.getgid!()}`] : [];
+}
+
+function placement(): string[] {
+  return service() === 'user' ? ['--workspace', workspaceRoot()] : ['--linux'];
+}
+
+function record(): string {
+  return `outcome=$1; shift; bash "$0" "$@"; printf %s "$?" > "$outcome"; ${[...elevated(), 'systemctl', ...manager(), 'start', 'house-kit.service'].join(' ')}`;
+}
+
 async function pendingInput(): Promise<string | null> {
   try {
     return (JSON.parse(await readFile(pending(), 'utf8')) as { input_id: string }).input_id;
@@ -57,7 +76,7 @@ async function finished(inputId: string): Promise<Ack> {
     const ack = await recorded();
     if (ack !== null) return ack;
     // systemctl answers at once, so ten seconds only bounds a stuck service manager.
-    if ((await run('systemctl', ['is-active', '--quiet', unit(inputId)], 10_000)).status !== 0) {
+    if ((await run('systemctl', [...manager(), 'is-active', '--quiet', unit(inputId)], 10_000)).status !== 0) {
       return (await recorded()) ?? { refused: 'the Kit bootstrap did not finish' };
     }
     // The bootstrap runs for minutes, so checking each second sees its outcome within a second at little cost.
@@ -67,23 +86,25 @@ async function finished(inputId: string): Promise<Ack> {
 
 function rerun(script: string, inputId: string, flags: string[]): Promise<Ack | null> {
   return new Promise((resolve) => {
-    const child = spawn(
+    const [command, ...args] = [
+      ...elevated(),
       'systemd-run',
-      [
-        '--wait',
-        '--collect',
-        '--quiet',
-        `--unit=${unit(inputId)}`,
-        `--setenv=HOME=${homedir()}`,
-        '/bin/sh',
-        '-c',
-        RECORD,
-        script,
-        outcome(),
-        ...flags,
-      ],
-      { stdio: ['ignore', 'ignore', 'inherit'] },
-    );
+      ...manager(),
+      ...account(),
+      '--wait',
+      '--collect',
+      '--quiet',
+      `--unit=${unit(inputId)}`,
+      `--setenv=HOME=${homedir()}`,
+      '/bin/sh',
+      '-c',
+      record(),
+      script,
+      outcome(),
+      ...placement(),
+      ...flags,
+    ];
+    const child = spawn(command!, args, { stdio: ['ignore', 'ignore', 'inherit'] });
     child.on('error', () => resolve({ refused: 'no service manager runs this Kit' }));
     child.on('close', () => resolve(null));
   });

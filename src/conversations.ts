@@ -48,6 +48,8 @@ type Ack = { provider_session_id: string } | { refused: string } | Record<string
 
 const KILLED = 'the conversation was killed';
 
+export const CONVERSATION_INPUTS: ReadonlySet<string> = new Set(['open', 'message', 'interrupt', 'kill', 'option', 'answer']);
+
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

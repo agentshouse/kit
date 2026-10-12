@@ -422,6 +422,7 @@ connect_native() {
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
+  record_placement server
   update_clis native_clis native_cli_update
   if ! service_manager; then
     printf 'House Kit %s is installed for Environment %s; no service manager runs on this host, so start it with: %s/kit resident\n' \
@@ -491,6 +492,17 @@ define_desktop_service() {
     # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
     define "$USER_UNIT" "$(printf '[Unit]\nDescription=House Kit\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n' \
       "$(unit_text "$WORKSPACE")" "$(unit_text "$NATIVE_BIN")")"
+  fi
+}
+
+installed_workspace() {
+  if ((MACOS)); then
+    [[ ! -f "$LAUNCH_AGENT" ]] ||
+      sed -n '/<key>HOUSE_KIT_WORKSPACE<\/key>/{n;s/^[[:space:]]*<string>\(.*\)<\/string>$/\1/p;}' "$LAUNCH_AGENT" |
+      sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
+  else
+    [[ ! -f "$USER_UNIT" ]] ||
+      sed -n 's/^Environment="HOUSE_KIT_WORKSPACE=\(.*\)"$/\1/p' "$USER_UNIT" | sed -e 's/%%/%/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
   fi
 }
 
@@ -614,7 +626,7 @@ remove_native() {
 }
 
 connect_desktop() {
-  local connected=running
+  local connected=running installed
   NATIVE_PREFIX="$DESKTOP_PREFIX"
   NATIVE_PACKAGE="$DESKTOP_PREFIX/lib/node_modules/@agentshouse/kit/dist"
   NATIVE_BIN="$DESKTOP_BIN"
@@ -626,6 +638,10 @@ connect_desktop() {
   notice_desktop_host
   take_placement native
   remove_container
+  if ((WORKSPACE_SELECTED == 0)); then
+    installed=$(installed_workspace)
+    WORKSPACE=${installed:-$WORKSPACE}
+  fi
   prepare_roots
   bind_house stop_loaded_desktop
   if [[ "$(cat "$NATIVE_PREFIX/release" 2>/dev/null || true)" != "$RELEASE" ]]; then

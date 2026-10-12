@@ -1,8 +1,9 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { signInAgain } from './end.ts';
+import { signInAgain, updateRequired } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { retryable } from './refusals.ts';
 import { relayed } from './relay.ts';
+import { KIT_WIRE, KIT_WIRE_HEADER, tooOld } from './wire.ts';
 
 export class HouseRefusal extends Error {
   readonly status: number;
@@ -47,12 +48,14 @@ export async function post<T>(
     method: 'POST',
     headers: {
       'content-type': 'application/json',
+      [KIT_WIRE_HEADER]: String(KIT_WIRE),
       ...(credential === undefined ? {} : { authorization: `Bearer ${credential}` }),
     },
     body: JSON.stringify(body),
     signal,
   });
   const text = await answer.text();
+  if (!answer.ok && tooOld(text)) updateRequired(house);
   if (!answer.ok) throw new HouseRefusal(path, answer.status, text);
   return JSON.parse(text) as T;
 }

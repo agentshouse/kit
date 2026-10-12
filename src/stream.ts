@@ -1,8 +1,9 @@
 import { subscribe } from 'node:diagnostics_channel';
 import { finalRefusal, HouseRefusal, retryDelay } from './api.ts';
-import { end, REPLACED, signInAgain } from './end.ts';
+import { end, REPLACED, signInAgain, updateRequired } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
+import { KIT_WIRE, tooOld } from './wire.ts';
 
 export type Frame = { type: string } & Record<string, unknown>;
 
@@ -21,7 +22,7 @@ interface Answered {
 }
 
 const PATH = '/kit/stream';
-const SUBPROTOCOL = 'house.kit.stream.1';
+const SUBPROTOCOL = `house.kit.stream.${KIT_WIRE}`;
 const REFUSAL_HEADER = 'x-house-refusal';
 
 function streamUrl(house: string): URL {
@@ -75,6 +76,7 @@ export function holdStream(handlers: StreamHandlers): Stream {
         void signInAgain(credential);
         return;
       }
+      if (refused !== null && tooOld(refused.text)) updateRequired(house);
       if (finalRefusal(refused)) end(refused.message);
       // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; an opening House refused as retryable or left unanswered backs off on the jittered curve.
       setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));
