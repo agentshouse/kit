@@ -2,14 +2,14 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { request, setGlobalProxyFromEnv } from 'node:http';
-import { basename, join } from 'node:path';
+import { extname, join } from 'node:path';
 import type { ToolResult } from './bridge.ts';
 import { HOUSE_REF } from './git.ts';
 import { kitHome, readEnrolment, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 
 interface Tool {
   name: string;
@@ -18,13 +18,7 @@ interface Tool {
 }
 
 interface Declared {
-  attachment: string;
   upload?: { url: string; operation: string };
-}
-
-interface Saved {
-  attachment: string;
-  upload_failure?: string;
 }
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
@@ -39,6 +33,33 @@ const REVOKED = 'this conversation no longer has House access; nothing to do fro
 const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
 const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
 const socketPath = process.env.HOUSE_BRIDGE;
+const MEDIA_TYPES = new Map([
+  ['avif', 'image/avif'],
+  ['csv', 'text/csv'],
+  ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['gif', 'image/gif'],
+  ['heic', 'image/heic'],
+  ['html', 'text/html'],
+  ['jpeg', 'image/jpeg'],
+  ['jpg', 'image/jpeg'],
+  ['json', 'application/json'],
+  ['m4a', 'audio/mp4'],
+  ['md', 'text/markdown'],
+  ['mov', 'video/quicktime'],
+  ['mp3', 'audio/mpeg'],
+  ['mp4', 'video/mp4'],
+  ['ogg', 'audio/ogg'],
+  ['pdf', 'application/pdf'],
+  ['png', 'image/png'],
+  ['pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  ['svg', 'image/svg+xml'],
+  ['txt', 'text/plain'],
+  ['wav', 'audio/wav'],
+  ['webm', 'video/webm'],
+  ['webp', 'image/webp'],
+  ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ['zip', 'application/zip'],
+]);
 
 function refused(path: string, status: number, text: string): string {
   const refusal = refusalOf(text);
@@ -124,21 +145,20 @@ async function sent(url: string, bytes: Buffer, operation: string): Promise<stri
   throw new Error(refused(url, answer.status, text));
 }
 
-async function upload(path: unknown, roomRef: unknown, missing: string): Promise<string> {
-  if (typeof path !== 'string' || path === '') throw new Error(missing);
-  const bytes = await localFile(path);
-  const declared = parse(
-    await called('upload', {
-      ...(roomRef === undefined ? {} : { room_ref: roomRef }),
-      name: basename(path),
-      bytes: bytes.length,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-    }),
-  ) as Declared;
-  if (declared.upload === undefined) return declared.attachment;
-  const saved = JSON.parse(await sent(declared.upload.url, bytes, declared.upload.operation)) as Saved;
-  if (saved.upload_failure !== undefined) throw new Error(`${path} was not saved: ${saved.upload_failure}; call again later`);
-  return saved.attachment;
+async function upload({ file, ...destination }: Record<string, unknown>): Promise<string> {
+  if (typeof file !== 'string' || file === '') throw new Error('upload needs "file", a local file');
+  const bytes = await localFile(file);
+  const mediaType = MEDIA_TYPES.get(extname(file).slice(1).toLowerCase());
+  const answer = await called('upload', {
+    ...destination,
+    bytes: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    ...(mediaType === undefined ? {} : { media_type: mediaType }),
+  });
+  const declared = parse(answer) as Declared;
+  if (declared.upload === undefined) return answer;
+  const written: unknown = JSON.parse(await sent(declared.upload.url, bytes, declared.upload.operation));
+  return stringify(written, { lineWidth: 0 }).trimEnd();
 }
 
 async function push(args: string[]): Promise<string> {
@@ -186,17 +206,7 @@ async function house([verb, argument]: string[]): Promise<string> {
     return [...(tool.description === undefined ? [] : [tool.description]), JSON.stringify(tool.inputSchema)].join('\n');
   }
   const args = argumentsOf(argument);
-  if (verb === 'upload') {
-    return JSON.stringify({ attachment: await upload(args.path, args.room_ref, 'upload needs "path", a local file') });
-  }
-  if (verb === 'append_record' && Array.isArray(args.attachments)) {
-    const attachments: string[] = [];
-    for (const path of args.attachments) {
-      attachments.push(await upload(path, args.room_ref, 'each attachments entry is the path of a local file'));
-    }
-    args.attachments = attachments;
-  }
-  return called(verb, args);
+  return verb === 'upload' ? upload(args) : called(verb, args);
 }
 
 async function called(name: string, args: Record<string, unknown>): Promise<string> {

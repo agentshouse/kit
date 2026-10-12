@@ -8,6 +8,7 @@ import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnr
 import { callHouse, rpc } from './mcp.ts';
 import { selectRelay } from './relay.ts';
 import { startService } from './service.ts';
+import { placeSkillSet } from './skills.ts';
 
 const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -110,6 +111,11 @@ export async function login(argv: string[]): Promise<void> {
       undefined,
       () => POLL_INTERVAL_MS,
     );
+  }
+  try {
+    await placeSkillSet();
+  } catch (error) {
+    process.stderr.write(`kit: the skills could not be placed: ${(error as Error).message}\n`);
   }
   await writeEnrolment({
     house,

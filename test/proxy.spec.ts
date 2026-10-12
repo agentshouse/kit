@@ -2,7 +2,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startProxy, until, type Proxy } from './double.ts';
-import { appRemote, attachmentDouble, directed, hostKit, installHeld, opened, runs } from './environment.ts';
+import { appRemote, directed, hostKit, installHeld, opened, runs, uploadDouble } from './environment.ts';
 import type { Started } from './started.ts';
 
 function variables(proxy: Proxy): Record<string, string> {
@@ -17,13 +17,13 @@ it.each([
   const hosted = await hostKit([{}], { tls: true, environment: proxied ? variables(proxy) : {} });
   const commit = 'a'.repeat(40);
   const credentials = appRemote(hosted.house, commit);
-  const transfers = await attachmentDouble(hosted);
+  const transfers = uploadDouble(hosted);
   await writeFile(join(hosted.workingDirectory, 'report.txt'), 'quarterly numbers\n');
   await opened(hosted);
 
   directed(
     hosted,
-    `@git ls-remote ${hosted.house.origin}/app/a_app.git\n@house upload {"path":"report.txt","room_ref":"r_room"}`,
+    `@git ls-remote ${hosted.house.origin}/app/a_app.git\n@house upload {"file":"report.txt","room_ref":"r_room","path":"report.txt"}`,
   );
   const [git, upload] = await runs(hosted, 2);
   hosted.socket.close(1012, 'restart');

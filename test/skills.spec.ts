@@ -4,8 +4,10 @@ import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { stringify } from 'yaml';
+import { startHouse } from './double.ts';
 import { conversationCredential, hostKit, lastInput, opened, type Hosted, type Hosting, type McpCall, type ToolResult } from './environment.ts';
 import { temporaryHome } from './kit.ts';
+import { logIn, serveLogin } from './login.ts';
 
 const SKILL_SET = fileURLToPath(new URL('../skills/', import.meta.url));
 const HOW_WE_WORK_TEXT = await readFile(new URL('../how-we-work.md', import.meta.url), 'utf8');
@@ -263,6 +265,35 @@ it('keeps the bootstrap choice in Kit configuration, says when a run changed it,
   expect(configure(home, [])).toEqual({ status: 0, stdout: 'changed\n', stderr: '' });
   await restart(hosted, {});
   expect((await readdir(skills(home))).sort()).toEqual(await names());
+});
+
+it('places every skill at kit login in the home of whoever runs it, with no resident, under the same record', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const { exit } = await logIn(house, join(home, '.house-kit'), { HOME: home });
+
+  expect(exit).toBe(0);
+  expect((await readdir(skills(home))).sort()).toEqual(await names());
+  for (const name of await names()) {
+    expect(await realpath(claude(home, name))).toBe(await realpath(skills(home, name)));
+  }
+  expect(await recorded(join(home, '.house-kit'))).toEqual({ version: KIT_VERSION, names: await names() });
+});
+
+it('places no skill at kit login when the Skill set is declined', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  expect(configure(join(home, '.house-kit'), ['--no-skills']).status).toBe(0);
+
+  const { exit } = await logIn(house, join(home, '.house-kit'), { HOME: home });
+
+  expect(exit).toBe(0);
+  await absent(skills(home));
+  await absent(claude(home));
+  expect(await recorded(join(home, '.house-kit'))).toBeNull();
 });
 
 it('creates the How-we-work document over the first conversation bridge after the Skill set is installed, once', async () => {

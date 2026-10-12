@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
+import { stringify } from 'yaml';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
 import { certificate, startHouse, until, type House, type KitSocket, type Received } from './double.ts';
@@ -81,8 +82,16 @@ export const LISTING: Listed[] = [
   },
   {
     name: 'upload',
-    description: 'Store a file of any kind in a Room; link it from a document for your User.',
-    inputSchema: { type: 'object', properties: { path: { type: 'string' }, room_ref: { type: 'string' } } },
+    description: 'Store a file of any kind at a path in a Room.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'The file in your Environment.' },
+        room_ref: { type: 'string', description: 'The Room.' },
+        path: { type: 'string', description: 'Its path in the Room.' },
+      },
+      required: ['file', 'room_ref', 'path'],
+    },
   },
   {
     name: 'list_rooms',
@@ -447,30 +456,53 @@ export function appRemote(house: House, commit: string): string[] {
   return credentials;
 }
 
-export async function attachmentDouble(
-  hosted: Hosted,
-): Promise<{ operation: unknown; authorization: unknown; bytes: Buffer }[]> {
-  const transfers: { operation: unknown; authorization: unknown; bytes: Buffer }[] = [];
-  let declared = 0;
-  hosted.tools.upload = () => {
-    declared++;
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            attachment: `at_${declared}`,
-            save: { status: 'pending' },
-            upload: {
-              method: 'POST',
-              operation: `operation-${declared}`,
-              url: `${hosted.house.origin}/bytes/upload-${declared}`,
-              expires_at: '2026-10-03T12:00:00Z',
-            },
-          }),
-        },
-      ],
-    };
+export interface Transfer {
+  operation: unknown;
+  authorization: unknown;
+  bytes: Buffer;
+}
+
+const named = (value: unknown) => typeof value === 'string' && value !== '';
+
+const UPLOAD_ARGUMENTS: Record<string, (value: unknown) => boolean> = {
+  file: named,
+  room_ref: named,
+  path: named,
+  base: named,
+  bytes: (value) => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 32 * 1024 * 1024,
+  sha256: (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value),
+  media_type: (value) => typeof value === 'string' && value.length >= 1 && value.length <= 255,
+};
+const UPLOAD_REQUIRED = ['room_ref', 'path', 'bytes', 'sha256'];
+
+export function declaredUpload(args: Record<string, unknown>, url: string, operation: string): ToolResult {
+  const unknown = Object.keys(args).filter((name) => !Object.hasOwn(UPLOAD_ARGUMENTS, name));
+  const issues = [
+    ...UPLOAD_REQUIRED.filter((name) => args[name] === undefined).map((name) => `${name} is required`),
+    ...Object.entries(UPLOAD_ARGUMENTS)
+      .filter(([name, valid]) => args[name] !== undefined && !valid(args[name]))
+      .map(([name]) => `${name} is not valid`),
+    ...(unknown.length === 0
+      ? []
+      : [`${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not an argument here; it takes ${Object.keys(UPLOAD_ARGUMENTS).join(', ')}`]),
+  ];
+  if (issues.length > 0) return { isError: true, content: [{ type: 'text', text: `invalid_arguments: ${issues.join('\n')}\n` }] };
+  return {
+    content: [{ type: 'text', text: stringify({ upload: { method: 'POST', operation, url, expires_at: '2026-10-03T12:00:00Z' } }) }],
+  };
+}
+
+export function uploadDouble(hosted: Hosted): Transfer[] {
+  const transfers: Transfer[] = [];
+  const paths: string[] = [];
+  hosted.tools.upload = (args) => {
+    const declared = declaredUpload(
+      args,
+      `${hosted.house.origin}/bytes/upload-${paths.length + 1}`,
+      `operation-${paths.length + 1}`,
+    );
+    if (declared.isError !== true) paths.push(args.path as string);
+    return declared;
   };
   hosted.house.route('POST', '/bytes/:grant', (received) => {
     transfers.push({
@@ -478,7 +510,8 @@ export async function attachmentDouble(
       authorization: received.headers.authorization,
       bytes: received.body as Buffer,
     });
-    return { body: { attachment: `at_${received.params.grant!.slice('upload-'.length)}` } };
+    const grant = Number(received.params.grant!.slice('upload-'.length));
+    return { body: { path: paths[grant - 1], revision: `fr_${grant}` } };
   });
   return transfers;
 }

@@ -409,6 +409,7 @@ connect_native() {
   if [[ -f "$KIT_HOME/credential.json" ]]; then
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   fi
+  configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
   if [[ -f "$KIT_HOME/credential.json" ]]; then
     :
   elif ((ENROLL_SELECTED)); then
@@ -421,7 +422,6 @@ connect_native() {
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
-  configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
   update_clis native_clis native_cli_update
   if ! service_manager; then
     printf 'House Kit %s is installed for Environment %s; no service manager runs on this host, so start it with: %s/kit resident\n' \
@@ -638,6 +638,7 @@ connect_desktop() {
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   fi
+  configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
   if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     connected=connected
     LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
@@ -645,7 +646,6 @@ connect_desktop() {
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
   record_placement native
-  configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
   update_clis native_clis native_cli_update
   define_desktop_service
   if ! desktop_loaded; then
@@ -745,12 +745,12 @@ connect_kit() {
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
     check_authority "${AUTHORITY[@]}"
   fi
+  configure_kit "${CONFIGURE[@]}"
   if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
   record_placement container
-  configure_kit "${CONFIGURE[@]}"
   update_clis container_clis container_cli_update
   start_resident
   printf 'House Kit connected for Environment %s.\n' "$(enrolled environment)"

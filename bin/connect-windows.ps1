@@ -448,14 +448,13 @@ function Connect-Kit {
     return
   }
 
-  if ($enrolment.ContainsKey('environment')) {
-    Test-Authority
-  } else {
+  if ($enrolment.ContainsKey('environment')) { Test-Authority }
+  [void](Set-Configuration)
+  if (-not $enrolment.ContainsKey('environment')) {
     Invoke-Login $Login
     $enrolment = Read-Enrolment
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
   }
-  [void](Set-Configuration)
   Update-Clis
   Start-Resident
   Write-Host "House Kit connected for Environment $($enrolment['environment'])."

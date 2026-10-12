@@ -1,13 +1,12 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
 import {
   appRemote,
-  attachmentDouble,
   conversationCredential,
   directed,
   helpLine,
@@ -16,6 +15,7 @@ import {
   LISTING,
   opened,
   runs,
+  uploadDouble,
   type McpCall,
 } from './environment.ts';
 import { OVERLOADED } from './rooms.ts';
@@ -129,74 +129,36 @@ it('resends a write House answers pending, and one whose answer is lost, as the 
   expect(called(hosted.mcp[0]!).params._meta[OPERATION]).toMatch(UUID_V7);
 });
 
-it('declares a local file through the upload Tool and sends its bytes before upload answers', async () => {
+it("uploads the local file named by file to its path in the Room, filling its size, digest and media type as House's argument schema takes them", async () => {
   const hosted = await hostKit();
-  const content = Buffer.from('quarterly numbers\n');
-  await writeFile(join(hosted.workingDirectory, 'report.txt'), content);
-  const transfers = await attachmentDouble(hosted);
+  const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46]);
+  await mkdir(join(hosted.workingDirectory, 'messenger-evidence'));
+  await writeFile(join(hosted.workingDirectory, 'messenger-evidence', 'messenger-light.jpg'), content);
+  const transfers = uploadDouble(hosted);
   await opened(hosted);
 
-  directed(hosted, '@house upload {"path":"report.txt","room_ref":"r_room"}');
+  directed(
+    hosted,
+    '@house upload {"file":"messenger-evidence/messenger-light.jpg","room_ref":"porting","path":"evidence/messenger-next-light.jpg"}',
+  );
 
-  const [ran] = await runs(hosted, 1);
-  expect(JSON.parse(ran!.stdout)).toEqual({ attachment: 'at_1' });
+  expect((await runs(hosted, 1))[0]).toMatchObject({
+    status: 0,
+    stdout: 'path: evidence/messenger-next-light.jpg\nrevision: fr_1\n',
+    stderr: '',
+  });
   const [declared] = hosted.mcp;
   expect(hosted.mcp).toHaveLength(1);
   expect(declared!.headers.authorization).toBe(`Bearer ${conversationCredential('conversation-1')}`);
   expect(called(declared!).params.name).toBe('upload');
   expect(called(declared!).params.arguments).toEqual({
-    room_ref: 'r_room',
-    name: 'report.txt',
+    room_ref: 'porting',
+    path: 'evidence/messenger-next-light.jpg',
     bytes: content.length,
     sha256: createHash('sha256').update(content).digest('hex'),
+    media_type: 'image/jpeg',
   });
   expect(transfers).toEqual([{ operation: 'operation-1', authorization: undefined, bytes: content }]);
-});
-
-it("uploads append_record's attachments and sends their references", async () => {
-  const hosted = await hostKit();
-  await writeFile(join(hosted.workingDirectory, 'a.txt'), 'first');
-  await writeFile(join(hosted.workingDirectory, 'b.txt'), 'second');
-  const transfers = await attachmentDouble(hosted);
-  await opened(hosted);
-
-  directed(
-    hosted,
-    '@house append_record {"room_ref":"r_room","source_ref":"s_source","body":"see","attachments":["a.txt","b.txt"]}',
-  );
-
-  expect((await runs(hosted, 1))[0]!.stdout).toBe('append_record answered\n');
-  expect(transfers.map((transfer) => transfer.bytes.toString())).toEqual(['first', 'second']);
-  const appended = hosted.mcp.filter((received) => called(received).params.name === 'append_record');
-  expect(appended.map(called).map((call) => call.params.arguments)).toEqual([
-    { room_ref: 'r_room', source_ref: 's_source', body: 'see', attachments: ['at_1', 'at_2'] },
-  ]);
-  expect(called(appended[0]!).params._meta[OPERATION]).toMatch(UUID_V7);
-});
-
-it('refuses a file the byte origin did not save, and appends nothing', async () => {
-  const hosted = await hostKit();
-  await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
-  await attachmentDouble(hosted);
-  hosted.house.route('POST', '/bytes/:grant', () => ({
-    body: { attachment: 'at_1', upload_failure: 'storage_unavailable' },
-  }));
-  await opened(hosted);
-
-  directed(
-    hosted,
-    [
-      '@house upload {"path":"report.txt","room_ref":"r_room"}',
-      '@house append_record {"room_ref":"r_room","source_ref":"s_source","body":"see","attachments":["report.txt"]}',
-    ].join('\n'),
-  );
-
-  const unsaved = 'house: report.txt was not saved: storage_unavailable; call again later\n';
-  expect((await runs(hosted, 2)).map((ran) => [ran.status, ran.stdout, ran.stderr])).toEqual([
-    [1, '', unsaved],
-    [1, '', unsaved],
-  ]);
-  expect(hosted.mcp.filter((received) => called(received).params.name === 'append_record')).toEqual([]);
 });
 
 it("prints House's own line for a refused call, and no route, status or body", async () => {
@@ -237,11 +199,11 @@ it("prints House's own line for a refused call, and no route, status or body", a
 it("prints the byte origin's refusal of an upload as House words it, with its delay", async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
-  await attachmentDouble(hosted);
+  uploadDouble(hosted);
   hosted.house.route('POST', '/bytes/:grant', () => ({ status: 503, body: OVERLOADED }));
   await opened(hosted);
 
-  directed(hosted, '@house upload {"path":"report.txt"}');
+  directed(hosted, '@house upload {"file":"report.txt","room_ref":"r_room","path":"report.txt"}');
 
   expect((await runs(hosted, 1))[0]).toMatchObject({
     status: 1,
@@ -252,11 +214,11 @@ it("prints the byte origin's refusal of an upload as House words it, with its de
 it('says a refused upload transfer failed without its capability address', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
-  await attachmentDouble(hosted);
+  uploadDouble(hosted);
   hosted.house.route('POST', '/bytes/:grant', () => ({ status: 404 }));
   await opened(hosted);
 
-  directed(hosted, '@house upload {"path":"report.txt"}');
+  directed(hosted, '@house upload {"file":"report.txt","room_ref":"r_room","path":"report.txt"}');
 
   expect((await runs(hosted, 1))[0]).toMatchObject({
     status: 1,
@@ -274,17 +236,19 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
       '@house search invoice',
       '@house search ["invoice"]',
       '@house upload {}',
-      '@house upload {"path":"absent.txt"}',
-      '@house upload {"path":"."}',
+      '@house upload {"path":"report.txt","room_ref":"r_room"}',
+      '@house upload {"file":"absent.txt","room_ref":"r_room","path":"absent.txt"}',
+      '@house upload {"file":".","room_ref":"r_room","path":"folder"}',
       '@house list_agents --help',
     ].join('\n'),
   );
 
   const form = `house: the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'\n`;
-  expect((await runs(hosted, 6)).map((ran) => ran.stderr)).toEqual([
+  expect((await runs(hosted, 7)).map((ran) => ran.stderr)).toEqual([
     form,
     form,
-    'house: upload needs "path", a local file\n',
+    'house: upload needs "file", a local file\n',
+    'house: upload needs "file", a local file\n',
     'house: absent.txt is not a readable file\n',
     'house: . is a folder; upload one file at a time\n',
     `house: list_agents is no Tool; house find_command '{"query":"list_agents"}' finds Commands\n`,

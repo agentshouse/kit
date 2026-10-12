@@ -467,8 +467,8 @@ it('installs the container exactly as before only with the container choice', as
     'info --format {{.OSType}}/{{.Architecture}}',
     'container inspect house-kit',
     `pull --quiet --platform linux/amd64 ${image}`,
-    `run --rm --network host --user ${uid} ${mounts} ${image} login`,
     `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,
+    `run --rm --network host --user ${uid} ${mounts} ${image} login`,
     `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js`,
     `run -d --name house-kit --restart on-failure --user ${uid} ${mounts} --label agentshouse.house=https://agents.house ${image} resident`,
   ]);
