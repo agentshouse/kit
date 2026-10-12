@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
+import { delimiter, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { post, retrying } from './api.ts';
 import { placeAppGit } from './app-git.ts';
+import { allowHouseInCodex, loginPath } from './clis.ts';
 import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
 import { selectRelay } from './relay.ts';
@@ -116,6 +118,12 @@ export async function login(argv: string[]): Promise<void> {
     await placeSkillSet();
   } catch (error) {
     process.stderr.write(`kit: the skills could not be placed: ${(error as Error).message}\n`);
+  }
+  try {
+    const shell = await loginPath().catch(() => '');
+    await allowHouseInCodex([dirname(process.execPath), process.env.PATH ?? '', shell].join(delimiter));
+  } catch (error) {
+    process.stderr.write(`kit: Codex's rule for house could not be written: ${(error as Error).message}\n`);
   }
   await writeEnrolment({
     house,

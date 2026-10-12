@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { constants, readFileSync } from 'node:fs';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { kitHome } from './home.ts';
@@ -18,6 +18,12 @@ export interface Cli {
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
   air: string[];
+}
+
+const HOUSE_EXECUTABLES = /^host_executable\(name = "house", paths = (\[.*\])\)$/m;
+
+function houseRule(houses: string[]): string {
+  return `prefix_rule(pattern = ["house"], decision = "allow")\nhost_executable(name = "house", paths = ${JSON.stringify(houses)})\n`;
 }
 
 const RAW_SUBTYPES = [
@@ -39,18 +45,36 @@ async function executable(path: string): Promise<boolean> {
   }
 }
 
-async function allowHouseInCodex(path: string): Promise<void> {
+async function listedHouses(file: string): Promise<string[]> {
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  try {
+    const listed: unknown = JSON.parse(HOUSE_EXECUTABLES.exec(text)?.[1] ?? '[]');
+    return Array.isArray(listed) ? listed.filter((house) => typeof house === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function allowHouseInCodex(path: string): Promise<void> {
   const candidates = [...new Set(path.split(delimiter).filter((directory) => isAbsolute(directory)))].map((directory) =>
     join(directory, 'house'),
   );
-  const houses: string[] = [];
-  for (const candidate of candidates) if (await executable(candidate)) houses.push(candidate);
   const rules = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'rules');
+  const file = join(rules, 'house.rules');
+  const houses: string[] = [];
+  for (const house of [...(await listedHouses(file)), ...candidates]) {
+    if (!houses.includes(house) && (await executable(house))) houses.push(house);
+  }
   await mkdir(rules, { recursive: true });
-  await writeFile(
-    join(rules, 'house.rules'),
-    `prefix_rule(pattern = ["house"], decision = "allow")\nhost_executable(name = "house", paths = ${JSON.stringify(houses)})\n`,
-  );
+  const temporary = `${file}.${process.pid}`;
+  await writeFile(temporary, houseRule(houses));
+  await rename(temporary, file);
 }
 
 async function nothing(): Promise<void> {}

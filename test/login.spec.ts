@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { certificate, startHouse, until, type House } from './double.ts';
+import { LOGIN_SHELL } from './environment.ts';
 import { runKit, temporaryHome } from './kit.ts';
 import { answerOwnAgent, LOGIN, logIn, loginLink, opener, ownAgent, serveLogin } from './login.ts';
 
@@ -112,6 +113,55 @@ it('redeems a login code once with the machine label, stores both credentials an
     user: 'user-one',
     credential: 'ahp_code_credential',
   });
+});
+
+async function placeHouse(directory: string): Promise<string> {
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'house'), '#!/bin/sh\n', { mode: 0o755 });
+  return join(directory, 'house');
+}
+
+function codexRule(houses: string[]): string {
+  return `prefix_rule(pattern = ["house"], decision = "allow")\nhost_executable(name = "house", paths = ${JSON.stringify(houses)})\n`;
+}
+
+it("writes Codex's rule for a lone house at a login by code from a Kit home of its own, naming each house on the caller's and the login shell's PATH", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const onPath = await placeHouse(join(home, 'bin'));
+  const inUserBin = await placeHouse(join(home, '.local', 'bin'));
+  house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' } }));
+
+  const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
+    HOUSE_KIT_HOME: join(home, '.house-kit-own'),
+    HOME: home,
+    CODEX_HOME: '',
+    PATH: `${join(home, 'bin')}:${join(home, 'empty')}`,
+    ...LOGIN_SHELL,
+  });
+
+  expect(await login.exited).toBe(0);
+  expect(await readFile(join(home, '.codex', 'rules', 'house.rules'), 'utf8')).toBe(codexRule([onPath, inUserBin]));
+});
+
+it("keeps each house another Kit home's Codex rule names and drops one that is gone when a login writes the rule", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const onPath = await placeHouse(join(home, 'bin'));
+  const otherKit = await placeHouse(join(home, 'other-kit', 'bin'));
+  await mkdir(join(home, '.codex', 'rules'), { recursive: true });
+  await writeFile(join(home, '.codex', 'rules', 'house.rules'), codexRule([otherKit, join(home, 'gone', 'house')]));
+  serveLogin(house, 'environment-one', 'ahk_first');
+
+  const { exit } = await logIn(house, join(home, '.house-kit-own'), {
+    HOME: home,
+    CODEX_HOME: '',
+    PATH: `${join(home, 'bin')}:${join(home, 'empty')}`,
+    ...LOGIN_SHELL,
+  });
+
+  expect(exit).toBe(0);
+  expect(await readFile(join(home, '.codex', 'rules', 'house.rules'), 'utf8')).toBe(codexRule([otherKit, onPath]));
 });
 
 it.each(['kit_code_used', 'kit_code_cancelled', 'kit_code_expired'])("ends with House's %s refusal after one login-code exchange", async (cause) => {
