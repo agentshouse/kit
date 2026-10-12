@@ -47,16 +47,18 @@ export interface Host {
   mark(name: Mark): Promise<void>;
   clear(name: Mark): Promise<void>;
   forget(): Promise<void>;
+  outdate(): Promise<void>;
   uninstall(tool: string): Promise<void>;
   restartPolicy(policy: string): Promise<void>;
 }
 
-type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-fails' | 'opener-fails' | 'refused' | 'stopped' | 'systemd';
+type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-abandoned' | 'login-fails' | 'opener-fails' | 'refused' | 'stopped' | 'systemd';
 
 const LOGGED = 'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n';
 
 const LOGIN = `[ ! -e "$FAKE/login-fails" ] || exit 7
 printf 'Open this link and confirm: ${LOGIN_LINK}\\n'
+[ ! -e "$FAKE/login-abandoned" ] || { kill -INT "$PPID"; kill -INT $$; }
 printf '{"house":"https://agents.house","environment":"%s","credential":"ahk_one"}' "\${2:-environment-one}" > "$1/credential.json"
 `;
 
@@ -219,6 +221,11 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     mark: (name) => writeFile(join(fake, name), ''),
     clear: (name) => rm(join(fake, name), { force: true }),
     forget: () => writeFile(join(fake, 'log'), ''),
+    outdate: () =>
+      writeFile(
+        join(platform.server === true ? join(fake, 'server', 'house-kit') : join(home, '.local', 'share', 'house-kit'), 'release'),
+        '@agentshouse/kit@0.2.1-alpha.0 node@24.21.0\n',
+      ),
     uninstall: (tool) => rm(join(bin, tool)),
     restartPolicy: async (policy) =>
       writeFile(join(fake, 'container'), (await readFile(join(fake, 'container'), 'utf8')).replace(/^policy=.*$/m, `policy=${policy}`)),

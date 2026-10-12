@@ -295,6 +295,7 @@ function Connect-Kit {
   $Forward = @()
   $NoSkills = @()
   $Login = @()
+  $Rooms = @()
   $UpdateClis = $false
   $Interactive = -not [Console]::IsInputRedirected
   $Arguments = $BootstrapArguments
@@ -321,8 +322,10 @@ function Connect-Kit {
     } elseif ($argument -ceq '--rooms') {
       if ($index + 1 -ge $Arguments.Count) { Stop-Bootstrap "$argument requires one value" }
       $index++
+      $Rooms += @('--rooms', $Arguments[$index])
       $Login += @('--rooms', $Arguments[$index])
     } elseif ($argument -ceq '--no-private') {
+      $Rooms += @('--no-private')
       $Login += @('--no-private')
     } elseif ($argument -ceq '--code') {
       if ($index + 1 -ge $Arguments.Count) { Stop-Bootstrap "$argument requires one value" }
@@ -435,9 +438,7 @@ function Connect-Kit {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
       Write-Host 'House Kit updated.'
-      return
-    }
-    if ((Read-Inspect '{{.State.Running}}') -cne 'true') {
+    } elseif ((Read-Inspect '{{.State.Running}}') -cne 'true') {
       Invoke-Docker start $Name | Out-Null
       Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
     } elseif ($configured) {
@@ -446,12 +447,14 @@ function Connect-Kit {
     } else {
       Write-Host 'House Kit is already installed.'
     }
+    if ($Rooms.Count -gt 0) { Invoke-Login $Rooms }
     return
   }
 
-  if ($enrolment.ContainsKey('environment')) { Test-Authority }
+  $alreadyConnected = $enrolment.ContainsKey('environment')
+  if ($alreadyConnected) { Test-Authority }
   [void](Set-Configuration)
-  if (-not $enrolment.ContainsKey('environment')) {
+  if (-not $alreadyConnected) {
     Invoke-Login $Login
     $enrolment = Read-Enrolment
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
@@ -459,6 +462,7 @@ function Connect-Kit {
   Update-Clis
   Start-Resident
   Write-Host "House Kit connected for Environment $($enrolment['environment'])."
+  if ($alreadyConnected -and $Rooms.Count -gt 0) { Invoke-Login $Rooms }
 }
 
 $consoleEncoding = [Console]::OutputEncoding

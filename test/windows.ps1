@@ -146,6 +146,7 @@ $script:Running = 'true'
 function Read-Inspect([string] $Format) {
   if ($Format -ceq '{{.Config.Image}}') { return $Image }
   if ($Format -ceq '{{.State.Running}}') { return $script:Running }
+  if ($Format.Contains('RestartPolicy')) { return "$Image on-failure" }
   if ($Format.Contains('.Source')) { return 'C:\Users\u\AgentsHouse' }
   if ($Format.Contains('.Name')) { return $KitHome }
   if ($Format.Contains('/kit-home') -and $Format.Contains('.Type')) { return 'volume/true' }
@@ -154,11 +155,20 @@ function Read-Inspect([string] $Format) {
   if ($Format -ceq '{{len .Mounts}}') { return '2' }
   "$Image on-failure"
 }
+$script:LoginStatus = 0
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
   if ($args[0] -ceq 'rm') { $script:Installed = $false }
   if ($args -contains 'login') {
+    if ($args -contains '--code' -and $script:Enrolment.ContainsKey('environment')) {
+      $global:LASTEXITCODE = 1
+      return
+    }
+    if ($script:LoginStatus -ne 0) {
+      $global:LASTEXITCODE = $script:LoginStatus
+      return
+    }
     $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
     $printed
   }
@@ -167,9 +177,11 @@ foreach ($case in @(
   @($false, @('--rooms', 'r_k2v.4,r_9qd.x'), 'login --rooms r_k2v.4,r_9qd.x'),
   @($false, @('--no-private', '--house', 'https://agents.house'), 'login --no-private --house https://agents.house'),
   @($false, @('--code', 'ahk_code_one'), 'login --code ahk_code_one'),
+  @($true, @('--workspace', 'C:\Users\u\AgentsHouse', '--no-private'), 'login --no-private'),
+  @($true, @('--workspace', 'C:\Users\u\AgentsHouse', '--rooms', 'r_k2v.4'), 'login --rooms r_k2v.4'),
+  @($true, @('--workspace', 'C:\Users\u\AgentsHouse', '--code', 'ahk_code_unused', '--no-private'), 'login --no-private'),
   @($true, @('kit', 'login', '--rooms', 'r_k2v.4'), 'login --rooms r_k2v.4'),
-  @($true, @('kit', 'login', '--no-private'), 'login --no-private'),
-  @($true, @('kit', 'login', '--code', 'ahk_code_one'), 'login --code ahk_code_one')
+  @($true, @('kit', 'login', '--no-private'), 'login --no-private')
 )) {
   $script:Installed = $case[0]
   $script:Enrolment = @{}
@@ -182,11 +194,58 @@ foreach ($case in @(
 }
 $script:Installed = $true
 $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
-$BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse', '--code', 'ahk_code_unused')
+$BootstrapArguments = @('kit', 'login', '--code', 'ahk_code_unused')
 $script:Ran = @()
-try { Connect-Kit } catch { $findings += "an enrolled bootstrap with a code refused with: $($_.Exception.Message)" }
+try {
+  Connect-Kit
+  $findings += 'a kit login --code forwarded to an enrolled Kit ended without the refusal of kit login'
+} catch {
+  if ($_.Exception.Message -cne 'kit_bootstrap_exit: 1') { $findings += "a kit login --code forwarded to an enrolled Kit ended with: $($_.Exception.Message)" }
+}
+foreach ($rerun in @(
+  @('--workspace', 'C:\Users\u\AgentsHouse', '--code', 'ahk_code_unused'),
+  @('--workspace', 'C:\Users\u\AgentsHouse')
+)) {
+  $script:Installed = $true
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $BootstrapArguments = $rerun
+  $script:Ran = @()
+  try { Connect-Kit } catch { $findings += "the enrolled bootstrap $($rerun -join ' ') refused with: $($_.Exception.Message)" }
+  $logins = @($script:Ran | Where-Object { $_ -match ' login( |$)' })
+  if ($logins.Count -ne 0) { $findings += "the enrolled bootstrap $($rerun -join ' ') ran kit login as: $($logins -join '|')" }
+}
+$script:Installed = $false
+$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+$BootstrapArguments = @('--no-private')
+$script:Ran = @()
+try { Connect-Kit } catch { $findings += "an enrolled bootstrap with no container refused --no-private with: $($_.Exception.Message)" }
 $logins = @($script:Ran | Where-Object { $_ -match ' login( |$)' })
-if ($logins.Count -ne 0) { $findings += "the enrolled bootstrap used the login code: $($logins -join '|')" }
+if ($logins.Count -ne 1 -or -not $logins[0].EndsWith(" $Image login --no-private")) { $findings += "the enrolled bootstrap with no container ran kit login as: $($logins -join '|')" }
+$script:LoginStatus = 7
+foreach ($case in @(
+  @($true, '^start house-kit$'),
+  @($false, '^run -d .* resident$')
+)) {
+  $withContainer = $case[0]
+  $script:Installed = $withContainer
+  $script:Running = 'false'
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse', '--no-private')
+  $script:Ran = @()
+  try {
+    Connect-Kit
+    $findings += "the enrolled bootstrap with a container installed $withContainer ended without the status of its failed login"
+  } catch {
+    if ($_.Exception.Message -cne 'kit_bootstrap_exit: 7') { $findings += "the enrolled bootstrap with a container installed $withContainer ended with: $($_.Exception.Message)" }
+  }
+  $started = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_] -match $case[1] })
+  $loggedIn = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_] -match ' login( |$)' })
+  if ($started.Count -ne 1 -or $loggedIn.Count -ne 1 -or $started[0] -gt $loggedIn[0]) {
+    $findings += "the enrolled bootstrap with a container installed $withContainer and a failing login ran: $($script:Ran -join '|')"
+  }
+}
+$script:LoginStatus = 0
+$script:Running = 'true'
 
 $env:HOUSE_KIT_RELAY = 'https://kit-relay.example'
 $script:Installed = $false

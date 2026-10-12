@@ -19,6 +19,7 @@ FORWARD=()
 NO_SKILLS=()
 ROOMS=()
 CODE=()
+ALREADY_CONNECTED=0
 CONFIGURED=''
 UPDATE_CLIS=0
 UBUNTU_RELEASES=(jammy noble resolute)
@@ -101,6 +102,10 @@ login_arguments() {
   if ((HOUSE_SELECTED)); then LOGIN+=(--house "$HOUSE"); fi
   LOGIN+=(${ROOMS[@]+"${ROOMS[@]}"})
   LOGIN+=(${CODE[@]+"${CODE[@]}"})
+}
+
+set_rooms_again() {
+  if ((ALREADY_CONNECTED)) && [[ -n "${ROOMS[*]-}" ]]; then login_kit "${ROOMS[@]}"; fi
 }
 
 prepare_directory() {
@@ -410,15 +415,15 @@ connect_native() {
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   fi
   configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
+  LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
   if [[ -f "$KIT_HOME/credential.json" ]]; then
-    :
+    ALREADY_CONNECTED=1
   elif ((ENROLL_SELECTED)); then
     connected=connected
     enroll_kit
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   else
     connected=connected
-    LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
@@ -655,11 +660,13 @@ connect_desktop() {
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   fi
   configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
+  LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
   if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     connected=connected
-    LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
+  else
+    ALREADY_CONNECTED=1
   fi
   record_placement native
   update_clis native_clis native_cli_update
@@ -773,6 +780,8 @@ connect_kit() {
   if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
+  else
+    ALREADY_CONNECTED=1
   fi
   record_placement container
   update_clis container_clis container_cli_update
@@ -905,10 +914,12 @@ esac
 
 if ((NATIVE)); then
   connect_native
+  set_rooms_again
   exit 0
 fi
 if ((CONTAINER == 0)); then
   connect_desktop
+  set_rooms_again
   exit 0
 fi
 if ((FORWARDING == 0)); then take_placement container; fi
@@ -967,6 +978,7 @@ if kit_installed; then
     connect_kit
     exit 0
   fi
+  ALREADY_CONNECTED=1
   record_placement container
   configure_kit "${CONFIGURE[@]}"
   update_clis container_clis container_cli_update
@@ -975,8 +987,10 @@ if kit_installed; then
   else
     resume_kit
   fi
+  set_rooms_again
   exit 0
 fi
 
 docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null
 connect_kit
+set_rooms_again

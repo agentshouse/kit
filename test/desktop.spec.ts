@@ -2,7 +2,7 @@ import { access, readFile, stat, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, type Host } from './host.ts';
+import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, type Host, type Platform } from './host.ts';
 import { temporaryHome } from './kit.ts';
 
 const UNSUPPORTED = 'it installs without that guarantee.';
@@ -15,6 +15,10 @@ function acts(host: Host): string[] {
 
 function notices(stdout: string): string[] {
   return stdout.split('\n').filter((line) => line.endsWith(UNSUPPORTED));
+}
+
+function logins(host: Host, placement: readonly string[]): string[] {
+  return placement.includes('--container') ? host.calls('docker').filter((call) => / login( |$)/.test(call)) : host.calls('kit');
 }
 
 async function installed(host: Host): Promise<void> {
@@ -547,8 +551,7 @@ it.each([
   const ran = host.run([...rooms, ...placement]);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  const logins = placement.length === 0 ? host.calls('kit') : host.calls('docker').filter((call) => / login( |$)/.test(call));
-  expect(logins).toEqual([expect.stringMatching(new RegExp(`(^| )login ${rooms.join(' ')}( |$)`))]);
+  expect(logins(host, placement)).toEqual([expect.stringMatching(new RegExp(`(^| )login ${rooms.join(' ')}( |$)`))]);
 });
 
 it.each([
@@ -562,26 +565,136 @@ it.each([
   const ran = host.run(['--code', 'ahk_code_one', ...placement]);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  const logins = placement.length === 0 ? host.calls('kit') : host.calls('docker').filter((call) => / login( |$)/.test(call));
-  expect(logins).toEqual([expect.stringMatching(/(^| )login --code ahk_code_one( |$)/)]);
+  expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --code ahk_code_one( |$)/)]);
 });
 
-it.each([
+const CONNECTED = [
   ['natively on Linux', { system: 'Linux', machine: 'x86_64' }, []],
   ['natively on macOS', { system: 'Darwin', machine: 'arm64' }, []],
+  ['natively on a Linux server', { system: 'Linux', machine: 'x86_64', server: true }, ['--linux']],
   ['in the container on Linux', { system: 'Linux', machine: 'x86_64' }, ['--container']],
   ['in the container on macOS', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, ['--container']],
-] as const)('leaves a login code unused when House accepts the enrolled Kit %s', async (_name, platform, placement) => {
+] as const;
+
+async function connectedHost(platform: Platform, placement: readonly string[]): Promise<Host> {
   const host = await fakeHost(platform);
+  if (platform.server === true) await host.mark('systemd');
   expect(host.run([...placement])).toMatchObject({ status: 0 });
   await host.forget();
+  return host;
+}
+
+it.each(CONNECTED)('reuses the connected Environment without another login when a rerun names no Rooms %s', async (_name, platform, placement) => {
+  const host = await connectedHost(platform, placement);
+
+  expect(host.run([...placement])).toMatchObject({ status: 0, stderr: '' });
+
+  expect(logins(host, placement)).toEqual([]);
+});
+
+it.each(CONNECTED)('sets the Rooms of the connected Environment again through kit login when a rerun names --no-private %s', async (_name, platform, placement) => {
+  const host = await connectedHost(platform, placement);
+
+  const ran = host.run(['--no-private', ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').slice(-3)).toEqual(['House Kit is already installed.', LINK_LINE, '']);
+  expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --no-private( |$)/)]);
+});
+
+it.each(CONNECTED)('sets the Rooms of the connected Environment again through kit login without the login code when a rerun names both %s', async (_name, platform, placement) => {
+  const host = await connectedHost(platform, placement);
+
+  const ran = host.run(['--code', 'ahk_code_unused', '--no-private', ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --no-private( HOUSE_KIT_HOME=\S+)?$/)]);
+});
+
+it('sets the Rooms of the connected Environment again through kit login when a rerun naming --no-private finds its Kit home but no container', async () => {
+  const host = await connectedHost({ system: 'Linux', machine: 'x86_64' }, ['--container']);
+  await host.clear('container');
+
+  const ran = host.run(['--no-private', '--container']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').slice(-3)).toEqual(['House Kit connected for Environment environment-one.', LINK_LINE, '']);
+  expect(logins(host, ['--container'])).toEqual([expect.stringMatching(/ login --no-private$/)]);
+});
+
+it.each(CONNECTED)('leaves a login code unused when a rerun on the connected computer names no Rooms %s', async (_name, platform, placement) => {
+  const host = await connectedHost(platform, placement);
 
   const ran = host.run(['--code', 'ahk_code_unused', ...placement]);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout).toContain('House Kit is already installed.');
-  expect(host.calls('kit')).toEqual([]);
-  expect(host.calls('docker').filter((call) => / login( |$)/.test(call))).toEqual([]);
+  expect(ran.stdout.split('\n').at(-2)).toBe('House Kit is already installed.');
+  expect(logins(host, placement)).toEqual([]);
+});
+
+it('sets the Rooms of the connected Environment again through kit login when a rerun naming --no-private finds no service manager on the server', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true });
+  expect(host.run(['--linux'])).toMatchObject({ status: 0 });
+  await host.forget();
+
+  const ran = host.run(['--no-private', '--linux']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').slice(-3)).toEqual([expect.stringContaining('no service manager runs on this host'), LINK_LINE, '']);
+  expect(host.calls('kit')).toEqual([expect.stringMatching(/^login --no-private /)]);
+});
+
+const STARTED_AGAIN = [
+  ['natively on Linux', { system: 'Linux', machine: 'x86_64' }, [], ['--user stop house-kit.service', '--user start house-kit.service']],
+  [
+    'natively on macOS',
+    { system: 'Darwin', machine: 'arm64' },
+    [],
+    [`bootout gui/${UID}/house-kit`, `enable gui/${UID}/house-kit`, expect.stringMatching(/^bootstrap /)],
+  ],
+  [
+    'natively on a Linux server',
+    { system: 'Linux', machine: 'x86_64', server: true },
+    ['--linux'],
+    ['stop house-kit.service', 'daemon-reload', '--quiet enable --now house-kit.service'],
+  ],
+] as const;
+
+it.each(
+  STARTED_AGAIN.flatMap(([name, platform, placement, started]) =>
+    (
+      [
+        ['fails', 'login-fails'],
+        ['is abandoned', 'login-abandoned'],
+      ] as const
+    ).map(([outcome, mark]) => [outcome, name, mark, platform, placement, started] as const),
+  ),
+)(
+  'starts the service a rerun updated before its kit login, which then %s, leaving the Kit running %s',
+  async (_outcome, _name, mark, platform, placement, started) => {
+    const host = await connectedHost(platform, placement);
+    await host.outdate();
+    await host.mark(mark);
+
+    const ran = host.run(['--no-private', ...placement]);
+
+    expect(ran.status).not.toBe(0);
+    expect(ran.stdout).toContain('House Kit updated.\n');
+    expect(acts(host)).toEqual(started);
+    expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --no-private( |$)/)]);
+  },
+);
+
+it.each(STARTED_AGAIN)('updates the Kit and leaves a login code unused when a rerun on the connected computer names no Rooms %s', async (_name, platform, placement, started) => {
+  const host = await connectedHost(platform, placement);
+  await host.outdate();
+
+  const ran = host.run(['--code', 'ahk_code_unused', ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').at(-2)).toBe('House Kit updated.');
+  expect(acts(host)).toEqual(started);
+  expect(logins(host, placement)).toEqual([]);
 });
 
 it.each([

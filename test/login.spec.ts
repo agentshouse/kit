@@ -336,14 +336,17 @@ it('refuses --rooms beside --no-private before starting a login', async () => {
   expect(house.requests).toEqual([]);
 });
 
-it('sets the Rooms again on a reconnect with --rooms, and a plain reconnect names none', async () => {
+it.each([
+  ['--rooms', ['--rooms', 'r_k2v.4'], { reach: 'selected', refs: ['r_k2v.4'] }],
+  ['--no-private', ['--no-private'], { reach: 'all_but_private' }],
+])('sets the Rooms again on a reconnect with %s, and a plain reconnect names none', async (_name, argv, rooms) => {
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
   await logIn(house, home);
 
   serveLogin(house, 'environment-one', 'ahk_second');
-  const chosen = await logIn(house, home, {}, ['--rooms', 'r_k2v.4']);
+  const chosen = await logIn(house, home, {}, argv);
   serveLogin(house, 'environment-one', 'ahk_third');
   const plain = await logIn(house, home);
 
@@ -351,7 +354,7 @@ it('sets the Rooms again on a reconnect with --rooms, and a plain reconnect name
   expect(chosen.started).toMatchObject({
     act: 'existing_environment',
     environment_id: 'environment-one',
-    rooms: { reach: 'selected', refs: ['r_k2v.4'] },
+    rooms,
   });
   expect(plain.started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
   expect(plain.started).not.toHaveProperty('rooms');
