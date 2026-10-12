@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { constants, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { kitHome } from './home.ts';
 
 export interface Cli {
@@ -36,7 +36,7 @@ const RAW_SUBTYPES = [
   'hook_response',
 ];
 
-async function executable(path: string): Promise<boolean> {
+export async function executable(path: string): Promise<boolean> {
   try {
     await access(path, constants.X_OK);
     return true;
@@ -275,6 +275,13 @@ export async function loginPath(): Promise<string> {
   const marker = 'house-kit-path ';
   const ran = await inLoginShell(`printf "${marker}%s\\n" "$PATH"`);
   return ran.stdout.split('\n').findLast((line) => line.startsWith(marker))!.slice(marker.length);
+}
+
+export async function writeCodexRule(): Promise<void> {
+  const shell = await loginPath().catch(() => '');
+  await allowHouseInCodex([dirname(process.execPath), process.env.PATH ?? '', shell].join(delimiter)).catch((error: Error) => {
+    throw new Error(`Codex's rule for house could not be written: ${error.message}`);
+  });
 }
 
 export async function versionOf(path: string, signal?: AbortSignal): Promise<string | null> {

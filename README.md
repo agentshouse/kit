@@ -35,14 +35,14 @@ them out; running it again without the flag brings them back.
 or another, continues on its own and keeps the Environment's credential in
 `~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is set. `--environment <id>`
 reconnects an Environment you already have; `--rooms <ref>[,<ref>...]` gives it
-only those Rooms and `--no-private` every Room but your Private Room;
-`--code <code>` connects immediately without a link.
+only those Rooms and `--no-private` every Room but your Private Room; `--code <code>` connects immediately without a link.
 A login also connects your own agent: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you, until you revoke
 that connection on Connections. `house help` lists the Tools. Codex sessions started after a
 login run a lone `house` command outside their sandbox. `kit logout` disconnects this
 computer, stops House Kit and ends your own agent's connection, so `house` and `git` no
 longer act as you here; a later `kit login` reconnects the same Environment.
+`kit codex --key <key>` starts Codex with `house` acting as you through a key made on Connections; next time, just `kit codex`.
 
 `kit resident` keeps the Environment connected and, as it connects, copies each
 Room you chose for it as a Git repository in the workspace's `local-copies`.

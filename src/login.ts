@@ -1,18 +1,17 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
-import { delimiter, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { post, retrying } from './api.ts';
 import { placeAppGit } from './app-git.ts';
-import { allowHouseInCodex, loginPath } from './clis.ts';
+import { writeCodexRule } from './clis.ts';
 import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
 import { selectRelay } from './relay.ts';
 import { startService } from './service.ts';
 import { placeSkillSet } from './skills.ts';
 
-const DEFAULT_HOUSE = 'https://agents.house';
+export const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
 // Polling every two seconds brings the User's confirmation to the waiting Kit moments after they give it.
 const POLL_INTERVAL_MS = 2000;
@@ -35,7 +34,7 @@ function open(link: string): void {
     .unref();
 }
 
-async function accepted(house: string, credential: string): Promise<boolean> {
+export async function accepted(house: string, credential: string): Promise<boolean> {
   const checked = await callHouse(house, credential, rpc('tools/list', {}));
   if (checked.status === 200) return true;
   if (checked.status === 401) return false;
@@ -120,12 +119,7 @@ export async function login(argv: string[]): Promise<void> {
   } catch (error) {
     process.stderr.write(`kit: the skills could not be placed: ${(error as Error).message}\n`);
   }
-  try {
-    const shell = await loginPath().catch(() => '');
-    await allowHouseInCodex([dirname(process.execPath), process.env.PATH ?? '', shell].join(delimiter));
-  } catch (error) {
-    process.stderr.write(`kit: Codex's rule for house could not be written: ${(error as Error).message}\n`);
-  }
+  await writeCodexRule().catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
   await writeEnrolment({
     house,
     ...(relay === undefined ? {} : { relay }),

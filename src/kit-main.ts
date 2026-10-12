@@ -2,6 +2,7 @@
 import { setGlobalProxyFromEnv } from 'node:http';
 import { parseArgs } from 'node:util';
 import { answerGitCredential } from './app-git.ts';
+import { codex } from './codex.ts';
 import { login } from './login.ts';
 import { logout } from './logout.ts';
 import { resident } from './resident.ts';
@@ -17,7 +18,7 @@ interface Command {
   run(operands: string[]): Promise<void>;
 }
 
-const USAGE = 'usage: kit <login|logout|resident>\n';
+const USAGE = 'usage: kit <login|logout|resident|codex>\n';
 const COMMANDS = new Map<string, Command>([
   [
     'logout',
@@ -53,6 +54,7 @@ setGlobalProxyFromEnv();
 
 async function run(): Promise<void> {
   if (command === 'login') return login(argv);
+  if (command === 'codex') return codex(argv);
   if (command === '--help') {
     parseArgs({ args: argv });
     process.stdout.write(USAGE);

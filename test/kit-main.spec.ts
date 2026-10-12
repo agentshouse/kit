@@ -21,7 +21,7 @@ it('prints its usage on standard output for kit --help', async () => {
   const kit = runKit(['--help'], { HOUSE_KIT_HOME: await temporaryHome() });
 
   expect(await kit.exited).toBe(0);
-  expect(kit.stdout()).toBe('usage: kit <login|logout|resident>\n');
+  expect(kit.stdout()).toBe('usage: kit <login|logout|resident|codex>\n');
   expect(kit.stderr()).toBe('');
 });
 
@@ -33,7 +33,7 @@ it('refuses kit --help with anything after it and prints no usage', async () => 
   expect(kit.stderr()).toMatch(/^kit: /);
 });
 
-it.each(['logout', 'resident', 'git-credential'])(
+it.each(['logout', 'resident', 'git-credential', 'codex'])(
   'prints kit %s --help on standard output and leaves an enrolled home and its House untouched',
   async (command) => {
     const house = await startHouse();
