@@ -24,6 +24,7 @@ const SHIPPED_HOW_WE_WORK = [
   '0bdcd43e1603ba6673a3cae56d70bbf90657cbeefd124e91a47be2ca1cbd6c93',
   '4106a87ec66da6f7b2a10e74d18e6559d68d5f4fe7415dae68f5c7bdb9081968',
   'ac814a2197038f037b657bb719340395f89f319ac9fcdd386629c3fe2cec68f1',
+  '29951ee394aad9979eecfed3e5dc32c2c86e2226b6a380db5dbd4f305f4d1156',
 ];
 const RECORD = 'skill-set.json';
 const WRITTEN = 'how-we-work.json';
