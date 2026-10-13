@@ -77,10 +77,10 @@ function present(path: string): Promise<boolean> {
   );
 }
 
-async function cpus(): Promise<number> {
+async function threads(): Promise<number> {
   const [quota, period] = (await readFile('/sys/fs/cgroup/cpu.max', 'utf8').catch(() => 'max')).split(' ');
   const allowed = quota === 'max' ? Infinity : Math.ceil(Number(quota) / Number(period));
-  return Math.min(availableParallelism(), allowed);
+  return Math.max(1, Math.floor(Math.min(availableParallelism(), allowed) / 2));
 }
 
 async function sha256(path: string): Promise<string> {
@@ -172,7 +172,7 @@ async function transcribed(path: string, signal: AbortSignal): Promise<string> {
     const parts = (await readdir(work)).sort().flatMap((part) => ['-f', join(work, part)]);
     const text = await executed(
       installed(pinned.engine),
-      ['-t', String(await cpus()), '-np', '-m', installed(MODEL), ...parts],
+      ['-t', String(await threads()), '-np', '-m', installed(MODEL), ...parts],
       signal,
     );
     return text

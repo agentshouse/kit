@@ -287,6 +287,20 @@ it('keeps the bare path of an audio file it cannot decode', async () => {
   expect(await prompted(hosted, 0)).toEqual(['listen', paths[0], paths[1], expect.stringMatching(ENGLISH)]);
 });
 
+it('runs the engine on half the CPUs the Environment grants, so work beside it does not slow it tenfold', async () => {
+  const hosted = await transcribing();
+  await opened(hosted);
+  const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(60) }]);
+
+  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+
+  // Thirty seconds cover the engine starting on a loaded runner.
+  const engine = await until(() => engines(hosted)[0], 30_000);
+  const argv = readFileSync(`/proc/${engine}/cmdline`, 'utf8').split('\0');
+  stop(engine);
+  expect(argv[argv.indexOf('-t') + 1]).toBe('2');
+});
+
 it('reports no idle while a transcription runs and reports idle once it has ended', async () => {
   const hosted = await transcribing();
   await opened(hosted);
