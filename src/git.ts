@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { isUtf8 } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { withoutProxy } from './clis.ts';
@@ -68,13 +69,19 @@ export async function tree(repository: string, commit: string): Promise<Map<stri
   return entries;
 }
 
-export async function blobText(repository: string, object: string, path: string): Promise<string> {
-  const bytes = (await run(repository, ['cat-file', 'blob', object])).stdout;
-  try {
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch {
-    throw new Error(`${path} is binary and House stores only text; remove it from the commit`);
-  }
+const TEXT_MAX_BYTES = 16 * 1024 * 1024;
+
+async function blob(repository: string, object: string): Promise<Buffer> {
+  return (await run(repository, ['cat-file', 'blob', object])).stdout;
+}
+
+export async function blobText(repository: string, object: string): Promise<string> {
+  return (await blob(repository, object)).toString('utf8');
+}
+
+export async function isText(repository: string, object: string): Promise<boolean> {
+  const bytes = await blob(repository, object);
+  return bytes.length <= TEXT_MAX_BYTES && isUtf8(bytes) && !bytes.includes(0);
 }
 
 export function blobId(content: string): string {

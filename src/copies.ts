@@ -7,6 +7,7 @@ import {
   blobId,
   blobText,
   git,
+  isText,
   HOUSE_REF,
   importCommits,
   localCopies,
@@ -156,6 +157,11 @@ const REBASED = new Set([
 
 function rebaseFixes(refusal: Refusal): boolean {
   return refusal.code === 'edit_conflict' && refusal.conflicts.some((code) => REBASED.has(code));
+}
+
+function textOnly(paths: string[]): string {
+  const [named, them] = paths.length === 1 ? [`${paths[0]} is`, 'it'] : [`${paths.join(', ')} are`, 'them'];
+  return `${named} not text, and house push sends text only; remove ${them} from the commit and place ${them} with house upload`;
 }
 
 function short(commit: string): string {
@@ -730,7 +736,10 @@ export class LocalCopies {
     const after = await tree(copy.repository, commit);
     const moved = movedPaths(copy.moves, before, after);
     const arrived = new Set(moved.values());
-    const text = (entry: string, path: string) => blobText(copy.repository, entry, path);
+    const binary: string[] = [];
+    for (const [path, entry] of after) if (before.get(path) !== entry && !(await isText(copy.repository, entry))) binary.push(path);
+    if (binary.length > 0) throw new Error(textOnly(binary));
+    const text = (entry: string) => blobText(copy.repository, entry);
     const changes: Edit[] = [];
     for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
       if (arrived.has(path)) continue;
@@ -742,14 +751,14 @@ export class LocalCopies {
         changes.push({ op: 'rename', path: `${root}/${path}`, to: `${root}/${to}`, base: known });
         const moving = after.get(to)!;
         if (moving !== prior) {
-          changes.push({ op: 'replace', path: `${root}/${to}`, base: known, content: await text(moving, to) });
+          changes.push({ op: 'replace', path: `${root}/${to}`, base: known, content: await text(moving) });
         }
         continue;
       }
       if (prior === next) continue;
       if (next === undefined) changes.push({ op: 'remove', path: `${root}/${path}`, base: known });
-      else if (prior === undefined) changes.push({ op: 'create', path: `${root}/${path}`, content: await text(next, path) });
-      else changes.push(...changed(`${root}/${path}`, path, known, await text(prior, path), await text(next, path)));
+      else if (prior === undefined) changes.push({ op: 'create', path: `${root}/${path}`, content: await text(next) });
+      else changes.push(...changed(`${root}/${path}`, path, known, await text(prior), await text(next)));
     }
     return changes;
   }
@@ -814,7 +823,7 @@ export class LocalCopies {
       written.push({
         path: `${root}/${path}`,
         revision: entry === undefined ? null : (revisionAt(current, current.house, path) ?? null),
-        content: entry === undefined ? null : await blobText(copy.repository, entry, path),
+        content: entry === undefined ? null : await blobText(copy.repository, entry),
       });
     }
     return this.finished(await this.save({ ...current, push: { ...push, state: 'accepted', written } }));
@@ -856,7 +865,7 @@ export class LocalCopies {
           {
             path: `${rootOf(copy.room_handle)}/${path}`,
             revision: entry === undefined ? null : (revisionAt(copy, copy.house, path) ?? null),
-            content: entry === undefined ? null : await blobText(copy.repository, entry, path),
+            content: entry === undefined ? null : await blobText(copy.repository, entry),
           },
         ];
       }
@@ -910,7 +919,7 @@ export class LocalCopies {
   ): Promise<boolean> {
     const text = async (path: string) => {
       const entry = house.get(relative(path));
-      return entry === undefined ? undefined : blobText(repository, entry, path);
+      return entry === undefined ? undefined : blobText(repository, entry);
     };
     for (const change of changes) {
       const current = await text(change.path);

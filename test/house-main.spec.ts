@@ -189,7 +189,7 @@ it('tells an Agent whose CLI sandbox refuses the bridge to run house directly', 
   expect(house.requests).toEqual([]);
 });
 
-it('prints the same help for house help as for house --help, listing help, push and fetch, a Tool without a description by its name alone, and no Git verb', async () => {
+it('prints the same help for house help as for house --help, listing help, push, fetch and download, a Tool without a description by its name alone, and no Git verb', async () => {
   const house = await startHouse();
   const home = await connected(house, true);
   house.route('POST', '/', ({ body }) => {
@@ -203,11 +203,12 @@ it('prints the same help for house help as for house --help, listing help, push 
   expect(help).toEqual(dashed);
   expect(help.status).toBe(0);
   const lines = help.stdout.split('\n');
-  expect(lines.slice(0, 4)).toEqual([
+  expect(lines.slice(0, 5)).toEqual([
     "usage: house <tool> ['<arguments as JSON>']",
     'help',
     "push [commit]: sends the Local copy's committed changes to House",
     "fetch: records House's changes on each Local copy's refs/house/received",
+    'download: writes a binary file of a Room to the local file named by file',
   ]);
   expect(lines).toContain('about_house');
   expect(help.stdout).not.toMatch(/\bgit\b/);
@@ -236,6 +237,7 @@ it.each([
   [['--help', 'push'], 'usage: house push [commit] [--owner]'],
   [['--help', 'push', 'HEAD', '--owner'], 'usage: house push [commit] [--owner]'],
   [['--help', 'fetch'], 'usage: house fetch'],
+  [['download', '--help'], `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`],
 ])('prints house %j as the usage of the command it names and calls nothing', async (argv, usage) => {
   const house = await startHouse();
   const home = await connected(house, true);

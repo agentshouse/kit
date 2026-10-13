@@ -76,6 +76,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       'help',
       "push [commit]: sends the Local copy's committed changes to House",
       "fetch: records House's changes on each Local copy's refs/house/received",
+      'download: writes a binary file of a Room to the local file named by file',
       ...LISTING.map(helpLine),
     ].join('\n') + '\n',
   );

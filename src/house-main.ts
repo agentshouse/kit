@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { request, setGlobalProxyFromEnv } from 'node:http';
-import { extname, join } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import type { ToolResult } from './bridge.ts';
+import { verified } from './files.ts';
 import { HOUSE_REF } from './git.ts';
 import { kitHome, readEnrolment, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
@@ -26,6 +27,8 @@ const PUSH_USAGE = 'usage: house push [commit] [--owner]';
 const PUSH = "push [commit]: sends the Local copy's committed changes to House";
 const FETCH_USAGE = 'usage: house fetch';
 const FETCH = `fetch: records House's changes on each Local copy's ${HOUSE_REF}`;
+const DOWNLOAD_USAGE = `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
+const DOWNLOAD = 'download: writes a binary file of a Room to the local file named by file';
 const ARGUMENTS = `the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'`;
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
@@ -61,38 +64,47 @@ const MEDIA_TYPES = new Map([
   ['zip', 'application/zip'],
 ]);
 
-function refused(path: string, status: number, text: string): string {
+function refused(path: string, method: string, status: number, text: string): string {
   const refusal = refusalOf(text);
   if (refusal !== null) return refusal.text;
   if (status === 401) return REVOKED;
-  if (URL.canParse(path)) return `the upload answered ${status}; upload the file again`;
+  const act = method === 'GET' ? 'download' : 'upload';
+  if (URL.canParse(path)) return `the ${act} answered ${status}; ${act} the file again`;
   if (status === 502 && /^[A-Za-z]/.test(text)) return text;
   return `${path} answered ${status}`;
 }
 
-function bridged(
+function exchanged(
   path: string,
-  body: unknown,
+  method: string,
+  body?: unknown,
   headers: Record<string, string> = { 'content-type': 'application/json' },
   to = socketPath,
-): Promise<string> {
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const sent = request({ socketPath: to, path, method: 'POST', headers }, (answer) => {
-      let text = '';
-      answer.setEncoding('utf8');
-      answer.on('data', (chunk: string) => {
-        text += chunk;
-      });
+    const sent = request({ socketPath: to, path, method, headers }, (answer) => {
+      const chunks: Buffer[] = [];
+      answer.on('data', (chunk: Buffer) => chunks.push(chunk));
       answer.on('end', () => {
-        if (answer.statusCode === 200) resolve(text);
-        else reject(new Error(refused(path, answer.statusCode!, text)));
+        const bytes = Buffer.concat(chunks);
+        if (answer.statusCode === 200) resolve(bytes);
+        else reject(new Error(refused(path, method, answer.statusCode!, bytes.toString('utf8'))));
       });
     });
     sent.on('error', (error: NodeJS.ErrnoException) =>
       reject(new Error(error.code === 'EPERM' || error.code === 'EACCES' ? SANDBOXED : CLOSED)),
     );
-    sent.end(body instanceof Buffer ? body : JSON.stringify(body));
+    sent.end(body === undefined ? undefined : body instanceof Buffer ? body : JSON.stringify(body));
   });
+}
+
+async function bridged(
+  path: string,
+  body: unknown,
+  headers?: Record<string, string>,
+  to = socketPath,
+): Promise<string> {
+  return (await exchanged(path, 'POST', body, headers, to)).toString('utf8');
 }
 
 async function direct(message: Message): Promise<string> {
@@ -133,16 +145,34 @@ async function localFile(path: string): Promise<Buffer> {
   }
 }
 
-async function sent(url: string, bytes: Buffer, operation: string): Promise<string> {
-  const headers = { 'content-type': 'application/octet-stream', 'x-house-byte-operation': operation };
-  if (socketPath !== undefined) return bridged(url, bytes, headers);
+async function transferred(url: string, method: string, bytes?: Buffer, headers?: Record<string, string>): Promise<Buffer> {
+  if (socketPath !== undefined) return exchanged(url, method, bytes, headers);
   setGlobalProxyFromEnv();
-  const answer = await fetch(relayed(url), { method: 'POST', headers, body: bytes }).catch(() => {
+  const answer = await fetch(relayed(url), { method, ...(headers === undefined ? {} : { headers }), ...(bytes === undefined ? {} : { body: bytes }) }).catch(() => {
     throw new Error(UNREACHABLE);
   });
-  const text = await answer.text();
-  if (answer.status === 200) return text;
-  throw new Error(refused(url, answer.status, text));
+  const received = Buffer.from(await answer.arrayBuffer());
+  if (answer.status === 200) return received;
+  throw new Error(refused(url, method, answer.status, received.toString('utf8')));
+}
+
+async function sent(url: string, bytes: Buffer, operation: string): Promise<string> {
+  const headers = { 'content-type': 'application/octet-stream', 'x-house-byte-operation': operation };
+  return (await transferred(url, 'POST', bytes, headers)).toString('utf8');
+}
+
+async function download(args: string[]): Promise<string> {
+  const { flags, positionals: [argument] } = accepted(args, ['--help'], 1, DOWNLOAD_USAGE);
+  if (flags.has('--help')) return DOWNLOAD_USAGE;
+  const { file, ...selected } = argumentsOf(argument);
+  if (typeof file !== 'string' || file === '') throw new Error('download needs "file", the local file to write');
+  const inspected = parse(await called('inspect', selected)) as { download?: unknown; sha256?: unknown } | null;
+  if (typeof inspected?.download !== 'string') throw new Error(`${String(selected.path)} holds no binary file; shell reads its text`);
+  const bytes = verified(await transferred(inspected.download, 'GET'), String(inspected.sha256), String(selected.path));
+  const written = resolve(file);
+  await mkdir(dirname(written), { recursive: true });
+  await writeFile(written, bytes);
+  return written;
 }
 
 async function upload({ file, ...destination }: Record<string, unknown>): Promise<string> {
@@ -215,7 +245,7 @@ async function house(args: string[]): Promise<string> {
   if (verb === 'help' && argument !== undefined) throw unexpected(argument, USAGE);
   if (flags.has('--help') && argument !== undefined) throw unexpected('--help', USAGE);
   if (verb === undefined || verb === 'help') {
-    return [USAGE, 'help', PUSH, FETCH, ...(await tools()).map((tool) => (tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`))].join('\n');
+    return [USAGE, 'help', PUSH, FETCH, DOWNLOAD, ...(await tools()).map((tool) => (tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`))].join('\n');
   }
   if (flags.has('--help')) {
     const tool = (await tools()).find((listed) => listed.name === verb);
@@ -236,7 +266,14 @@ async function called(name: string, args: Record<string, unknown>): Promise<stri
 const argv = process.argv.slice(2);
 const named = argv.findIndex((arg) => !arg.startsWith('-'));
 const rest = argv.filter((_arg, index) => index !== named);
-(argv[named] === 'push' ? push(rest) : argv[named] === 'fetch' ? fetched(rest) : house(argv)).then(
+(argv[named] === 'push'
+  ? push(rest)
+  : argv[named] === 'fetch'
+    ? fetched(rest)
+    : argv[named] === 'download'
+      ? download(rest)
+      : house(argv)
+).then(
   (text) => {
     process.stdout.write(`${text}\n`);
     if (argv[0] === 'shell') process.exitCode = Number(/^exit: (\d+)(?:\n|$)/.exec(text)?.[1] ?? 0);

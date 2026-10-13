@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HouseRefusal, retrying, type House } from './api.ts';
@@ -7,6 +8,12 @@ export interface MessageFile {
   version: string;
   name: string;
   media_type: string | null;
+  sha256: string;
+}
+
+export function verified(bytes: Buffer, sha256: string, name: string): Buffer {
+  if (createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error(`${name} did not arrive whole; download it again`);
+  return bytes;
 }
 
 interface Original {
@@ -35,7 +42,7 @@ export async function placeFiles(
     });
     await mkdir(folder, { recursive: true });
     const path = join(folder, file.name);
-    await writeFile(path, Buffer.from(await answer.arrayBuffer()));
+    await writeFile(path, verified(Buffer.from(await answer.arrayBuffer()), file.sha256, file.name));
     paths.push(path);
   }
   return paths;

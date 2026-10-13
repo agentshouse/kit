@@ -1,6 +1,6 @@
 import { apply, parse, serialize, type Change } from '@agentshouse/mdmodel';
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,11 @@ interface Stored {
   content: string;
   revision: string;
   provenance?: string;
+}
+
+interface Binary {
+  revision: string;
+  bytes: Buffer;
 }
 
 interface Write {
@@ -64,7 +69,9 @@ export class Room {
   write = [''];
   protected = ['capture', 'collaboration'];
   files = new Map<string, Stored>();
+  readonly binaries = new Map<string, Binary>();
   readonly history = new Map<string, string>();
+  readonly binaryHistory = new Map<string, Binary & { path: string }>();
   readonly log: { position: number; paths: string[] }[] = [];
   readonly batches: EditChange[][] = [];
 
@@ -98,6 +105,15 @@ export class Room {
     this.files.set(path, stored);
     this.advance([path]);
     return stored.revision;
+  }
+
+  upload(path: string, bytes: Buffer): string {
+    revisions++;
+    const binary = { revision: `rev-${revisions}`, bytes };
+    this.binaries.set(path, binary);
+    this.binaryHistory.set(binary.revision, { ...binary, path });
+    this.advance([path]);
+    return binary.revision;
   }
 
   remove(path: string): void {
@@ -194,6 +210,11 @@ export class Room {
       const current = next.get(path);
       const stale = (code: string) =>
         conflicts.push({ path: change.path, code, ...(current === undefined ? {} : { revision: current.revision }) });
+      const binary = this.binaries.get(to ?? path);
+      if (binary !== undefined) {
+        conflicts.push({ path: change.to ?? change.path, code: 'binary_file', revision: binary.revision });
+        continue;
+      }
       if (change.op === 'create') {
         if (current !== undefined) stale('path_exists');
         else set(path, 'create', change.content!);
@@ -263,6 +284,8 @@ export interface Rooms {
   pass: number;
   prepared: unknown[];
   uploaded: Buffer[];
+  byteReads: Received[];
+  damages: boolean;
   edits(): Received[];
 }
 
@@ -290,6 +313,8 @@ export function serveRooms(hosted: Hosted): Rooms {
     pass: Infinity,
     prepared: [],
     uploaded: [],
+    byteReads: [],
+    damages: false,
     room: (handle) => {
       const room = new Room(handle);
       rooms.push(room);
@@ -373,6 +398,34 @@ export function serveRooms(hosted: Hosted): Rooms {
     return {
       body: { ...rest, contents: answered(writes).map((write) => ({ path: write.path, content: write.content, revision: write.revision })) },
     };
+  });
+  hosted.tools.inspect = (args) => {
+    const path = String(args.path);
+    const room = roomOf(path);
+    const relative = path.slice(room.root.length + 1);
+    const ref = args.ref as string | undefined;
+    const binary = ref === undefined ? room.binaries.get(relative) : room.binaryHistory.get(ref);
+    if (binary !== undefined) {
+      const text = stringify({
+        path,
+        revision: binary.revision,
+        file: `bf_${binary.revision}`,
+        bytes: binary.bytes.length,
+        media_type: 'image/jpeg',
+        sha256: createHash('sha256').update(binary.bytes).digest('hex'),
+        download: `${hosted.house.origin}/files/${room.ref}/${binary.revision}`,
+      });
+      return { content: [{ type: 'text', text }] };
+    }
+    const file = room.files.get(relative);
+    if (file === undefined) return { isError: true, content: [{ type: 'text', text: `path_not_found: ${path} does not exist\n` }] };
+    return { content: [{ type: 'text', text: stringify({ path, revision: file.revision }) }] };
+  };
+  hosted.house.route('GET', '/files/:room/:revision', (request) => {
+    state.byteReads.push(request);
+    const room = rooms.find((candidate) => candidate.ref === request.params.room)!;
+    const { bytes } = room.binaryHistory.get(request.params.revision!)!;
+    return { bytes: { type: 'application/octet-stream', content: state.damages ? Buffer.concat([bytes, Buffer.from([0])]) : bytes } };
   });
   const grants = new Map<string, { operation: string; staged?: string }>();
   const staged = new Map<string, Buffer>();

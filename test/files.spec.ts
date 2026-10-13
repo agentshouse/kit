@@ -78,3 +78,15 @@ it('refuses a message with files for a launch directory that does not exist and 
   await expect(stat(directory)).rejects.toThrow('ENOENT');
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toEqual([]);
 });
+
+it('refuses a message whose file does not match the SHA-256 House sent with it, and places none of it', async () => {
+  const hosted = await hostKit();
+  serveFiles(hosted);
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+
+  hosted.input({ kind: 'message', text: 'read this', files: [{ ...described[1]!, sha256: described[0]!.sha256 }], first: false });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('data.bin did not arrive whole') });
+  await expect(stat(join(hosted.workingDirectory, '.house', 'files', 'message-1', 'version-2', 'data.bin'))).rejects.toThrow('ENOENT');
+});
