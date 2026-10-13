@@ -5,12 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import { startHouse } from './double.ts';
-import { conversationCredential, hostKit, lastInput, opened, userBin, type Hosted, type Hosting, type McpCall, type ToolResult } from './environment.ts';
+import { conversationCredential, hostKit, lastInput, opened, shelled, userBin, type Hosted, type Hosting, type McpCall, type ToolResult } from './environment.ts';
 import { readOnlyHome, temporaryHome } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 
 const SKILL_SET = fileURLToPath(new URL('../skills/', import.meta.url));
 const HOW_WE_WORK_TEXT = await readFile(new URL('../how-we-work.md', import.meta.url), 'utf8');
+const SHIPPED = new URL('./fixtures/how-we-work/', import.meta.url);
+const SHIPPED_TEXTS = await Promise.all((await readdir(SHIPPED)).sort().map((name) => readFile(new URL(name, SHIPPED), 'utf8')));
+const EARLIER_TEXTS = SHIPPED_TEXTS.filter((text) => text !== HOW_WE_WORK_TEXT);
+const EARLIER_TEXT = EARLIER_TEXTS[0]!;
 const { version: KIT_VERSION } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
 };
@@ -82,6 +86,29 @@ function configure(home: string, argv: string[]): { status: number | null; stdou
 
 function refused(code: string): ToolResult {
   return { isError: true, content: [{ type: 'text', text: `${code}: you may not write here\n` }] };
+}
+
+function held(hosted: Hosted, text: string): void {
+  hosted.tools.inspect = () => ({
+    content: [
+      {
+        type: 'text',
+        text: stringify({
+          ref: 'af_1.d',
+          path: DOCUMENT,
+          revisions: [
+            { revision: 'fr_1.1.2', created_at: '2026-10-07T10:00:00Z', author_user: 'user-1' },
+            { revision: 'fr_1.1.1', created_at: '2026-10-06T10:00:00Z', author_user: 'user-1' },
+          ],
+        }),
+      },
+    ],
+  });
+  hosted.tools.shell = () => shelled(text);
+  hosted.tools.edit = (args) =>
+    (args as { changes: { op: string }[] }).changes[0]!.op === 'create'
+      ? conflicted('path_exists')
+      : { content: [{ type: 'text', text: 'results: []' }] };
 }
 
 function conflicted(code: string): ToolResult {
@@ -373,15 +400,76 @@ it.each(['operation_denied', 'room_not_found'])(
   },
 );
 
-it('keeps a present document as it is and never creates it again', async () => {
+it('keeps a fixture of every text it ships, its current one among them', () => {
+  expect(SHIPPED_TEXTS).toContain(HOW_WE_WORK_TEXT);
+  expect(EARLIER_TEXTS.length).toBeGreaterThan(0);
+});
+
+it.each(EARLIER_TEXTS.map((text, index) => [index + 1, text]))(
+  'replaces a present document that still holds earlier text %i with the current text, once',
+  async (_index, text) => {
+    const hosted = await hostKit([{}], { skills: true });
+    held(hosted, text);
+
+    await opened(hosted, 'conversation-1');
+    await opened(hosted, 'conversation-2');
+
+    expect(edits(hosted).map((call) => call.params.arguments)).toEqual([
+      { changes: [{ op: 'create', path: DOCUMENT, content: HOW_WE_WORK_TEXT }] },
+      { changes: [{ op: 'replace', path: DOCUMENT, base: 'fr_1.1.2', content: HOW_WE_WORK_TEXT }] },
+    ]);
+  },
+);
+
+it('keeps a present document that already holds the current text', async () => {
   const hosted = await hostKit([{}], { skills: true });
-  hosted.tools.edit = () => conflicted('path_exists');
+  held(hosted, HOW_WE_WORK_TEXT);
+
+  await opened(hosted, 'conversation-1');
+
+  expect(edits(hosted)).toHaveLength(1);
+});
+
+it('opens every conversation that starts together while it brings the text', async () => {
+  const hosted = await hostKit([{}], { skills: true });
+  held(hosted, EARLIER_TEXT);
+  const inputs = [];
+  for (const conversation of ['conversation-1', 'conversation-2', 'conversation-3', 'conversation-4']) {
+    hosted.input({ kind: 'open', conversation_id: conversation, agent_id: 'agent-1' });
+    inputs.push(lastInput());
+  }
+
+  for (const input of inputs) expect(await hosted.ack(input)).toEqual({ provider_session_id: expect.any(String) });
+});
+
+it('keeps a present document the User edited as it is and never writes it again', async () => {
+  const hosted = await hostKit([{}], { skills: true });
+  held(hosted, `${EARLIER_TEXT}- Meeting notes: \`meetings/<date>.md\`\n`);
 
   await opened(hosted, 'conversation-1');
   await opened(hosted, 'conversation-2');
 
-  expect(edits(hosted)).toHaveLength(1);
+  expect(edits(hosted).map((call) => call.params.arguments)).toEqual([
+    { changes: [{ op: 'create', path: DOCUMENT, content: HOW_WE_WORK_TEXT }] },
+  ]);
 });
+
+it.each(['base_revision_stale', 'path_absent'])(
+  'keeps a document the User changed while the Kit replaced it, %s, and opens the conversation',
+  async (code) => {
+    const hosted = await hostKit([{}], { skills: true });
+    held(hosted, EARLIER_TEXT);
+    const create = hosted.tools.edit!;
+    hosted.tools.edit = (args, request) =>
+      (args as { changes: { op: string }[] }).changes[0]!.op === 'replace' ? conflicted(code) : create(args, request);
+
+    await opened(hosted, 'conversation-1');
+    await opened(hosted, 'conversation-2');
+
+    expect(edits(hosted)).toHaveLength(2);
+  },
+);
+
 
 it("refuses to open a conversation with House's answer when another refusal stops the document, and tries again at the next", async () => {
   const hosted = await hostKit([{}], { skills: true });

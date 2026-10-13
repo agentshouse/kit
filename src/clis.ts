@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { constants, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
@@ -72,7 +73,7 @@ export async function allowHouseInCodex(path: string): Promise<void> {
     if (!houses.includes(house) && (await executable(house))) houses.push(house);
   }
   await mkdir(rules, { recursive: true });
-  const temporary = `${file}.${process.pid}`;
+  const temporary = `${file}.${randomUUID()}`;
   await writeFile(temporary, houseRule(houses));
   await rename(temporary, file);
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { accessSync, chmodSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -83,7 +84,7 @@ export async function readHome<T>(name: string): Promise<T | null> {
 export async function writeHome(name: string, value: unknown): Promise<void> {
   const home = kitHome();
   await mkdir(home, { recursive: true, mode: 0o700 });
-  const temporary = join(home, `${name}.${process.pid}`);
+  const temporary = join(home, `${name}.${randomUUID()}`);
   await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 });
   await rename(temporary, join(home, name));
 }
