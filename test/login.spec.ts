@@ -326,6 +326,66 @@ it.each(['credential.json', 'disconnected.json'])('refuses a login code when Kit
   expect(house.requests).toEqual([]);
 });
 
+it.each(['credential.json', 'disconnected.json'])(
+  'connects this computer as a new machine in the same run when House no longer holds the Environment %s records',
+  async (record) => {
+    const house = await startHouse();
+    const home = await temporaryHome();
+    await writeFile(
+      join(home, record),
+      JSON.stringify({ house: house.origin, environment: 'environment-gone', credential: 'ahk_held' }),
+    );
+    serveLogin(house, 'environment-two', 'ahk_second', { gone: 'environment-gone' });
+
+    const { exit, login } = await logIn(house, home);
+
+    expect(exit).toBe(0);
+    const starts = house.requests.filter((request) => request.path === '/kit').map((request) => request.body);
+    expect(starts).toMatchObject([
+      { act: 'existing_environment', environment_id: 'environment-gone' },
+      { act: 'new_environment' },
+    ]);
+    expect(starts[1]).not.toHaveProperty('environment_id');
+    expect(login.stdout().split('Open this link and confirm: ')).toHaveLength(2);
+    expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
+      house: house.origin,
+      environment: 'environment-two',
+      credential: 'ahk_second',
+    });
+    await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  },
+);
+
+it('forgets the Environment House no longer holds even when the new login it starts is never confirmed', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, 'disconnected.json'), JSON.stringify({ house: house.origin, environment: 'environment-gone' }));
+  const served = serveLogin(house, 'environment-two', 'ahk_second', { gone: 'environment-gone', waiting: true });
+
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  await until(() => house.requests.some((request) => request.path === '/kit/token'));
+  served.end();
+
+  expect(await login.exited).toBe(1);
+  await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(access(join(home, 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('ends with the cause and starts no new machine when House holds no Environment --environment names', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-two', 'ahk_second', { gone: 'environment-gone' });
+
+  const { exit, login } = await logIn(house, home, {}, ['--environment', 'environment-gone']);
+
+  expect(exit).toBe(1);
+  expect(login.stderr()).toContain('kit_environment_not_found');
+  expect(house.requests.filter((request) => request.path === '/kit').map((request) => request.body)).toMatchObject([
+    { act: 'existing_environment', environment_id: 'environment-gone' },
+  ]);
+  await expect(access(join(home, 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 it('refuses --manual as an unknown option before starting a login', async () => {
   const house = await startHouse();
   const home = await temporaryHome();

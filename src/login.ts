@@ -2,11 +2,20 @@ import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { post, retrying } from './api.ts';
+import { HouseRefusal, post, retrying } from './api.ts';
 import { placeAppGit } from './app-git.ts';
 import { writeCodexRule } from './clis.ts';
-import { forgetOwnAgent, readDisconnected, readEnrolment, readOwnAgent, writeEnrolment, writeOwnAgent } from './home.ts';
+import {
+  forgetDisconnected,
+  forgetOwnAgent,
+  readDisconnected,
+  readEnrolment,
+  readOwnAgent,
+  writeEnrolment,
+  writeOwnAgent,
+} from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
+import { refusalOf } from './refusals.ts';
 import { selectRelay } from './relay.ts';
 import { startService } from './service.ts';
 import { placeSkillSet } from './skills.ts';
@@ -50,6 +59,10 @@ const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms
   --code <code>             connect this machine with a login code
 `;
 
+function gone(error: unknown): boolean {
+  return error instanceof HouseRefusal && refusalOf(error.text)?.code === 'kit_environment_not_found';
+}
+
 function chosenRooms(rooms: string | undefined, noPrivate: boolean): object {
   if (rooms !== undefined && noPrivate) throw new Error('--rooms and --no-private are two choices of Rooms; pass one');
   if (rooms !== undefined) return { rooms: { reach: 'selected', refs: rooms.split(',') } };
@@ -84,8 +97,9 @@ export async function login(argv: string[]): Promise<void> {
   selectRelay(relay);
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
   const replaces = process.env.HOUSE_KIT_REPLACES;
-  const environment =
-    replaces === undefined ? (values.environment ?? (enrolled?.house === house ? enrolled.environment : undefined)) : undefined;
+  const remembered =
+    replaces === undefined && values.environment === undefined && enrolled?.house === house ? enrolled.environment : undefined;
+  const environment = replaces === undefined ? (values.environment ?? remembered) : undefined;
   const ownAgent = await readOwnAgent();
   let held = false;
   let exchanged: Exchanged;
@@ -94,17 +108,27 @@ export async function login(argv: string[]): Promise<void> {
   } else {
     held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
     const verifier = randomBytes(32).toString('base64url');
-    const started = await retrying(() =>
-      post<Started>(house, '/kit', {
-        label: hostname(),
-        ...(environment === undefined
-          ? { act: 'new_environment', ...(replaces === undefined ? {} : { replaces }) }
-          : { act: 'existing_environment', environment_id: environment }),
-        ...rooms,
-        code_challenge: createHash('sha256').update(verifier).digest('base64url'),
-        ...(held ? {} : { headless: true }),
-      }),
-    );
+    const start = (named: string | undefined) =>
+      retrying(() =>
+        post<Started>(house, '/kit', {
+          label: hostname(),
+          ...(named === undefined
+            ? { act: 'new_environment', ...(replaces === undefined ? {} : { replaces }) }
+            : { act: 'existing_environment', environment_id: named }),
+          ...rooms,
+          code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+          ...(held ? {} : { headless: true }),
+        }),
+      );
+    let started: Started;
+    try {
+      started = await start(environment);
+    } catch (error) {
+      if (remembered === undefined || !gone(error)) throw error;
+      await forgetDisconnected();
+      process.stdout.write(`House no longer holds Environment ${remembered}; connecting this computer as a new one.\n`);
+      started = await start(undefined);
+    }
     process.stdout.write(`Open this link and confirm: ${started.start_url}\n`);
     open(started.start_url);
 

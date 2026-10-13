@@ -17,13 +17,14 @@ export interface Served {
   user?: string;
   waiting?: boolean;
   busy?: number;
+  gone?: string;
 }
 
 export function serveLogin(
   house: House,
   environment: string,
   credential: string,
-  { own, user = 'user-one', waiting = false, busy = 0 }: Served = {},
+  { own, user = 'user-one', waiting = false, busy = 0, gone }: Served = {},
 ) {
   let refusals = busy;
   let challenge = '';
@@ -31,6 +32,9 @@ export function serveLogin(
   let ended = false;
   house.route('POST', '/kit', ({ body }) => {
     if (refusals-- > 0) return { status: 503, body: { error: { code: 'kit_environment_unavailable', retryable: true } } };
+    if (gone !== undefined && (body as { environment_id?: string }).environment_id === gone) {
+      return { status: 404, body: { error: { code: 'kit_environment_not_found', retryable: false } } };
+    }
     challenge = (body as { code_challenge: string }).code_challenge;
     return { body: { start_url: loginLink(house), login: LOGIN } };
   });

@@ -41,7 +41,8 @@ House as you and `git` clones and pushes your Apps at `<house>/app/` as you, unt
 that connection on Connections. `house help` lists the Tools. Codex sessions started after a
 login run a lone `house` command outside their sandbox. `kit logout` disconnects this
 computer, stops House Kit and ends your own agent's connection, so `house` and `git` no
-longer act as you here; a later `kit login` reconnects the same Environment.
+longer act as you here; a later `kit login` reconnects the same Environment, or connects
+this computer as a new one when House no longer holds it.
 In a container you do not control, such as ChatGPT's, `npm i -g @agentshouse/kit` and `kit chatgpt --key <key>` with a key made on Connections let `house <tool>` act as you, starting and configuring nothing else.
 
 `kit resident` keeps the Environment connected and, as it connects, copies the text of each Room

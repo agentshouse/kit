@@ -104,6 +104,10 @@ export function readDisconnected(): Promise<Omit<Enrolment, 'credential'> | null
   return readHome(DISCONNECTED);
 }
 
+export function forgetDisconnected(): Promise<void> {
+  return rm(join(kitHome(), DISCONNECTED), { force: true });
+}
+
 export async function forgetEnrolment({ house, environment }: Enrolment): Promise<void> {
   await writeHome(DISCONNECTED, { house, environment });
   await rm(join(kitHome(), ENROLMENT), { force: true });
