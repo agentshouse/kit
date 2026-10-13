@@ -5,7 +5,7 @@ import { beforeEach, expect, it } from 'vitest';
 import { RELEASES, placeUserCli } from './cli.ts';
 import { startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL, macOS, placeUserClis, userBin } from './environment.ts';
-import { HOST_KEY, fakeBin, placeHostKey, runKit, temporaryHome, type KitRun } from './kit.ts';
+import { HOST_KEY, fakeBin, placeHostKey, readOnlyHome, runKit, temporaryHome, type KitRun } from './kit.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
@@ -85,6 +85,18 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
     `@agentclientprotocol/claude-agent-acp@${PINNED['@agentclientprotocol/claude-agent-acp']}`,
   ]);
   expect(await logged('curl.log')).toEqual([]);
+});
+
+it("installs a pinned adapter from a read-only home, keeping npm's cache in Kit home", async () => {
+  desired = ['codex-acp'];
+  const readOnly = await temporaryHome();
+  await writeFile(join(readOnly, '.profile'), `PATH="${userBin(home)}:$PATH"\n`);
+  await readOnlyHome(readOnly);
+  await start(undefined, [], { HOME: readOnly, npm_config_cache: '' });
+
+  expect(await until(() => reports[0])).toMatchObject({ agents: [{ kind: 'codex-acp', failure: null }] });
+  expect(await adapterInstalls()).toEqual([`@agentclientprotocol/codex-acp@${PINNED['@agentclientprotocol/codex-acp']}`]);
+  expect((await stat(join(home, 'npm-cache'))).isDirectory()).toBe(true);
 });
 
 it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit version, its wire, whether it updates itself and its transcription engine', async () => {

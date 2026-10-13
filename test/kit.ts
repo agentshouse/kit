@@ -23,6 +23,13 @@ export async function temporaryHome(): Promise<string> {
   return home;
 }
 
+export async function readOnlyHome(home: string): Promise<{ temporary: string; kitHome: string }> {
+  await chmod(home, 0o555);
+  onTestFinished(() => chmod(home, 0o700));
+  const temporary = await temporaryHome();
+  return { temporary, kitHome: join(temporary, `house-kit-${process.getuid!()}`) };
+}
+
 export function runKit(argv: string[], environment: Record<string, string>, node: string[] = []): KitRun {
   const child = spawn(process.execPath, [...node, KIT, ...argv], {
     env: { ...process.env, HOME: environment.HOUSE_KIT_HOME ?? process.env.HOME, ...environment },

@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, openSync, realpathSync } from 'node:fs';
-import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -8,7 +8,7 @@ import { placeUserCli } from './cli.ts';
 import { startHouse } from './double.ts';
 import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
 import { fakeHost, published } from './host.ts';
-import { temporaryHome } from './kit.ts';
+import { readOnlyHome, runKit, temporaryHome } from './kit.ts';
 
 const LINUX = fileURLToPath(new URL('../bin/connect-linux.sh', import.meta.url));
 const WINDOWS = fileURLToPath(new URL('../bin/connect-windows.ps1', import.meta.url));
@@ -174,6 +174,36 @@ it('passes a login code and the Kit relay through the native server bootstrap en
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(host.calls('kit')).toEqual([expect.stringMatching(/^login --house https:\/\/agents\.house --code ahk_code_one /)]);
   expect(host.calls('relay')).toEqual([relay]);
+});
+
+it('installs a server whose home is read-only with its Kit home under the temporary directory, the one a later kit finds', async () => {
+  const temporary = await temporaryHome();
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true, environment: { TMPDIR: `${temporary}/` } });
+  await readOnlyHome(host.home);
+  const kitHome = join(temporary, `house-kit-${process.getuid!()}`);
+
+  expect(host.run(['--linux'])).toMatchObject({ status: 0, stderr: '' });
+
+  expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${kitHome}`]);
+  expect((await stat(kitHome)).mode & 0o777).toBe(0o700);
+  expect(JSON.parse(await readFile(join(kitHome, 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one' });
+  const house = await startHouse();
+  const kit = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOME: host.home, TMPDIR: `${temporary}/` });
+  expect(await kit.exited).toBe(1);
+  expect(kit.stderr()).toBe('kit: --code connects a new machine; this Kit home records Environment environment-one, so run kit login to reconnect it\n');
+});
+
+it('installs a server with its Kit home where HOUSE_KIT_HOME names, and its service reads it there', async () => {
+  const kitHome = join(await temporaryHome(), 'kit-home');
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true, environment: { HOUSE_KIT_HOME: kitHome } });
+  await host.mark('systemd');
+
+  expect(host.run(['--linux'])).toMatchObject({ status: 0, stderr: '' });
+
+  expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${kitHome}`]);
+  expect(JSON.parse(await readFile(join(kitHome, 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one' });
+  await expect(access(join(host.home, '.house-kit'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await host.serverUnit()).split('\n')).toContain(`Environment="HOUSE_KIT_HOME=${kitHome}"`);
 });
 
 const LISTED = [

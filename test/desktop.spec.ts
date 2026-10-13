@@ -41,6 +41,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
+Environment="HOUSE_KIT_HOME=${home}/.house-kit"
 Environment="HOUSE_KIT_WORKSPACE=${workspace}"
 ExecStart="${home}/.local/bin/kit" resident
 Restart=on-failure
@@ -65,6 +66,8 @@ function launchAgent(home: string, workspace = join(home, 'AgentsHouse')): strin
 \t</array>
 \t<key>EnvironmentVariables</key>
 \t<dict>
+\t\t<key>HOUSE_KIT_HOME</key>
+\t\t<string>${home}/.house-kit</string>
 \t\t<key>HOUSE_KIT_WORKSPACE</key>
 \t\t<string>${workspace}</string>
 \t</dict>
@@ -216,6 +219,22 @@ it.each([
 
   expect((await readFile(join(host.home, definition), 'utf8')).split('\n')).toContain(
     line.replace('~', host.home).replace(/^/, platform.system === 'Darwin' ? '\t\t' : ''),
+  );
+});
+
+it.each([
+  ['LaunchAgent', { system: 'Darwin', machine: 'arm64' }, 'Library/LaunchAgents/house-kit.plist', '<string>~/R&amp;D &lt;50%&gt;</string>'],
+  ['systemd unit', { system: 'Linux', machine: 'x86_64' }, '.config/systemd/user/house-kit.service', 'Environment="HOUSE_KIT_HOME=~/R&D <50%%>"'],
+] as const)('names the Kit home HOUSE_KIT_HOME chose in the %s, so the service reads the credential the login stored there', async (_name, platform, definition, line) => {
+  const root = await temporaryHome();
+  const kitHome = join(root, 'R&D <50%>');
+  const host = await fakeHost({ ...platform, environment: { HOUSE_KIT_HOME: kitHome } });
+
+  expect(host.run()).toMatchObject({ status: 0, stderr: '' });
+
+  expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${kitHome}`]);
+  expect((await readFile(join(host.home, definition), 'utf8')).split('\n')).toContain(
+    line.replace('~', root).replace(/^/, platform.system === 'Darwin' ? '\t\t' : ''),
   );
 });
 

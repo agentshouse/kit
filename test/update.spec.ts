@@ -52,7 +52,7 @@ it('reruns the verified bootstrap with --linux outside its own service and ackno
   expect(await ran(hosted)).toBe('--linux\n');
   const launched = await readFile(join(hosted.home, 'systemd-run.log'), 'utf8');
   expect(launched).toMatch(
-    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --linux\n$/,
+    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --linux\n$/,
   );
 });
 
@@ -71,7 +71,7 @@ it('reruns the bootstrap of its desktop placement in its workspace through the u
   expect(await hosted.ack('update-user')).toEqual({});
   expect(await ran(hosted)).toBe(`--workspace ${workspace} --update-clis\n`);
   expect(await readFile(join(hosted.home, 'systemd-run.log'), 'utf8')).toMatch(
-    /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+ --update-clis\n$/,
+    /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+ --update-clis\n$/,
   );
   expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('--user start house-kit.service\n');
 });

@@ -49,6 +49,7 @@ export interface Host {
   forget(): Promise<void>;
   outdate(): Promise<void>;
   uninstall(tool: string): Promise<void>;
+  serverUnit(): Promise<string>;
   restartPolicy(policy: string): Promise<void>;
 }
 
@@ -227,6 +228,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
         '@agentshouse/kit@0.2.1-alpha.0 node@24.21.0\n',
       ),
     uninstall: (tool) => rm(join(bin, tool)),
+    serverUnit: () => readFile(join(fake, 'server', 'house-kit.service'), 'utf8'),
     restartPolicy: async (policy) =>
       writeFile(join(fake, 'container'), (await readFile(join(fake, 'container'), 'utf8')).replace(/^policy=.*$/m, `policy=${policy}`)),
   };

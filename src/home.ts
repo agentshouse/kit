@@ -1,6 +1,6 @@
-import { existsSync, linkSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { selectRelay } from './relay.ts';
 
@@ -27,8 +27,39 @@ const CONFIGURATION = 'kit.json';
 const OWN_AGENT = 'own-agent.json';
 const RESTART = 'restart';
 
+let defaulted: string | undefined;
+
+function writable(directory: string): boolean {
+  try {
+    accessSync(directory, constants.W_OK | constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ownTemporaryHome(): string {
+  const home = join(tmpdir(), `house-kit-${process.getuid!()}`);
+  try {
+    mkdirSync(home, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const found = lstatSync(home);
+  if (found.isSymbolicLink()) throw new Error(`${home} is a symbolic link`);
+  if (!found.isDirectory()) throw new Error(`${home} is not a directory`);
+  if (found.uid !== process.getuid!()) throw new Error(`${home} is not owned by this User`);
+  chmodSync(home, 0o700);
+  return home;
+}
+
+function defaultHome(): string {
+  const home = join(homedir(), '.house-kit');
+  return existsSync(home) || writable(homedir()) ? home : ownTemporaryHome();
+}
+
 export function kitHome(): string {
-  return process.env.HOUSE_KIT_HOME ?? join(homedir(), '.house-kit');
+  return process.env.HOUSE_KIT_HOME || (defaulted ??= defaultHome());
 }
 
 export function workspaceRoot(): string {

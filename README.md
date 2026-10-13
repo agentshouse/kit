@@ -33,7 +33,7 @@ them out; running it again without the flag brings them back.
 
 `kit login` opens or prints a link you confirm in any browser, on this computer
 or another, continues on its own and keeps the Environment's credential in
-`~/.house-kit`, or in `$HOUSE_KIT_HOME` when it is set. `--environment <id>`
+`$HOUSE_KIT_HOME` when it is set, else in `~/.house-kit`, or in `house-kit-<uid>` under the temporary directory when your home is read-only. `--environment <id>`
 reconnects an Environment you already have; `--rooms <ref>[,<ref>...]` gives it
 only those Rooms and `--no-private` every Room but your Private Room; `--code <code>` connects immediately without a link.
 A login also connects your own agent: outside an Agent conversation, `house <tool>` calls
@@ -52,7 +52,7 @@ both, without `--owner`. `house upload` and `house download` move a Room's other
 
 House Kit turns each audio file of your message to an Agent into text on this
 computer before the Agent reads it. While transcription is on, the speech
-engine and model use about 425 MB in `~/.house-kit`; turning it off deletes them.
+engine and model use about 425 MB beside the Environment's credential; turning it off deletes them.
 
 ## License
 

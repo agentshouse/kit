@@ -114,11 +114,7 @@ export async function login(argv: string[]): Promise<void> {
       () => POLL_INTERVAL_MS,
     );
   }
-  try {
-    await placeSkillSet();
-  } catch (error) {
-    process.stderr.write(`kit: the skills could not be placed: ${(error as Error).message}\n`);
-  }
+  await placeSkillSet();
   await writeCodexRule().catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
   await writeEnrolment({
     house,
@@ -133,7 +129,7 @@ export async function login(argv: string[]): Promise<void> {
     await forgetOwnAgent();
     process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
   }
-  await placeAppGit(ownAgent, await readOwnAgent());
+  await placeAppGit(ownAgent, await readOwnAgent()).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
   try {
     startService();
   } catch (error) {

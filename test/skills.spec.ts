@@ -1,12 +1,12 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import { startHouse } from './double.ts';
-import { conversationCredential, hostKit, lastInput, opened, type Hosted, type Hosting, type McpCall, type ToolResult } from './environment.ts';
-import { temporaryHome } from './kit.ts';
+import { conversationCredential, hostKit, lastInput, opened, userBin, type Hosted, type Hosting, type McpCall, type ToolResult } from './environment.ts';
+import { readOnlyHome, temporaryHome } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 
 const SKILL_SET = fileURLToPath(new URL('../skills/', import.meta.url));
@@ -294,6 +294,36 @@ it('places no skill at kit login when the Skill set is declined', async () => {
   await absent(skills(home));
   await absent(claude(home));
   expect(await recorded(join(home, '.house-kit'))).toBeNull();
+});
+
+it('keeps the Environment connected from a read-only home, saying the skills could not be placed, and creates no How-we-work document', async () => {
+  const home = await temporaryHome();
+  const readOnly = await temporaryHome();
+  await writeFile(join(readOnly, '.profile'), `PATH="${userBin(home)}:${join(home, 'bin')}:$PATH"\n`);
+  await readOnlyHome(readOnly);
+
+  const hosted = await hostKit([{}], { home, skills: true, environment: { HOME: readOnly, CODEX_HOME: await temporaryHome() } });
+  hosted.input({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
+
+  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(hosted.kit.stderr()).toMatch(/^kit: the skills could not be placed: EACCES: .*\.agents/m);
+  expect(edits(hosted)).toEqual([]);
+});
+
+it('creates no How-we-work document for a declined Skill set whose recorded skills could not be removed', async () => {
+  const hosted = await hostKit([{}], {
+    skills: false,
+    prepare: async (home) => {
+      await mkdir(skills(home, 'grill-me'), { recursive: true });
+      await writeFile(join(home, RECORD), JSON.stringify({ version: KIT_VERSION, names: ['grill-me'] }));
+      await chmod(skills(home), 0o555);
+      onTestFinished(() => chmod(skills(home), 0o700));
+    },
+  });
+  await opened(hosted, 'conversation-1');
+
+  expect(hosted.kit.stderr()).toMatch(/^kit: the skills could not be placed: EACCES: /m);
+  expect(edits(hosted)).toEqual([]);
 });
 
 it('creates the How-we-work document over the first conversation bridge after the Skill set is installed, once', async () => {

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { certificate, startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL } from './environment.ts';
-import { runKit, temporaryHome } from './kit.ts';
+import { readOnlyHome, runKit, temporaryHome } from './kit.ts';
 import { answerOwnAgent, LOGIN, logIn, loginLink, opener, ownAgent, serveLogin } from './login.ts';
 
 it('prints the link, opens it with the host opener, waits for the confirmation and stores the credential, reading nothing from standard input', async () => {
@@ -113,6 +113,32 @@ it('redeems a login code once with the machine label, stores both credentials an
     user: 'user-one',
     credential: 'ahp_code_credential',
   });
+});
+
+it('connects from a read-only home with its Kit home under the temporary directory, naming the skills, the Codex rule and the Git helper it could not place', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const { temporary, kitHome } = await readOnlyHome(home);
+  house.route('POST', '/kit/token', () => ({
+    body: { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one', headless_credential: 'ahp_code_credential' },
+  }));
+
+  const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOME: home, TMPDIR: temporary, CODEX_HOME: '', ...LOGIN_SHELL });
+
+  expect(await login.exited).toBe(0);
+  expect(login.stdout()).toBe(`Environment environment-one is connected to ${house.origin}.\n`);
+  expect(login.stderr().split('\n')).toEqual([
+    expect.stringMatching(/^kit: the skills could not be placed: EACCES: /),
+    expect.stringMatching(/^kit: Codex's rule for house could not be written: EACCES: /),
+    expect.stringMatching(/^kit: git config failed: .*\.gitconfig/),
+    '',
+  ]);
+  expect(JSON.parse(await readFile(join(kitHome, 'credential.json'), 'utf8'))).toEqual({
+    house: house.origin,
+    environment: 'environment-one',
+    credential: 'ahk_code_credential',
+  });
+  expect(await ownAgent(kitHome)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_code_credential' });
 });
 
 async function placeHouse(directory: string): Promise<string> {

@@ -241,7 +241,7 @@ export async function installAdapter(kind: string, signal?: AbortSignal): Promis
   if ((await installedAdapter(kind)) === release) return null;
   const ran = await run(
     'npm',
-    ['install', '--prefix', prefix(kind), '--no-save', '--no-audit', '--no-fund', '--omit=optional', `${adapter.package}@${release}`],
+    ['install', '--prefix', prefix(kind), '--cache', join(kitHome(), 'npm-cache'), '--no-save', '--no-audit', '--no-fund', '--omit=optional', `${adapter.package}@${release}`],
     INSTALL_MS,
     true,
     signal,

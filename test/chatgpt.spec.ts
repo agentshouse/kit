@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { certificate, startHouse, type House } from './double.ts';
-import { entriesUnder, placeKitHouse, runKit, temporaryHome } from './kit.ts';
+import { entriesUnder, placeKitHouse, readOnlyHome, runKit, temporaryHome } from './kit.ts';
 import { ownAgent } from './login.ts';
 
 const KEY = 'ahp_script_key';
@@ -86,6 +86,45 @@ it('keeps a key House accepts in the default Kit home, says so in one line and r
     [`Bearer ${KEY}`, 'tools/list'],
     [`Bearer ${KEY}`, 'tools/call'],
   ]);
+});
+
+it('keeps the key in a Kit home of its own under the temporary directory when the home is read-only, and a plain house then finds it there', async () => {
+  const house = await startHouse(certificate());
+  serveKey(house);
+  const container = await freshContainer();
+  const { temporary, kitHome } = await readOnlyHome(container.home);
+  container.environment.TMPDIR = `${temporary}/`;
+
+  const kit = runKit(['chatgpt', '--key', KEY, '--house', house.origin], container.environment);
+
+  expect(await kit.exited).toBe(0);
+  expect(kit.stdout()).toBe(`house now calls ${house.origin} as you, with the key kept in ${kitHome}.\n`);
+  expect(kit.stderr()).toBe('');
+  expect(await entriesUnder(container.home)).toEqual([]);
+  expect((await stat(kitHome)).mode & 0o777).toBe(0o700);
+  expect(await ownAgent(kitHome)).toEqual({ house: house.origin, credential: KEY });
+
+  expect(await inContainer(container, 'house list_rooms')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
+  expect(calls(house)).toEqual([
+    [`Bearer ${KEY}`, 'tools/list'],
+    [`Bearer ${KEY}`, 'tools/call'],
+  ]);
+});
+
+it('refuses a Kit home under the temporary directory that is a symbolic link and writes nothing through it', async () => {
+  const house = await startHouse(certificate());
+  serveKey(house);
+  const container = await freshContainer();
+  const { temporary, kitHome } = await readOnlyHome(container.home);
+  container.environment.TMPDIR = temporary;
+  const elsewhere = await temporaryHome();
+  await symlink(elsewhere, kitHome);
+
+  const kit = runKit(['chatgpt', '--key', KEY, '--house', house.origin], container.environment);
+
+  expect(await kit.exited).toBe(1);
+  expect(kit.stderr()).toBe(`kit: ${kitHome} is a symbolic link\n`);
+  expect(await entriesUnder(elsewhere)).toEqual([]);
 });
 
 it('checks a new key with the House the Kit home already names when no --house is passed, and keeps it in place of the earlier key', async () => {

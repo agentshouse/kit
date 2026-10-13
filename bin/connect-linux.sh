@@ -6,7 +6,15 @@ VERSION='__KIT_VERSION__'
 NAME='house-kit'
 HOUSE='https://agents.house'
 WORKSPACE="$HOME/AgentsHouse"
-KIT_HOME="$HOME/.house-kit"
+if [[ -n "${HOUSE_KIT_HOME:-}" ]]; then
+  KIT_HOME=$HOUSE_KIT_HOME
+elif [[ -e "$HOME/.house-kit" || ( -w "$HOME" && -x "$HOME" ) ]]; then
+  KIT_HOME="$HOME/.house-kit"
+else
+  KIT_HOME=${TMPDIR:-${TMP:-${TEMP:-/tmp}}}
+  [[ "$KIT_HOME" == / ]] || KIT_HOME=${KIT_HOME%/}
+  KIT_HOME="$KIT_HOME/house-kit-$(id -u)"
+fi
 LINK='Open this link and confirm: '
 RECONNECT='run this command again with kit login appended'
 WORKSPACE_SELECTED=0
@@ -359,8 +367,8 @@ stop_native_service() {
 
 start_native_service() {
   # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
-  printf '[Unit]\nDescription=House Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' \
-    "$(id -un)" "$NATIVE_WORKSPACE" "$NATIVE_BIN" | elevated tee "$NATIVE_UNIT" >/dev/null &&
+  printf '[Unit]\nDescription=House Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nEnvironment="HOUSE_KIT_HOME=%s"\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' \
+    "$(id -un)" "$(unit_text "$KIT_HOME")" "$NATIVE_WORKSPACE" "$NATIVE_BIN" | elevated tee "$NATIVE_UNIT" >/dev/null &&
     elevated chmod 0644 "$NATIVE_UNIT" || refuse "$NATIVE_UNIT could not be written"
   elevated systemctl daemon-reload || refuse 'systemd could not read the House Kit service'
   elevated systemctl --quiet enable --now "$NATIVE_SERVICE" || refuse 'the House Kit service could not be started'
@@ -491,12 +499,12 @@ unit_text() {
 
 define_desktop_service() {
   if ((MACOS)); then
-    define "$LAUNCH_AGENT" "$(printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>%s</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s/kit</string>\n\t\t<string>resident</string>\n\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>HOUSE_KIT_WORKSPACE</key>\n\t\t<string>%s</string>\n\t</dict>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\t<key>StandardErrorPath</key>\n\t<string>%s/kit.log</string>\n</dict>\n</plist>\n' \
-      "$SERVICE" "$(xml_text "$NATIVE_BIN")" "$(xml_text "$WORKSPACE")" "$(xml_text "$KIT_HOME")")"
+    define "$LAUNCH_AGENT" "$(printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>%s</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s/kit</string>\n\t\t<string>resident</string>\n\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>HOUSE_KIT_HOME</key>\n\t\t<string>%s</string>\n\t\t<key>HOUSE_KIT_WORKSPACE</key>\n\t\t<string>%s</string>\n\t</dict>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\t<key>StandardErrorPath</key>\n\t<string>%s/kit.log</string>\n</dict>\n</plist>\n' \
+      "$SERVICE" "$(xml_text "$NATIVE_BIN")" "$(xml_text "$KIT_HOME")" "$(xml_text "$WORKSPACE")" "$(xml_text "$KIT_HOME")")"
   else
     # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
-    define "$USER_UNIT" "$(printf '[Unit]\nDescription=House Kit\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n' \
-      "$(unit_text "$WORKSPACE")" "$(unit_text "$NATIVE_BIN")")"
+    define "$USER_UNIT" "$(printf '[Unit]\nDescription=House Kit\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nEnvironment="HOUSE_KIT_HOME=%s"\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n' \
+      "$(unit_text "$KIT_HOME")" "$(unit_text "$WORKSPACE")" "$(unit_text "$NATIVE_BIN")")"
   fi
 }
 

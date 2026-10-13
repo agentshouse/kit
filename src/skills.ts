@@ -59,6 +59,14 @@ async function install(): Promise<void> {
 }
 
 export async function placeSkillSet(): Promise<void> {
+  try {
+    await replaceSkillSet();
+  } catch (error) {
+    process.stderr.write(`kit: the skills could not be placed: ${(error as Error).message}\n`);
+  }
+}
+
+async function replaceSkillSet(): Promise<void> {
   const accepted = (await readConfiguration()).skills;
   const installed = await readHome<Installed>(RECORD);
   if (accepted && installed?.version === KIT_VERSION) return;
@@ -71,7 +79,8 @@ export async function placeSkillSet(): Promise<void> {
 }
 
 export async function createHowWeWork(bridge: Bridge): Promise<void> {
-  if ((await readHome<Installed>(RECORD)) === null || (await present(join(kitHome(), CREATED)))) return;
+  if (!(await readConfiguration()).skills || (await readHome<Installed>(RECORD))?.version === undefined) return;
+  if (await present(join(kitHome(), CREATED))) return;
   const created = await bridge.tool('edit', { changes: [{ op: 'create', path: HOW_WE_WORK, content: HOW_WE_WORK_TEXT }] });
   if (created.isError === true) {
     const text = created.content.map((content) => content.text).join('\n');

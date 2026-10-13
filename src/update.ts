@@ -96,6 +96,7 @@ function rerun(script: string, inputId: string, flags: string[]): Promise<Ack | 
       '--quiet',
       `--unit=${unit(inputId)}`,
       `--setenv=HOME=${homedir()}`,
+      `--setenv=HOUSE_KIT_HOME=${kitHome()}`,
       '/bin/sh',
       '-c',
       record(),

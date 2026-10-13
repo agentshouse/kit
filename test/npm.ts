@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLIS } from '../src/clis.ts';
@@ -21,6 +22,7 @@ export function placeAdapter(prefix: string, kind: string, version: string): voi
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   recordStart('npm');
   const argv = process.argv.slice(2);
+  mkdirSync(argv.includes('--cache') ? argv[argv.indexOf('--cache') + 1]! : process.env.npm_config_cache || join(homedir(), '.npm'), { recursive: true });
   const home = process.env.HOUSE_KIT_HOME!;
   appendFileSync(join(home, 'npm.log'), `${JSON.stringify(argv)}\n`);
   const prefix = argv[argv.indexOf('--prefix') + 1]!;
