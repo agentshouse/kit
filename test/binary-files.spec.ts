@@ -232,3 +232,117 @@ it("downloads an incoming message's direct file into the conversation's fixed fo
   expect(own.files.size).toBe(1);
   expect(await copyState(hosted, own)).toEqual(before);
 });
+
+it("attaches local files to a record: describes each to House, sends the bytes of every file House asks for, and appends again", async () => {
+  const hosted = await hostKit();
+  const PDF = Buffer.from('%PDF-1.4\n%%EOF\n');
+  await writeFile(join(hosted.workingDirectory, 'photo.jpg'), JPEG);
+  await mkdir(join(hosted.workingDirectory, 'mail'));
+  await writeFile(join(hosted.workingDirectory, 'mail', 'invoice.pdf'), PDF);
+  const transfers: Received[] = [];
+  const staged = new Set<string>([digest(JPEG)]);
+  hosted.tools.append_record = (args) => {
+    const missing = (args.attachments as Array<{ sha256: string }>).filter((file) => !staged.has(file.sha256));
+    return {
+      content: [
+        {
+          type: 'text',
+          text: stringify(
+            missing.length === 0
+              ? { record: 'rec_1' }
+              : {
+                  upload: missing.map((file, index) => ({
+                    sha256: file.sha256,
+                    method: 'POST',
+                    operation: `operation-${index + 1}`,
+                    url: `${hosted.house.origin}/bytes/stage-${index + 1}`,
+                    expires_at: '2026-10-13T12:00:00Z',
+                  })),
+                },
+          ).trimEnd(),
+        },
+      ],
+    };
+  };
+  hosted.house.route('POST', '/bytes/:grant', (received) => {
+    transfers.push(received);
+    staged.add(digest(received.body as Buffer));
+    return { body: { file: 'bf_1' } };
+  });
+  await opened(hosted);
+
+  const appended = await ran(
+    hosted,
+    '@house append_record {"room_ref":"r_notes","source_ref":"s_mail","body":"scan","attachments":["photo.jpg","mail/invoice.pdf"]}',
+  );
+
+  const described = {
+    room_ref: 'r_notes',
+    source_ref: 's_mail',
+    body: 'scan',
+    attachments: [
+      { name: 'photo.jpg', bytes: JPEG.length, sha256: digest(JPEG), media_type: 'image/jpeg' },
+      { name: 'invoice.pdf', bytes: PDF.length, sha256: digest(PDF), media_type: 'application/pdf' },
+    ],
+  };
+  expect(appended).toMatchObject({ status: 0, stdout: 'record: rec_1\n', stderr: '' });
+  expect(hosted.mcp.map((received) => [called(received).name, called(received).arguments])).toEqual([
+    ['append_record', described],
+    ['append_record', described],
+  ]);
+  expect(transfers.map((transfer) => [transfer.headers['x-house-byte-operation'], transfer.body])).toEqual([['operation-1', PDF]]);
+});
+
+it('sends the bytes again when House asks for them again, and answers only the appended record', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.workingDirectory, 'photo.jpg'), JPEG);
+  const transfers: Received[] = [];
+  const staged = new Set<string>();
+  hosted.tools.append_record = () => ({
+    content: [
+      {
+        type: 'text',
+        text: stringify(
+          staged.has(digest(JPEG))
+            ? { record: 'rec_1' }
+            : {
+                upload: [
+                  {
+                    sha256: digest(JPEG),
+                    method: 'POST',
+                    operation: `operation-${transfers.length + 1}`,
+                    url: `${hosted.house.origin}/bytes/stage-${transfers.length + 1}`,
+                    expires_at: '2026-10-13T12:00:00Z',
+                  },
+                ],
+              },
+        ).trimEnd(),
+      },
+    ],
+  });
+  hosted.house.route('POST', '/bytes/:grant', (received) => {
+    transfers.push(received);
+    if (transfers.length > 1) staged.add(digest(received.body as Buffer));
+    return { body: { file: 'bf_1' } };
+  });
+  await opened(hosted);
+
+  const appended = await ran(hosted, '@house append_record {"room_ref":"r_notes","source_ref":"s_mail","attachments":["photo.jpg"]}');
+
+  expect(appended).toMatchObject({ status: 0, stdout: 'record: rec_1\n', stderr: '' });
+  expect(hosted.mcp.map((received) => called(received).name)).toEqual(['append_record', 'append_record', 'append_record']);
+  expect(transfers.map((transfer) => [transfer.headers['x-house-byte-operation'], transfer.body])).toEqual([
+    ['operation-1', JPEG],
+    ['operation-2', JPEG],
+  ]);
+});
+
+it('refuses a record attachment that is no readable local file before calling House', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+
+  const appended = await ran(hosted, '@house append_record {"room_ref":"r_notes","source_ref":"s_mail","attachments":["missing.pdf"]}');
+
+  expect(appended).toMatchObject({ status: 1, stdout: '', stderr: 'house: missing.pdf is not a readable file\n' });
+  expect(hosted.mcp).toEqual([]);
+});

@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { request, setGlobalProxyFromEnv } from 'node:http';
-import { dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { ToolResult } from './bridge.ts';
 import { verified } from './files.ts';
 import { HOUSE_REF } from './git.ts';
@@ -18,8 +18,22 @@ interface Tool {
   inputSchema: unknown;
 }
 
+interface Grant {
+  url: string;
+  operation: string;
+}
+
 interface Declared {
-  upload?: { url: string; operation: string };
+  upload?: Grant;
+}
+
+interface Staged {
+  upload?: Array<Grant & { sha256: string }>;
+}
+
+interface Described {
+  bytes: Buffer;
+  description: { bytes: number; sha256: string; media_type?: string };
 }
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
@@ -191,20 +205,48 @@ async function download(args: string[]): Promise<string> {
   return written;
 }
 
-async function upload({ file, ...destination }: Record<string, unknown>): Promise<string> {
-  if (typeof file !== 'string' || file === '') throw new Error('upload needs "file", a local file');
+async function described(file: string): Promise<Described> {
   const bytes = await localFile(file);
   const mediaType = MEDIA_TYPES.get(extname(file).slice(1).toLowerCase());
-  const answer = await called('upload', {
-    ...destination,
-    bytes: bytes.length,
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-    ...(mediaType === undefined ? {} : { media_type: mediaType }),
-  });
+  return {
+    bytes,
+    description: {
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      ...(mediaType === undefined ? {} : { media_type: mediaType }),
+    },
+  };
+}
+
+async function upload({ file, ...destination }: Record<string, unknown>): Promise<string> {
+  if (typeof file !== 'string' || file === '') throw new Error('upload needs "file", a local file');
+  const { bytes, description } = await described(file);
+  const answer = await called('upload', { ...destination, ...description });
   const declared = parse(answer) as Declared;
   if (declared.upload === undefined) return answer;
   const written: unknown = JSON.parse(await sent(declared.upload.url, bytes, declared.upload.operation));
   return stringify(written, { lineWidth: 0 }).trimEnd();
+}
+
+async function appendRecord(args: Record<string, unknown>): Promise<string> {
+  const held = new Map<string, Buffer>();
+  const attachments = Array.isArray(args.attachments)
+    ? await Promise.all(
+        args.attachments.map(async (attachment: unknown) => {
+          if (typeof attachment !== 'string') return attachment;
+          const { bytes, description } = await described(attachment);
+          held.set(description.sha256, bytes);
+          return { name: basename(attachment), ...description };
+        }),
+      )
+    : args.attachments;
+  const record = { ...args, attachments };
+  for (;;) {
+    const answer = await called('append_record', record);
+    const { upload } = parse(answer) as Staged;
+    if (upload === undefined) return answer;
+    for (const grant of upload) await sent(grant.url, held.get(grant.sha256)!, grant.operation);
+  }
 }
 
 function unexpected(argument: string, usage: string): Error {
@@ -269,7 +311,7 @@ async function house(args: string[]): Promise<string> {
     return [...(tool.description === undefined ? [] : [tool.description]), JSON.stringify(tool.inputSchema)].join('\n');
   }
   const parsed = argumentsOf(argument);
-  return verb === 'upload' ? upload(parsed) : called(verb, parsed);
+  return verb === 'upload' ? upload(parsed) : verb === 'append_record' ? appendRecord(parsed) : called(verb, parsed);
 }
 
 async function called(name: string, args: Record<string, unknown>): Promise<string> {
