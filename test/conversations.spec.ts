@@ -8,6 +8,17 @@ import { placeHostKey, temporaryHome } from './kit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])("leaves %s on its own default model and effort when the Profile names neither", async (kind) => {
+  const hosted = await hostKit([{ kind, model: null, effort: null }]);
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  const log = await hosted.adapterLog();
+  expect(log.some((entry) => entry.method === 'session/new')).toBe(true);
+  expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => (entry.params as { configId: string }).configId)).toEqual(
+    kind === 'grok-build' ? [] : ['mode'],
+  );
+});
+
 it('opens the provider session in the launch directory with the route settings and full access and reports its id', async () => {
   const hosted = await hostKit([{ model: 'gpt-route', effort: 'high' }]);
 

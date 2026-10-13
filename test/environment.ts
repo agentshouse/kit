@@ -127,7 +127,7 @@ export interface RouteOverrides {
   kind?: string;
   base_instructions?: string;
   working_directory?: string;
-  model?: string;
+  model?: string | null;
   effort?: string | null;
   mode?: string | null;
 }

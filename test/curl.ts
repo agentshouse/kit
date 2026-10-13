@@ -62,6 +62,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     serve(artifact, process.argv[process.argv.indexOf('-o') + 1]!);
   } else {
     const kind = Object.keys(CLIS).find((candidate) => CLIS[candidate]!.install.includes(` ${url} `))!;
+    if (existsSync(join(process.env.HOUSE_KIT_HOME!, `install-stall-${kind}`))) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+    }
     process.stdout.write(
       [
         `if grep -qx ${kind} "$HOUSE_KIT_HOME/install-fail" 2>/dev/null; then cat "$HOUSE_KIT_HOME/install-output" 2>/dev/null; echo "Checksum verification failed" >&2; exit 1; fi`,

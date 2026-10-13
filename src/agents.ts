@@ -14,7 +14,7 @@ export interface Route {
   kind: string;
   base_instructions: string;
   working_directory: string;
-  model: string;
+  model: string | null;
   effort: string | null;
   mode: string | null;
 }
@@ -347,6 +347,7 @@ export class Agents {
     const known = this.readings.get(kind);
     if (known !== undefined && known.failure === null && known.minimum === undefined) return;
     await this.examine(kind, SIGNED_OUT, offer);
+    await this.report();
   }
 
   private async send(): Promise<void> {

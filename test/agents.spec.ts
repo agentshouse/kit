@@ -39,6 +39,13 @@ beforeEach(async () => {
   });
 });
 
+function completeReports(): Record<string, unknown>[] {
+  return reports.filter((report) => {
+    const agents = report.agents as { kind: string }[];
+    return desired.every((kind) => agents.some((agent) => agent.kind === kind));
+  });
+}
+
 async function logged(name: string): Promise<string[]> {
   const log = await readFile(join(home, name), 'utf8').catch(() => '');
   return log.split('\n').filter((line) => line !== '');
@@ -64,6 +71,22 @@ async function probes(): Promise<number> {
   return (await logged('adapter.log')).filter((line) => line.includes('"method":"session/new"')).length;
 }
 
+it('reports a present signed-in CLI with its models while another CLI is still installing', async () => {
+  desired = ['claude-agent-acp', 'codex-acp'];
+  await signIn('codex-acp');
+  await start(async () => {
+    await rm(join(userBin(home), 'claude'));
+    await writeFile(join(home, 'install-stall-claude-agent-acp'), '');
+  });
+  await until(async () => (await logged('curl.log')).includes('https://claude.ai/install.sh'));
+  const report = await until(() => reports.find((report) =>
+    (report.agents as { kind: string; signed_in: boolean }[]).some((agent) => agent.kind === 'codex-acp' && agent.signed_in),
+  ));
+  expect(report.agents).toEqual([
+    expect.objectContaining({ kind: 'codex-acp', signed_in: true, models: expect.arrayContaining([expect.objectContaining({ model: 'gpt-5.5' })]) }),
+  ]);
+});
+
 it('pins in its package only the Codex and Claude Code adapters, no CLI and no Grok Build package', () => {
   expect(Object.keys(PINNED).sort()).toEqual(['@agentclientprotocol/claude-agent-acp', '@agentclientprotocol/codex-acp']);
   expect(Object.keys({ ...KIT_PACKAGE.dependencies, ...PINNED }).join(' ')).not.toMatch(/grok|@openai\/codex|claude-code/);
@@ -73,14 +96,15 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
   desired = ['codex-acp', 'grok-build'];
   await start();
 
-  await until(() => reports[0]);
+  await until(() => completeReports()[0]);
   expect(await adapterInstalls()).toEqual([`@agentclientprotocol/codex-acp@${PINNED['@agentclientprotocol/codex-acp']}`]);
 
+  reports.length = 0;
   desired = ['codex-acp', 'claude-agent-acp'];
   const socket = await until(() => house.sockets[0]);
   socket.send({ type: 'work_available', subject: 'agents' });
 
-  await until(() => reports[1]);
+  await until(() => completeReports()[0]);
   expect((await adapterInstalls()).slice(1)).toEqual([
     `@agentclientprotocol/claude-agent-acp@${PINNED['@agentclientprotocol/claude-agent-acp']}`,
   ]);
@@ -94,7 +118,7 @@ it("installs a pinned adapter from a read-only home, keeping npm's cache in Kit 
   await readOnlyHome(readOnly);
   await start(undefined, [], { HOME: readOnly, npm_config_cache: '' });
 
-  expect(await until(() => reports[0])).toMatchObject({ agents: [{ kind: 'codex-acp', failure: null }] });
+  expect(await until(() => completeReports()[0])).toMatchObject({ agents: [{ kind: 'codex-acp', failure: null }] });
   expect(await adapterInstalls()).toEqual([`@agentclientprotocol/codex-acp@${PINNED['@agentclientprotocol/codex-acp']}`]);
   expect((await stat(join(home, 'npm-cache'))).isDirectory()).toBe(true);
 });
@@ -104,7 +128,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
   await signIn(...desired);
   await start();
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report).toEqual({
     os: expect.stringMatching(/\S/),
@@ -171,7 +195,7 @@ it('installs each chosen CLI the login shell does not find through its official 
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await start(() => rm(userBin(home), { recursive: true }));
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report.agents).toEqual(desired.map((kind) => expect.objectContaining({ kind, release: RELEASES[kind], failure: null })));
   expect((await logged('curl.log')).sort()).toEqual([
@@ -188,7 +212,7 @@ it('installs each chosen CLI the login shell does not find through its official 
   reports.length = 0;
   kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeBin(home), ...LOGIN_SHELL });
 
-  expect((await until(() => reports[0])).agents).toEqual(report.agents);
+  expect((await until(() => completeReports()[0])).agents).toEqual(report.agents);
   expect(await logged('curl.log')).toHaveLength(3);
 });
 
@@ -199,7 +223,7 @@ it('installs a chosen CLI the login shell does not find though its profile print
     await writeFile(join(home, '.profile'), `echo "$HOME"\n${await readFile(join(home, '.profile'), 'utf8')}`);
   });
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report.agents).toEqual([expect.objectContaining({ kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'], failure: null })]);
   expect(await logged('curl.log')).toEqual(['https://claude.ai/install.sh']);
@@ -212,7 +236,7 @@ it("reports a CLI whose official install failed with no release and the installe
     await writeFile(join(home, 'install-fail'), 'claude-agent-acp\n');
   });
 
-  const failed = await until(() => reports[0]);
+  const failed = await until(() => completeReports()[0]);
 
   expect(failed.agents).toEqual([
     expect.objectContaining({ kind: 'codex-acp', release: RELEASES['codex-acp'] }),
@@ -223,7 +247,7 @@ it("reports a CLI whose official install failed with no release and the installe
   await rm(join(home, 'install-fail'));
   house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
 
-  const recovered = await until(() => reports[1]);
+  const recovered = await until(() => completeReports()[1]);
   expect(recovered.agents).toEqual([
     expect.objectContaining({ kind: 'codex-acp', release: RELEASES['codex-acp'] }),
     { kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'], failure: null, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
@@ -238,7 +262,7 @@ it("keeps the end of a long installer output as the cause, so it stays within wh
     await writeFile(join(home, 'install-output'), `${'Downloading Grok Build\n'.repeat(400)}`);
   });
 
-  const [grok] = (await until(() => reports[0])).agents as { failure: string }[];
+  const [grok] = (await until(() => completeReports()[0])).agents as { failure: string }[];
 
   expect(grok!.failure).toHaveLength(4000);
   expect(grok!.failure.endsWith('Downloading Grok Build\nChecksum verification failed')).toBe(true);
@@ -248,7 +272,7 @@ it("reports a CLI whose adapter failed to install with no release and npm's caus
   desired = ['claude-agent-acp'];
   await start(() => writeFile(join(home, 'npm-fail'), '@agentclientprotocol/claude-agent-acp'));
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report.agents).toEqual([
     {
@@ -268,7 +292,7 @@ it("names npm's exit status as the cause of an adapter install that failed witho
   desired = ['claude-agent-acp'];
   await start(() => writeFile(join(home, 'npm-mute'), '@agentclientprotocol/claude-agent-acp'));
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report.agents).toEqual([
     { kind: 'claude-agent-acp', release: null, failure: 'npm exited with 1', signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
@@ -282,7 +306,7 @@ it('reports a CLI below its minimum with the version found and the minimum, and 
     placeUserCli(userBin(home), 'codex-acp', '0.150.0');
   });
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report.agents).toEqual([
     {
@@ -304,12 +328,12 @@ it('reads a CLI below its minimum again at a later work frame and reports the re
   await start(async () => {
     placeUserCli(userBin(home), 'codex-acp', '0.150.0');
   });
-  expect((await until(() => reports[0])).agents).toEqual([expect.objectContaining({ kind: 'codex-acp', release: '0.150.0', minimum: '0.159.1' })]);
+  expect((await until(() => completeReports()[0])).agents).toEqual([expect.objectContaining({ kind: 'codex-acp', release: '0.150.0', minimum: '0.159.1' })]);
 
   placeUserCli(userBin(home), 'codex-acp', '0.160.0');
   house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
 
-  const [current] = (await until(() => reports[1])).agents as Record<string, unknown>[];
+  const [current] = (await until(() => completeReports()[1])).agents as Record<string, unknown>[];
   expect(current).toMatchObject({ kind: 'codex-acp', release: '0.160.0', failure: null });
   expect(current).not.toHaveProperty('minimum');
 });
@@ -319,7 +343,7 @@ it('reports a model its CLI refuses to select with no efforts before the Kit rea
   await signIn('claude-agent-acp');
   await start(() => writeFile(join(home, 'refuse-model'), 'sonnet'));
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report.agents).toEqual([
     {
@@ -343,7 +367,7 @@ it('reads the models when it starts and on no timer after it, though House names
   desired = ['codex-acp'];
   await signIn('codex-acp');
   await start(undefined, FAST_INTERVALS);
-  await until(() => reports[0]);
+  await until(() => completeReports()[0]);
   await mkdir(join(home, 'models'));
   await writeFile(join(home, 'models', 'codex-acp'), JSON.stringify([{ id: 'gpt-5.5', name: '5.5', efforts: ['high'] }]));
 
@@ -352,14 +376,14 @@ it('reads the models when it starts and on no timer after it, though House names
   await new Promise((resolve) => setTimeout(resolve, 1500));
 
   expect(await probes()).toBe(1);
-  expect(reports).toHaveLength(1);
+  expect(completeReports()).toHaveLength(1);
 });
 
 it('reports the SHA256 fingerprint of the host SSH key when the host has one', async () => {
   desired = [];
   await start(() => placeHostKey(home));
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report.ssh_host_key).toBe(HOST_KEY);
 });
@@ -369,7 +393,7 @@ it('creates and reports the agents folder of the native workspace root as its Ag
   const workspace = await temporaryHome();
   await start(undefined, [], { HOUSE_KIT_WORKSPACE: workspace });
 
-  const report = await until(() => reports[0]);
+  const report = await until(() => completeReports()[0]);
 
   expect(report.agent_base).toBe(join(workspace, 'agents'));
   expect((await stat(join(workspace, 'agents'))).isDirectory()).toBe(true);
@@ -388,12 +412,12 @@ it.each([
   };
   await start(placeSudo, node, environment);
 
-  expect((await until(() => reports[0])).updates_itself).toBe(updates);
+  expect((await until(() => completeReports()[0])).updates_itself).toBe(updates);
 });
 
 it('reports that it does not update itself on macOS', async () => {
   desired = [];
   await start(undefined, [], { ...USER_SERVICE, ...(await macOS(home)) });
 
-  expect(await until(() => reports[0])).toMatchObject({ os: 'macOS 27.0.1', updates_itself: false });
+  expect(await until(() => completeReports()[0])).toMatchObject({ os: 'macOS 27.0.1', updates_itself: false });
 });
