@@ -6,10 +6,10 @@ import { dirname, extname, join, resolve } from 'node:path';
 import type { ToolResult } from './bridge.ts';
 import { verified } from './files.ts';
 import { HOUSE_REF } from './git.ts';
-import { kitHome, readEnrolment, readOwnAgent } from './home.ts';
+import { kitHome, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
-import { relayed } from './relay.ts';
+import { relayed, selectRelay } from './relay.ts';
 import { parse, stringify } from 'yaml';
 
 interface Tool {
@@ -126,7 +126,7 @@ async function bridged(
 async function direct(message: Message): Promise<string> {
   const ownAgent = await readOwnAgent();
   if (ownAgent === null) throw new Error(UNCONNECTED);
-  await readEnrolment();
+  selectRelay(process.env.HOUSE_KIT_RELAY || ownAgent.relay);
   setGlobalProxyFromEnv();
   const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
     throw new Error(UNREACHABLE);

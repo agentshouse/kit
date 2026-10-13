@@ -116,18 +116,21 @@ export async function login(argv: string[]): Promise<void> {
   }
   await placeSkillSet();
   await writeCodexRule().catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
+  const relayRecord = relay === undefined ? {} : { relay };
   await writeEnrolment({
     house,
-    ...(relay === undefined ? {} : { relay }),
+    ...relayRecord,
     environment: exchanged.environment,
     credential: exchanged.credential,
   });
   process.stdout.write(`Environment ${exchanged.environment} is connected to ${house}.\n`);
   if (exchanged.headless_credential !== undefined) {
-    await writeOwnAgent({ house, user: exchanged.user, credential: exchanged.headless_credential });
+    await writeOwnAgent({ house, ...relayRecord, user: exchanged.user, credential: exchanged.headless_credential });
   } else if (held && ownAgent !== null && ownAgent.user !== exchanged.user) {
     await forgetOwnAgent();
     process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
+  } else if (held && ownAgent !== null) {
+    await writeOwnAgent({ house, ...relayRecord, user: ownAgent.user, credential: ownAgent.credential });
   }
   await placeAppGit(ownAgent, await readOwnAgent()).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
   try {

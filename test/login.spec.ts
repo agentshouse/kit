@@ -238,6 +238,7 @@ it('records the login-code relay and the resident uses it without an ambient var
     environment: 'environment-one',
     credential: 'ahk_code_credential',
   });
+  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_code_credential', relay: relay.origin });
 
   relay.route('POST', `${prefix}/kit/restarted`, () => ({ body: {} }));
   relay.route('POST', `${prefix}/kit/agents/desired`, () => ({
@@ -286,6 +287,7 @@ it('clears a recorded relay when a later bare login has no relay variable', asyn
     environment: 'environment-one',
     credential: 'ahk_direct',
   });
+  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_code_credential' });
 });
 
 it.each([

@@ -20,6 +20,7 @@ export async function chatgpt(argv: string[]): Promise<void> {
   if (values.key === undefined) throw new Error(`pass --key with a key from ${KEY_SOURCE}`);
   const house = values.house ?? (await readOwnAgent())?.house ?? DEFAULT_HOUSE;
   if (!(await accepted(house, values.key))) throw new Error(`${house} does not accept this key; pass one from ${KEY_SOURCE}`);
-  await writeOwnAgent({ house, credential: values.key });
+  const relay = process.env.HOUSE_KIT_RELAY || undefined;
+  await writeOwnAgent({ house, ...(relay === undefined ? {} : { relay }), credential: values.key });
   process.stdout.write(`house now calls ${house} as you, with the key kept in ${kitHome()}.\n`);
 }

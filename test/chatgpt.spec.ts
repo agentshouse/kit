@@ -16,8 +16,8 @@ interface Container {
   environment: Record<string, string>;
 }
 
-function serveKey(house: House): void {
-  house.route('POST', '/', ({ body, headers }) => {
+function serveKey(house: House, path = '/'): void {
+  house.route('POST', path, ({ body, headers }) => {
     if (headers.authorization !== `Bearer ${KEY}`) return { status: 401, body: {} };
     const message = body as { id: string; method: string };
     const result = message.method === 'tools/list' ? { tools: [] } : { content: [{ type: 'text', text: 'room_ref: r_one' }] };
@@ -86,6 +86,36 @@ it('keeps a key House accepts in the default Kit home, says so in one line and r
     [`Bearer ${KEY}`, 'tools/list'],
     [`Bearer ${KEY}`, 'tools/call'],
   ]);
+});
+
+it('records the relay kit chatgpt ran through beside the key, so a plain house calls through it and HOUSE_KIT_RELAY still wins', async () => {
+  const house = await startHouse();
+  const prefix = `/${new URL(house.origin).host}`;
+  const relay = await startHouse(certificate());
+  const other = await startHouse(certificate());
+  serveKey(relay, `${prefix}/`);
+  serveKey(other, `${prefix}/`);
+  const container = await freshContainer();
+
+  const kit = runKit(['chatgpt', '--key', KEY, '--house', house.origin], { ...container.environment, HOUSE_KIT_RELAY: relay.origin });
+
+  expect(await kit.exited).toBe(0);
+  expect(await ownAgent(container.kitHome)).toEqual({ house: house.origin, relay: relay.origin, credential: KEY });
+
+  expect(await inContainer(container, 'house list_rooms')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
+  expect(calls(relay)).toEqual([
+    [`Bearer ${KEY}`, 'tools/list'],
+    [`Bearer ${KEY}`, 'tools/call'],
+  ]);
+
+  expect(await inContainer(container, `HOUSE_KIT_RELAY=${other.origin} house list_rooms`)).toEqual({
+    status: 0,
+    stdout: 'room_ref: r_one\n',
+    stderr: '',
+  });
+  expect(calls(other)).toEqual([[`Bearer ${KEY}`, 'tools/call']]);
+  expect(relay.requests).toHaveLength(2);
+  expect(house.requests).toEqual([]);
 });
 
 it('keeps the key in a Kit home of its own under the temporary directory when the home is read-only, and a plain house then finds it there', async () => {
