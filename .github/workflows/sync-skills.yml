@@ -1,0 +1,43 @@
+name: Follow the upstream skills
+
+on:
+  schedule:
+    # Upstream changes its skills a few times a week, so a daily sync keeps the installed set at most a day behind.
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-skills
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - run: npm install --global --ignore-scripts npm@11.19.0
+      - run: npm run sync-skills
+      - name: Land the changed set and publish it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git add --all skills skills-upstream.json
+          if git diff --cached --quiet; then
+            echo "The skills already follow upstream"
+            exit 0
+          fi
+          commit=$(node -p "require('./skills-upstream.json').commit")
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet --message "The skills follow mattpocock/skills at $commit"
+          git push origin HEAD:main
+          gh workflow run publish.yml --ref main

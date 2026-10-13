@@ -1,9 +1,8 @@
 ---
 name: to-questionnaire
 description: Turn a decision you can't fully answer into a questionnaire for someone else to fill in.
+disable-model-invocation: true
 ---
-
-<!-- Vendored from mattpocock/skills at commit c55ee46073ed923f86ce59a5eb3b6d895095d1b7 (skills/productivity/to-questionnaire). MIT licensed — see LICENSE in this directory. -->
 
 Turn something the user can't answer alone into a **questionnaire**: a Markdown document they hand to one person to fill in async, or fill out together over a meeting. The recipient holds knowledge the user lacks; the questionnaire pulls it out of them.
 

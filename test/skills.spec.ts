@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { basename, join, relative } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
@@ -14,8 +14,14 @@ const HOW_WE_WORK_TEXT = await readFile(new URL('../how-we-work.md', import.meta
 const { version: KIT_VERSION } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
 };
-const LEFT_OUT = ['setup-matt-pocock-skills', 'triage', 'wizard'];
-const PROVENANCE = /^<!-- Vendored from mattpocock\/skills at commit ([0-9a-f]{40}) \(/m;
+const UPSTREAM = JSON.parse(await readFile(new URL('../skills-upstream.json', import.meta.url), 'utf8')) as {
+  repository: string;
+  commit: string;
+  date: string;
+};
+const CATEGORIES = ['engineering', 'productivity'];
+const LEFT_OUT = 'setup-matt-pocock-skills';
+const [FIRST, SECOND] = (await readdir(SKILL_SET)).sort();
 const RECORD = 'skill-set.json';
 const DOCUMENT = '/rooms/private/how-we-work.md';
 
@@ -38,18 +44,6 @@ async function upstreamAt(commit: string): Promise<string> {
   await writeFile(join(root, 'skills.tar.gz'), Buffer.from(await answer.arrayBuffer()));
   execFileSync('tar', ['-xzf', join(root, 'skills.tar.gz'), '-C', root]);
   return join(root, `skills-${commit}`);
-}
-
-function vendoredSkill(upstream: string, commit: string, path: string): string {
-  const lines = upstream.split('\n');
-  const end = lines.indexOf('---', 1);
-  return [
-    ...lines.slice(0, end).filter((line) => line !== 'disable-model-invocation: true'),
-    '---',
-    '',
-    `<!-- Vendored from mattpocock/skills at commit ${commit} (${path}). MIT licensed — see LICENSE in this directory. -->`,
-    ...lines.slice(end + 1),
-  ].join('\n');
 }
 
 async function recorded(home: string): Promise<{ version?: string; names: string[] } | null> {
@@ -103,40 +97,30 @@ function conflicted(code: string): ToolResult {
   };
 }
 
-it('vendors every skill the pinned upstream plugin manifest names but three, byte-identical but for the provenance header and the two invocation lines', async () => {
-  const vendored = await names();
-  const commits = new Set<string | undefined>();
-  for (const name of vendored) {
-    commits.add(PROVENANCE.exec(await readFile(join(SKILL_SET, name, 'SKILL.md'), 'utf8'))?.[1]);
-  }
-  expect(commits.size).toBe(1);
-  const [commit] = commits as Set<string>;
-  const upstream = await upstreamAt(commit);
-  const manifest = JSON.parse(await readFile(join(upstream, '.claude-plugin', 'plugin.json'), 'utf8')) as { skills: string[] };
-  const declared = manifest.skills.map((path) => path.replace(/^\.\//, '')).filter((path) => !LEFT_OUT.includes(basename(path)));
-  expect(declared).toHaveLength(manifest.skills.length - LEFT_OUT.length);
-
-  expect(vendored).toEqual(declared.map((path) => basename(path)).sort());
-  const license = await readFile(join(upstream, 'LICENSE'), 'utf8');
-  for (const path of declared) {
-    const name = basename(path);
-    const source = join(upstream, path);
-    const copy = join(SKILL_SET, name);
-    expect(await tree(copy), name).toEqual([...(await tree(source)), 'LICENSE'].sort());
-    for (const file of await tree(source)) {
-      const original = await readFile(join(source, file), 'utf8');
-      const expected =
-        file === 'SKILL.md'
-          ? vendoredSkill(original, commit, path)
-          : file === join('agents', 'openai.yaml')
-            ? original
-                .split('\n')
-                .filter((line) => line !== '  allow_implicit_invocation: false')
-                .join('\n')
-            : original;
-      expect(await readFile(join(copy, file), 'utf8'), `${name}/${file}`).toBe(expected);
+it('ships every engineering and productivity skill upstream has at the recorded commit but setup, verbatim, each with the upstream license', async () => {
+  expect(UPSTREAM).toEqual({
+    repository: 'https://github.com/mattpocock/skills',
+    commit: expect.stringMatching(/^[0-9a-f]{40}$/),
+    date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+  });
+  const upstream = await upstreamAt(UPSTREAM.commit);
+  const sources = new Map<string, string>();
+  for (const category of CATEGORIES) {
+    for (const entry of await readdir(join(upstream, 'skills', category), { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name !== LEFT_OUT) sources.set(entry.name, join(upstream, 'skills', category, entry.name));
     }
-    expect(await readFile(join(copy, 'LICENSE'), 'utf8'), `${name}/LICENSE`).toBe(license);
+  }
+
+  expect(await names()).toEqual([...sources.keys()].sort());
+  const license = await readFile(join(upstream, 'LICENSE'), 'utf8');
+  for (const [name, source] of sources) {
+    const copy = join(SKILL_SET, name);
+    const files = await tree(source);
+    expect(await tree(copy), name).toEqual([...new Set([...files, 'LICENSE'])].sort());
+    for (const file of files) {
+      expect(await readFile(join(copy, file), 'utf8'), `${name}/${file}`).toBe(await readFile(join(source, file), 'utf8'));
+    }
+    if (!files.includes('LICENSE')) expect(await readFile(join(copy, 'LICENSE'), 'utf8'), `${name}/LICENSE`).toBe(license);
   }
 });
 
@@ -188,39 +172,39 @@ it('makes no per-skill link when the Claude skill directory already resolves to 
 
 it('leaves a skill directory or link the record does not name untouched and installs nothing under its name', async () => {
   const home = await temporaryHome();
-  await mkdir(skills(home, 'tdd'), { recursive: true });
-  await writeFile(join(skills(home, 'tdd'), 'SKILL.md'), "the owner's tdd\n");
+  await mkdir(skills(home, FIRST), { recursive: true });
+  await writeFile(join(skills(home, FIRST), 'SKILL.md'), "the owner's skill\n");
   await mkdir(claude(home), { recursive: true });
   await mkdir(join(home, 'elsewhere'));
-  await symlink(join(home, 'elsewhere'), claude(home, 'grilling'));
+  await symlink(join(home, 'elsewhere'), claude(home, SECOND));
 
   await hostKit([{}], { home, skills: true });
 
-  expect(await readFile(join(skills(home, 'tdd'), 'SKILL.md'), 'utf8')).toBe("the owner's tdd\n");
-  await absent(claude(home, 'tdd'));
-  expect(await readlink(claude(home, 'grilling'))).toBe(join(home, 'elsewhere'));
-  await absent(skills(home, 'grilling'));
+  expect(await readFile(join(skills(home, FIRST), 'SKILL.md'), 'utf8')).toBe("the owner's skill\n");
+  await absent(claude(home, FIRST));
+  expect(await readlink(claude(home, SECOND))).toBe(join(home, 'elsewhere'));
+  await absent(skills(home, SECOND));
   expect(await recorded(home)).toEqual({
     version: KIT_VERSION,
-    names: (await names()).filter((name) => name !== 'tdd' && name !== 'grilling'),
+    names: (await names()).filter((name) => name !== FIRST && name !== SECOND),
   });
 });
 
 it('keeps an installed skill as the owner edited it while the Kit version is the same', async () => {
   const hosted = await hostKit([{}], { skills: true });
-  await writeFile(join(skills(hosted.home, 'tdd'), 'SKILL.md'), "the owner's own tdd\n");
+  await writeFile(join(skills(hosted.home, FIRST), 'SKILL.md'), "the owner's own skill\n");
 
   await restart(hosted, { skills: true });
 
-  expect(await readFile(join(skills(hosted.home, 'tdd'), 'SKILL.md'), 'utf8')).toBe("the owner's own tdd\n");
+  expect(await readFile(join(skills(hosted.home, FIRST), 'SKILL.md'), 'utf8')).toBe("the owner's own skill\n");
 });
 
 it('replaces only the names an earlier Kit version recorded when a new version starts', async () => {
   const hosted = await hostKit([{}], { skills: true });
   const home = hosted.home;
-  await writeFile(join(skills(home, 'tdd'), 'SKILL.md'), "the owner's own tdd\n");
-  await writeFile(join(skills(home, 'tdd'), 'notes.md'), 'an added file\n');
-  await rm(claude(home, 'grilling'));
+  await writeFile(join(skills(home, FIRST), 'SKILL.md'), "the owner's own skill\n");
+  await writeFile(join(skills(home, FIRST), 'notes.md'), 'an added file\n');
+  await rm(claude(home, SECOND));
   await mkdir(skills(home, 'retired'));
   await symlink(join('..', '..', '.agents', 'skills', 'retired'), claude(home, 'retired'));
   await mkdir(skills(home, 'my-tdd'));
@@ -229,13 +213,36 @@ it('replaces only the names an earlier Kit version recorded when a new version s
 
   await restart(hosted, { skills: true });
 
-  expect(await readFile(join(skills(home, 'tdd'), 'SKILL.md'), 'utf8')).toBe(await readFile(join(SKILL_SET, 'tdd', 'SKILL.md'), 'utf8'));
-  await absent(join(skills(home, 'tdd'), 'notes.md'));
-  expect(await readlink(claude(home, 'grilling'))).toBe(join('..', '..', '.agents', 'skills', 'grilling'));
+  expect(await readFile(join(skills(home, FIRST), 'SKILL.md'), 'utf8')).toBe(await readFile(join(SKILL_SET, FIRST, 'SKILL.md'), 'utf8'));
+  await absent(join(skills(home, FIRST), 'notes.md'));
+  expect(await readlink(claude(home, SECOND))).toBe(join('..', '..', '.agents', 'skills', SECOND));
   await absent(skills(home, 'retired'));
   await absent(claude(home, 'retired'));
   expect(await readFile(join(skills(home, 'my-tdd'), 'SKILL.md'), 'utf8')).toBe('my copy\n');
   expect(await recorded(home)).toEqual({ version: KIT_VERSION, names: await names() });
+});
+
+it("brings an updated upstream set with a new Kit version: a skill upstream dropped leaves both directories and one it added arrives", async () => {
+  const hosted = await hostKit([{}], { skills: true });
+  const home = hosted.home;
+  const current = await names();
+  const added = current.at(-1)!;
+  await rm(skills(home, added), { recursive: true });
+  await rm(claude(home, added));
+  await mkdir(skills(home, 'dropped-upstream'));
+  await writeFile(join(skills(home, 'dropped-upstream'), 'SKILL.md'), 'an earlier upstream skill\n');
+  await symlink(join('..', '..', '.agents', 'skills', 'dropped-upstream'), claude(home, 'dropped-upstream'));
+  const earlier = [...current.filter((name) => name !== added), 'dropped-upstream'].sort();
+  await writeFile(join(home, RECORD), JSON.stringify({ version: '0.2.1-c000000000000', names: earlier }));
+
+  await restart(hosted, { skills: true });
+
+  await absent(skills(home, 'dropped-upstream'));
+  await absent(claude(home, 'dropped-upstream'));
+  expect(await tree(skills(home, added))).toEqual(await tree(join(SKILL_SET, added)));
+  expect(await realpath(claude(home, added))).toBe(await realpath(skills(home, added)));
+  expect((await readdir(skills(home))).sort()).toEqual(current);
+  expect(await recorded(home)).toEqual({ version: KIT_VERSION, names: current });
 });
 
 it('removes every recorded skill and the record and installs nothing when the Skill set is declined', async () => {
@@ -344,7 +351,7 @@ it('creates the How-we-work document over the first conversation bridge after th
     `Bearer ${conversationCredential('conversation-1')}`,
   );
   expect(HOW_WE_WORK_TEXT.startsWith('# How we work\n')).toBe(true);
-  expect(HOW_WE_WORK_TEXT).toContain('- Glossary (`CONTEXT.md`): `glossary.md`\n- Decisions (ADRs): `decisions/NNNN-<slug>.md`\n');
+  expect(HOW_WE_WORK_TEXT).toContain('- Glossary (`GLOSSARY.md`): `glossary.md`\n- Decisions (ADRs): `decisions/NNNN-<slug>.md`\n');
   expect(HOW_WE_WORK_TEXT).not.toContain('library/');
 });
 

@@ -3,8 +3,6 @@ name: codebase-design
 description: Shared vocabulary for designing deep modules. Use when the user wants to design or improve a module's interface, find deepening opportunities, decide where a seam goes, make code more testable or AI-navigable, or when another skill needs the deep-module vocabulary.
 ---
 
-<!-- Vendored from mattpocock/skills at commit c55ee46073ed923f86ce59a5eb3b6d895095d1b7 (skills/engineering/codebase-design). MIT licensed — see LICENSE in this directory. -->
-
 # Codebase Design
 
 Design **deep modules**: a lot of behaviour behind a small interface, placed at a clean seam, testable through that interface. Use this language and these principles wherever code is being designed or restructured. The aim is leverage for callers, locality for maintainers, and testability for everyone.

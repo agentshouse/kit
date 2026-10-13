@@ -3,8 +3,6 @@ name: prototype
 description: Build a throwaway prototype to answer a design question. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like.
 ---
 
-<!-- Vendored from mattpocock/skills at commit c55ee46073ed923f86ce59a5eb3b6d895095d1b7 (skills/engineering/prototype). MIT licensed — see LICENSE in this directory. -->
-
 # Prototype
 
 A prototype is **throwaway code that answers a question**. The question decides the shape.
