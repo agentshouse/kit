@@ -35,6 +35,7 @@ const SANDBOXED = "your CLI's sandbox kept house from House; run house directly,
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
 const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
 const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
+const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 const socketPath = process.env.HOUSE_BRIDGE;
 const MEDIA_TYPES = new Map([
   ['avif', 'image/avif'],
@@ -64,14 +65,18 @@ const MEDIA_TYPES = new Map([
   ['zip', 'application/zip'],
 ]);
 
-function refused(path: string, method: string, status: number, text: string): string {
+function refused(path: string, method: string, status: number, text: string, local: boolean): string {
   const refusal = refusalOf(text);
   if (refusal !== null) return refusal.text;
   if (status === 401) return REVOKED;
   const act = method === 'GET' ? 'download' : 'upload';
   if (URL.canParse(path)) return `the ${act} answered ${status}; ${act} the file again`;
-  if (status === 502 && /^[A-Za-z]/.test(text)) return text;
-  return `${path} answered ${status}`;
+  if (status === 502 && local) return text;
+  return path === '/' ? unconfirmed(status) : `${path} answered ${status}`;
+}
+
+function unconfirmed(status: number): string {
+  return `House answered ${status} ${UNCONFIRMED}`;
 }
 
 function exchanged(
@@ -88,7 +93,18 @@ function exchanged(
       answer.on('end', () => {
         const bytes = Buffer.concat(chunks);
         if (answer.statusCode === 200) resolve(bytes);
-        else reject(new Error(refused(path, method, answer.statusCode!, bytes.toString('utf8'))));
+        else
+          reject(
+            new Error(
+              refused(
+                path,
+                method,
+                answer.statusCode!,
+                bytes.toString('utf8'),
+                answer.headers['content-type'] === undefined,
+              ),
+            ),
+          );
       });
     });
     sent.on('error', (error: NodeJS.ErrnoException) =>
@@ -116,7 +132,7 @@ async function direct(message: Message): Promise<string> {
     throw new Error(UNREACHABLE);
   });
   if (answer.status === 200) return answer.text;
-  throw new Error(answer.status === 401 ? DISCONNECTED : (refusalOf(answer.text)?.text ?? `House answered ${answer.status}`));
+  throw new Error(answer.status === 401 ? DISCONNECTED : (refusalOf(answer.text)?.text ?? unconfirmed(answer.status)));
 }
 
 async function mcp<T>(method: string, params: Record<string, unknown>): Promise<T> {
@@ -153,7 +169,7 @@ async function transferred(url: string, method: string, bytes?: Buffer, headers?
   });
   const received = Buffer.from(await answer.arrayBuffer());
   if (answer.status === 200) return received;
-  throw new Error(refused(url, method, answer.status, received.toString('utf8')));
+  throw new Error(refused(url, method, answer.status, received.toString('utf8'), false));
 }
 
 async function sent(url: string, bytes: Buffer, operation: string): Promise<string> {

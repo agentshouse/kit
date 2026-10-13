@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { access, chmod, writeFile } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -116,6 +117,39 @@ it("lists the Tools House lists to the User's own agent as its help, and never s
   expect(ran.status).toBe(0);
   for (const tool of LISTING) expect(ran.stdout).toContain(helpLine(tool));
   expect(house.requests.map((request) => request.headers.authorization)).toEqual(['Bearer ahp_own']);
+});
+
+it('says a write may have taken effect when House answers with no result, and to read before repeating it', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  house.route('POST', '/', () => ({ status: 502, bytes: { type: 'text/html', content: '<html>Bad Gateway</html>' } }));
+
+  const ran = await runHouse(home, ['edit', '{"changes":[]}']);
+
+  expect(ran).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: 'house: House answered 502 with no result; a write may or may not have taken effect, so read before you repeat it\n',
+  });
+});
+
+it.each([
+  ['the gateway in front of House', { 'content-type': 'application/json' }, 'Bad Gateway', `House answered 502 with no result; a write may or may not have taken effect, so read before you repeat it`],
+  ['the bridge itself', {}, 'House is unreachable; call again in a minute', 'House is unreachable; call again in a minute'],
+])("prints a bridged 502 from %s as that answer says", async (_from, headers: Record<string, string>, body, said) => {
+  const home = await temporaryHome();
+  const socket = join(home, 'bridge.sock');
+  const bridge = createHttpServer((request, response) => {
+    request.resume();
+    response.writeHead(502, headers).end(body);
+  });
+  bridge.listen(socket);
+  await once(bridge, 'listening');
+  onTestFinished(() => new Promise<void>((resolve) => bridge.close(() => resolve())));
+
+  const ran = await runHouse(home, ['--help'], socket);
+
+  expect(ran).toEqual({ status: 1, stdout: '', stderr: `house: ${said}\n` });
 });
 
 it("refuses a Tool call in one line naming kit login while Kit holds no connection for the User's own agent", async () => {
