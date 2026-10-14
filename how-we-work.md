@@ -4,6 +4,8 @@ A Room is where information people share is kept; it is not the place for
 private information. Work goes into the Room it belongs to, or the First Room
 when none is named.
 
+Every House answer carries the `url` of what it names; send the User that link.
+
 The skills are already set up; never run `setup-matt-pocock-skills`.
 
 ## Where skill output goes
