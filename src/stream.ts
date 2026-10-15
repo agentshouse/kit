@@ -24,6 +24,42 @@ interface Answered {
 const PATH = '/kit/stream';
 const SUBPROTOCOL = `house.kit.stream.${KIT_WIRE}`;
 const REFUSAL_HEADER = 'x-house-refusal';
+// House beats each stream every thirty seconds, so two silent beats mean this Kit cannot hear House.
+export const STREAM_SILENCE_MS = 60_000;
+
+export interface StreamClock {
+  later(delay: number, callback: () => void): ReturnType<typeof setTimeout>;
+  clear(timer: ReturnType<typeof setTimeout>): void;
+}
+
+const SYSTEM_STREAM_CLOCK: StreamClock = {
+  later: (delay, callback) => setTimeout(callback, delay),
+  clear: (timer) => clearTimeout(timer),
+};
+
+export class StreamSilence {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    private readonly silent: () => void,
+    private readonly clock: StreamClock = SYSTEM_STREAM_CLOCK,
+    private readonly interval = STREAM_SILENCE_MS,
+  ) {}
+
+  heard(): void {
+    this.stop();
+    this.timer = this.clock.later(this.interval, () => {
+      this.timer = null;
+      this.silent();
+    });
+  }
+
+  stop(): void {
+    if (this.timer === null) return;
+    this.clock.clear(this.timer);
+    this.timer = null;
+  }
+}
 
 function streamUrl(house: string): URL {
   const url = new URL(PATH, house);
@@ -58,17 +94,10 @@ export function holdStream(handlers: StreamHandlers): Stream {
       headers: { authorization: `Bearer ${credential}` },
     } as unknown as string[]);
     let opened = false;
-    opening.onopen = () => {
-      opened = true;
-      failures = 0;
-      socket = opening;
-      handlers.opened();
-    };
-    opening.onmessage = (event) => {
-      handlers.frame(JSON.parse(String(event.data)) as Frame);
-    };
-    opening.onerror = () => undefined;
-    opening.onclose = (event) => {
+    let silence: StreamSilence | null = null;
+    const closed = (event: CloseEvent) => {
+      silence?.stop();
+      silence = null;
       if (socket === opening) socket = null;
       process.stderr.write(`kit: control stream closed ${event.code} ${event.reason}\n`);
       if (event.reason === 'replaced') end(REPLACED);
@@ -81,6 +110,27 @@ export function holdStream(handlers: StreamHandlers): Stream {
       // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; an opening House refused as retryable or left unanswered backs off on the jittered curve.
       setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));
     };
+    opening.onopen = () => {
+      opened = true;
+      failures = 0;
+      socket = opening;
+      silence = new StreamSilence(() => {
+        if (socket !== opening) return;
+        socket = null;
+        opening.onclose = null;
+        opening.close();
+        closed(new CloseEvent('close', { code: 1006, reason: 'heartbeat_missed' }));
+      });
+      silence.heard();
+      handlers.opened();
+    };
+    opening.onmessage = (event) => {
+      silence?.heard();
+      const frame = JSON.parse(String(event.data)) as Frame;
+      if (frame.type !== 'beat') handlers.frame(frame);
+    };
+    opening.onerror = () => undefined;
+    opening.onclose = closed;
   };
 
   void connect();
