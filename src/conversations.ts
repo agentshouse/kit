@@ -48,6 +48,15 @@ type Ack = { provider_session_id: string } | { refused: string } | Record<string
 
 const KILLED = 'the conversation was killed';
 
+const EXIT_PLAN_MODE = {
+  parse(value: unknown): Record<string, unknown> {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('_x.ai/exit_plan_mode needs an object');
+    }
+    return value as Record<string, unknown>;
+  },
+};
+
 export const CONVERSATION_INPUTS: ReadonlySet<string> = new Set(['open', 'message', 'interrupt', 'kill', 'option', 'answer']);
 
 function causeOf(error: unknown): string {
@@ -416,7 +425,7 @@ export class Conversations {
       .onRequest('elicitation/create', ({ params, signal }) =>
         this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       )
-      .onRequest('_x.ai/exit_plan_mode', ({ params, signal }) =>
+      .onRequest('_x.ai/exit_plan_mode', EXIT_PLAN_MODE, ({ params, signal }) =>
         this.ask(conversation, '_x.ai/exit_plan_mode', params, false, signal),
       );
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
