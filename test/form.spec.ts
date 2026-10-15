@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { chassisForm } from '../src/agents.ts';
+import { chassisForm, hostVm } from '../src/agents.ts';
 
 it.each([
   ['8', 'laptop'],
@@ -17,4 +17,12 @@ it.each([
 
 it.each(['', '1', '2', '11', '12', '13', '25', 'not-a-chassis'])('omits unknown chassis type %s', (chassis) => {
   expect(chassisForm(chassis)).toBeUndefined();
+});
+
+it.each([
+  ['LinuxKit Docker Desktop', true],
+  ['Microsoft WSL2', true],
+  ['Linux version 6.8.0-generic', false],
+])('recognizes whether a container sees a desktop host VM from %s', (version, expected) => {
+  expect(hostVm(version)).toBe(expected);
 });

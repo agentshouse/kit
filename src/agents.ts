@@ -84,6 +84,10 @@ export function chassisForm(value: string): Form | undefined {
   return undefined;
 }
 
+export function hostVm(version: string): boolean {
+  return /docker desktop|microsoft|wsl|linuxkit/i.test(version);
+}
+
 async function models(kind: string, adapter: Adapter, known: Model[]): Promise<Pick<Offer, 'models' | 'modes'>> {
   const agent = adapter.connection.agent;
   const opened = await agent.request('session/new', { cwd: kitHome(), mcpServers: [] });
@@ -192,7 +196,7 @@ async function hostForm(): Promise<Form | undefined> {
     readFile('/proc/version', 'utf8').catch(() => ''),
     readFile('/sys/class/dmi/id/chassis_type', 'utf8').catch(() => ''),
   ]);
-  if (container && /docker desktop|microsoft|wsl|linuxkit/i.test(version)) return undefined;
+  if (container && hostVm(version)) return undefined;
   return chassisForm(chassis);
 }
 
