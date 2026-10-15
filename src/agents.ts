@@ -70,6 +70,20 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
+type Form = 'laptop' | 'desktop' | 'server';
+
+const LAPTOP_CHASSIS = new Set(['8', '9', '10', '14', '30', '31', '32']);
+const DESKTOP_CHASSIS = new Set(['3', '4', '5', '6', '7', '15', '16']);
+const SERVER_CHASSIS = new Set(['17', '18', '19', '20', '21', '22', '23', '24']);
+
+export function chassisForm(value: string): Form | undefined {
+  const chassis = value.trim();
+  if (LAPTOP_CHASSIS.has(chassis)) return 'laptop';
+  if (DESKTOP_CHASSIS.has(chassis)) return 'desktop';
+  if (SERVER_CHASSIS.has(chassis)) return 'server';
+  return undefined;
+}
+
 async function models(kind: string, adapter: Adapter, known: Model[]): Promise<Pick<Offer, 'models' | 'modes'>> {
   const agent = adapter.connection.agent;
   const opened = await agent.request('session/new', { cwd: kitHome(), mcpServers: [] });
@@ -165,6 +179,21 @@ async function operatingSystem(): Promise<string> {
   if (process.platform === 'darwin') return `macOS ${(await run('sw_vers', ['-productVersion'], 10_000)).output.trim()}`;
   const release = await readFile('/etc/os-release', 'utf8');
   return /^PRETTY_NAME="?([^"\n]*)"?$/m.exec(release)?.[1] ?? release;
+}
+
+async function hostForm(): Promise<Form | undefined> {
+  if (process.platform === 'darwin') {
+    const battery = await run('pmset', ['-g', 'batt'], 10_000);
+    return battery.status === 0 && battery.output.includes('InternalBattery') ? 'laptop' : 'desktop';
+  }
+  if (process.platform !== 'linux') return undefined;
+  const [container, version, chassis] = await Promise.all([
+    readFile('/.dockerenv', 'utf8').then(() => true).catch(() => false),
+    readFile('/proc/version', 'utf8').catch(() => ''),
+    readFile('/sys/class/dmi/id/chassis_type', 'utf8').catch(() => ''),
+  ]);
+  if (container && /docker desktop|microsoft|wsl|linuxkit/i.test(version)) return undefined;
+  return chassisForm(chassis);
 }
 
 export class Agents {
@@ -356,8 +385,10 @@ export class Agents {
       return reading === undefined ? [] : [reported(kind, reading)];
     });
     const hostKey = await sshHostKey();
+    const form = await hostForm();
     const body = {
       os: await operatingSystem(),
+      ...(form === undefined ? {} : { form }),
       kit_version: KIT_VERSION,
       wire: KIT_WIRE,
       updates_itself: await updatesItself(),
