@@ -1,5 +1,6 @@
 import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
 import { readFile, realpath } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_VERSION, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
@@ -46,6 +47,9 @@ interface Reading extends Offer {
   minimum?: string;
   failure: string | null;
 }
+
+// Two quiet seconds let a fresh conversation start before background model discovery competes for its CPU.
+const MODEL_PROBE_QUIET_MS = 2_000;
 
 const SIGNED_OUT: Offer = { signed_in: false, models: [], modes: [] };
 
@@ -208,6 +212,7 @@ export class Agents {
   private installing: Promise<unknown> = Promise.resolve();
   private readonly readings = new Map<string, Reading>();
   private readonly reads = new Map<string, number>();
+  private starts = 0;
   private sending: Promise<void> = Promise.resolve();
   private sent: string | null = null;
   private refreshing = 0;
@@ -261,6 +266,7 @@ export class Agents {
   }
 
   cli(kind: string): Promise<string> {
+    this.starts += 1;
     return this.queue(kind, async () => {
       const resolved = await this.resolve(kind);
       if (!('cli' in resolved)) {
@@ -274,7 +280,7 @@ export class Agents {
         this.update(kind, { release, failure: null, signed_in: kept.signed_in, models: kept.models, modes: kept.modes });
       }
       const read = this.nextRead(kind);
-      offer(kind, cli, kept)
+      this.quietOffer(kind, cli, kept)
         .then((offered) => {
           const current = this.readings.get(kind);
           if (this.reads.get(kind) === read && current?.release === release) this.update(kind, { ...current, ...offered });
@@ -376,10 +382,18 @@ export class Agents {
     if (this.reads.get(kind) === current && !signal?.aborted) this.readings.set(kind, reading);
   }
 
+  private async quietOffer(kind: string, cli: string, known: Offer): Promise<Offer> {
+    for (let seen = -1; seen !== this.starts; ) {
+      seen = this.starts;
+      await delay(MODEL_PROBE_QUIET_MS);
+    }
+    return offer(kind, cli, known);
+  }
+
   private async load(kind: string): Promise<void> {
     const known = this.readings.get(kind);
     if (known !== undefined && known.failure === null && known.minimum === undefined) return;
-    await this.examine(kind, SIGNED_OUT, offer);
+    await this.examine(kind, SIGNED_OUT, (kind, cli, known) => this.quietOffer(kind, cli, known));
     await this.report();
   }
 

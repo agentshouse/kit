@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until } from './double.ts';
@@ -684,4 +684,25 @@ it('calls restarted before it opens its socket', async () => {
   const order = hosted.house.requests.map((request) => request.path);
   expect(order.indexOf('/kit/restarted')).toBeGreaterThanOrEqual(0);
   expect(order.indexOf('/kit/restarted')).toBeLessThan(order.indexOf('/kit/stream'));
+});
+
+it('reads the CLI again only after the conversation it opens has had two quiet seconds', async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp', model: null, effort: null }], {
+    prepare: async (home) => {
+      await mkdir(join(home, 'signed-in'), { recursive: true });
+      await writeFile(join(home, 'signed-in', 'codex-acp'), '');
+    },
+  });
+  await until(() => hosted.reports.find((report) =>
+    (report.agents as { kind: string; signed_in: boolean; models: unknown[] }[])
+      .some((agent) => agent.kind === 'codex-acp' && agent.signed_in && agent.models.length > 0),
+  ));
+  const sessions = async () => (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new').length;
+  const before = await sessions();
+  const opening = Date.now();
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  await until(async () => (await sessions()) === before + 1);
+  await until(async () => (await sessions()) === before + 2);
+  expect(Date.now() - opening).toBeGreaterThanOrEqual(2_000);
 });
