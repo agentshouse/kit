@@ -66,7 +66,7 @@ async function holdEarlierKey(container: Container, house: House): Promise<strin
   return readFile(join(container.kitHome, 'own-agent.json'), 'utf8');
 }
 
-it('keeps a key House accepts in the default Kit home, says so in one line and runs nothing, and a plain house then calls House with it', async () => {
+it('keeps a key House accepts in the default Kit home and a plain house then calls House with it', async () => {
   const house = await startHouse(certificate());
   serveKey(house);
   const container = await freshContainer();
@@ -78,7 +78,7 @@ it('keeps a key House accepts in the default Kit home, says so in one line and r
   expect(kit.stderr()).toBe('');
   expect(await entriesUnder(container.home)).toEqual(['.house-kit', join('.house-kit', 'own-agent.json')]);
   expect(await ownAgent(container.kitHome)).toEqual({ house: house.origin, credential: KEY });
-  expect(await entriesUnder(container.ran)).toEqual([]);
+  expect(await entriesUnder(container.ran)).toEqual(['log']);
   expect(calls(house)).toEqual([[`Bearer ${KEY}`, 'tools/list']]);
 
   expect(await inContainer(container, 'house list_rooms')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
@@ -86,6 +86,24 @@ it('keeps a key House accepts in the default Kit home, says so in one line and r
     [`Bearer ${KEY}`, 'tools/list'],
     [`Bearer ${KEY}`, 'tools/call'],
   ]);
+});
+
+it('registers the App Git credential helper for the script key', async () => {
+  const house = await startHouse(certificate());
+  serveKey(house);
+  const container = await freshContainer();
+
+  const kit = runKit(['chatgpt', '--key', KEY, '--house', house.origin], container.environment);
+
+  expect(await kit.exited).toBe(0);
+  const commands = (await readFile(join(container.ran, 'log'), 'utf8')).trim().split('\n');
+  expect(commands).toHaveLength(3);
+  expect(commands).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining('git config --global --remove-section credential.'),
+      expect.stringContaining('git config --global --add credential.'),
+    ]),
+  );
 });
 
 it('records the relay kit chatgpt ran through beside the key, so a plain house calls through it and HOUSE_KIT_RELAY still wins', async () => {
@@ -168,7 +186,7 @@ it('checks a new key with the House the Kit home already names when no --house i
   expect(await kit.exited).toBe(0);
   expect(calls(house)).toEqual([[`Bearer ${KEY}`, 'tools/list']]);
   expect(await ownAgent(container.kitHome)).toEqual({ house: house.origin, credential: KEY });
-  expect(await entriesUnder(container.ran)).toEqual([]);
+  expect(await entriesUnder(container.ran)).toEqual(['log']);
 });
 
 it('refuses a key House does not accept and writes nothing', async () => {
