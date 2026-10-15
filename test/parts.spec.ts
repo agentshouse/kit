@@ -28,6 +28,7 @@ interface Recording {
   route?: RouteOverrides;
   options?: [string, string][];
   questions?: number;
+  responses?: unknown[];
 }
 
 async function replayed(fixture: string, count = 1, recording: Recording = {}): Promise<Replayed> {
@@ -47,8 +48,10 @@ async function replayed(fixture: string, count = 1, recording: Recording = {}): 
       interaction_id: string;
       request: { params: { options: { optionId: string; kind: string }[] } };
     };
-    const allowed = request.params.options.find((option) => option.kind.startsWith('allow'))!;
-    hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: allowed.optionId } } });
+    const response =
+      recording.responses?.[index] ??
+      { outcome: { outcome: 'selected', optionId: request.params.options.find((option) => option.kind.startsWith('allow'))!.optionId } };
+    hosted.input({ kind: 'answer', interaction_id, response });
   }
   const ended = await until(() => {
     const found = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
@@ -267,7 +270,7 @@ it("marks a recorded Codex plan approval and the collaboration mode it switched 
 });
 
 it("marks Grok Build's recorded entry into plan mode and its exit", async () => {
-  const { turns } = await replayed('grok-plan');
+  const { turns } = await replayed('grok-plan', 1, { questions: 1, responses: ['approved'] });
 
   expect(turns[0]!.parts.filter((part) => part.type === 'marker')).toEqual([
     { type: 'marker', marker: 'mode', text: 'enter_plan_mode' },
