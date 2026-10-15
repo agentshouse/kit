@@ -415,6 +415,9 @@ export class Conversations {
       )
       .onRequest('elicitation/create', ({ params, signal }) =>
         this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
+      )
+      .onRequest('_x.ai/exit_plan_mode', ({ params, signal }) =>
+        this.ask(conversation, '_x.ai/exit_plan_mode', params, false, signal),
       );
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridge = await openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal);
