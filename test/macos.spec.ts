@@ -8,7 +8,7 @@ it('reports macOS and its version as the operating system on a Mac', async () =>
 
   const report = await until(() => hosted.house.requests.find((request) => request.path === '/kit/agents/report'));
 
-  expect(report.body).toMatchObject({ os: 'macOS 27.0.1' });
+  expect(report.body).toMatchObject({ os: 'macOS 27.0.1', form: 'laptop' });
 });
 
 it('kills the process and every process it started on a Mac', async () => {

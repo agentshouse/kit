@@ -355,7 +355,8 @@ export async function macOS(home: string): Promise<Record<string, string>> {
   await mkdir(bin);
   await writeFile(join(bin, 'ps'), `#!/bin/sh\nexec env -u NODE_OPTIONS ${process.execPath} ${fileURLToPath(new URL('./ps.ts', import.meta.url))} "$@"\n`);
   await writeFile(join(bin, 'sw_vers'), '#!/bin/sh\n[ "$*" = -productVersion ] && echo 27.0.1\n');
-  await Promise.all(['ps', 'sw_vers'].map((tool) => chmod(join(bin, tool), 0o755)));
+  await writeFile(join(bin, 'pmset'), '#!/bin/sh\n[ "$*" = "-g batt" ] && echo "Now drawing from Battery Power: InternalBattery-0"\n');
+  await Promise.all(['ps', 'sw_vers', 'pmset'].map((tool) => chmod(join(bin, tool), 0o755)));
   return {
     PATH: `${bin}:${join(home, 'bin')}:${process.env.PATH}`,
     NODE_OPTIONS: `--import=${fileURLToPath(new URL('./darwin.ts', import.meta.url))}`,
