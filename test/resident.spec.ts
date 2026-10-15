@@ -7,6 +7,7 @@ import { runKit, temporaryHome, type KitRun } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 
 const RACING_LOGIN = fileURLToPath(new URL('./racing-login.ts', import.meta.url));
+const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
 
 async function enrol(house: House, home: string, credential: string) {
   await writeFile(
@@ -53,6 +54,18 @@ it('holds the control stream with its credential and opens a new socket after ev
 
   house.sockets[2]!.socket.terminate();
   await until(() => house.sockets[3]);
+});
+
+it('drops a silent control stream after two House beats and reconnects it', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await enrol(house, home, 'ahk_held');
+  runKit(['resident'], { HOUSE_KIT_HOME: home }, ['--import', FAST_TIMEOUTS]);
+
+  const first = await until(() => house.sockets[0]);
+  const second = await until(() => house.sockets[1]);
+  expect(second).not.toBe(first);
+  expect(second.headers.authorization).toBe('Bearer ahk_held');
 });
 
 it('presents the credential a later login stored when it opens its next socket', async () => {
