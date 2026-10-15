@@ -39,12 +39,19 @@ const SYSTEM_STREAM_CLOCK: StreamClock = {
 
 export class StreamSilence {
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly silent: () => void;
+  private readonly clock: StreamClock;
+  private readonly interval: number;
 
   constructor(
-    private readonly silent: () => void,
-    private readonly clock: StreamClock = SYSTEM_STREAM_CLOCK,
-    private readonly interval = STREAM_SILENCE_MS,
-  ) {}
+    silent: () => void,
+    clock: StreamClock = SYSTEM_STREAM_CLOCK,
+    interval = STREAM_SILENCE_MS,
+  ) {
+    this.silent = silent;
+    this.clock = clock;
+    this.interval = interval;
+  }
 
   heard(): void {
     this.stop();
