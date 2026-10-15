@@ -334,6 +334,30 @@ async function opened(kind = 'codex-acp'): Promise<Hosted> {
   return hosted;
 }
 
+it('relays Grok plan approval with its recorded request and the owner response', async () => {
+  const hosted = await opened('grok-build');
+
+  hosted.input({ kind: 'message', text: '@replay grok-plan', files: [], first: false });
+
+  const question = await until(() => hosted.interactions[0]);
+  expect(question.body).toMatchObject({
+    request: {
+      method: '_x.ai/exit_plan_mode',
+      params: {
+        sessionId: expect.any(String),
+        toolCallId: expect.any(String),
+        planContent: 'create hello.txt containing hi\n',
+      },
+    },
+    secret: false,
+  });
+  hosted.input({
+    kind: 'answer',
+    interaction_id: (question.body as { interaction_id: string }).interaction_id,
+    response: 'approved',
+  });
+});
+
 async function ends(hosted: Hosted, count: number): Promise<unknown[]> {
   const ended = await until(() => {
     const reported = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
