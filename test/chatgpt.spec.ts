@@ -16,9 +16,9 @@ interface Container {
   environment: Record<string, string>;
 }
 
-function serveKey(house: House, path = '/'): void {
+function serveKey(house: House, path = '/', keys: string[] = [KEY]): void {
   house.route('POST', path, ({ body, headers }) => {
-    if (headers.authorization !== `Bearer ${KEY}`) return { status: 401, body: {} };
+    if (!keys.some((key) => headers.authorization === `Bearer ${key}`)) return { status: 401, body: {} };
     const message = body as { id: string; method: string };
     const result = message.method === 'tools/list' ? { tools: [] } : { content: [{ type: 'text', text: 'room_ref: r_one' }] };
     return { body: { jsonrpc: '2.0', id: message.id, result } };
@@ -227,4 +227,22 @@ it.each([[[]], [['--house', 'https://dev.agents.house']]])('refuses kit chatgpt 
   expect(kit.stderr()).toBe('kit: pass --key with a key from New key for a script on Connections\n');
   expect(await entriesUnder(container.home)).toEqual([]);
   expect(await entriesUnder(container.ran)).toEqual([]);
+});
+
+it.each([KEY, 'ahp_second_script_key'])('says it replaced the earlier key only when the new key %s differs', async (nextKey) => {
+  const house = await startHouse(certificate());
+  serveKey(house, '/', [KEY, nextKey]);
+  const container = await freshContainer();
+  const first = runKit(['chatgpt', '--key', KEY, '--house', house.origin], container.environment);
+  expect(await first.exited).toBe(0);
+  const normal = `house now calls ${house.origin} as you, with the key kept in ${container.kitHome}.\n`;
+  expect(first.stdout()).toBe(normal);
+
+  const second = runKit(['chatgpt', '--key', nextKey], container.environment);
+
+  expect(await second.exited).toBe(0);
+  const notice = 'This replaced the key this Kit home held; give each session its own HOUSE_KIT_HOME to keep its own key.\n';
+  expect(second.stdout()).toBe((nextKey === KEY ? '' : notice) + normal);
+  expect(second.stderr()).toBe('');
+  expect(await ownAgent(container.kitHome)).toEqual({ house: house.origin, credential: nextKey });
 });

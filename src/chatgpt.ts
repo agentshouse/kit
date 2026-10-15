@@ -27,5 +27,8 @@ export async function chatgpt(argv: string[]): Promise<void> {
   await placeAppGit(before, await readOwnAgent()).catch((error: Error) =>
     process.stderr.write(`kit: ${error.message}\n`),
   );
+  if (before !== null && before.credential !== values.key) {
+    process.stdout.write('This replaced the key this Kit home held; give each session its own HOUSE_KIT_HOME to keep its own key.\n');
+  }
   process.stdout.write(`house now calls ${house} as you, with the key kept in ${kitHome()}.\n`);
 }
