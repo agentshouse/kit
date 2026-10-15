@@ -160,7 +160,7 @@ it("refuses a Tool call in one line naming kit login while Kit holds no connecti
 
   expect(ran.status).toBe(1);
   expect(ran.stdout).toBe('');
-  expect(ran.stderr).toMatch(/^house: [^\n]*kit login[^\n]*\n$/);
+  expect(ran.stderr).toMatch(/^house: [^\n]*kit login, or kit chatgpt --key <key>[^\n]*\n$/);
   expect(house.requests).toEqual([]);
 });
 
@@ -177,7 +177,7 @@ it("refuses a Tool call naming kit login once kit logout has ended the User's ow
   ]);
   await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toMatch(/^house: [^\n]*kit login[^\n]*\n$/);
+  expect(ran.stderr).toMatch(/^house: [^\n]*kit login, or kit chatgpt --key <key>[^\n]*\n$/);
 });
 
 it("stops acting as the User when House had already disconnected the computer", async () => {
