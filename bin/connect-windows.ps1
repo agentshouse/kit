@@ -240,6 +240,9 @@ function Clear-KitHome {
 }
 
 function Set-Configuration {
+  if ($env:HOUSE_KIT_INSTALL_COMMAND) {
+    Invoke-Docker run --rm --network none --env HOUSE_KIT_INSTALL_COMMAND --mount $KitHomeMount --entrypoint sh $Image -c 'printenv HOUSE_KIT_INSTALL_COMMAND > /kit-home/install-command' | Out-Null
+  }
   $ErrorActionPreference = 'Continue'
   $output = @(& docker run --rm --network none --mount $KitHomeMount --entrypoint node $Image $ConfigureMain @NoSkills 2>&1 | ForEach-Object { "$_" })
   if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "the Kit configuration could not be written: $(@($output | Where-Object { $_ })[-1])" }

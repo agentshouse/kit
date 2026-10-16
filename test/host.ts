@@ -40,8 +40,8 @@ export interface Ran {
 
 export interface Host {
   home: string;
-  run(argv?: string[]): Ran;
-  terminal(argv: string[], typed: string): Ran;
+  run(argv?: string[], added?: Record<string, string>): Ran;
+  terminal(argv: string[], typed: string, added?: Record<string, string>): Ran;
   command(name: string, argv: string[]): Ran;
   calls(tool: string): string[];
   mark(name: Mark): Promise<void>;
@@ -199,18 +199,18 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     FAKE_MACOS: platform.macos ?? '27.0.1',
     ...platform.environment,
   };
-  const ran = (command: string, argv: string[]): Ran => {
-    const finished = spawnSync(command, argv, { encoding: 'utf8', env: environment });
+  const ran = (command: string, argv: string[], added: Record<string, string> = {}): Ran => {
+    const finished = spawnSync(command, argv, { encoding: 'utf8', env: { ...environment, ...added } });
     return { status: finished.status, stdout: finished.stdout, stderr: finished.stderr };
   };
   return {
     home,
-    run: (argv = []) => ran('bash', [bootstrap, ...argv]),
-    terminal: (argv, typed) => {
+    run: (argv = [], added = {}) => ran('bash', [bootstrap, ...argv], added),
+    terminal: (argv, typed, added = {}) => {
       const line = ['cat', bootstrap, '|', 'bash', '-s', '--', ...argv]
         .map((word) => (word === '|' ? word : `'${word.replaceAll("'", `'\\''`)}'`))
         .join(' ');
-      const finished = spawnSync('script', ['-qec', line, '/dev/null'], { encoding: 'utf8', env: environment, input: typed });
+      const finished = spawnSync('script', ['-qec', line, '/dev/null'], { encoding: 'utf8', env: { ...environment, ...added }, input: typed });
       return { status: finished.status, stdout: finished.stdout.replaceAll('\r\n', '\n'), stderr: finished.stderr };
     },
     command: (name, argv) => ran(join(home, '.local', 'bin', name), argv),

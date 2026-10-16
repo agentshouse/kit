@@ -10,7 +10,7 @@ import { received } from './bridge.ts';
 import { CONVERSATION_INPUTS, Conversations, type Input } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
 import { restart } from './end.ts';
-import { agentBase, enrolled, forgetRestart, kitHome, restartAsked } from './home.ts';
+import { agentBase, enrolled, forgetRestart, kitHome, ownerSocket, restartAsked } from './home.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
@@ -34,7 +34,7 @@ async function installShim(path: string, module: string): Promise<void> {
 }
 
 async function serveOwner(copies: LocalCopies): Promise<void> {
-  const socketPath = join(kitHome(), 'owner.sock');
+  const socketPath = ownerSocket();
   await rm(socketPath, { force: true });
   const server = createServer(async (request, response) => {
     try {

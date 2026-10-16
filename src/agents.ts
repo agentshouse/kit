@@ -171,6 +171,8 @@ function reported(kind: string, reading: Reading) {
   };
 }
 
+const NOT_READY = "the Agent's CLI is not ready on this computer";
+
 function tooOld(kind: string, release: string): string {
   const cli = CLIS[kind]!;
   return `${cli.bin} ${release} is older than ${cli.minimum}, the oldest this Kit runs`;
@@ -271,7 +273,7 @@ export class Agents {
       const resolved = await this.resolve(kind);
       if (!('cli' in resolved)) {
         this.update(kind, resolved);
-        throw new Error(resolved.failure ?? tooOld(kind, resolved.release!));
+        throw new Error(resolved.failure === null ? tooOld(kind, resolved.release!) : NOT_READY);
       }
       const { cli, release } = resolved;
       const known = this.readings.get(kind);

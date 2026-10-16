@@ -50,6 +50,26 @@ const KILLED = 'the conversation was killed';
 
 const REFUSED = 'the CLI refused the prompt';
 
+const NO_CONNECTION = "the Kit could not open this conversation's connection";
+
+const NO_START = "the Agent's CLI did not start";
+
+const NO_SESSION = "the Agent's CLI did not open a session";
+
+const NO_RESUME = "the Agent's CLI could not resume this conversation";
+
+const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
+
+class NotStarted extends Error {}
+
+async function step<T>(reason: string, work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    throw new NotStarted(reason, { cause: error });
+  }
+}
+
 const EXIT_PLAN_MODE = {
   parse(value: unknown): Record<string, unknown> {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -71,6 +91,13 @@ function answerMessage(request: unknown, response: unknown): string {
 
 function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
+}
+
+function refusal(conversation: Conversation, error: unknown): string {
+  if (conversation.kills > 0) return KILLED;
+  const cause = error instanceof NotStarted ? `${error.message}: ${causeOf(error.cause)}` : causeOf(error);
+  logged(new Error(`conversation ${conversation.id} did not start: ${cause}`));
+  return causeOf(error);
 }
 
 function marker(bridge: Bridge): string {
@@ -287,7 +314,7 @@ export class Conversations {
     try {
       return { provider_session_id: await this.start(conversation, await this.route(conversation, input.agent_id), null) };
     } catch (error) {
-      return { refused: causeOf(error) };
+      return { refused: refusal(conversation, error) };
     }
   }
 
@@ -302,7 +329,7 @@ export class Conversations {
       if (lines.length > 0) content.push({ type: 'text', text: lines.join('\n') });
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
-      return { ack: Promise.resolve({ refused: conversation.kills > 0 ? KILLED : causeOf(error) }) };
+      return { ack: Promise.resolve({ refused: refusal(conversation, error) }) };
     }
     return {
       ack: new Promise<Ack>((settle) => {
@@ -344,7 +371,7 @@ export class Conversations {
         conversation.session = null;
         await this.kill(conversation);
       }
-      waiting.settle({ refused: conversation.kills > 0 ? KILLED : causeOf(error) });
+      waiting.settle({ refused: refusal(conversation, error) });
       return;
     }
     this.prompt(conversation, [...prompt, ...waiting.content]);
@@ -431,7 +458,7 @@ export class Conversations {
         this.ask(conversation, '_x.ai/exit_plan_mode', params, false, signal),
       );
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
-    const bridge = await openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal);
+    const bridge = await step(NO_CONNECTION, openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal));
     if (conversation.kills > 0) {
       bridge.close();
       throw new Error(KILLED);
@@ -442,18 +469,22 @@ export class Conversations {
     try {
       await unlessAborted(createHowWeWork(bridge), conversation.killed.signal);
       await CLIS[route.kind]!.allowHouse(bridge.env.PATH!);
-      const adapter = await startAdapter(
-        route.kind,
-        cli,
-        route.working_directory,
-        app,
-        (message) => {
-          work.read(message);
-          this.read(conversation, reader, message);
-        },
-        { ...bridge.env, ...(await work.open(cli)) },
-        undefined,
-        scope,
+      const streamed = await step(NO_CONNECTION, work.open(cli));
+      const adapter = await step(
+        NO_START,
+        startAdapter(
+          route.kind,
+          cli,
+          route.working_directory,
+          app,
+          (message) => {
+            work.read(message);
+            this.read(conversation, reader, message);
+          },
+          { ...bridge.env, ...streamed },
+          undefined,
+          scope,
+        ),
       );
       void adapter.exited.then(() => bridge.close());
       const agent = adapter.connection.agent;
@@ -461,15 +492,15 @@ export class Conversations {
       const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, conversation.id);
       const opened =
         sessionId === null
-          ? await agent.request('session/new', { cwd, mcpServers: [], _meta })
-          : { ...(await agent.request('session/resume', { sessionId, cwd, mcpServers: [], _meta })), sessionId };
+          ? await step(NO_SESSION, agent.request('session/new', { cwd, mcpServers: [], _meta }))
+          : { ...(await step(NO_RESUME, agent.request('session/resume', { sessionId, cwd, mcpServers: [], _meta }))), sessionId };
       reader.session = opened.sessionId;
       if (sessionId === null && CLIS[route.kind]!.renames) {
         const prompt: ContentBlock[] = [{ type: 'text', text: `/rename ${conversation.id}` }];
-        await agent.request('session/prompt', { sessionId: opened.sessionId, prompt });
+        await step(NO_SESSION, agent.request('session/prompt', { sessionId: opened.sessionId, prompt }));
       }
       const running: Running = { adapter, bridge, sessionId: opened.sessionId, killed: false, reader, work, scope };
-      const options = await this.launchSettings(running, route, opened.configOptions ?? []);
+      const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
       void work.settled().then(() => scope.record());
       conversation.running = running;
       conversation.session = running.sessionId;

@@ -70,6 +70,7 @@ LAUNCH_AGENT="$HOME/Library/LaunchAgents/$SERVICE.plist"
 USER_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE.service"
 REDEFINED=0
 REPLACES=''
+OTHER_HOME=0
 RELEASE="@agentshouse/kit@$VERSION node@$NODE_VERSION"
 
 refuse() {
@@ -397,6 +398,7 @@ connect_native() {
   if service_manager && [[ -f "$NATIVE_UNIT" ]] && ! grep -qx "User=$(id -un)" "$NATIVE_UNIT"; then
     refuse 'House Kit runs natively on this host for another account'
   fi
+  keep_other_home
   establish_native_packages
   [[ ! -L "${NATIVE_WORKSPACE%/*}" ]] || refuse "${NATIVE_WORKSPACE%/*} is a symbolic link"
   if [[ ! -e "$NATIVE_WORKSPACE" && ! -L "$NATIVE_WORKSPACE" ]]; then
@@ -407,6 +409,7 @@ connect_native() {
   prepare_directory "$KIT_HOME"
   KIT_HOME=$(cd "$KIT_HOME" && pwd -P)
   bind_house stop_native_service
+  ((OTHER_HOME == 0)) || stop_native_service
   if ((ENROLL_SELECTED)) && [[ -f "$KIT_HOME/credential.json" && "$(enrolled environment)" != "$ENROLL" ]]; then
     refuse "this host is enrolled for Environment $(enrolled environment), not $ENROLL"
   fi
@@ -508,15 +511,50 @@ define_desktop_service() {
   fi
 }
 
-installed_workspace() {
+unit_variable() {
+  [[ ! -f "$2" ]] ||
+    sed -n "s/^Environment=\"$1=\\(.*\\)\"\$/\\1/p" "$2" | sed -e 's/%%/%/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
+}
+
+installed_variable() {
   if ((MACOS)); then
     [[ ! -f "$LAUNCH_AGENT" ]] ||
-      sed -n '/<key>HOUSE_KIT_WORKSPACE<\/key>/{n;s/^[[:space:]]*<string>\(.*\)<\/string>$/\1/p;}' "$LAUNCH_AGENT" |
+      sed -n "/<key>$1<\\/key>/{n;s/^[[:space:]]*<string>\\(.*\\)<\\/string>\$/\\1/p;}" "$LAUNCH_AGENT" |
       sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
   else
-    [[ ! -f "$USER_UNIT" ]] ||
-      sed -n 's/^Environment="HOUSE_KIT_WORKSPACE=\(.*\)"$/\1/p' "$USER_UNIT" | sed -e 's/%%/%/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
+    unit_variable "$1" "$USER_UNIT"
   fi
+}
+
+installed_workspace() {
+  installed_variable HOUSE_KIT_WORKSPACE
+}
+
+installed_homes() {
+  if ((NATIVE)); then
+    unit_variable HOUSE_KIT_HOME "$NATIVE_UNIT"
+    return 0
+  fi
+  installed_variable HOUSE_KIT_HOME
+  if containerized; then
+    docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Source}}{{end}}{{end}}' "$NAME" || true
+  fi
+}
+
+keep_other_home() {
+  local held homes here=$KIT_HOME
+  [[ ! -d "$here" ]] || here=$(cd "$here" && pwd -P)
+  homes=$(installed_homes)
+  if ((CONTAINER == 0)) && [[ "$homes" != "$here" ]] && type -P docker >/dev/null && ! docker_answers; then
+    refuse "Docker does not answer: $(docker_cause); start Docker so this bootstrap can see whether House Kit runs in its container with another Kit home, then rerun this bootstrap"
+  fi
+  while IFS= read -r held; do
+    [[ -n "$held" && "$held" != "$here" ]] || continue
+    terminal || refuse "House Kit runs on this computer with the Kit home $held; installing it with the Kit home $here replaces that Kit, so run this bootstrap in a terminal to confirm"
+    confirmed "House Kit is already installed on this computer with the Kit home $held. Replace it?" || refuse "the Kit home $held was kept; nothing changed"
+    OTHER_HOME=1
+    return 0
+  done <<< "$homes"
 }
 
 desktop_loaded() {
@@ -598,7 +636,14 @@ held_placement() {
 }
 
 record_placement() {
+  local flag=''
   printf '%s\n' "$1" > "$KIT_HOME/placement" || refuse "$KIT_HOME/placement could not be written"
+  [[ -n "${HOUSE_KIT_INSTALL_COMMAND:-}" ]] || return 0
+  case "$1" in
+    server) flag=' --linux' ;;
+    container) flag=' --container' ;;
+  esac
+  printf '%s%s\n' "$HOUSE_KIT_INSTALL_COMMAND" "$flag" > "$KIT_HOME/install-command" || refuse "$KIT_HOME/install-command could not be written"
 }
 
 placed() {
@@ -648,8 +693,9 @@ connect_desktop() {
   PLACING_NOTE=''
   DIRECT=(env)
   RECONNECT="run $NATIVE_BIN/kit login"
-  notice_desktop_host
   take_placement native
+  keep_other_home
+  notice_desktop_host
   remove_container
   if ((WORKSPACE_SELECTED == 0)); then
     installed=$(installed_workspace)
@@ -948,12 +994,15 @@ esac
 if ((FORWARDING)); then
   kit_installed || refuse "House Kit is not installed; run this command without $FORWARDED and its arguments first"
   WORKSPACE=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/agents/house"}}{{.Source}}{{end}}{{end}}' "$NAME")
+else
+  keep_other_home
 fi
 
 prepare_roots
 KIT_HOME_MOUNT=$(bind_mount "$KIT_HOME" /kit-home)
 WORKSPACE_MOUNT=$(bind_mount "$WORKSPACE" /agents/house)
 bind_house remove_container
+if ((OTHER_HOME)); then remove_container; fi
 if ((FORWARDING == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
 
 if [[ "$RUNTIME" == 'Docker Desktop' ]]; then NAMED=(--hostname "$(hostname)"); fi

@@ -112,7 +112,7 @@ export function holdStream(handlers: StreamHandlers): Stream {
         void signInAgain(credential);
         return;
       }
-      if (refused !== null && tooOld(refused.text)) updateRequired(house);
+      if (refused !== null && tooOld(refused.text)) updateRequired();
       if (finalRefusal(refused)) end(refused.message);
       // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; an opening House refused as retryable or left unanswered backs off on the jittered curve.
       setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));

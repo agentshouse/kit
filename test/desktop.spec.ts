@@ -98,7 +98,11 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
   expect(host.calls('sha256sum')).toEqual(['--check']);
   expect(host.calls('npm')).toEqual([expect.stringMatching(/ @agentshouse\/kit@0\.2\.1-alpha\.1$/)]);
   expect(host.calls('sudo')).toEqual([]);
-  expect(host.calls('docker')).toEqual(['container inspect house-kit']);
+  expect(host.calls('docker')).toEqual([
+    'container inspect house-kit',
+    'info --format {{.OSType}}/{{.Architecture}}',
+    'container inspect house-kit',
+  ]);
   expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${host.home}/.house-kit`]);
   expect(ran.stdout).toContain(`${LINK_LINE}\n`);
   expect(host.calls('xdg-open')).toEqual([]);
@@ -502,6 +506,7 @@ it('installs the container exactly as before only with the container choice', as
   });
   expect(host.calls('docker')).toEqual([
     'info --format {{.OSType}}/{{.Architecture}}',
+    'container inspect house-kit',
     'container inspect house-kit',
     `pull --quiet --platform linux/amd64 ${image}`,
     `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,

@@ -254,10 +254,6 @@ it('opens its socket again after an answer to its opening that carries no House 
 
 const TOO_OLD = { status: 426, body: { error: { code: 'kit_update_required', retryable: false } } };
 
-function tooOld(command: string): string {
-  return `kit: This Kit is too old for House. Update it: ${command}\n`;
-}
-
 it('names its wire in its stream subprotocol and in a header on every other /kit/ request', async () => {
   const house = await startHouse();
   await resident(house);
@@ -268,47 +264,25 @@ it('names its wire in its stream subprotocol and in a header on every other /kit
   expect(requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(requests.map(() => '1'));
 });
 
-it('ends, left stopped, saying it must be updated and with what command, when House refuses its socket opening as too old', async () => {
+it('ends, left stopped, saying it must be installed again, when House refuses its socket opening as too old and no bootstrap recorded its install command', async () => {
   const house = await startHouse();
   house.route('UPGRADE', '/kit/stream', () => TOO_OLD);
   const kit = await resident(house);
-  const host = new URL(house.origin).host;
 
   expect(await ended(kit)).toBe(0);
-  expect(kit.stderr()).toContain(tooOld(`curl -fsSL ${host}/kit | sh -s -- --container, or irm ${host}/kit.ps1 | iex on Windows`));
+  expect(kit.stderr()).toContain('kit: This Kit is too old for House; install it again.\n');
   expect(openings(house)).toBe(1);
 });
 
-it.each([
-  ['natively on a computer', 'native', ''],
-  ['natively on a server', 'server', ' -s -- --linux'],
-])('ends, left stopped, naming the install command of a Kit installed %s even outside its service, when House refuses any of its calls as too old', async (_, placement, flags) => {
+it('ends, left stopped, naming the install command its bootstrap recorded even outside its service, when House refuses any of its calls as too old', async () => {
   const house = await startHouse();
   house.route('POST', '/kit/restarted', () => TOO_OLD);
   const home = await temporaryHome();
-  await writeFile(join(home, 'placement'), `${placement}\n`);
+  const command = `HOUSE_KIT_RELAY=https://relay.example sh -c 'kit=$(curl -fsSL "$0") || exit 1; eval "$kit"' https://relay.example/dev.agents.house/kit --linux`;
+  await writeFile(join(home, 'install-command'), `${command}\n`);
   const kit = await resident(house, home);
 
   expect(await ended(kit)).toBe(0);
-  expect(kit.stderr()).toContain(tooOld(`curl -fsSL ${new URL(house.origin).host}/kit | sh${flags}`));
+  expect(kit.stderr()).toContain(`kit: This Kit is too old for House. Update it: ${command}\n`);
   expect(openings(house)).toBe(0);
-});
-
-it('names the install command through its relay when House refuses a call it relayed as too old', async () => {
-  const relay = await startHouse();
-  relay.route('POST', '/dev.agents.house/kit/restarted', () => TOO_OLD);
-  const home = await temporaryHome();
-  await writeFile(
-    join(home, 'credential.json'),
-    JSON.stringify({ house: 'https://dev.agents.house', relay: relay.origin, environment: 'environment-one', credential: 'ahk_held' }),
-  );
-  const kit = runKit(['resident'], { HOUSE_KIT_HOME: home });
-
-  expect(await ended(kit)).toBe(0);
-  const entry = `${relay.origin}/dev.agents.house/kit`;
-  expect(kit.stderr()).toContain(
-    tooOld(
-      `curl -fsSL ${entry} | HOUSE_KIT_RELAY=${relay.origin} sh -s -- --container, or $env:HOUSE_KIT_RELAY='${relay.origin}'; irm ${entry}.ps1 | iex on Windows`,
-    ),
-  );
 });

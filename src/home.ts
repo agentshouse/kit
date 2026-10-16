@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
-import { accessSync, chmodSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { accessSync, chmodSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { selectRelay } from './relay.ts';
 
 export interface Enrolment {
@@ -40,19 +40,22 @@ function writable(directory: string): boolean {
   }
 }
 
-function ownTemporaryHome(): string {
-  const home = join(tmpdir(), `house-kit-${process.getuid!()}`);
+function privateDirectory(path: string): string {
   try {
-    mkdirSync(home, { mode: 0o700 });
+    mkdirSync(path, { mode: 0o700 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
-  const found = lstatSync(home);
-  if (found.isSymbolicLink()) throw new Error(`${home} is a symbolic link`);
-  if (!found.isDirectory()) throw new Error(`${home} is not a directory`);
-  if (found.uid !== process.getuid!()) throw new Error(`${home} is not owned by this User`);
-  chmodSync(home, 0o700);
-  return home;
+  const found = lstatSync(path);
+  if (found.isSymbolicLink()) throw new Error(`${path} is a symbolic link`);
+  if (!found.isDirectory()) throw new Error(`${path} is not a directory`);
+  if (found.uid !== process.geteuid!()) throw new Error(`${path} is not owned by this User`);
+  chmodSync(path, 0o700);
+  return path;
+}
+
+function ownTemporaryHome(): string {
+  return privateDirectory(join(tmpdir(), `house-kit-${process.getuid!()}`));
 }
 
 function defaultHome(): string {
@@ -62,6 +65,15 @@ function defaultHome(): string {
 
 export function kitHome(): string {
   return process.env.HOUSE_KIT_HOME || (defaulted ??= defaultHome());
+}
+
+export function socketDirectory(): string {
+  const sockets = privateDirectory(join(realpathSync('/tmp'), `hk-${process.geteuid!()}`));
+  return privateDirectory(join(sockets, createHash('sha256').update(resolve(kitHome())).digest('hex').slice(0, 12)));
+}
+
+export function ownerSocket(): string {
+  return join(socketDirectory(), 'owner.sock');
 }
 
 export function workspaceRoot(): string {

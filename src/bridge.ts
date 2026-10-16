@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { mkdir } from 'node:fs/promises';
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
@@ -17,7 +16,7 @@ import {
   type Submitted,
   type Upload,
 } from './copies.ts';
-import { kitHome, readEnrolment } from './home.ts';
+import { kitHome, readEnrolment, socketDirectory } from './home.ts';
 import { callHouse, mcpBody, rpc, UNREACHABLE, type Forwarded, type Message } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { refusalOf, retryable, type Refusal } from './refusals.ts';
@@ -207,9 +206,7 @@ export async function openBridge(
     return path === '/' ? forward(text) : { status: 404, text: '' };
   };
 
-  const sockets = join(kitHome(), 'bridges');
-  await mkdir(sockets, { recursive: true, mode: 0o700 });
-  const socketPath = join(sockets, `${randomUUID()}.sock`);
+  const socketPath = join(socketDirectory(), `${randomUUID()}.sock`);
   const bridge = createServer(async (request, response) => {
     try {
       const path = request.url ?? '';
