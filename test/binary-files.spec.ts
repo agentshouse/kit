@@ -159,13 +159,13 @@ it('copies and fetches a Room holding binary files with no binary entry or byte 
   expect(hosted.mcp).toEqual([]);
 });
 
-it('refuses a push of a commit holding a JPEG, a NUL or text above 16 MiB before any House submission, naming each non-text Path and house upload, and sends none of its text', async () => {
-  const { hosted, room } = await copied();
+it("refuses a push of a commit holding a JPEG, a NUL or text above House's authored-file cap before any House submission, naming each non-text Path and house upload, and sends none of its text", async () => {
+  const { hosted, rooms, room } = await copied();
   await writeFile(join(room.repository, 'plan.md'), 'one\ntwo\n');
   await mkdir(join(room.repository, 'images'));
   await writeFile(join(room.repository, 'images', 'cover.jpg'), JPEG);
   await writeFile(join(room.repository, 'notes.txt'), 'valid UTF-8 \0 with a NUL\n');
-  await writeFile(join(room.repository, 'log.txt'), 'a'.repeat(16 * 1024 * 1024 + 1));
+  await writeFile(join(room.repository, 'log.txt'), 'a'.repeat(rooms.authoredFileBytes + 1));
   commitAll(room.repository, 'text and a picture');
 
   const owner = await house(hosted, room.repository, 'push', '--owner');
@@ -177,6 +177,45 @@ it('refuses a push of a commit holding a JPEG, a NUL or text above 16 MiB before
   expect(conversation).toMatchObject({ status: 1, stderr: `house: ${refusal}\n` });
   expect(batches(hosted)).toEqual([]);
   expect(hosted.mcp).toEqual([]);
+  expect(room.files.get('plan.md')!.content).toBe('one\n');
+});
+
+it("pushes a text of exactly the authored-file cap House's discovery answers, and refuses one byte more before any submission, naming its Path and house upload", async () => {
+  const { hosted, rooms, room } = await copied();
+  rooms.authoredFileBytes = 64;
+  await writeFile(join(room.repository, 'log.txt'), 'ü'.repeat(32));
+  commitAll(room.repository, 'at the cap');
+
+  const at = await house(hosted, room.repository, 'push', '--owner');
+  await writeFile(join(room.repository, 'log.txt'), `${'ü'.repeat(32)}!`);
+  commitAll(room.repository, 'one byte above the cap');
+  const above = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(at).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}/) });
+  expect(above).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: 'house: log.txt is not text, and house push sends text only; remove it from the commit and place it with house upload\n',
+  });
+  expect(batches(hosted).map((batch) => (batch as { changes: unknown }).changes)).toEqual([
+    [{ op: 'create', path: '/rooms/notes/log.txt', content: 'ü'.repeat(32) }],
+  ]);
+  expect(room.files.get('log.txt')!.content).toBe('ü'.repeat(32));
+});
+
+it("refuses a push in House's words when its discovery does not answer the cap, and sends nothing", async () => {
+  const { hosted, room } = await copied();
+  await writeFile(join(room.repository, 'plan.md'), 'one\ntwo\n');
+  commitAll(room.repository, 'text');
+  hosted.house.route('POST', '/kit/door/discover', () => ({
+    status: 503,
+    body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; push again shortly', retryable: true } },
+  }));
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(pushed).toEqual({ status: 1, stdout: '', stderr: 'house: house_unavailable: House is unavailable; push again shortly\n' });
+  expect(batches(hosted)).toEqual([]);
   expect(room.files.get('plan.md')!.content).toBe('one\n');
 });
 

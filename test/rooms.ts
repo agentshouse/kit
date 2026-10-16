@@ -286,6 +286,7 @@ export interface Rooms {
   uploaded: Buffer[];
   byteReads: Received[];
   damages: boolean;
+  authoredFileBytes: number;
   edits(): Received[];
 }
 
@@ -315,6 +316,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     uploaded: [],
     byteReads: [],
     damages: false,
+    authoredFileBytes: 1_000_000,
     room: (handle) => {
       const room = new Room(handle);
       rooms.push(room);
@@ -352,7 +354,10 @@ export function serveRooms(hosted: Hosted): Rooms {
   hosted.house.route('POST', '/kit/door/discover', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
     return {
-      body: { authorities: prefixed(rooms, prefixes).map((room) => room.authority()) },
+      body: {
+        bounds: { max_authored_file_bytes: state.authoredFileBytes },
+        authorities: prefixed(rooms, prefixes).map((room) => room.authority()),
+      },
     };
   });
   hosted.house.route('POST', '/kit/door/bootstrap', (request) => {

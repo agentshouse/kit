@@ -69,8 +69,6 @@ export async function tree(repository: string, commit: string): Promise<Map<stri
   return entries;
 }
 
-const TEXT_MAX_BYTES = 16 * 1024 * 1024;
-
 async function blob(repository: string, object: string): Promise<Buffer> {
   return (await run(repository, ['cat-file', 'blob', object])).stdout;
 }
@@ -79,9 +77,9 @@ export async function blobText(repository: string, object: string): Promise<stri
   return (await blob(repository, object)).toString('utf8');
 }
 
-export async function isText(repository: string, object: string): Promise<boolean> {
+export async function isText(repository: string, object: string, maxBytes: number): Promise<boolean> {
   const bytes = await blob(repository, object);
-  return bytes.length <= TEXT_MAX_BYTES && isUtf8(bytes) && !bytes.includes(0);
+  return bytes.length <= maxBytes && isUtf8(bytes) && !bytes.includes(0);
 }
 
 export function blobId(content: string): string {

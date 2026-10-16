@@ -90,6 +90,11 @@ interface Authority {
   log_epoch: string;
 }
 
+interface Discovery {
+  bounds: { max_authored_file_bytes: number };
+  authorities: Authority[];
+}
+
 interface Bundle {
   scopes: {
     manifest: {
@@ -140,6 +145,10 @@ export interface Observed {
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function houseCause(error: unknown): string {
+  return error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error);
 }
 
 function logged(error: unknown): void {
@@ -424,7 +433,7 @@ export class LocalCopies {
           current.forEach((copy, index) => said.push(...moved(copy, refreshed[index]!)));
         } catch (error) {
           refused = true;
-          said.push(error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error));
+          said.push(houseCause(error));
         }
       }
       return { refused, text: said.length === 0 ? 'Nothing new from House.' : said.join('\n') };
@@ -497,7 +506,7 @@ export class LocalCopies {
 
   private async read(handle: string): Promise<Read | null> {
     const prefixes = [rootOf(handle)];
-    const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', { prefixes });
+    const discovery = await this.house.post<Discovery>('/kit/door/discover', { prefixes });
     let bundle = await this.house.post<Bundle | { transfer: { url: string } }>('/kit/door/bootstrap', { prefixes });
     if ('transfer' in bundle) bundle = (await (await fetch(relayed(bundle.transfer.url))).json()) as Bundle;
     const [view] = bundle.scopes;
@@ -591,7 +600,7 @@ export class LocalCopies {
   }
 
   private async refreshed(copies: readonly Copy[]): Promise<Copy[]> {
-    const discovery = await this.house.post<{ authorities: Authority[] }>('/kit/door/discover', {
+    const discovery = await this.house.post<Discovery>('/kit/door/discover', {
       prefixes: copies.map((copy) => rootOf(copy.room_handle)),
     });
     const regranted = new Map<string, Copy>();
@@ -706,7 +715,7 @@ export class LocalCopies {
     try {
       changes = await this.derived(copy, base, commit);
     } catch (error) {
-      return { refused: true, text: causeOf(error) };
+      return { refused: true, text: houseCause(error) };
     }
     if (changes.length === 0) return { refused: false, text: `Nothing to submit: ${short(commit)} matches House.` };
     const branch = await git(worktree, ['symbolic-ref', '-q', 'HEAD']).then(
@@ -736,9 +745,15 @@ export class LocalCopies {
     const after = await tree(copy.repository, commit);
     const moved = movedPaths(copy.moves, before, after);
     const arrived = new Set(moved.values());
-    const binary: string[] = [];
-    for (const [path, entry] of after) if (before.get(path) !== entry && !(await isText(copy.repository, entry))) binary.push(path);
-    if (binary.length > 0) throw new Error(textOnly(binary));
+    const arriving = [...after].filter(([path, entry]) => before.get(path) !== entry);
+    if (arriving.length > 0) {
+      const { bounds } = await this.house.post<Discovery>('/kit/door/discover', { prefixes: [root] });
+      const binary: string[] = [];
+      for (const [path, entry] of arriving) {
+        if (!(await isText(copy.repository, entry, bounds.max_authored_file_bytes))) binary.push(path);
+      }
+      if (binary.length > 0) throw new Error(textOnly(binary));
+    }
     const text = (entry: string) => blobText(copy.repository, entry);
     const changes: Edit[] = [];
     for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
