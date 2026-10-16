@@ -488,10 +488,11 @@ it('reconnects the same Environment on a second login', async () => {
   await logIn(house, home);
   serveLogin(house, 'environment-one', 'ahk_second');
 
-  const { started, exit } = await logIn(house, home);
+  const { started, exit, login } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
+  expect(login.stdout()).toContain(`Environment environment-one is reconnected to ${house.origin}.\n`);
   expect(typeof started.label).toBe('string');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,
@@ -665,6 +666,30 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   const reconnected = await until(() => house.sockets[1]);
   expect(reconnected.headers.authorization).toBe('Bearer ahk_second');
+});
+
+it('logs out and connects this computer as a new Environment of the other account that confirms the next login, saying so', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  await logIn(house, home);
+  house.route('POST', '/kit/logout', () => ({ body: {} }));
+  expect(await runKit(['logout'], { HOUSE_KIT_HOME: home }).exited).toBe(0);
+  serveLogin(house, 'environment-two', 'ahk_second', { user: 'user-two' });
+
+  const { started, exit, login } = await logIn(house, home);
+
+  expect(exit).toBe(0);
+  expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
+  expect(login.stdout()).toContain(
+    `Environment environment-one stays with its account; this computer is connected to ${house.origin} as new Environment environment-two of the account that confirmed.\n`,
+  );
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
+    house: house.origin,
+    environment: 'environment-two',
+    credential: 'ahk_second',
+  });
+  await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 const MACOS = ['--import', fileURLToPath(new URL('./darwin.ts', import.meta.url))];
