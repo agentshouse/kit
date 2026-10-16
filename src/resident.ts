@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, get } from 'node:http';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
@@ -40,6 +40,10 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
     try {
       const text = await received(request);
       let answered: Pushed;
+      if (request.url === '/resident') {
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ pid: process.pid }));
+        return;
+      }
       if (request.url === '/git/fetch') {
         answered = await copies.fetch();
       } else if (request.url === '/git/push') {
@@ -56,6 +60,17 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
   });
   server.listen(socketPath);
   await once(server, 'listening');
+}
+
+function runningResident(): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    get({ socketPath: ownerSocket(), path: '/resident' }, async (answer) => {
+      resolve((JSON.parse(await received(answer)) as { pid: number }).pid);
+    }).on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT' || error.code === 'ECONNREFUSED') resolve(null);
+      else reject(error);
+    });
+  });
 }
 
 function connected(): Promise<void> {
@@ -75,6 +90,8 @@ function connected(): Promise<void> {
 }
 
 export async function resident(): Promise<void> {
+  const running = await runningResident();
+  if (running !== null) throw new Error(`Kit ${running} already runs this Environment from Kit home ${kitHome()}; stop it first to run another here`);
   await connected();
   await forgetRestart();
   watch(kitHome(), () => {

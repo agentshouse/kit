@@ -2,7 +2,7 @@ import { access, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { startHouse, until, type House } from './double.ts';
+import { settle, startHouse, until, type House } from './double.ts';
 import { runKit, temporaryHome, type KitRun } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 
@@ -91,6 +91,23 @@ it('ends, left stopped, when House replaces its socket with another Kit of its E
   expect(await ended(kit)).toBe(0);
   expect(kit.stderr()).toContain('kit: another Kit started for this Environment\n');
   expect(openings(house)).toBe(1);
+});
+
+it('refuses a second resident of a Kit home whose Kit runs, naming that Kit and how to take over, and leaves that Kit holding the Environment', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const first = await resident(house, home);
+  await until(() => house.sockets[0]);
+
+  const second = runKit(['resident'], { HOUSE_KIT_HOME: home });
+
+  expect(await ended(second)).toBe(1);
+  expect(second.stderr()).toBe(`kit: Kit ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another here\n`);
+  await settle();
+  expect(openings(house)).toBe(1);
+  const third = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  expect(await ended(third)).toBe(1);
+  expect(third.stderr()).toContain(`kit: Kit ${first.pid} already runs`);
 });
 
 async function forgotten(house: House, home: string): Promise<void> {

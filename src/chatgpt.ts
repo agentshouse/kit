@@ -24,7 +24,7 @@ export async function chatgpt(argv: string[]): Promise<void> {
   if (!(await accepted(house, values.key))) throw new Error(`${house} does not accept this key; pass one from ${KEY_SOURCE}`);
   const relay = process.env.HOUSE_KIT_RELAY || undefined;
   await writeOwnAgent({ house, ...(relay === undefined ? {} : { relay }), credential: values.key });
-  await placeAppGit(before, await readOwnAgent()).catch((error: Error) =>
+  await placeAppGit(await readOwnAgent()).catch((error: Error) =>
     process.stderr.write(`kit: ${error.message}\n`),
   );
   if (before !== null && before.credential !== values.key) {

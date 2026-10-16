@@ -1,5 +1,4 @@
 import { HouseRefusal, post } from './api.ts';
-import { forgetAppGit } from './app-git.ts';
 import { forgetEnrolment, forgetOwnAgent, readEnrolment } from './home.ts';
 
 export async function logout(): Promise<void> {
@@ -12,7 +11,6 @@ export async function logout(): Promise<void> {
     }
     await forgetEnrolment(enrolled);
   }
-  await forgetAppGit();
   await forgetOwnAgent();
   process.stdout.write(
     enrolled === null

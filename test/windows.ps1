@@ -92,7 +92,6 @@ try {
 if ($script:Prompts.Count -ne 0) { $findings += "Test-Authority asked: $($script:Prompts[0])" }
 $invokeLogin = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Login' }, $true)
 . ([scriptblock]::Create($invokeLogin.Extent.Text))
-function Exit-Bootstrap([int] $Status) { throw "kit_bootstrap_exit: $Status" }
 $Link = 'Open this link and confirm: '
 $Network = @()
 $Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
@@ -200,7 +199,7 @@ try {
   Connect-Kit
   $findings += 'a kit login --code forwarded to an enrolled Kit ended without the refusal of kit login'
 } catch {
-  if ($_.Exception.Message -cne 'kit_bootstrap_exit: 1') { $findings += "a kit login --code forwarded to an enrolled Kit ended with: $($_.Exception.Message)" }
+  if ($_.Exception.Message -cne 'kit_bootstrap_refused: kit login ended with status 1') { $findings += "a kit login --code forwarded to an enrolled Kit ended with: $($_.Exception.Message)" }
 }
 foreach ($rerun in @(
   @('--workspace', 'C:\Users\u\AgentsHouse', '--code', 'ahk_code_unused'),
@@ -236,7 +235,7 @@ foreach ($case in @(
     Connect-Kit
     $findings += "the enrolled bootstrap with a container installed $withContainer ended without the status of its failed login"
   } catch {
-    if ($_.Exception.Message -cne 'kit_bootstrap_exit: 7') { $findings += "the enrolled bootstrap with a container installed $withContainer ended with: $($_.Exception.Message)" }
+    if ($_.Exception.Message -cne 'kit_bootstrap_refused: kit login ended with status 7') { $findings += "the enrolled bootstrap with a container installed $withContainer ended with: $($_.Exception.Message)" }
   }
   $started = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_] -match $case[1] })
   $loggedIn = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_] -match ' login( |$)' })
@@ -278,9 +277,7 @@ foreach ($case in @(
   $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
   $BootstrapArguments = $case[0]
   $script:Ran = @()
-  try { Connect-Kit } catch {
-    if ($_.Exception.Message -cne 'kit_bootstrap_exit: 0') { $findings += "the bootstrap forwarding $($case[0] -join ' ') ended with: $($_.Exception.Message)" }
-  }
+  try { Connect-Kit } catch { $findings += "the bootstrap forwarding $($case[0] -join ' ') ended with: $($_.Exception.Message)" }
   $stops = @($script:Ran | Where-Object { $_ -ceq "stop $Name" })
   if ($stops.Count -ne $case[1]) { $findings += "the bootstrap forwarding $($case[0] -join ' ') stopped the container $($stops.Count) times" }
 }
@@ -289,12 +286,25 @@ $script:Installed = $true
 $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
 $BootstrapArguments = @('kit', 'login', '--help')
 $script:Ran = @()
-try { Connect-Kit } catch {
-  if ($_.Exception.Message -cne 'kit_bootstrap_exit: 0') { $findings += "the bootstrap forwarding kit login --help ended with: $($_.Exception.Message)" }
-}
+try { Connect-Kit } catch { $findings += "the bootstrap forwarding kit login --help ended with: $($_.Exception.Message)" }
 if (@($script:Ran | Where-Object { $_ -match ' login( |$)' -or $_ -match '^(start|stop) ' }).Count -ne 1 -or -not $script:Ran[-1].EndsWith(' login --help')) {
   $findings += "the bootstrap forwarding kit login --help into a stopped container ran: $($script:Ran -join '|')"
 }
 $script:Running = 'true'
+$whole = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+[void][IO.Directory]::CreateDirectory($whole)
+$installer = Join-Path $whole 'connect-windows.ps1'
+[IO.File]::WriteAllText($installer, [IO.File]::ReadAllText('/kit/bin/connect-windows.ps1').Replace('__IMAGE_DIGEST__', 'a' * 64))
+[IO.File]::WriteAllText((Join-Path $whole 'docker'), "#!/bin/sh`nif [ `"`$1`" = info ]; then echo 'linux/x86_64|Docker Desktop|6.6.87.2-microsoft-standard-WSL2'; exit 0; fi`necho 'docker: no space left on device' >&2`nexit 3`n")
+& chmod 755 (Join-Path $whole 'docker')
+$prelude = "`$env:OS = 'Windows_NT'; `$env:ProgramFiles = '$whole'; `$env:LOCALAPPDATA = '$whole'; `$env:PATH = '$whole' + ':' + `$env:PATH; function Get-CimInstance([string] `$ClassName) { if (`$ClassName -eq 'Win32_OperatingSystem') { return [pscustomobject]@{ ProductType = 1; BuildNumber = '26100'; Caption = 'Windows 11 Pro' } }; [pscustomobject]@{ Architecture = 9 } };"
+foreach ($case in @(
+  @('--house https://agents.house --bogus', 'kit_bootstrap_refused: unknown argument --bogus'),
+  @('--house https://agents.house', 'kit_bootstrap_refused: docker volume ended with status 3')
+)) {
+  $output = @(& pwsh -NoProfile -NonInteractive -Command "$prelude & { & ([scriptblock]::Create([IO.File]::ReadAllText('$installer'))) @args } $($case[0])" 2>&1 | ForEach-Object { "$_" })
+  $status = $LASTEXITCODE
+  if ($status -eq 0 -or -not ($output -join "`n").Contains($case[1])) { $findings += "powershell -Command running the installer with $($case[0]) ended with status $status and: $($output -join '|')" }
+}
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }

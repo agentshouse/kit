@@ -21,10 +21,6 @@ function Stop-Bootstrap([string] $Cause) {
   throw "kit_bootstrap_refused: $Cause"
 }
 
-function Exit-Bootstrap([int] $Status) {
-  throw "kit_bootstrap_exit: $Status"
-}
-
 function Invoke-Native([string] $Command, [string[]] $NativeArguments) {
   $ErrorActionPreference = 'Continue'
   $output = @(& $Command @NativeArguments 2>&1 | ForEach-Object { "$_" })
@@ -41,7 +37,7 @@ function ConvertTo-NativeArgument([string] $Value) {
 
 function Invoke-Docker {
   & docker @args
-  if ($LASTEXITCODE -ne 0) { Exit-Bootstrap $LASTEXITCODE }
+  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "docker $($args[0]) ended with status $LASTEXITCODE" }
 }
 
 function Read-Docker {
@@ -204,7 +200,7 @@ function Read-Enrolment {
 
 function Read-Inspect([string] $Format) {
   $value = & docker inspect --format $Format $Name
-  if ($LASTEXITCODE -ne 0) { Exit-Bootstrap $LASTEXITCODE }
+  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "docker inspect ended with status $LASTEXITCODE" }
   "$value"
 }
 
@@ -225,7 +221,7 @@ function Invoke-Login([string[]] $LoginArguments) {
       try { Start-Process -FilePath $_.Substring($Link.Length) } catch { }
     }
   }
-  if ($LASTEXITCODE -ne 0) { Exit-Bootstrap $LASTEXITCODE }
+  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "kit login ended with status $LASTEXITCODE" }
 }
 
 function Test-Authority {
@@ -428,8 +424,9 @@ function Connect-Kit {
         & docker run -i @terminal @placed @entry --rm @Network @Common @Forward
       }
       $status = $LASTEXITCODE
-      if ($status -eq 0 -and $Forwarded -ceq 'kit' -and ($Forward -join ' ') -ceq 'logout') { Invoke-Docker stop $Name | Out-Null }
-      Exit-Bootstrap $status
+      if ($status -ne 0) { Stop-Bootstrap "$Forwarded ended with status $status" }
+      if ($Forwarded -ceq 'kit' -and ($Forward -join ' ') -ceq 'logout') { Invoke-Docker stop $Name | Out-Null }
+      return
     }
     if ($enrolment.ContainsKey('environment')) { Test-Authority } else { Invoke-Docker rm -f $Name | Out-Null }
   }
@@ -477,17 +474,6 @@ try {
   }
   Connect-Kit
   $global:LASTEXITCODE = 0
-} catch {
-  $message = "$($_.Exception.Message)"
-  if ($message -match '^kit_bootstrap_exit: (\d+)$') {
-    $global:LASTEXITCODE = [int]$Matches[1]
-  } elseif ($message.StartsWith('kit_bootstrap_refused: ')) {
-    [Console]::Error.WriteLine($message)
-    $global:LASTEXITCODE = 1
-  } else {
-    $global:LASTEXITCODE = 1
-    throw
-  }
 } finally {
   try { [Console]::OutputEncoding = $consoleEncoding } catch { }
 }

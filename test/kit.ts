@@ -67,6 +67,13 @@ export async function placeKitHouse(bin: string): Promise<void> {
   await chmod(join(bin, 'house'), 0o755);
 }
 
+export async function placeKit(bin: string): Promise<string> {
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, 'kit'), `#!/bin/sh\nexec ${process.execPath} ${KIT} "$@"\n`);
+  await chmod(join(bin, 'kit'), 0o755);
+  return `${bin}:${process.env.PATH}`;
+}
+
 export const HOST_KEY = 'SHA256:kOo3WBbkkD4lemUHYroV3Ndz9eyygFTzdlqlS/+yLlE';
 
 export async function placeHostKey(home: string): Promise<void> {
