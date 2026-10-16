@@ -48,6 +48,8 @@ type Ack = { provider_session_id: string } | { refused: string } | Record<string
 
 const KILLED = 'the conversation was killed';
 
+const REFUSED = 'the CLI refused the prompt';
+
 const EXIT_PLAN_MODE = {
   parse(value: unknown): Record<string, unknown> {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -609,8 +611,9 @@ export class Conversations {
     turn.prompted = true;
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
       (answer) => {
-        const failure = answeredFailure(answer);
-        this.end(conversation, turn, failure === null ? null : { failed: failure }, failure);
+        const notice = answeredFailure(answer);
+        const failed = notice ?? (answer.stopReason === 'refusal' ? REFUSED : null);
+        this.end(conversation, turn, failed === null ? null : { failed }, notice);
       },
       async (error: unknown) => {
         if (running.adapter.connection.signal.aborted) {

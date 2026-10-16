@@ -541,7 +541,7 @@ it('ends a turn failed with the failure Claude answers its prompt with, as for a
   const hosted = await opened('claude-agent-acp');
   const limit = "You've hit your weekly limit · resets 11am (UTC)";
 
-  hosted.input({ kind: 'message', text: `@refuse ${limit}`, files: [], first: true });
+  hosted.input({ kind: 'message', text: `@sessionfailure ${limit}`, files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(ended.body).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: limit });
@@ -549,6 +549,19 @@ it('ends a turn failed with the failure Claude answers its prompt with, as for a
   expect(await ends(hosted, 2)).toEqual([{ failed: limit }, { text: 'back' }]);
   const log = await hosted.adapterLog();
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(1);
+});
+
+it.each(KINDS)('ends a turn failed when %s refuses its prompt, with the explanation it gave or none', async (kind) => {
+  const hosted = await opened(kind);
+
+  hosted.input({ kind: 'message', text: '@refusal', files: [], first: true });
+  hosted.input({ kind: 'message', text: '@say I cannot help with that.\n@refusal', files: [], first: false });
+
+  await ends(hosted, 2);
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended')).map((turn) => turn.body)).toEqual([
+    { parts: [], context: null, failed: expect.stringContaining('refused') },
+    { parts: [{ type: 'text', text: 'I cannot help with that.' }], context: null, failed: expect.stringContaining('refused') },
+  ]);
 });
 
 it('ends a turn when Claude answers its prompt without an end notice, as it does for a local command', async () => {

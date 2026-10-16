@@ -182,10 +182,11 @@ async function directive(
   if (name === 'started') await turnStarted(client, sessionId);
   if (name === 'ended') await turnEnded(client, sessionId);
   if (name === 'fail') throw new RequestError(-32603, argument);
-  if (name === 'refuse') {
+  if (name === 'sessionfailure') {
     const sessionFailure = { id: `${sessionId}:error`, revision: 1, category: 'limit', severity: 'error', title: argument, actions: [] };
     return { stopReason: 'end_turn', _meta: { jetbrains: { air: { version: 1, sessionFailure } } } };
   }
+  if (name === 'refusal') return { stopReason: 'refusal' };
   if (name === 'answer') return 'answered';
   // A hold keeps the turn running for the milliseconds its spec names, the time that spec stages something else in.
   if (name === 'hold') await new Promise((resolve) => setTimeout(resolve, Number(argument)));
