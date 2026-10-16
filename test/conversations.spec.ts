@@ -537,6 +537,20 @@ it.each(KINDS)('ends a turn failed with the cause %s gives when it fails the pro
   ]);
 });
 
+it('ends a turn failed with the failure Claude answers its prompt with, as for an exhausted limit, shows it as an error marker and keeps the process', async () => {
+  const hosted = await opened('claude-agent-acp');
+  const limit = "You've hit your weekly limit · resets 11am (UTC)";
+
+  hosted.input({ kind: 'message', text: `@refuse ${limit}`, files: [], first: true });
+
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(ended.body).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: limit });
+  hosted.input({ kind: 'message', text: '@say back', files: [], first: false });
+  expect(await ends(hosted, 2)).toEqual([{ failed: limit }, { text: 'back' }]);
+  const log = await hosted.adapterLog();
+  expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(1);
+});
+
 it('ends a turn when Claude answers its prompt without an end notice, as it does for a local command', async () => {
   const hosted = await opened('claude-agent-acp');
 

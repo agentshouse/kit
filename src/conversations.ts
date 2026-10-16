@@ -15,7 +15,7 @@ import type { House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
-import { readerFor, type Event, type Message, type Reader } from './events.ts';
+import { answeredFailure, readerFor, type Event, type Message, type Reader } from './events.ts';
 import { placeFiles, uploadBytes, type MessageFile, type SavedFile } from './files.ts';
 import { agentBase } from './home.ts';
 import { instructions } from './instructions.ts';
@@ -584,11 +584,12 @@ export class Conversations {
     return turn;
   }
 
-  private end(conversation: Conversation, turn: Turn, failed: { failed: string } | null): void {
+  private end(conversation: Conversation, turn: Turn, failed: { failed: string } | null, notice: string | null = null): void {
     if (turn.ended) return;
     if (conversation.turn === turn) {
       for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
     }
+    if (notice !== null) turn.parts.start({ type: 'marker', marker: 'retry', text: notice });
     turn.ended = true;
     conversation.open--;
     if (conversation.turn === turn) conversation.turn = null;
@@ -607,7 +608,10 @@ export class Conversations {
     const turn = this.begin(conversation);
     turn.prompted = true;
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
-      () => this.end(conversation, turn, null),
+      (answer) => {
+        const failure = answeredFailure(answer);
+        this.end(conversation, turn, failure === null ? null : { failed: failure }, failure);
+      },
       async (error: unknown) => {
         if (running.adapter.connection.signal.aborted) {
           this.end(conversation, turn, { failed: running.killed ? KILLED : await running.adapter.exited });
