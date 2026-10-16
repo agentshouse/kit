@@ -106,10 +106,7 @@ function connected(): Promise<void> {
   });
 }
 
-export async function resident(): Promise<void> {
-  const copies = new LocalCopies(house);
-  await copies.load();
-  await serveOwner(copies);
+async function started(): Promise<void> {
   await connected();
   await forgetRestart();
   watch(kitHome(), () => {
@@ -119,10 +116,21 @@ export async function resident(): Promise<void> {
   });
   await placeSkillSet();
   await mkdir(agentBase(), { recursive: true });
-  process.env.HOUSE_KIT_RESIDENT = String(process.pid);
-  const agents = new Agents(house, () => changed());
   await installShim(join(kitHome(), 'shim', 'git'), 'git-main');
   await installShim(codexLauncher(), 'codex-main');
+}
+
+export async function resident(): Promise<void> {
+  await mkdir(kitHome(), { recursive: true, mode: 0o700 });
+  const copies = new LocalCopies(house);
+  await copies.load();
+  await serveOwner(copies);
+  await started().catch((error: unknown) => {
+    report(error);
+    process.exit(1);
+  });
+  process.env.HOUSE_KIT_RESIDENT = String(process.pid);
+  const agents = new Agents(house, () => changed());
   let stream: Stream | null = null;
   let reported = false;
   const idle = () => conversations.idle() && signIns.idle() && agents.idle();

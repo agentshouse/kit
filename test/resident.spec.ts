@@ -165,6 +165,33 @@ it('refuses a second resident that reaches the running Kit home through a symbol
   expect(openings(house)).toBe(1);
 });
 
+it('waits for a login on a Kit home that does not exist yet, and connects once a login enrols it', async () => {
+  const house = await startHouse();
+  const home = join(await temporaryHome(), 'home');
+  const kit = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => kit.stderr().includes('run kit login'));
+
+  await enrol(house, home, 'ahk_held');
+
+  expect((await until(() => house.sockets[0])).headers.authorization).toBe('Bearer ahk_held');
+});
+
+it('ends with a failure when a start step after its claim fails, and leaves the Environment to the next resident', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await enrol(house, home, 'ahk_held');
+  const workspace = join(home, 'workspace');
+  await writeFile(workspace, '');
+  const failed = runKit(['resident'], { HOUSE_KIT_HOME: home, HOUSE_KIT_WORKSPACE: workspace });
+
+  expect(await ended(failed)).toBe(1);
+  expect(failed.stderr()).toBe(`kit: ENOTDIR: not a directory, mkdir '${join(workspace, 'agents')}'\n`);
+  runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => house.sockets[0]);
+  await settle();
+  expect(openings(house)).toBe(1);
+});
+
 async function forgotten(house: House, home: string): Promise<void> {
   await expect(access(join(home, 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(JSON.parse(await readFile(join(home, 'disconnected.json'), 'utf8'))).toEqual({ house: house.origin, environment: 'environment-one' });
