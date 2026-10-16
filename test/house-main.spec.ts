@@ -6,7 +6,8 @@ import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it, onTestFinished } from 'vitest';
+import { expect, it, onTestFinished, vi } from 'vitest';
+import { ownerSocket } from '../src/home.ts';
 import { startHouse, type House } from './double.ts';
 import { declaredUpload, helpLine, LISTING, shelled, type McpCall, type Transfer } from './environment.ts';
 import { runKit, temporaryHome } from './kit.ts';
@@ -289,13 +290,16 @@ it.each([
   [['fetch', '--x'], false, '--x', 'usage: house fetch'],
 ])('refuses house %j with its usage before it opens a socket', async (argv, conversation, unexpected, usage) => {
   const home = await temporaryHome();
+  vi.stubEnv('HOUSE_KIT_HOME', home);
+  const owner = ownerSocket();
+  vi.unstubAllEnvs();
   const opened: string[] = [];
-  for (const socket of ['owner.sock', 'bridge.sock']) {
+  for (const socket of [owner, join(home, 'bridge.sock')]) {
     const listener = createServer((connection) => {
       opened.push(socket);
       connection.destroy();
     });
-    listener.listen(join(home, socket));
+    listener.listen(socket);
     await once(listener, 'listening');
     onTestFinished(() => new Promise<void>((resolve) => listener.close(() => resolve())));
   }

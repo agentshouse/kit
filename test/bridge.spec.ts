@@ -5,6 +5,7 @@ import { request } from 'node:http';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
+import { temporaryHome } from './kit.ts';
 import {
   appRemote,
   conversationCredential,
@@ -49,6 +50,18 @@ it("reaches House with each process's own conversation credential and never show
   const seen = JSON.stringify([await hosted.adapterLog(), hosted.socket.frames]);
   expect(seen).not.toContain(conversationCredential('conversation-1'));
   expect(seen).not.toContain(conversationCredential('conversation-2'));
+});
+
+it.each([60, 120])("opens a conversation and answers its house calls under a Kit home %i characters deeper than a temporary directory", async (deeper) => {
+  const home = join(await temporaryHome(), 'k'.repeat(deeper));
+  await mkdir(home);
+  const hosted = await hostKit([{}], { home, skills: false });
+
+  hosted.input({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
+
+  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  directed(hosted, '@house search {"query":"one"}');
+  expect((await runs(hosted, 1)).map((ran) => ran.status)).toEqual([0]);
 });
 
 it("keeps a conversation's house on its bridge credential while Kit home holds the User's own agent's connection", async () => {

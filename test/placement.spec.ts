@@ -209,3 +209,75 @@ it('forwards nothing into the container of a computer whose Kit runs natively', 
   });
   await nativeUnchanged(host);
 });
+
+const UNIT = ['.config', 'systemd', 'user', 'house-kit.service'];
+
+function replacing(held: string, home: string): string {
+  return `kit_bootstrap_refused: House Kit runs on this computer with the Kit home ${held}; installing it with the Kit home ${home} replaces that Kit, so run this bootstrap in a terminal to confirm\n`;
+}
+
+it.each([
+  ['natively', []],
+  ['in a container', ['--container']],
+])('changes nothing of a native Kit another Kit home runs when a run %s names a new Kit home, without a terminal or a yes', async (_, choice) => {
+  const host = await native();
+  const held = join(host.home, '.house-kit');
+  const added = { HOUSE_KIT_HOME: join(host.home, 'second-kit') };
+
+  expect(host.run(choice, added)).toEqual({ status: 1, stdout: '', stderr: replacing(held, added.HOUSE_KIT_HOME) });
+  const declined = host.terminal(choice, 'n\n', added);
+  expect(declined.status).toBe(1);
+  expect(declined.stdout).toContain(`House Kit is already installed on this computer with the Kit home ${held}. Replace it? [y/N]`);
+  expect(declined.stdout).toContain(`kit_bootstrap_refused: the Kit home ${held} was kept; nothing changed`);
+
+  await nativeUnchanged(host);
+  expect(await readFile(join(host.home, ...UNIT), 'utf8')).toContain(`Environment="HOUSE_KIT_HOME=${held}"`);
+  await keptTheRest(host);
+});
+
+it('changes nothing of a container Kit another Kit home runs when a native run names a new Kit home without a terminal', async () => {
+  const host = await contained();
+  const added = { HOUSE_KIT_HOME: join(host.home, 'second-kit') };
+
+  expect(host.run([], added)).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: replacing(join(host.home, '.house-kit'), added.HOUSE_KIT_HOME),
+  });
+
+  await containerUnchanged(host);
+  await keptTheRest(host);
+});
+
+it('changes nothing of a server Kit another Kit home runs when a server run names a new Kit home without a terminal', async () => {
+  const host = await fakeHost({ ...NATIVE, server: true });
+  await host.mark('systemd');
+  expect(host.run(['--linux'])).toMatchObject({ status: 0 });
+  const unit = await host.serverUnit();
+  await host.forget();
+  const added = { HOUSE_KIT_HOME: join(host.home, 'second-kit') };
+
+  expect(host.run(['--linux'], added)).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: replacing(join(host.home, '.house-kit'), added.HOUSE_KIT_HOME),
+  });
+
+  expect(await host.serverUnit()).toBe(unit);
+  expect(host.calls('systemctl')).toEqual([]);
+  expect(host.calls('kit')).toEqual([]);
+});
+
+it('replaces a native Kit another Kit home runs once the User confirms, and leaves that Kit home as it was', async () => {
+  const host = await native();
+  const added = { HOUSE_KIT_HOME: join(host.home, 'second-kit') };
+
+  const ran = host.terminal([], 'y\n', added);
+
+  expect(ran.status).toBe(0);
+  expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
+  expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${added.HOUSE_KIT_HOME}`]);
+  expect(await readFile(join(host.home, ...UNIT), 'utf8')).toContain(`Environment="HOUSE_KIT_HOME=${added.HOUSE_KIT_HOME}"`);
+  expect(await enrolled(host)).toBe('environment-one');
+  await keptTheRest(host);
+});

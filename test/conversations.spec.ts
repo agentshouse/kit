@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it, onTestFinished } from 'vitest';
+import { expect, it, onTestFinished, vi } from 'vitest';
+import { socketDirectory } from '../src/home.ts';
 import { settle, until } from './double.ts';
 import { hostKit, installHeld, lastInput, outcome, userBin, type Hosted } from './environment.ts';
 import { placeHostKey, temporaryHome } from './kit.ts';
@@ -101,13 +102,14 @@ it('starts Grok approving every tool, since it offers no mode', async () => {
   ]);
 });
 
-it("refuses the open with the CLI's cause when the CLI does not take the route's effort", async () => {
+it("refuses the open in the Kit's words when the CLI does not take the route's effort, and logs the CLI's cause", async () => {
   const hosted = await hostKit([{ model: 'codex-instant', effort: 'high' }]);
 
   hosted.input({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('Unknown config option: thought_level') });
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI refused the Agent's model, mode or effort" });
   expect(hosted.socket.frames.filter((frame) => frame.type === 'process')).toEqual([]);
+  expect(hosted.kit.stderr()).toContain('Unknown config option: thought_level');
 });
 
 it('opens a conversation of an Agent House added after the Kit read its Agents', async () => {
@@ -316,13 +318,29 @@ it('resumes the stored provider session for a message with no process and prompt
   });
 });
 
-it('reports a refused resume with the CLI cause', async () => {
+it("reports a refused resume in the Kit's words, never the CLI's, and logs the CLI's cause", async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'refuse-resume'), '');
 
   hosted.input({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', files: [], first: false });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('the session cannot be resumed') });
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ did not start: the Agent's CLI could not resume this conversation: .*the session cannot be resumed/m);
+});
+
+it("refuses a conversation whose connection cannot open in the Kit's words, and logs why", async () => {
+  const hosted = await hostKit();
+  vi.stubEnv('HOUSE_KIT_HOME', hosted.home);
+  const sockets = socketDirectory();
+  vi.unstubAllEnvs();
+  await rm(sockets, { recursive: true, force: true });
+  await writeFile(sockets, '');
+  onTestFinished(() => rm(sockets, { force: true }));
+
+  hosted.input({ kind: 'open' });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Kit could not open this conversation's connection" });
+  expect(hosted.kit.stderr()).toContain(`${sockets} is not a directory`);
 });
 
 const KINDS = ['codex-acp', 'claude-agent-acp', 'grok-build'];

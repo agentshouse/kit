@@ -31,18 +31,20 @@ function installed(): string | null {
   }
 }
 
+const CHECKED = `sh -c 'kit=$(curl -fsSL "$0") || { echo "House Kit could not be downloaded; run this command again." >&2; exit 1; }; eval "$kit"'`;
+
 function entries(house: string): [shell: string, windows: string] {
   const host = new URL(house).host;
   const relay = relayOrigin();
-  if (relay === undefined) return [`curl -fsSL ${host}/kit | sh`, `irm ${host}/kit.ps1 | iex`];
+  if (relay === undefined) return [`${CHECKED} ${host}/kit`, `irm ${host}/kit.ps1 | iex`];
   const entry = `${relay}/${host}/kit`;
-  return [`curl -fsSL ${entry} | HOUSE_KIT_RELAY=${relay} sh`, `$env:HOUSE_KIT_RELAY='${relay}'; irm ${entry}.ps1 | iex`];
+  return [`HOUSE_KIT_RELAY=${relay} ${CHECKED} ${entry}`, `$env:HOUSE_KIT_RELAY='${relay}'; irm ${entry}.ps1 | iex`];
 }
 
 export function installCommand(house: string): string {
   const [shell, windows] = entries(house);
   const placement = installed();
   if (placement === 'native') return shell;
-  if (placement === 'server') return `${shell} -s -- --linux`;
-  return `${shell} -s -- --container, or ${windows} on Windows`;
+  if (placement === 'server') return `${shell} --linux`;
+  return `${shell} --container, or ${windows} on Windows`;
 }

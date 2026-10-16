@@ -254,6 +254,8 @@ it('opens its socket again after an answer to its opening that carries no House 
 
 const TOO_OLD = { status: 426, body: { error: { code: 'kit_update_required', retryable: false } } };
 
+const CHECKED = `sh -c 'kit=$(curl -fsSL "$0") || { echo "House Kit could not be downloaded; run this command again." >&2; exit 1; }; eval "$kit"'`;
+
 function tooOld(command: string): string {
   return `kit: This Kit is too old for House. Update it: ${command}\n`;
 }
@@ -275,13 +277,13 @@ it('ends, left stopped, saying it must be updated and with what command, when Ho
   const host = new URL(house.origin).host;
 
   expect(await ended(kit)).toBe(0);
-  expect(kit.stderr()).toContain(tooOld(`curl -fsSL ${host}/kit | sh -s -- --container, or irm ${host}/kit.ps1 | iex on Windows`));
+  expect(kit.stderr()).toContain(tooOld(`${CHECKED} ${host}/kit --container, or irm ${host}/kit.ps1 | iex on Windows`));
   expect(openings(house)).toBe(1);
 });
 
 it.each([
   ['natively on a computer', 'native', ''],
-  ['natively on a server', 'server', ' -s -- --linux'],
+  ['natively on a server', 'server', ' --linux'],
 ])('ends, left stopped, naming the install command of a Kit installed %s even outside its service, when House refuses any of its calls as too old', async (_, placement, flags) => {
   const house = await startHouse();
   house.route('POST', '/kit/restarted', () => TOO_OLD);
@@ -290,7 +292,7 @@ it.each([
   const kit = await resident(house, home);
 
   expect(await ended(kit)).toBe(0);
-  expect(kit.stderr()).toContain(tooOld(`curl -fsSL ${new URL(house.origin).host}/kit | sh${flags}`));
+  expect(kit.stderr()).toContain(tooOld(`${CHECKED} ${new URL(house.origin).host}/kit${flags}`));
   expect(openings(house)).toBe(0);
 });
 
@@ -308,7 +310,7 @@ it('names the install command through its relay when House refuses a call it rel
   const entry = `${relay.origin}/dev.agents.house/kit`;
   expect(kit.stderr()).toContain(
     tooOld(
-      `curl -fsSL ${entry} | HOUSE_KIT_RELAY=${relay.origin} sh -s -- --container, or $env:HOUSE_KIT_RELAY='${relay.origin}'; irm ${entry}.ps1 | iex on Windows`,
+      `HOUSE_KIT_RELAY=${relay.origin} ${CHECKED} ${entry} --container, or $env:HOUSE_KIT_RELAY='${relay.origin}'; irm ${entry}.ps1 | iex on Windows`,
     ),
   );
 });

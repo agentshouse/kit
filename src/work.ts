@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { RUNNING_JOB, type Message } from './events.ts';
-import { kitHome } from './home.ts';
+import { kitHome, socketDirectory } from './home.ts';
 
 type Fields = Record<string, any>;
 
@@ -194,9 +194,7 @@ class CodexWork extends Work {
   private proven = -1;
 
   override async open(cli: string): Promise<Record<string, string>> {
-    const sockets = join(kitHome(), 'bridges');
-    await mkdir(sockets, { recursive: true, mode: 0o700 });
-    this.path = join(sockets, `${randomUUID()}.sock`);
+    this.path = join(socketDirectory(), `${randomUUID()}.sock`);
     this.server = createServer((socket) => this.connected(socket));
     this.server.listen(this.path);
     await once(this.server, 'listening');

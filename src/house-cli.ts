@@ -5,7 +5,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { ToolResult } from './bridge.ts';
 import { verified } from './files.ts';
 import { HOUSE_REF } from './git.ts';
-import { kitHome, readOwnAgent } from './home.ts';
+import { ownerSocket, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed, selectRelay } from './relay.ts';
@@ -269,7 +269,7 @@ async function push(args: string[]): Promise<string> {
   if (owner && socketPath !== undefined) throw new Error('--owner is not for Agent conversations; run house push without it');
   if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house push needs --owner');
   const pushed = JSON.parse(
-    await bridged('/git/push', { cwd: process.cwd(), commit }, undefined, owner ? join(kitHome(), 'owner.sock') : socketPath),
+    await bridged('/git/push', { cwd: process.cwd(), commit }, undefined, owner ? ownerSocket() : socketPath),
   ) as { refused: boolean; text: string };
   if (pushed.refused) throw new Error(pushed.text);
   return pushed.text;
@@ -277,7 +277,7 @@ async function push(args: string[]): Promise<string> {
 
 async function fetched(args: string[]): Promise<string> {
   if (accepted(args, ['--help'], 0, FETCH_USAGE).flags.has('--help')) return FETCH_USAGE;
-  const answer = JSON.parse(await bridged('/git/fetch', {}, undefined, socketPath ?? join(kitHome(), 'owner.sock'))) as {
+  const answer = JSON.parse(await bridged('/git/fetch', {}, undefined, socketPath ?? ownerSocket())) as {
     refused: boolean;
     text: string;
   };
