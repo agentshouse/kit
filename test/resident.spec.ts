@@ -1,4 +1,4 @@
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -108,6 +108,38 @@ it('refuses a second resident of a Kit home whose Kit runs, naming that Kit and 
   const third = runKit(['resident'], { HOUSE_KIT_HOME: home });
   expect(await ended(third)).toBe(1);
   expect(third.stderr()).toContain(`kit: Kit ${first.pid} already runs`);
+});
+
+it('refuses a second resident while the first waits for a login, and leaves the first holding the Environment once it connects', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const first = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => first.stderr().includes('run kit login'));
+
+  const second = runKit(['resident'], { HOUSE_KIT_HOME: home });
+
+  expect(await ended(second)).toBe(1);
+  expect(second.stderr()).toBe(`kit: Kit ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another here\n`);
+  await enrol(house, home, 'ahk_held');
+  await until(() => house.sockets[0]);
+  await settle();
+  expect(openings(house)).toBe(1);
+});
+
+it('refuses a second resident that reaches the running Kit home through a symbolic link', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const first = await resident(house, home);
+  await until(() => house.sockets[0]);
+  const alias = join(await temporaryHome(), 'alias');
+  await symlink(home, alias);
+
+  const second = runKit(['resident'], { HOUSE_KIT_HOME: alias });
+
+  expect(await ended(second)).toBe(1);
+  expect(second.stderr()).toBe(`kit: Kit ${first.pid} already runs this Environment from Kit home ${alias}; stop it first to run another here\n`);
+  await settle();
+  expect(openings(house)).toBe(1);
 });
 
 async function forgotten(house: House, home: string): Promise<void> {

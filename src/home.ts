@@ -69,7 +69,9 @@ export function kitHome(): string {
 
 export function socketDirectory(): string {
   const sockets = privateDirectory(join(realpathSync('/tmp'), `hk-${process.geteuid!()}`));
-  return privateDirectory(join(sockets, createHash('sha256').update(resolve(kitHome())).digest('hex').slice(0, 12)));
+  const home = kitHome();
+  const physical = existsSync(home) ? realpathSync(home) : resolve(home);
+  return privateDirectory(join(sockets, createHash('sha256').update(physical).digest('hex').slice(0, 12)));
 }
 
 export function ownerSocket(): string {

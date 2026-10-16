@@ -1,7 +1,6 @@
-import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { createServer, get } from 'node:http';
+import { createServer, get, type Server } from 'node:http';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
@@ -33,9 +32,22 @@ async function installShim(path: string, module: string): Promise<void> {
   await writeFile(path, `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(main)} "$@"\n`, { mode: 0o755 });
 }
 
+function listened(server: Server): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const failed = (error: NodeJS.ErrnoException) => {
+      server.off('listening', succeeded);
+      if (error.code === 'EADDRINUSE') resolve(false);
+      else reject(error);
+    };
+    const succeeded = () => {
+      server.off('error', failed);
+      resolve(true);
+    };
+    server.once('error', failed).once('listening', succeeded).listen(ownerSocket());
+  });
+}
+
 async function serveOwner(copies: LocalCopies): Promise<void> {
-  const socketPath = ownerSocket();
-  await rm(socketPath, { force: true });
   const server = createServer(async (request, response) => {
     try {
       const text = await received(request);
@@ -58,14 +70,17 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
       response.writeHead(502).end(error instanceof Error ? error.message : String(error));
     }
   });
-  server.listen(socketPath);
-  await once(server, 'listening');
+  while (!(await listened(server))) {
+    const running = await runningResident();
+    if (running !== null) throw new Error(`Kit ${running} already runs this Environment from Kit home ${kitHome()}; stop it first to run another here`);
+    await rm(ownerSocket(), { force: true });
+  }
 }
 
 function runningResident(): Promise<number | null> {
   return new Promise((resolve, reject) => {
-    get({ socketPath: ownerSocket(), path: '/resident' }, async (answer) => {
-      resolve((JSON.parse(await received(answer)) as { pid: number }).pid);
+    get({ socketPath: ownerSocket(), path: '/resident' }, (answer) => {
+      received(answer).then((text) => resolve((JSON.parse(text) as { pid: number }).pid), reject);
     }).on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT' || error.code === 'ECONNREFUSED') resolve(null);
       else reject(error);
@@ -90,8 +105,9 @@ function connected(): Promise<void> {
 }
 
 export async function resident(): Promise<void> {
-  const running = await runningResident();
-  if (running !== null) throw new Error(`Kit ${running} already runs this Environment from Kit home ${kitHome()}; stop it first to run another here`);
+  const copies = new LocalCopies(house);
+  await copies.load();
+  await serveOwner(copies);
   await connected();
   await forgetRestart();
   watch(kitHome(), () => {
@@ -103,11 +119,8 @@ export async function resident(): Promise<void> {
   await mkdir(agentBase(), { recursive: true });
   process.env.HOUSE_KIT_RESIDENT = String(process.pid);
   const agents = new Agents(house, () => changed());
-  const copies = new LocalCopies(house);
-  await copies.load();
   await installShim(join(kitHome(), 'shim', 'git'), 'git-main');
   await installShim(codexLauncher(), 'codex-main');
-  await serveOwner(copies);
   let stream: Stream | null = null;
   let reported = false;
   const idle = () => conversations.idle() && signIns.idle() && agents.idle();
