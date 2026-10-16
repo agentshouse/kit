@@ -248,10 +248,7 @@ function Set-Configuration {
 function Update-Clis {
   $ErrorActionPreference = 'Continue'
   $listed = @(& docker run --rm @Network --entrypoint node @Common $ClisMain)
-  if ($LASTEXITCODE -ne 0) {
-    [Console]::Error.WriteLine('House Kit could not read the agent CLIs, so it updates none.')
-    return
-  }
+  if ($LASTEXITCODE -ne 0) { return "House Kit could not read the agent CLIs, so it updated none; docker run ended with status $LASTEXITCODE" }
   foreach ($line in $listed) {
     $name, $path, $release, $minimum, $state = "$line".Split("`t")
     if (-not $UpdateClis) {
@@ -264,7 +261,7 @@ function Update-Clis {
     if ($Interactive) { $terminal = @('-t') }
     & docker run -i @terminal --rm @Network --entrypoint $path @Common update | Out-Host
     if ($LASTEXITCODE -ne 0) {
-      [Console]::Error.WriteLine("$name could not be updated; it stays at $release.")
+      "$name could not be updated; it stays at $release"
       continue
     }
     Invoke-Docker run --rm --network none --mount $KitHomeMount --entrypoint touch $Image /kit-home/restart | Out-Null
@@ -433,7 +430,7 @@ function Connect-Kit {
 
   if (Test-Container) {
     $configured = Set-Configuration
-    Update-Clis
+    $failed = @(Update-Clis)
     if ($installed -cne "$Image on-failure") {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
@@ -448,6 +445,7 @@ function Connect-Kit {
       Write-Host 'House Kit is already installed.'
     }
     if ($Rooms.Count -gt 0) { Invoke-Login $Rooms }
+    if ($failed.Count -gt 0) { Stop-Bootstrap ($failed -join '; ') }
     return
   }
 
@@ -459,10 +457,11 @@ function Connect-Kit {
     $enrolment = Read-Enrolment
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
   }
-  Update-Clis
+  $failed = @(Update-Clis)
   Start-Resident
   Write-Host "House Kit connected for Environment $($enrolment['environment'])."
   if ($alreadyConnected -and $Rooms.Count -gt 0) { Invoke-Login $Rooms }
+  if ($failed.Count -gt 0) { Stop-Bootstrap ($failed -join '; ') }
 }
 
 $consoleEncoding = [Console]::OutputEncoding

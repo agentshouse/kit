@@ -20,10 +20,14 @@ foreach ($name in @('Update-Clis', 'Invoke-Docker')) {
   $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
   . ([scriptblock]::Create($definition.Extent.Text))
 }
+$script:ListStatus = 0
+$script:FailingCli = ''
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
+  if ($args[-1] -ceq 'update' -and $args -contains $script:FailingCli) { $global:LASTEXITCODE = 1 }
   if ($args -contains 'node') {
+    $global:LASTEXITCODE = $script:ListStatus
     "codex`t/kit-home/.local/bin/codex`t0.150.0`t0.159.1`told"
     "claude`t/kit-home/.local/bin/claude`t2.1.200`t2.1.286`told"
     "grok`t/kit-home/.grok/bin/grok`t1.0.50`t1.0.46`tcurrent"
@@ -39,16 +43,18 @@ $Network = @('--network', 'host')
 $Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
 $KitHomeMount = 'home'
 $Image = 'image'
-function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected) {
+function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected, [string[]] $Failures = @()) {
   $script:UpdateClis = $Flag
   $script:Interactive = $Terminal
   $script:Answers = $Given
   $script:Prompts = @()
   $script:Ran = @()
-  Update-Clis
+  $failed = @(Update-Clis)
   $updates = @($script:Ran | Where-Object { $_.EndsWith(' update') })
   $restarts = @($script:Ran | Where-Object { $_ -ceq 'run --rm --network none --mount home --entrypoint touch image /kit-home/restart' })
-  if ($restarts.Count -ne $Expected.Count) { "Update-Clis asked the Kit to restart $($restarts.Count) times after $($Expected.Count) updates" }
+  $succeeded = @($Expected | Where-Object { -not $script:FailingCli -or -not $_.Contains("--entrypoint $script:FailingCli ") })
+  if ($restarts.Count -ne $succeeded.Count) { "Update-Clis asked the Kit to restart $($restarts.Count) times after $($succeeded.Count) updates that succeeded" }
+  if (($failed -join '|') -cne ($Failures -join '|')) { "Update-Clis reported the failures: $($failed -join '|')" }
   if ($script:Ran[0] -ne "run --rm --network host --entrypoint node --hostname pc --mount home --mount workspace image $ClisMain") { "Update-Clis read the CLIs with: $($script:Ran[0])" }
   if ($script:Prompts.Count -ne $Asked) { "Update-Clis asked $($script:Prompts.Count) times, not $Asked" }
   if (($updates -join '|') -ne ($Expected -join '|')) { "Update-Clis ran: $($updates -join '|')" }
@@ -62,6 +68,16 @@ $findings += @(Test-Updates $true $false @() 0 @(
   'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --hostname pc --mount home --mount workspace image update'
 ))
 $findings += @(Test-Updates $false $false @('') 0 @())
+$script:FailingCli = '/kit-home/.local/bin/claude'
+$findings += @(Test-Updates $true $false @() 0 @(
+  'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --hostname pc --mount home --mount workspace image update',
+  'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --hostname pc --mount home --mount workspace image update',
+  'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --hostname pc --mount home --mount workspace image update'
+) @('claude could not be updated; it stays at 2.1.200'))
+$script:FailingCli = ''
+$script:ListStatus = 7
+$findings += @(Test-Updates $true $false @() 0 @() @('House Kit could not read the agent CLIs, so it updated none; docker run ended with status 7'))
+$script:ListStatus = 0
 $workdir = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-HouseWorkdir' }, $true)
 . ([scriptblock]::Create($workdir.Extent.Text))
 foreach ($case in @(
@@ -139,7 +155,8 @@ function Read-Enrolment { $script:Enrolment }
 function Test-Container { $script:Installed }
 function Test-Path { $true }
 function Set-Configuration { $false }
-function Update-Clis { }
+$script:CliFailures = @()
+function Update-Clis { $script:CliFailures }
 function Write-Host { }
 $script:Running = 'true'
 function Read-Inspect([string] $Format) {
@@ -291,6 +308,24 @@ if (@($script:Ran | Where-Object { $_ -match ' login( |$)' -or $_ -match '^(star
   $findings += "the bootstrap forwarding kit login --help into a stopped container ran: $($script:Ran -join '|')"
 }
 $script:Running = 'true'
+$script:CliFailures = @('grok could not be updated; it stays at 1.0.50')
+foreach ($case in @(
+  @($true, '^restart house-kit$|^start house-kit$|^rm '),
+  @($false, '^run -d .* resident$')
+)) {
+  $script:Installed = $case[0]
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse')
+  $script:Ran = @()
+  try {
+    Connect-Kit
+    $findings += "the bootstrap with a container installed $($case[0]) whose CLI update failed ended without a refusal"
+  } catch {
+    if ($_.Exception.Message -cne 'kit_bootstrap_refused: grok could not be updated; it stays at 1.0.50') { $findings += "the bootstrap with a container installed $($case[0]) whose CLI update failed ended with: $($_.Exception.Message)" }
+  }
+  if (-not $case[0] -and @($script:Ran | Where-Object { $_ -match $case[1] }).Count -ne 1) { $findings += "the bootstrap whose CLI update failed started no Kit: $($script:Ran -join '|')" }
+}
+$script:CliFailures = @()
 $whole = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
 [void][IO.Directory]::CreateDirectory($whole)
 $installer = Join-Path $whole 'connect-windows.ps1'

@@ -78,6 +78,10 @@ export function ownerSocket(): string {
   return join(socketDirectory(), 'owner.sock');
 }
 
+export function ownerLock(): string {
+  return join(socketDirectory(), 'owner.lock');
+}
+
 export function workspaceRoot(): string {
   return process.env.HOUSE_KIT_WORKSPACE ?? '/agents/house';
 }

@@ -1,7 +1,9 @@
+import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { createServer, get, type Server } from 'node:http';
+import { createServer, get } from 'node:http';
 import { dirname, extname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
@@ -9,7 +11,7 @@ import { received } from './bridge.ts';
 import { CONVERSATION_INPUTS, Conversations, type Input } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
 import { restart } from './end.ts';
-import { agentBase, enrolled, forgetRestart, kitHome, ownerSocket, restartAsked } from './home.ts';
+import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, restartAsked } from './home.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
@@ -32,22 +34,23 @@ async function installShim(path: string, module: string): Promise<void> {
   await writeFile(path, `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(main)} "$@"\n`, { mode: 0o755 });
 }
 
-function listened(server: Server): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const failed = (error: NodeJS.ErrnoException) => {
-      server.off('listening', succeeded);
-      if (error.code === 'EADDRINUSE') resolve(false);
-      else reject(error);
-    };
-    const succeeded = () => {
-      server.off('error', failed);
-      resolve(true);
-    };
-    server.once('error', failed).once('listening', succeeded).listen(ownerSocket());
-  });
+function claimed(lock: DatabaseSync): boolean {
+  try {
+    lock.exec('BEGIN EXCLUSIVE');
+    return true;
+  } catch (error) {
+    if ((error as { errcode?: number }).errcode === 5) return false;
+    throw error;
+  }
 }
 
 async function serveOwner(copies: LocalCopies): Promise<void> {
+  const lock = new DatabaseSync(ownerLock());
+  if (!claimed(lock)) {
+    lock.close();
+    const running = await runningResident();
+    throw new Error(`${running === null ? 'another Kit' : `Kit ${running}`} already runs this Environment from Kit home ${kitHome()}; stop it first to run another here`);
+  }
   const server = createServer(async (request, response) => {
     try {
       const text = await received(request);
@@ -70,11 +73,10 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
       response.writeHead(502).end(error instanceof Error ? error.message : String(error));
     }
   });
-  while (!(await listened(server))) {
-    const running = await runningResident();
-    if (running !== null) throw new Error(`Kit ${running} already runs this Environment from Kit home ${kitHome()}; stop it first to run another here`);
-    await rm(ownerSocket(), { force: true });
-  }
+  server.on('close', () => lock.close());
+  await rm(ownerSocket(), { force: true });
+  server.listen(ownerSocket());
+  await once(server, 'listening');
 }
 
 function runningResident(): Promise<number | null> {

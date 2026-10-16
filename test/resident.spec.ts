@@ -3,11 +3,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { settle, startHouse, until, type House } from './double.ts';
-import { runKit, temporaryHome, type KitRun } from './kit.ts';
+import { runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 
 const RACING_LOGIN = fileURLToPath(new URL('./racing-login.ts', import.meta.url));
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
+const PAUSED_SOCKET_REMOVAL = fileURLToPath(new URL('./paused-socket-removal.ts', import.meta.url));
 
 async function enrol(house: House, home: string, credential: string) {
   await writeFile(
@@ -120,6 +121,28 @@ it('refuses a second resident while the first waits for a login, and leaves the 
 
   expect(await ended(second)).toBe(1);
   expect(second.stderr()).toBe(`kit: Kit ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another here\n`);
+  await enrol(house, home, 'ahk_held');
+  await until(() => house.sockets[0]);
+  await settle();
+  expect(openings(house)).toBe(1);
+});
+
+it('refuses a second resident that starts while the first removes the socket a killed Kit left, and leaves the first holding the Environment', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const killed = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => killed.stderr().includes('run kit login'));
+  stop(killed.pid);
+  await killed.exited;
+  const first = runKit(['resident'], { HOUSE_KIT_HOME: home }, ['--import', PAUSED_SOCKET_REMOVAL]);
+  await until(() => first.stderr().includes('kit-test: removing the owner socket'));
+
+  const second = runKit(['resident'], { HOUSE_KIT_HOME: home });
+
+  expect(await ended(second)).toBe(1);
+  expect(second.stderr()).toBe(`kit: another Kit already runs this Environment from Kit home ${home}; stop it first to run another here\n`);
+  first.input.write('\n');
+  await until(() => first.stderr().includes('run kit login'));
   await enrol(house, home, 'ahk_held');
   await until(() => house.sockets[0]);
   await settle();
