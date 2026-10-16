@@ -552,6 +552,10 @@ class GrokReader extends Reader {
 
 export type { Reader };
 
+export function answeredFailure(answer: Fields): string | null {
+  return answer._meta?.jetbrains?.air?.sessionFailure?.title ?? null;
+}
+
 export function readerFor(kind: string): Reader {
   if (kind === 'claude-agent-acp') return new ClaudeReader();
   if (kind === 'grok-build') return new GrokReader();
