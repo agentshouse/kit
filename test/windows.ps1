@@ -20,10 +20,14 @@ foreach ($name in @('Update-Clis', 'Invoke-Docker')) {
   $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
   . ([scriptblock]::Create($definition.Extent.Text))
 }
+$script:ListStatus = 0
+$script:FailingCli = ''
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
+  if ($args[-1] -ceq 'update' -and $args -contains $script:FailingCli) { $global:LASTEXITCODE = 1 }
   if ($args -contains 'node') {
+    $global:LASTEXITCODE = $script:ListStatus
     "codex`t/kit-home/.local/bin/codex`t0.150.0`t0.159.1`told"
     "claude`t/kit-home/.local/bin/claude`t2.1.200`t2.1.286`told"
     "grok`t/kit-home/.grok/bin/grok`t1.0.50`t1.0.46`tcurrent"
@@ -39,16 +43,18 @@ $Network = @('--network', 'host')
 $Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
 $KitHomeMount = 'home'
 $Image = 'image'
-function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected) {
+function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected, [string[]] $Failures = @()) {
   $script:UpdateClis = $Flag
   $script:Interactive = $Terminal
   $script:Answers = $Given
   $script:Prompts = @()
   $script:Ran = @()
-  Update-Clis
+  $failed = @(Update-Clis)
   $updates = @($script:Ran | Where-Object { $_.EndsWith(' update') })
   $restarts = @($script:Ran | Where-Object { $_ -ceq 'run --rm --network none --mount home --entrypoint touch image /kit-home/restart' })
-  if ($restarts.Count -ne $Expected.Count) { "Update-Clis asked the Kit to restart $($restarts.Count) times after $($Expected.Count) updates" }
+  $succeeded = @($Expected | Where-Object { -not $script:FailingCli -or -not $_.Contains("--entrypoint $script:FailingCli ") })
+  if ($restarts.Count -ne $succeeded.Count) { "Update-Clis asked the Kit to restart $($restarts.Count) times after $($succeeded.Count) updates that succeeded" }
+  if (($failed -join '|') -cne ($Failures -join '|')) { "Update-Clis reported the failures: $($failed -join '|')" }
   if ($script:Ran[0] -ne "run --rm --network host --entrypoint node --hostname pc --mount home --mount workspace image $ClisMain") { "Update-Clis read the CLIs with: $($script:Ran[0])" }
   if ($script:Prompts.Count -ne $Asked) { "Update-Clis asked $($script:Prompts.Count) times, not $Asked" }
   if (($updates -join '|') -ne ($Expected -join '|')) { "Update-Clis ran: $($updates -join '|')" }
@@ -62,6 +68,16 @@ $findings += @(Test-Updates $true $false @() 0 @(
   'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --hostname pc --mount home --mount workspace image update'
 ))
 $findings += @(Test-Updates $false $false @('') 0 @())
+$script:FailingCli = '/kit-home/.local/bin/claude'
+$findings += @(Test-Updates $true $false @() 0 @(
+  'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --hostname pc --mount home --mount workspace image update',
+  'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --hostname pc --mount home --mount workspace image update',
+  'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --hostname pc --mount home --mount workspace image update'
+) @('claude could not be updated; it stays at 2.1.200'))
+$script:FailingCli = ''
+$script:ListStatus = 7
+$findings += @(Test-Updates $true $false @() 0 @() @('House Kit could not read the agent CLIs, so it updated none; docker run ended with status 7'))
+$script:ListStatus = 0
 $workdir = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-HouseWorkdir' }, $true)
 . ([scriptblock]::Create($workdir.Extent.Text))
 foreach ($case in @(
@@ -92,7 +108,6 @@ try {
 if ($script:Prompts.Count -ne 0) { $findings += "Test-Authority asked: $($script:Prompts[0])" }
 $invokeLogin = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Login' }, $true)
 . ([scriptblock]::Create($invokeLogin.Extent.Text))
-function Exit-Bootstrap([int] $Status) { throw "kit_bootstrap_exit: $Status" }
 $Link = 'Open this link and confirm: '
 $Network = @()
 $Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
@@ -140,7 +155,8 @@ function Read-Enrolment { $script:Enrolment }
 function Test-Container { $script:Installed }
 function Test-Path { $true }
 function Set-Configuration { $false }
-function Update-Clis { }
+$script:CliFailures = @()
+function Update-Clis { $script:CliFailures }
 function Write-Host { }
 $script:Running = 'true'
 function Read-Inspect([string] $Format) {
@@ -200,7 +216,7 @@ try {
   Connect-Kit
   $findings += 'a kit login --code forwarded to an enrolled Kit ended without the refusal of kit login'
 } catch {
-  if ($_.Exception.Message -cne 'kit_bootstrap_exit: 1') { $findings += "a kit login --code forwarded to an enrolled Kit ended with: $($_.Exception.Message)" }
+  if ($_.Exception.Message -cne 'kit_bootstrap_refused: kit login ended with status 1') { $findings += "a kit login --code forwarded to an enrolled Kit ended with: $($_.Exception.Message)" }
 }
 foreach ($rerun in @(
   @('--workspace', 'C:\Users\u\AgentsHouse', '--code', 'ahk_code_unused'),
@@ -236,7 +252,7 @@ foreach ($case in @(
     Connect-Kit
     $findings += "the enrolled bootstrap with a container installed $withContainer ended without the status of its failed login"
   } catch {
-    if ($_.Exception.Message -cne 'kit_bootstrap_exit: 7') { $findings += "the enrolled bootstrap with a container installed $withContainer ended with: $($_.Exception.Message)" }
+    if ($_.Exception.Message -cne 'kit_bootstrap_refused: kit login ended with status 7') { $findings += "the enrolled bootstrap with a container installed $withContainer ended with: $($_.Exception.Message)" }
   }
   $started = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_] -match $case[1] })
   $loggedIn = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_] -match ' login( |$)' })
@@ -278,9 +294,7 @@ foreach ($case in @(
   $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
   $BootstrapArguments = $case[0]
   $script:Ran = @()
-  try { Connect-Kit } catch {
-    if ($_.Exception.Message -cne 'kit_bootstrap_exit: 0') { $findings += "the bootstrap forwarding $($case[0] -join ' ') ended with: $($_.Exception.Message)" }
-  }
+  try { Connect-Kit } catch { $findings += "the bootstrap forwarding $($case[0] -join ' ') ended with: $($_.Exception.Message)" }
   $stops = @($script:Ran | Where-Object { $_ -ceq "stop $Name" })
   if ($stops.Count -ne $case[1]) { $findings += "the bootstrap forwarding $($case[0] -join ' ') stopped the container $($stops.Count) times" }
 }
@@ -289,12 +303,43 @@ $script:Installed = $true
 $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
 $BootstrapArguments = @('kit', 'login', '--help')
 $script:Ran = @()
-try { Connect-Kit } catch {
-  if ($_.Exception.Message -cne 'kit_bootstrap_exit: 0') { $findings += "the bootstrap forwarding kit login --help ended with: $($_.Exception.Message)" }
-}
+try { Connect-Kit } catch { $findings += "the bootstrap forwarding kit login --help ended with: $($_.Exception.Message)" }
 if (@($script:Ran | Where-Object { $_ -match ' login( |$)' -or $_ -match '^(start|stop) ' }).Count -ne 1 -or -not $script:Ran[-1].EndsWith(' login --help')) {
   $findings += "the bootstrap forwarding kit login --help into a stopped container ran: $($script:Ran -join '|')"
 }
 $script:Running = 'true'
+$script:CliFailures = @('grok could not be updated; it stays at 1.0.50')
+foreach ($case in @(
+  @($true, '^restart house-kit$|^start house-kit$|^rm '),
+  @($false, '^run -d .* resident$')
+)) {
+  $script:Installed = $case[0]
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse')
+  $script:Ran = @()
+  try {
+    Connect-Kit
+    $findings += "the bootstrap with a container installed $($case[0]) whose CLI update failed ended without a refusal"
+  } catch {
+    if ($_.Exception.Message -cne 'kit_bootstrap_refused: grok could not be updated; it stays at 1.0.50') { $findings += "the bootstrap with a container installed $($case[0]) whose CLI update failed ended with: $($_.Exception.Message)" }
+  }
+  if (-not $case[0] -and @($script:Ran | Where-Object { $_ -match $case[1] }).Count -ne 1) { $findings += "the bootstrap whose CLI update failed started no Kit: $($script:Ran -join '|')" }
+}
+$script:CliFailures = @()
+$whole = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+[void][IO.Directory]::CreateDirectory($whole)
+$installer = Join-Path $whole 'connect-windows.ps1'
+[IO.File]::WriteAllText($installer, [IO.File]::ReadAllText('/kit/bin/connect-windows.ps1').Replace('__IMAGE_DIGEST__', 'a' * 64))
+[IO.File]::WriteAllText((Join-Path $whole 'docker'), "#!/bin/sh`nif [ `"`$1`" = info ]; then echo 'linux/x86_64|Docker Desktop|6.6.87.2-microsoft-standard-WSL2'; exit 0; fi`necho 'docker: no space left on device' >&2`nexit 3`n")
+& chmod 755 (Join-Path $whole 'docker')
+$prelude = "`$env:OS = 'Windows_NT'; `$env:ProgramFiles = '$whole'; `$env:LOCALAPPDATA = '$whole'; `$env:PATH = '$whole' + ':' + `$env:PATH; function Get-CimInstance([string] `$ClassName) { if (`$ClassName -eq 'Win32_OperatingSystem') { return [pscustomobject]@{ ProductType = 1; BuildNumber = '26100'; Caption = 'Windows 11 Pro' } }; [pscustomobject]@{ Architecture = 9 } };"
+foreach ($case in @(
+  @('--house https://agents.house --bogus', 'kit_bootstrap_refused: unknown argument --bogus'),
+  @('--house https://agents.house', 'kit_bootstrap_refused: docker volume ended with status 3')
+)) {
+  $output = @(& pwsh -NoProfile -NonInteractive -Command "$prelude & { & ([scriptblock]::Create([IO.File]::ReadAllText('$installer'))) @args } $($case[0])" 2>&1 | ForEach-Object { "$_" })
+  $status = $LASTEXITCODE
+  if ($status -eq 0 -or -not ($output -join "`n").Contains($case[1])) { $findings += "powershell -Command running the installer with $($case[0]) ended with status $status and: $($output -join '|')" }
+}
 $findings | ForEach-Object { [Console]::Out.WriteLine($_) }
 if ($findings.Count -gt 0) { exit 1 }

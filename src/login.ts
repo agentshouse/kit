@@ -164,7 +164,7 @@ export async function login(argv: string[]): Promise<void> {
   } else if (held && ownAgent !== null) {
     await writeOwnAgent({ house, ...relayRecord, user: ownAgent.user, credential: ownAgent.credential });
   }
-  await placeAppGit(ownAgent, await readOwnAgent()).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
+  await placeAppGit(await readOwnAgent()).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
   try {
     startService();
   } catch (error) {

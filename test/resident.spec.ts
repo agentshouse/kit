@@ -1,13 +1,14 @@
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { startHouse, until, type House } from './double.ts';
-import { runKit, temporaryHome, type KitRun } from './kit.ts';
+import { settle, startHouse, until, type House } from './double.ts';
+import { runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 
 const RACING_LOGIN = fileURLToPath(new URL('./racing-login.ts', import.meta.url));
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
+const PAUSED_SOCKET_REMOVAL = fileURLToPath(new URL('./paused-socket-removal.ts', import.meta.url));
 
 async function enrol(house: House, home: string, credential: string) {
   await writeFile(
@@ -90,6 +91,104 @@ it('ends, left stopped, when House replaces its socket with another Kit of its E
 
   expect(await ended(kit)).toBe(0);
   expect(kit.stderr()).toContain('kit: another Kit started for this Environment\n');
+  expect(openings(house)).toBe(1);
+});
+
+it('refuses a second resident of a Kit home whose Kit runs, naming that Kit and how to take over, and leaves that Kit holding the Environment', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const first = await resident(house, home);
+  await until(() => house.sockets[0]);
+
+  const second = runKit(['resident'], { HOUSE_KIT_HOME: home });
+
+  expect(await ended(second)).toBe(1);
+  expect(second.stderr()).toBe(`kit: Kit ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another here\n`);
+  await settle();
+  expect(openings(house)).toBe(1);
+  const third = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  expect(await ended(third)).toBe(1);
+  expect(third.stderr()).toContain(`kit: Kit ${first.pid} already runs`);
+});
+
+it('refuses a second resident while the first waits for a login, and leaves the first holding the Environment once it connects', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const first = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => first.stderr().includes('run kit login'));
+
+  const second = runKit(['resident'], { HOUSE_KIT_HOME: home });
+
+  expect(await ended(second)).toBe(1);
+  expect(second.stderr()).toBe(`kit: Kit ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another here\n`);
+  await enrol(house, home, 'ahk_held');
+  await until(() => house.sockets[0]);
+  await settle();
+  expect(openings(house)).toBe(1);
+});
+
+it('refuses a second resident that starts while the first removes the socket a killed Kit left, and leaves the first holding the Environment', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const killed = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => killed.stderr().includes('run kit login'));
+  stop(killed.pid);
+  await killed.exited;
+  const first = runKit(['resident'], { HOUSE_KIT_HOME: home }, ['--import', PAUSED_SOCKET_REMOVAL]);
+  await until(() => first.stderr().includes('kit-test: removing the owner socket'));
+
+  const second = runKit(['resident'], { HOUSE_KIT_HOME: home });
+
+  expect(await ended(second)).toBe(1);
+  expect(second.stderr()).toBe(`kit: another Kit already runs this Environment from Kit home ${home}; stop it first to run another here\n`);
+  first.input.write('\n');
+  await until(() => first.stderr().includes('run kit login'));
+  await enrol(house, home, 'ahk_held');
+  await until(() => house.sockets[0]);
+  await settle();
+  expect(openings(house)).toBe(1);
+});
+
+it('refuses a second resident that reaches the running Kit home through a symbolic link', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const first = await resident(house, home);
+  await until(() => house.sockets[0]);
+  const alias = join(await temporaryHome(), 'alias');
+  await symlink(home, alias);
+
+  const second = runKit(['resident'], { HOUSE_KIT_HOME: alias });
+
+  expect(await ended(second)).toBe(1);
+  expect(second.stderr()).toBe(`kit: Kit ${first.pid} already runs this Environment from Kit home ${alias}; stop it first to run another here\n`);
+  await settle();
+  expect(openings(house)).toBe(1);
+});
+
+it('waits for a login on a Kit home that does not exist yet, and connects once a login enrols it', async () => {
+  const house = await startHouse();
+  const home = join(await temporaryHome(), 'home');
+  const kit = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => kit.stderr().includes('run kit login'));
+
+  await enrol(house, home, 'ahk_held');
+
+  expect((await until(() => house.sockets[0])).headers.authorization).toBe('Bearer ahk_held');
+});
+
+it('ends with a failure when a start step after its claim fails, and leaves the Environment to the next resident', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await enrol(house, home, 'ahk_held');
+  const workspace = join(home, 'workspace');
+  await writeFile(workspace, '');
+  const failed = runKit(['resident'], { HOUSE_KIT_HOME: home, HOUSE_KIT_WORKSPACE: workspace });
+
+  expect(await ended(failed)).toBe(1);
+  expect(failed.stderr()).toBe(`kit: ENOTDIR: not a directory, mkdir '${join(workspace, 'agents')}'\n`);
+  runKit(['resident'], { HOUSE_KIT_HOME: home });
+  await until(() => house.sockets[0]);
+  await settle();
   expect(openings(house)).toBe(1);
 });
 

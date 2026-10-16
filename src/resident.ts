@@ -1,8 +1,9 @@
 import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, get } from 'node:http';
 import { dirname, extname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
@@ -10,7 +11,7 @@ import { received } from './bridge.ts';
 import { CONVERSATION_INPUTS, Conversations, type Input } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
 import { restart } from './end.ts';
-import { agentBase, enrolled, forgetRestart, kitHome, ownerSocket, restartAsked } from './home.ts';
+import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, restartAsked } from './home.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
@@ -33,13 +34,31 @@ async function installShim(path: string, module: string): Promise<void> {
   await writeFile(path, `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(main)} "$@"\n`, { mode: 0o755 });
 }
 
+function claimed(lock: DatabaseSync): boolean {
+  try {
+    lock.exec('BEGIN EXCLUSIVE');
+    return true;
+  } catch (error) {
+    if ((error as { errcode?: number }).errcode === 5) return false;
+    throw error;
+  }
+}
+
 async function serveOwner(copies: LocalCopies): Promise<void> {
-  const socketPath = ownerSocket();
-  await rm(socketPath, { force: true });
+  const lock = new DatabaseSync(ownerLock());
+  if (!claimed(lock)) {
+    lock.close();
+    const running = await runningResident();
+    throw new Error(`${running === null ? 'another Kit' : `Kit ${running}`} already runs this Environment from Kit home ${kitHome()}; stop it first to run another here`);
+  }
   const server = createServer(async (request, response) => {
     try {
       const text = await received(request);
       let answered: Pushed;
+      if (request.url === '/resident') {
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ pid: process.pid }));
+        return;
+      }
       if (request.url === '/git/fetch') {
         answered = await copies.fetch();
       } else if (request.url === '/git/push') {
@@ -54,8 +73,21 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
       response.writeHead(502).end(error instanceof Error ? error.message : String(error));
     }
   });
-  server.listen(socketPath);
+  server.on('close', () => lock.close());
+  await rm(ownerSocket(), { force: true });
+  server.listen(ownerSocket());
   await once(server, 'listening');
+}
+
+function runningResident(): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    get({ socketPath: ownerSocket(), path: '/resident' }, (answer) => {
+      received(answer).then((text) => resolve((JSON.parse(text) as { pid: number }).pid), reject);
+    }).on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT' || error.code === 'ECONNREFUSED') resolve(null);
+      else reject(error);
+    });
+  });
 }
 
 function connected(): Promise<void> {
@@ -74,7 +106,7 @@ function connected(): Promise<void> {
   });
 }
 
-export async function resident(): Promise<void> {
+async function started(): Promise<void> {
   await connected();
   await forgetRestart();
   watch(kitHome(), () => {
@@ -84,13 +116,21 @@ export async function resident(): Promise<void> {
   });
   await placeSkillSet();
   await mkdir(agentBase(), { recursive: true });
-  process.env.HOUSE_KIT_RESIDENT = String(process.pid);
-  const agents = new Agents(house, () => changed());
-  const copies = new LocalCopies(house);
-  await copies.load();
   await installShim(join(kitHome(), 'shim', 'git'), 'git-main');
   await installShim(codexLauncher(), 'codex-main');
+}
+
+export async function resident(): Promise<void> {
+  await mkdir(kitHome(), { recursive: true, mode: 0o700 });
+  const copies = new LocalCopies(house);
+  await copies.load();
   await serveOwner(copies);
+  await started().catch((error: unknown) => {
+    report(error);
+    process.exit(1);
+  });
+  process.env.HOUSE_KIT_RESIDENT = String(process.pid);
+  const agents = new Agents(house, () => changed());
   let stream: Stream | null = null;
   let reported = false;
   const idle = () => conversations.idle() && signIns.idle() && agents.idle();
