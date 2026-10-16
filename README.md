@@ -6,7 +6,7 @@ your Agents' conversations through the agent CLIs you chose and gives each Agent
 ## Install
 
 Run `sh -c 'kit=$(curl -fsSL "$0") || { echo "House Kit could not be downloaded; run this command again." >&2; exit 1; }; eval "$kit"' agents.house/kit`,
-which runs nothing of a failed download, or `irm agents.house/kit.ps1 | iex` on Windows, and again to update; options follow `agents.house/kit`.
+or `& { try { $kit = irm agents.house/kit.ps1 } catch { [Console]::Error.WriteLine('House Kit could not be downloaded; run this command again.'); $global:LASTEXITCODE = 1; return }; & ([scriptblock]::Create($kit)) @args }` on Windows, which run nothing of a failed download, and again to update; options follow `agents.house/kit`.
 On macOS and Linux it installs House Kit natively under your own account, without an admin password, as a service that runs
 while you are logged in. `kit` and `house` are then on your login shell's `PATH`, and your workspace is `~/AgentsHouse` unless you
 pass `--workspace <path>`.
