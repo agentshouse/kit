@@ -59,6 +59,12 @@ const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms
   --code <code>             connect this machine with a login code
 `;
 
+function connected(house: string, named: string | undefined, environment: string): string {
+  if (named === undefined) return `Environment ${environment} is connected to ${house}.\n`;
+  if (named === environment) return `Environment ${environment} is reconnected to ${house}.\n`;
+  return `Environment ${named} stays with its account; this computer is connected to ${house} as new Environment ${environment} of the account that confirmed.\n`;
+}
+
 function gone(error: unknown): boolean {
   return error instanceof HouseRefusal && refusalOf(error.text)?.code === 'kit_environment_not_found';
 }
@@ -102,13 +108,14 @@ export async function login(argv: string[]): Promise<void> {
   const environment = replaces === undefined ? (values.environment ?? remembered) : undefined;
   const ownAgent = await readOwnAgent();
   let held = false;
+  let named = environment;
   let exchanged: Exchanged;
   if (values.code !== undefined) {
     exchanged = await post<Exchanged>(house, '/kit/token', { code: values.code, label: hostname() });
   } else {
     held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
     const verifier = randomBytes(32).toString('base64url');
-    const start = (named: string | undefined) =>
+    const start = () =>
       retrying(() =>
         post<Started>(house, '/kit', {
           label: hostname(),
@@ -122,12 +129,13 @@ export async function login(argv: string[]): Promise<void> {
       );
     let started: Started;
     try {
-      started = await start(environment);
+      started = await start();
     } catch (error) {
       if (remembered === undefined || !gone(error)) throw error;
       await forgetDisconnected();
       process.stdout.write(`House no longer holds Environment ${remembered}; connecting this computer as a new one.\n`);
-      started = await start(undefined);
+      named = undefined;
+      started = await start();
     }
     process.stdout.write(`Open this link and confirm: ${started.start_url}\n`);
     open(started.start_url);
@@ -147,7 +155,7 @@ export async function login(argv: string[]): Promise<void> {
     environment: exchanged.environment,
     credential: exchanged.credential,
   });
-  process.stdout.write(`Environment ${exchanged.environment} is connected to ${house}.\n`);
+  process.stdout.write(connected(house, named, exchanged.environment));
   if (exchanged.headless_credential !== undefined) {
     await writeOwnAgent({ house, ...relayRecord, user: exchanged.user, credential: exchanged.headless_credential });
   } else if (held && ownAgent !== null && ownAgent.user !== exchanged.user) {
