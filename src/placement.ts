@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from './clis.ts';
 import { kitHome } from './home.ts';
-import { relayOrigin } from './relay.ts';
 
 type Service = 'user' | 'system';
 
@@ -22,29 +21,11 @@ export async function updatesItself(): Promise<boolean> {
   return (await run('sudo', ['-n', 'true'], 10_000)).status === 0;
 }
 
-function installed(): string | null {
+export function installCommand(): string | null {
   try {
-    return readFileSync(join(kitHome(), 'placement'), 'utf8').trim();
+    return readFileSync(join(kitHome(), 'install-command'), 'utf8').trim();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
-}
-
-const CHECKED = `sh -c 'kit=$(curl -fsSL "$0") || { echo "House Kit could not be downloaded; run this command again." >&2; exit 1; }; eval "$kit"'`;
-
-function entries(house: string): [shell: string, windows: string] {
-  const host = new URL(house).host;
-  const relay = relayOrigin();
-  if (relay === undefined) return [`${CHECKED} ${host}/kit`, `irm ${host}/kit.ps1 | iex`];
-  const entry = `${relay}/${host}/kit`;
-  return [`HOUSE_KIT_RELAY=${relay} ${CHECKED} ${entry}`, `$env:HOUSE_KIT_RELAY='${relay}'; irm ${entry}.ps1 | iex`];
-}
-
-export function installCommand(house: string): string {
-  const [shell, windows] = entries(house);
-  const placement = installed();
-  if (placement === 'native') return shell;
-  if (placement === 'server') return `${shell} --linux`;
-  return `${shell} --container, or ${windows} on Windows`;
 }

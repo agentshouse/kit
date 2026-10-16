@@ -18,8 +18,9 @@ export function restart(reason: string): never {
   exit(reason, 1);
 }
 
-export function updateRequired(house: string): never {
-  end(`This Kit is too old for House. Update it: ${installCommand(house)}`);
+export function updateRequired(): never {
+  const command = installCommand();
+  end(command === null ? 'This Kit is too old for House; install it again.' : `This Kit is too old for House. Update it: ${command}`);
 }
 
 export async function signInAgain(rejected: string): Promise<never> {

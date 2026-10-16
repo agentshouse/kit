@@ -328,6 +328,21 @@ it("reports a refused resume in the Kit's words, never the CLI's, and logs the C
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ did not start: the Agent's CLI could not resume this conversation: .*the session cannot be resumed/m);
 });
 
+it("refuses a conversation whose CLI does not install in the Kit's words, never the installer's, and logs the installer's cause", async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
+    prepare: async (home) => {
+      await rm(join(userBin(home), 'claude'));
+      await writeFile(join(home, 'install-fail'), 'claude-agent-acp\n');
+      await writeFile(join(home, 'install-output'), 'Claude installer private diagnostic\n');
+    },
+  });
+
+  hosted.input({ kind: 'open' });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
+  expect(hosted.kit.stderr()).toContain('claude-agent-acp did not install: Claude installer private diagnostic\nChecksum verification failed');
+});
+
 it("refuses a conversation whose connection cannot open in the Kit's words, and logs why", async () => {
   const hosted = await hostKit();
   vi.stubEnv('HOUSE_KIT_HOME', hosted.home);

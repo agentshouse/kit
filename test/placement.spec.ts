@@ -37,6 +37,22 @@ it('records the placement of a Kit installed natively on a server', async () => 
   expect(await placement(host)).toBe('server\n');
 });
 
+const INSTALL = `HOUSE_KIT_RELAY=https://relay.example sh -c 'kit=$(curl -fsSL "$0") || exit 1; eval "$kit"' https://relay.example/agents.house/kit`;
+
+it.each([
+  ['natively on a computer', false, [], ''],
+  ['in a container', false, ['--container'], ' --container'],
+  ['natively on a server', true, ['--linux'], ' --linux'],
+])('records the command House gave it, with the placement flag, to install a Kit placed %s again', async (_, server, choice, flag) => {
+  const host = await fakeHost({ ...NATIVE, server });
+
+  expect(host.run(choice, { HOUSE_KIT_INSTALL_COMMAND: INSTALL })).toMatchObject({ status: 0, stderr: '' });
+  expect(await readFile(join(host.home, '.house-kit', 'install-command'), 'utf8')).toBe(`${INSTALL}${flag}\n`);
+
+  expect(host.run(choice)).toMatchObject({ status: 0, stderr: '' });
+  expect(await readFile(join(host.home, '.house-kit', 'install-command'), 'utf8')).toBe(`${INSTALL}${flag}\n`);
+});
+
 async function native(): Promise<Host> {
   const host = await fakeHost(NATIVE);
   expect(host.run()).toMatchObject({ status: 0 });
@@ -280,4 +296,35 @@ it('replaces a native Kit another Kit home runs once the User confirms, and leav
   expect(await readFile(join(host.home, ...UNIT), 'utf8')).toContain(`Environment="HOUSE_KIT_HOME=${added.HOUSE_KIT_HOME}"`);
   expect(await enrolled(host)).toBe('environment-one');
   await keptTheRest(host);
+});
+
+it('replaces a server Kit another Kit home runs once the User confirms, restarting its service on the new Kit home', async () => {
+  const host = await fakeHost({ ...NATIVE, server: true });
+  await host.mark('systemd');
+  expect(host.run(['--linux'])).toMatchObject({ status: 0 });
+  await host.forget();
+  const added = { HOUSE_KIT_HOME: join(host.home, 'second-kit') };
+
+  const ran = host.terminal(['--linux'], 'y\n', added);
+
+  expect(ran.status).toBe(0);
+  expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
+  expect(host.calls('systemctl')).toContain('stop house-kit.service');
+  expect(host.calls('systemctl').at(-1)).toBe('--quiet enable --now house-kit.service');
+  expect(await host.serverUnit()).toContain(`Environment="HOUSE_KIT_HOME=${added.HOUSE_KIT_HOME}"`);
+});
+
+it('changes nothing while Docker does not answer and the computer may run a container Kit with another Kit home', async () => {
+  const host = await contained();
+  await host.mark('docker-down');
+  const added = { HOUSE_KIT_HOME: join(host.home, 'second-kit') };
+
+  const ran = host.run([], added);
+
+  expect(ran.status).toBe(1);
+  expect(ran.stderr).toMatch(/^kit_bootstrap_refused: Docker does not answer: .*; start Docker so this bootstrap can see whether House Kit runs in its container with another Kit home, then rerun this bootstrap\n$/u);
+  await absent(join(host.home, '.local'));
+  await absent(added.HOUSE_KIT_HOME);
+  await host.clear('docker-down');
+  await containerUnchanged(host);
 });

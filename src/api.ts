@@ -55,7 +55,7 @@ export async function post<T>(
     signal,
   });
   const text = await answer.text();
-  if (!answer.ok && tooOld(text)) updateRequired(house);
+  if (!answer.ok && tooOld(text)) updateRequired();
   if (!answer.ok) throw new HouseRefusal(path, answer.status, text);
   return JSON.parse(text) as T;
 }
