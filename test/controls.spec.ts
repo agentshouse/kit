@@ -54,7 +54,7 @@ it('kills the process and every process it started, and the next message resumes
   expect(await hosted.ack(lastInput())).toEqual({});
   expect(alive(adapter)).toBe(false);
   await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
-  expect(await until(() => ended(hosted)[0])).toMatchObject({ body: { failed: 'the conversation was killed' } });
+  expect(await until(() => ended(hosted)[0])).toMatchObject({ body: { failed: 'killed' } });
   await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
 
   hosted.input({ kind: 'message', provider_session_id: session, text: 'after', files: [], first: false });

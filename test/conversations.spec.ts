@@ -556,7 +556,7 @@ it('resumes the provider session for a message that waited while the process cra
 
   await release();
 
-  expect(await ends(hosted, 2)).toEqual([{ failed: expect.stringContaining('exited with 3') }, { text: 'after' }]);
+  expect(await ends(hosted, 2)).toEqual([{ failed: 'exited' }, { text: 'after' }]);
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: session });
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
@@ -606,17 +606,14 @@ it('reports a turn start and end once each under the turn id Kit gave it', async
   expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'Hello' }], context: null });
 });
 
-it('ends a turn failed when its process exits during it, with the parts it had', async () => {
+it('ends a turn failed as exited when its process exits during it, with the parts it had, and logs the exit only on its computer', async () => {
   const hosted = await opened();
 
   hosted.input({ kind: 'message', text: '@say partial\n@exit 3', files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(ended.body).toEqual({
-    parts: [{ type: 'text', text: 'partial' }],
-    context: null,
-    failed: expect.stringContaining('exited with 3'),
-  });
+  expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'exited' });
+  expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: the CLI exited with 3/m);
   await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
 });
 
@@ -628,10 +625,10 @@ it.each(['codex-acp', 'claude-agent-acp'])(
 
     hosted.input({ kind: 'message', text: '@fail The agent process exited unexpectedly', files: [], first: true });
 
-    expect(await ends(hosted, 1)).toEqual([{ failed: expect.stringContaining('exited unexpectedly') }]);
+    expect(await ends(hosted, 1)).toEqual([{ failed: 'error' }]);
     await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
     hosted.input({ kind: 'message', text: '@say back', files: [], first: false, provider_session_id: session });
-    expect(await ends(hosted, 2)).toEqual([{ failed: expect.stringContaining('exited unexpectedly') }, { text: 'back' }]);
+    expect(await ends(hosted, 2)).toEqual([{ failed: 'error' }, { text: 'back' }]);
     const log = await hosted.adapterLog();
     expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: session });
     expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
@@ -648,34 +645,35 @@ it('sends a message that waited on a prompt the CLI failed to a fresh process th
 
   await release();
 
-  expect(await ends(hosted, 2)).toEqual([{ failed: expect.stringContaining('provider request failed') }, { text: 'next' }]);
+  expect(await ends(hosted, 2)).toEqual([{ failed: 'error' }, { text: 'next' }]);
   const log = await hosted.adapterLog();
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
 });
 
-it.each(KINDS)('ends a turn failed with the cause %s gives when it fails the prompt after it ends the turn', async (kind) => {
+it.each(KINDS)('ends a turn failed as an error when %s fails the prompt after it ends the turn, its answer only in the Kit log', async (kind) => {
   const hosted = await opened(kind);
 
   // The prompt fails a tenth of a second after the CLI ends its turn, so the failure arrives after the end.
   hosted.input({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(outcome(ended.body)).toEqual({ failed: expect.stringContaining('provider request failed') });
+  expect(outcome(ended.body)).toEqual({ failed: 'error' });
+  expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: provider request failed/m);
   expect(hosted.turns.filter((turn) => turn.path.endsWith('/started')).map((turn) => turn.params.turn)).toEqual([
     ended.params.turn,
   ]);
 });
 
-it('ends a turn failed with the failure Claude answers its prompt with, as for an exhausted limit, shows it as an error marker and keeps the process', async () => {
+it('ends a turn failed as a limit when Claude answers its prompt with an exhausted limit, shows its words as an error marker and keeps the process', async () => {
   const hosted = await opened('claude-agent-acp');
   const limit = "You've hit your weekly limit · resets 11am (UTC)";
 
   hosted.input({ kind: 'message', text: `@sessionfailure ${limit}`, files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(ended.body).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: limit });
+  expect(ended.body).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: 'limit' });
   hosted.input({ kind: 'message', text: '@say back', files: [], first: false });
-  expect(await ends(hosted, 2)).toEqual([{ failed: limit }, { text: 'back' }]);
+  expect(await ends(hosted, 2)).toEqual([{ failed: 'limit' }, { text: 'back' }]);
   const log = await hosted.adapterLog();
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(1);
 });
@@ -688,9 +686,19 @@ it.each(KINDS)('ends a turn failed when %s refuses its prompt, with the explanat
 
   await ends(hosted, 2);
   expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended')).map((turn) => turn.body)).toEqual([
-    { parts: [], context: null, failed: expect.stringContaining('refused') },
-    { parts: [{ type: 'text', text: 'I cannot help with that.' }], context: null, failed: expect.stringContaining('refused') },
+    { parts: [], context: null, failed: 'refused' },
+    { parts: [{ type: 'text', text: 'I cannot help with that.' }], context: null, failed: 'refused' },
   ]);
+});
+
+it.each(KINDS)('ends a turn failed as signed out when %s answers its prompt that it needs a sign-in, its answer only in the Kit log', async (kind) => {
+  const hosted = await opened(kind);
+
+  hosted.input({ kind: 'message', text: '@say partial\n@signedout', files: [], first: true });
+
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'signed_out' });
+  expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: Authentication required/m);
 });
 
 it('ends a turn when Claude answers its prompt without an end notice, as it does for a local command', async () => {

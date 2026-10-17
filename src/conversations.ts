@@ -1,5 +1,6 @@
 import {
   client,
+  RequestError,
   type AvailableCommand,
   type ContentBlock,
   type CreateElicitationRequest,
@@ -48,6 +49,15 @@ export interface Input {
 
 type Ack = { provider_session_id: string } | { refused: string } | Record<string, never>;
 
+type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error';
+
+interface Failed {
+  failure: Failure;
+  cause: string;
+}
+
+const SIGNED_OUT = RequestError.authRequired().code;
+
 const KILLED = 'the conversation was killed';
 
 const REFUSED = 'the CLI refused the prompt';
@@ -85,6 +95,15 @@ export const CONVERSATION_INPUTS: ReadonlySet<string> = new Set(['open', 'messag
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function answeredWith(error: unknown): Failed {
+  const signedOut = typeof error === 'object' && error !== null && (error as { code?: unknown }).code === SIGNED_OUT;
+  return { failure: signedOut ? 'signed_out' : 'error', cause: causeOf(error) };
+}
+
+function exitedWith(running: Running, cause: string): Failed {
+  return running.killed ? { failure: 'killed', cause: KILLED } : { failure: 'exited', cause };
 }
 
 function answerMessage(request: unknown, response: unknown): string {
@@ -574,7 +593,7 @@ export class Conversations {
     if (running?.adapter !== adapter) return;
     this.detach(conversation, running);
     if (conversation.turn !== null) {
-      this.end(conversation, conversation.turn, { failed: running.killed ? KILLED : cause });
+      this.end(conversation, conversation.turn, exitedWith(running, cause));
     }
     this.next(conversation);
     this.kit.changed();
@@ -641,8 +660,9 @@ export class Conversations {
     return turn;
   }
 
-  private end(conversation: Conversation, turn: Turn, failed: { failed: string } | null, notice: string | null = null): void {
+  private end(conversation: Conversation, turn: Turn, failed: Failed | null, notice: string | null = null): void {
     if (turn.ended) return;
+    if (failed !== null) logged(new Error(`conversation ${conversation.id} turn ${turn.id} failed: ${failed.cause}`));
     if (conversation.turn === turn) {
       for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
     }
@@ -653,7 +673,7 @@ export class Conversations {
     const body = Promise.allSettled(turn.uploads).then(() => ({
       parts: turn.parts.saved(),
       context: turn.parts.context,
-      ...failed,
+      ...(failed === null ? {} : { failed: failed.failure }),
     }));
     void this.deliver(conversation, turn, 'ended', body).catch(logged);
     this.next(conversation);
@@ -668,18 +688,21 @@ export class Conversations {
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
       (answer) => {
         const notice = answeredFailure(answer);
-        const failed = notice ?? (answer.stopReason === 'refusal' ? REFUSED : null);
-        this.end(conversation, turn, failed === null ? null : { failed }, notice);
+        if (notice !== null) {
+          this.end(conversation, turn, { failure: notice.limit ? 'limit' : 'error', cause: notice.title }, notice.title);
+        } else {
+          this.end(conversation, turn, answer.stopReason === 'refusal' ? { failure: 'refused', cause: REFUSED } : null);
+        }
       },
       async (error: unknown) => {
         if (running.adapter.connection.signal.aborted) {
-          this.end(conversation, turn, { failed: running.killed ? KILLED : await running.adapter.exited });
+          this.end(conversation, turn, exitedWith(running, await running.adapter.exited));
         } else {
           if (conversation.open === 1 && conversation.running === running) {
             running.scope.kill();
             this.detach(conversation, running);
           }
-          this.end(conversation, turn, { failed: causeOf(error) });
+          this.end(conversation, turn, answeredWith(error));
         }
       },
     );

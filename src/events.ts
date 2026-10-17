@@ -552,8 +552,14 @@ class GrokReader extends Reader {
 
 export type { Reader };
 
-export function answeredFailure(answer: Fields): string | null {
-  return answer._meta?.jetbrains?.air?.sessionFailure?.title ?? null;
+export interface AnsweredFailure {
+  title: string;
+  limit: boolean;
+}
+
+export function answeredFailure(answer: Fields): AnsweredFailure | null {
+  const failure = answer._meta?.jetbrains?.air?.sessionFailure;
+  return typeof failure?.title === 'string' ? { title: failure.title, limit: failure.category === 'limit' } : null;
 }
 
 export function readerFor(kind: string): Reader {
