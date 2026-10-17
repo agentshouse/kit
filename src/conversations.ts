@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
 import { startAdapter, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
-import type { House } from './api.ts';
+import { finalRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
@@ -23,6 +23,7 @@ import { placeFiles, uploadBytes, type MessageFile, type SavedFile } from './fil
 import { agentBase } from './home.ts';
 import { instructions } from './instructions.ts';
 import { Parts, type Context, type Operation, type Part } from './parts.ts';
+import { refusalOf } from './refusals.ts';
 import { killMarked, Scope } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 import { createHowWeWork } from './skills.ts';
@@ -62,7 +63,16 @@ const KILLED = 'the conversation was killed';
 
 const REFUSED = 'the CLI refused the prompt';
 
-const NO_CONNECTION = "the Kit could not open this conversation's connection";
+const NO_CONNECTION = "the Agent's computer could not open this conversation; try again";
+
+const GONE = 'House no longer holds this conversation; start a new one';
+
+const RETIRED = "this conversation's Agent is retired, so it cannot start";
+
+const ENDED: Readonly<Record<string, string>> = {
+  conversation_not_found: GONE,
+  conversation_historical: RETIRED,
+};
 
 const NO_START = "the Agent's CLI did not start";
 
@@ -74,12 +84,16 @@ const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
 
 class NotStarted extends Error {}
 
-async function step<T>(reason: string, work: Promise<T>): Promise<T> {
+async function step<T>(reason: string | ((error: unknown) => string), work: Promise<T>): Promise<T> {
   try {
     return await work;
   } catch (error) {
-    throw new NotStarted(reason, { cause: error });
+    throw new NotStarted(typeof reason === 'string' ? reason : reason(error), { cause: error });
   }
+}
+
+function unbridged(error: unknown): string {
+  return (finalRefusal(error) ? ENDED[refusalOf(error.text)?.code ?? ''] : undefined) ?? NO_CONNECTION;
 }
 
 const EXIT_PLAN_MODE = {
@@ -485,7 +499,7 @@ export class Conversations {
         this.ask(conversation, '_x.ai/exit_plan_mode', params, false, signal),
       );
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
-    const bridge = await step(NO_CONNECTION, openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal));
+    const bridge = await step(unbridged, openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal));
     if (conversation.kills > 0) {
       bridge.close();
       throw new Error(KILLED);

@@ -66,6 +66,32 @@ it("places a message's files under .house/files/<message id>/ with their stored 
   ]);
 });
 
+it("places a message's file once House answers its original after a refusal House marks retryable", async () => {
+  const hosted = await hostKit();
+  serveFiles(hosted);
+  let refusals = 1;
+  hosted.house.route('POST', '/kit/conversation/originals/get', (received) => {
+    if (refusals-- > 0) return { status: 503, body: { error: { code: 'house_overloaded', retryable: true } } };
+    const { version } = received.body as { version: string };
+    return {
+      body: {
+        version,
+        message: 'message-1',
+        name: STORED[version]!.name,
+        download: { method: 'GET', url: `${hosted.house.origin}/bytes/${version}`, expires_at: '2026-10-03T12:00:00Z' },
+      },
+    };
+  });
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+
+  hosted.input({ kind: 'message', text: 'read this', files: [described[0]!], first: false });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  const path = join(hosted.workingDirectory, '.house', 'files', 'message-1', 'version-1', 'notes.txt');
+  expect(await readFile(path)).toEqual(STORED['version-1']!.content);
+});
+
 it('refuses a message with files for a launch directory that does not exist and creates nothing there', async () => {
   const directory = join(tmpdir(), `kit-missing-${randomUUID()}`);
   onTestFinished(() => rm(directory, { recursive: true, force: true }));

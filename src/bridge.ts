@@ -110,9 +110,8 @@ export async function openBridge(
 ): Promise<Bridge> {
   const path = [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter);
   const origin = (await readEnrolment())!.house;
-  const { credential } = await house.post<{ credential: string }>(
-    `/kit/conversations/${conversationId}/credential`,
-    {},
+  const { credential } = await retrying(
+    () => house.post<{ credential: string }>(`/kit/conversations/${conversationId}/credential`, {}, signal),
     signal,
   );
 
