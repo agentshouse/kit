@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
 import { settle, until } from './double.ts';
-import { hostKit, installHeld, lastInput, outcome, userBin, type Hosted } from './environment.ts';
+import { conversationCredential, hostKit, installHeld, lastInput, outcome, userBin, type Hosted } from './environment.ts';
 import { placeHostKey, temporaryHome } from './kit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -450,8 +450,39 @@ it("refuses a conversation whose connection cannot open in the Kit's words, and 
 
   hosted.input({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Kit could not open this conversation's connection" });
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's computer could not open this conversation" });
   expect(hosted.kit.stderr()).toContain(`${sockets} is not a directory`);
+});
+
+it('opens a conversation whose credential House refused as retryable while it restarted, once House answers it', async () => {
+  const hosted = await hostKit();
+  let refusals = 2;
+  hosted.house.route('POST', '/kit/conversations/:conversation/credential', (request) =>
+    refusals-- > 0
+      ? { status: 503, body: { error: { code: 'house_overloaded', retryable: true } } }
+      : { body: { credential: conversationCredential(request.params.conversation!) } },
+  );
+
+  hosted.input({ kind: 'open' });
+
+  const ack = await hosted.ack(lastInput());
+  expect(ack).toEqual({ provider_session_id: expect.any(String) });
+  const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
+  expect(ack).toEqual({ provider_session_id: opened.sessionId });
+  expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(3);
+});
+
+it('refuses a conversation whose credential House refuses as final, without asking again', async () => {
+  const hosted = await hostKit();
+  hosted.house.route('POST', '/kit/conversations/:conversation/credential', () => ({
+    status: 404,
+    body: { error: { code: 'conversation_not_found', retryable: false } },
+  }));
+
+  hosted.input({ kind: 'open' });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's computer could not open this conversation" });
+  expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(1);
 });
 
 const KINDS = ['codex-acp', 'claude-agent-acp', 'grok-build'];
