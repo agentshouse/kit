@@ -472,16 +472,19 @@ it('opens a conversation whose credential House refused as retryable while it re
   expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(3);
 });
 
-it('refuses a conversation House no longer holds in those words, without asking again', async () => {
+it.each([
+  [404, 'conversation_not_found', 'House no longer holds this conversation; start a new one'],
+  [409, 'conversation_historical', "this conversation's Agent is retired, so it cannot start"],
+])('refuses a conversation House answers %s %s for in its own words, without asking again', async (status, code, refused) => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/conversations/:conversation/credential', () => ({
-    status: 404,
-    body: { error: { code: 'conversation_not_found', retryable: false } },
+    status,
+    body: { error: { code, retryable: false } },
   }));
 
   hosted.input({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: 'House no longer holds this conversation; start a new one' });
+  expect(await hosted.ack(lastInput())).toEqual({ refused });
   expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(1);
 });
 

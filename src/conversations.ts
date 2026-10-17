@@ -67,6 +67,13 @@ const NO_CONNECTION = "the Agent's computer could not open this conversation; tr
 
 const GONE = 'House no longer holds this conversation; start a new one';
 
+const RETIRED = "this conversation's Agent is retired, so it cannot start";
+
+const ENDED: Readonly<Record<string, string>> = {
+  conversation_not_found: GONE,
+  conversation_historical: RETIRED,
+};
+
 const NO_START = "the Agent's CLI did not start";
 
 const NO_SESSION = "the Agent's CLI did not open a session";
@@ -86,7 +93,7 @@ async function step<T>(reason: string | ((error: unknown) => string), work: Prom
 }
 
 function unbridged(error: unknown): string {
-  return finalRefusal(error) && refusalOf(error.text)?.code === 'conversation_not_found' ? GONE : NO_CONNECTION;
+  return (finalRefusal(error) ? ENDED[refusalOf(error.text)?.code ?? ''] : undefined) ?? NO_CONNECTION;
 }
 
 const EXIT_PLAN_MODE = {
