@@ -5,7 +5,7 @@ import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
 import { settle, until } from './double.ts';
 import { conversationCredential, hostKit, installHeld, lastInput, outcome, userBin, type Hosted } from './environment.ts';
-import { placeHostKey, temporaryHome } from './kit.ts';
+import { alive, placeHostKey, temporaryHome } from './kit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -594,6 +594,24 @@ it('resumes the provider session for a message that waited while the process cra
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: session });
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
+});
+
+it('keeps what a process it no longer runs writes after it crashed out of the process that resumed its session', async () => {
+  const hosted = await opened();
+  hosted.input({ kind: 'message', text: '@linger late stale\n@exit 3', files: [], first: false });
+  const lingering = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.lingering !== undefined))).lingering as number;
+  await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
+  hosted.input({ kind: 'message', text: '@gate replaced\n@say fresh', files: [], first: false });
+  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started'))[1]);
+
+  await writeFile(join(hosted.home, 'late'), '');
+  await until(() => !alive(lingering));
+  await settle();
+  await gated(hosted, 'replaced')();
+
+  expect(await ends(hosted, 2)).toEqual([{ failed: 'exited' }, { text: 'fresh' }]);
+  await settle();
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(2);
 });
 
 it("does not acknowledge a waiting message, so a restarted Kit receives it again at its socket's opening and sends it as the next turn", async () => {

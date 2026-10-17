@@ -5,6 +5,7 @@ import { BINS, RELEASES, placeUserCli } from './cli.ts';
 import { LOCATIONS } from './curl.ts';
 import { settle, until } from './double.ts';
 import { hostKit, lastInput, outcome, userBin, type Hosted } from './environment.ts';
+import { alive } from './kit.ts';
 
 const KINDS = Object.keys(BINS);
 const EXECUTABLES: Record<string, string> = { 'codex-acp': 'HOUSE_KIT_CODEX', 'claude-agent-acp': 'CLAUDE_CODE_EXECUTABLE' };
@@ -321,6 +322,22 @@ it.each([
   await until(() => hosted.kit.stderr().includes(`grok-build did not offer its models: ${cause}`));
   await settle();
   expect(reported(hosted).at(-1)!.agents).toEqual([{ ...known, release: '1.0.48' }]);
+});
+
+it('ends the CLI an adapter started when the Kit reads that CLI and the adapter does not initialize', async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }], {
+    prepare: async (home) => {
+      await signIn(home, 'codex-acp');
+      await writeFile(join(home, 'refuse-initialize'), '');
+      await writeFile(join(home, 'hung-app-server'), '');
+    },
+  });
+
+  await until(() => hosted.kit.stderr().includes('codex-acp did not offer its models: the CLI did not initialize'));
+
+  const started = (await hosted.adapterLog()).filter((entry) => entry.appServer !== undefined);
+  expect(started).toHaveLength(1);
+  await until(() => !alive(started[0]!.appServer as number));
 });
 
 it('reports a model its CLI refuses to select, when it reads that CLI again, with the efforts the Kit last read for it', async () => {

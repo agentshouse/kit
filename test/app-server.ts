@@ -7,6 +7,10 @@ const memories = !process.argv.includes('memories') && existsSync(join(home, 'co
 const queues = new Map<string, number>();
 
 appendFileSync(join(home, 'app-server.log'), `${JSON.stringify(process.argv.slice(2))}\n`);
+if (existsSync(join(home, 'hung-app-server'))) {
+  // An idle tick each minute keeps a hung app server alive after its input ends, as a CLI stuck in its start stays.
+  setInterval(() => undefined, 60_000);
+}
 
 function write(message: unknown): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);

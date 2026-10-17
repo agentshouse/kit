@@ -63,6 +63,10 @@ const JOB =
   "const clean = require('node:child_process').spawn('sleep', ['600'], { detached: true, stdio: 'ignore', env: { PATH: process.env.PATH } }); process.stdout.write(String(clean.pid)); setInterval(() => undefined, 60_000);";
 const LAUNCHER = `const job = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(JOB)}], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] }); job.stdout.once('data', (clean) => { process.stdout.write(JSON.stringify({ spawned: job.pid, clean: Number(clean) })); process.exit(0); });`;
 
+// Twenty milliseconds writes the late message as soon as the spec creates its file.
+const LINGER =
+  "const [gate, line] = process.argv.slice(1); const wait = setInterval(() => { if (!require('node:fs').existsSync(gate)) return; clearInterval(wait); process.stdout.write(line); }, 20);";
+
 const SERVER =
   "require('node:readline').createInterface({ input: process.stdin }).on('line', () => process.stdout.write(`${require('node:child_process').spawn('sleep', ['603'], { stdio: 'ignore' }).pid}\\n`));";
 let server: ChildProcess | null = null;
@@ -80,6 +84,7 @@ const answers = new Map<unknown, () => void>();
 const configured = appServer === null ? Promise.resolve() : new Promise<void>((resolve) => answers.set('config', resolve));
 let emitted = 0;
 if (appServer !== null) {
+  log({ appServer: appServer.pid });
   createInterface({ input: appServer.stdout! }).on('line', (line) => answers.get((JSON.parse(line) as { id?: unknown }).id)?.());
   appServer.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'config', method: 'config/read', params: { includeLayers: false } })}\n`);
 }
@@ -357,6 +362,13 @@ async function directive(
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }
   if (name === 'spawn') spawnJob();
+  if (name === 'linger') {
+    const update = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: rest.slice(1).join(' ') }, ...messageSignal('final_answer') };
+    const line = `${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } })}\n`;
+    const lingering = spawn(process.execPath, ['-e', LINGER, join(home, rest[0]!), line], { stdio: ['ignore', 'inherit', 'ignore'] });
+    lingering.unref();
+    log({ lingering: lingering.pid });
+  }
   if (name === 'server') {
     const later = spawn('sleep', ['602'], { stdio: 'ignore' });
     later.unref();

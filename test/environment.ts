@@ -180,8 +180,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     for (const log of ['adapter.log', 'login.log']) {
       const lines = (await readFile(join(home, log), 'utf8').catch(() => '')).split('\n').filter((line) => line !== '');
       for (const line of lines) {
-        const { pid, spawned, clean, server, served, host } = JSON.parse(line) as Record<string, number | undefined>;
-        for (const target of [pid, spawned, clean, server, served, host]) if (target !== undefined) stop(target);
+        const { pid, spawned, clean, server, served, host, appServer, lingering } = JSON.parse(line) as Record<string, number | undefined>;
+        for (const target of [pid, spawned, clean, server, served, host, appServer, lingering]) if (target !== undefined) stop(target);
       }
     }
   });
