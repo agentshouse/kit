@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { House } from './api.ts';
 import { run } from './clis.ts';
 import { kitHome, workspaceRoot } from './home.ts';
+import type { Ack, Inputs } from './inputs.ts';
 import { service, throughSudo } from './placement.ts';
 
 export interface Update {
@@ -13,12 +13,6 @@ export interface Update {
   bootstrap: string;
   sha256: string;
   update_clis?: boolean;
-}
-
-type Ack = Record<string, never> | { refused: string };
-
-function logged(error: unknown): void {
-  process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
 }
 
 function directory(): string {
@@ -71,6 +65,12 @@ async function recorded(): Promise<Ack | null> {
   return status.trim() === '0' ? {} : { refused: `the Kit bootstrap exited with ${status.trim()}` };
 }
 
+async function forget(inputId: string): Promise<void> {
+  if ((await pendingInput()) !== inputId) return;
+  await rm(pending(), { force: true });
+  await rm(outcome(), { force: true });
+}
+
 async function finished(inputId: string): Promise<Ack> {
   for (;;) {
     const ack = await recorded();
@@ -112,28 +112,28 @@ function rerun(script: string, inputId: string, flags: string[]): Promise<Ack | 
 }
 
 export class Updates {
-  private readonly house: House;
-  private readonly held = new Set<string>();
+  private readonly inputs: Inputs;
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(house: House) {
-    this.house = house;
+  constructor(inputs: Inputs) {
+    this.inputs = inputs;
   }
 
   async resumed(): Promise<void> {
     const inputId = await pendingInput();
     if (inputId === null) return;
-    await this.acknowledge(inputId, await finished(inputId));
+    await this.enqueue(inputId, () => finished(inputId));
   }
 
   start(input: Update): void {
-    if (this.held.has(input.input_id)) return;
-    this.held.add(input.input_id);
-    this.queue = this.queue
-      .then(() => this.carry(input))
-      .then((ack) => this.acknowledge(input.input_id, ack))
-      .catch(logged)
-      .finally(() => this.held.delete(input.input_id));
+    void this.enqueue(input.input_id, () => this.carry(input));
+  }
+
+  private enqueue(inputId: string, work: () => Promise<Ack>): Promise<void> {
+    this.queue = this.queue.then(() =>
+      this.inputs.carry(inputId, async () => ({ ack: await work(), acknowledged: () => forget(inputId) })),
+    );
+    return this.queue;
   }
 
   private async carry(input: Update): Promise<Ack> {
@@ -152,12 +152,5 @@ export class Updates {
     return (await rerun(path, input.input_id, input.update_clis ? ['--update-clis'] : [])) ?? (await recorded()) ?? {
       refused: 'the Kit bootstrap did not finish',
     };
-  }
-
-  private async acknowledge(inputId: string, ack: Ack): Promise<void> {
-    await this.house.deliver(`/kit/inputs/${inputId}/ack`, ack);
-    if ((await pendingInput()) !== inputId) return;
-    await rm(pending(), { force: true });
-    await rm(outcome(), { force: true });
   }
 }

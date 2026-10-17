@@ -196,7 +196,7 @@ it('holds the page and acknowledges a finished sign-in while a model read of its
   expect(reportBeforeAck(hosted, input)).toMatchObject({ agents: [{ kind: 'codex-acp', signed_in: true }] });
 });
 
-it('starts no second login for a sign-in input sent again while it runs', async () => {
+it('starts no second login for a sign-in input sent again while it runs, and acknowledges each arrival with its one answer', async () => {
   const { hosted, holds, input } = await signingIn('codex-acp');
   await until(() => holds[0]);
   hosted.socket.close(1001, 'shutting_down');
@@ -206,10 +206,33 @@ it('starts no second login for a sign-in input sent again while it runs', async 
   await settle();
   await finish(hosted, 'codex-acp');
 
-  await hosted.ack(input);
+  await until(() => hosted.acks[1]);
   await settle();
   expect(await logins(hosted)).toHaveLength(1);
-  expect(hosted.acks).toHaveLength(1);
+  expect(hosted.acks.map((ack) => [ack.params.input, ack.body])).toEqual([
+    [input, {}],
+    [input, {}],
+  ]);
+});
+
+it('starts no second login for a sign-in its reopened socket sends after the sign-in ended, and acknowledges it again', async () => {
+  const { hosted, holds, input } = await signingIn('codex-acp');
+  await until(() => holds[0]);
+  hosted.socket.close(1001, 'shutting_down');
+  await until(() => hosted.house.sockets[1]);
+  await finish(hosted, 'codex-acp');
+  await hosted.ack(input);
+  await until(() => hosted.idles[1]);
+
+  hosted.input({ input_id: input, kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 600 });
+
+  await until(() => hosted.acks[1]);
+  await settle();
+  expect(await logins(hosted)).toHaveLength(1);
+  expect(hosted.acks.map((ack) => [ack.params.input, ack.body])).toEqual([
+    [input, {}],
+    [input, {}],
+  ]);
 });
 
 it('reports no idle while a sign-in runs and reports idle after its acknowledgement', async () => {
