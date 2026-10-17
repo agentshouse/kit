@@ -596,18 +596,20 @@ it('resumes the provider session for a message that waited while the process cra
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
 });
 
-it("keeps output a crashed Conversation process leaves behind out of the process that resumed its session", async () => {
+it('keeps output a crashed Conversation process leaves behind out of the process that resumed its session', async () => {
   const hosted = await opened();
+  const late = gated(hosted, 'late');
+  const release = gated(hosted, 'replaced');
   hosted.input({ kind: 'message', text: '@linger late stale\n@exit 3', files: [], first: false });
   const lingering = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.lingering !== undefined))).lingering as number;
   await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
   hosted.input({ kind: 'message', text: '@gate replaced\n@say fresh', files: [], first: false });
   await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started'))[1]);
 
-  await writeFile(join(hosted.home, 'late'), '');
+  await late();
   await until(() => !alive(lingering));
   await settle();
-  await gated(hosted, 'replaced')();
+  await release();
 
   expect(await ends(hosted, 2)).toEqual([{ failed: 'exited' }, { text: 'fresh' }]);
   await settle();
