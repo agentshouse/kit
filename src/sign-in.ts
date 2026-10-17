@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import type { Agents } from './agents.ts';
 import type { House } from './api.ts';
 import { CLIS, withoutProxy } from './clis.ts';
+import type { Carried, Inputs } from './inputs.ts';
 import { killTree } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 
@@ -20,10 +21,6 @@ function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function logged(error: unknown): void {
-  process.stderr.write(`kit: ${causeOf(error)}\n`);
-}
-
 function endOf(signal: AbortSignal): Promise<true> {
   return new Promise((resolve) => signal.addEventListener('abort', () => resolve(true), { once: true }));
 }
@@ -31,40 +28,26 @@ function endOf(signal: AbortSignal): Promise<true> {
 export class SignIns {
   private readonly house: House;
   private readonly agents: Agents;
-  private readonly changed: () => void;
-  private readonly running = new Set<string>();
+  private readonly inputs: Inputs;
 
-  constructor(house: House, agents: Agents, changed: () => void) {
+  constructor(house: House, agents: Agents, inputs: Inputs) {
     this.house = house;
     this.agents = agents;
-    this.changed = changed;
-  }
-
-  idle(): boolean {
-    return this.running.size === 0;
+    this.inputs = inputs;
   }
 
   start(input: SignIn): void {
-    if (this.running.has(input.input_id)) return;
-    this.running.add(input.input_id);
-    this.changed();
-    this.signIn(input)
-      .catch(logged)
-      .finally(() => {
-        this.running.delete(input.input_id);
-        this.changed();
-      });
+    void this.inputs.carry(input.input_id, () => this.signIn(input));
   }
 
-  private async signIn(input: SignIn): Promise<void> {
+  private async signIn(input: SignIn): Promise<Carried> {
     const ending = new AbortController();
     // House stops waiting for a sign-in ten minutes after it wrote it and sends the seconds left, so its install and login end with the page.
     const timer = setTimeout(() => ending.abort(), input.ends_in * 1000);
     const ended = await Promise.race([this.signedIn(input, ending.signal), endOf(ending.signal)]);
     clearTimeout(timer);
     if (ended) process.stderr.write(`kit: the ${input.cli} sign-in reached the end House set for it\n`);
-    await this.house.deliver(`/kit/inputs/${input.input_id}/ack`, {});
-    if (!ended) await this.agents.reread(input.cli);
+    return ended ? { ack: {} } : { ack: {}, acknowledged: () => this.agents.reread(input.cli) };
   }
 
   private async signedIn(input: SignIn, signal: AbortSignal): Promise<false> {

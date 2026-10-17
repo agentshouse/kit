@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
-import { until } from './double.ts';
+import { settle, until } from './double.ts';
 import { hostKit, type Hosted } from './environment.ts';
 import { fakeBin, runKit } from './kit.ts';
 
@@ -29,7 +30,7 @@ async function serve(hosted: Hosted, script: string): Promise<{ bootstrap: strin
 }
 
 function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string; update_clis?: boolean }): void {
-  hosted.socket.send({
+  hosted.house.sockets.at(-1)!.send({
     type: 'input',
     input_id: id,
     kind: 'update',
@@ -41,6 +42,15 @@ function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: st
 }
 
 const ran = (hosted: Hosted) => readFile(join(hosted.home, 'bootstrap.ran'), 'utf8').catch(() => undefined);
+
+// The bootstrap looks for the spec's go file every tenth of a second, so it runs until the spec lets it end.
+const HELD = 'until [ -e "$HOUSE_KIT_HOME/go" ]; do sleep 0.1; done\nprintf "%s\\n" "$*" >> "$HOUSE_KIT_HOME/bootstrap.ran"\n';
+
+const FAST_INTERVALS = fileURLToPath(new URL('./fast-intervals.ts', import.meta.url));
+
+const downloaded = (hosted: Hosted) => hosted.house.requests.find((request) => request.path === '/releases/connect-linux.sh');
+
+const checkpoint = (hosted: Hosted) => readFile(join(hosted.home, 'update', 'pending.json'), 'utf8').catch(() => undefined);
 
 it('reruns the verified bootstrap with --linux outside its own service and acknowledges the update', async () => {
   const hosted = await hostKit();
@@ -142,6 +152,70 @@ it('refuses the update with the exit status of a bootstrap that fails', async ()
   update(hosted, 'update-3', pin);
 
   expect(await hosted.ack('update-3')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
+});
+
+it('reruns no bootstrap for an update its reopened socket sends after the update ended, and acknowledges it again', async () => {
+  const hosted = await hostKit();
+  const pin = await serve(hosted, HELD);
+  update(hosted, 'update-8', pin);
+  await until(() => downloaded(hosted));
+  hosted.socket.close(1001, 'shutting_down');
+  await until(() => hosted.house.sockets[1]);
+  await writeFile(join(hosted.home, 'go'), '');
+  await hosted.ack('update-8');
+  await until(async () => (await checkpoint(hosted)) === undefined);
+
+  update(hosted, 'update-8', pin);
+
+  await until(() => hosted.acks[1]);
+  await settle();
+  expect(await ran(hosted)).toBe('--linux\n');
+  expect(hosted.acks.map((ack) => [ack.params.input, ack.body])).toEqual([
+    ['update-8', {}],
+    ['update-8', {}],
+  ]);
+});
+
+it('reports no idle while an update runs and reports idle once it acknowledged the update', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
+  const pin = await serve(hosted, HELD);
+  update(hosted, 'update-9', pin);
+  await until(() => downloaded(hosted));
+  await settle();
+  expect(hosted.idles).toHaveLength(1);
+
+  await writeFile(join(hosted.home, 'go'), '');
+
+  await hosted.ack('update-9');
+  await until(() => hosted.idles[1]);
+  const paths = hosted.house.requests.map((request) => request.path);
+  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf('/kit/inputs/update-9/ack'));
+});
+
+it('reports no idle while an update waits behind another and reports idle once it acknowledged both', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
+  const first = await serve(hosted, HELD);
+  const next = 'printf "%s\\n" "$*" >> "$HOUSE_KIT_HOME/bootstrap.ran"\n';
+  hosted.house.route('GET', '/releases/next/connect-linux.sh', () => ({
+    bytes: { type: 'text/x-shellscript', content: next },
+  }));
+  update(hosted, 'update-10', first);
+  await until(() => downloaded(hosted));
+  update(hosted, 'update-11', {
+    bootstrap: `${hosted.house.origin}/releases/next/connect-linux.sh`,
+    sha256: createHash('sha256').update(next).digest('hex'),
+  });
+  await settle();
+
+  await writeFile(join(hosted.home, 'go'), '');
+
+  await hosted.ack('update-11');
+  await until(() => hosted.idles[1]);
+  await settle();
+  const reported = hosted.house.requests
+    .map((request) => request.path)
+    .filter((path) => path === '/kit/idle' || path.endsWith('/ack'));
+  expect(reported).toEqual(['/kit/idle', '/kit/inputs/update-10/ack', '/kit/inputs/update-11/ack', '/kit/idle']);
 });
 
 async function restartAfter(hosted: Hosted, id: string, script: string): Promise<unknown> {

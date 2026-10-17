@@ -21,6 +21,7 @@ import type { LocalCopies } from './copies.ts';
 import { answeredFailure, readerFor, type Event, type Message, type Reader } from './events.ts';
 import { placeFiles, uploadBytes, type MessageFile, type SavedFile } from './files.ts';
 import { agentBase } from './home.ts';
+import type { Ack, Inputs } from './inputs.ts';
 import { instructions } from './instructions.ts';
 import { Parts, type Context, type Operation, type Part } from './parts.ts';
 import { refusalOf } from './refusals.ts';
@@ -35,6 +36,7 @@ export interface Kit {
   house: House;
   agents: Agents;
   copies: LocalCopies;
+  inputs: Inputs;
   send(frame: Frame): boolean;
   changed(): void;
 }
@@ -47,8 +49,6 @@ export interface Input {
   provider_session_id: string | null;
   [field: string]: unknown;
 }
-
-type Ack = { provider_session_id: string } | { refused: string } | Record<string, never>;
 
 type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error';
 
@@ -226,9 +226,7 @@ function asksSecret(request: CreateElicitationRequest): boolean {
 export class Conversations {
   private readonly kit: Kit;
   private readonly conversations = new Map<string, Conversation>();
-  private readonly acks = new Map<string, Promise<Ack>>();
   private readonly questions = new Map<string, Question>();
-  private carrying = 0;
   private reporting = 0;
   private watched = false;
 
@@ -239,38 +237,26 @@ export class Conversations {
   }
 
   input(input: Input): void {
-    this.carrying++;
-    const carried =
-      this.acks.get(input.input_id) ??
-      (() => {
-        const conversation = this.conversation(input.conversation_id);
-        if (input.kind === 'kill') {
-          conversation.kills++;
-          conversation.killed.abort(new Error(KILLED));
-          for (const waiting of conversation.waiting.splice(0)) waiting.settle({ refused: KILLED });
-          this.halt(conversation);
-        }
-        if (input.kind === 'interrupt') {
-          conversation.interrupts++;
-          conversation.interrupted.abort();
-        }
-        const handled = conversation.queue.then(() => this.carry(conversation, input));
-        conversation.queue = handled.catch(() => undefined);
-        const work = handled.then(({ ack }) => ack);
-        this.acks.set(input.input_id, work);
-        return work;
-      })();
-    carried
-      .then((body) => this.kit.house.deliver(`/kit/inputs/${input.input_id}/ack`, body))
-      .catch(logged)
-      .finally(() => {
-        this.carrying--;
-        this.kit.changed();
-      });
+    void this.kit.inputs.carry(input.input_id, () => {
+      const conversation = this.conversation(input.conversation_id);
+      if (input.kind === 'kill') {
+        conversation.kills++;
+        conversation.killed.abort(new Error(KILLED));
+        for (const waiting of conversation.waiting.splice(0)) waiting.settle({ refused: KILLED });
+        this.halt(conversation);
+      }
+      if (input.kind === 'interrupt') {
+        conversation.interrupts++;
+        conversation.interrupted.abort();
+      }
+      const handled = conversation.queue.then(() => this.carry(conversation, input));
+      conversation.queue = handled.catch(() => undefined);
+      return handled.then(async ({ ack }) => ({ ack: await ack }));
+    });
   }
 
   idle(): boolean {
-    if (this.carrying > 0 || this.reporting > 0) return false;
+    if (this.reporting > 0) return false;
     for (const conversation of this.conversations.values()) {
       const turn = conversation.turn;
       const asking = turn !== null && turn.questions > 0 && turn.secrets === 0;

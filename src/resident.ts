@@ -12,6 +12,7 @@ import { CONVERSATION_INPUTS, Conversations, type Input } from './conversations.
 import { LocalCopies, type Pushed } from './copies.ts';
 import { restart } from './end.ts';
 import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, restartAsked } from './home.ts';
+import { Inputs } from './inputs.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
 import { SignIns, type SignIn } from './sign-in.ts';
@@ -133,7 +134,7 @@ export async function resident(): Promise<void> {
   const agents = new Agents(house, () => changed());
   let stream: Stream | null = null;
   let reported = false;
-  const idle = () => conversations.idle() && signIns.idle() && agents.idle();
+  const idle = () => inputs.idle() && conversations.idle() && agents.idle();
   const changed = () => {
     if (!idle()) {
       reported = false;
@@ -144,15 +145,17 @@ export async function resident(): Promise<void> {
       logged(house.deliver('/kit/idle', {}, idle));
     }
   };
+  const inputs = new Inputs(house, changed);
   const conversations: Conversations = new Conversations({
     house,
     agents,
     copies,
+    inputs,
     send: (frame) => stream?.send(frame) ?? false,
     changed,
   });
-  const signIns: SignIns = new SignIns(house, agents, changed);
-  const updates = new Updates(house);
+  const signIns = new SignIns(house, agents, inputs);
+  const updates = new Updates(inputs);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
       killDescendants();
@@ -174,13 +177,12 @@ export async function resident(): Promise<void> {
       if (arrived.type === 'authority_changed') logged(copies.connected());
       if (arrived.type === 'work_available' && arrived.subject === 'agents') logged(agents.refresh());
       if (arrived.type === 'input') {
-        reported = false;
         if (arrived.kind === 'sign_in') signIns.start(arrived as unknown as SignIn);
         else if (arrived.kind === 'update') updates.start(arrived as unknown as Update);
         else if (CONVERSATION_INPUTS.has(arrived.kind as string)) conversations.input(arrived as unknown as Input);
         else {
           const refused = { refused: `This Kit does not know ${arrived.kind}; update the Kit` };
-          logged(house.deliver(`/kit/inputs/${arrived.input_id}/ack`, refused).finally(changed));
+          void inputs.carry(String(arrived.input_id), async () => ({ ack: refused }));
         }
       }
     },
