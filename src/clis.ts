@@ -14,6 +14,7 @@ export interface Cli {
   args: string[];
   fullAccess: string | null;
   sessionMeta(bridge: string, title: string): Record<string, unknown>;
+  unknownSession(error: unknown): boolean;
   renames: boolean;
   allowHouse(path: string): Promise<void>;
   signedIn: { command: string[] } | { initializeMeta: string };
@@ -80,6 +81,15 @@ export async function allowHouseInCodex(path: string): Promise<void> {
 
 async function nothing(): Promise<void> {}
 
+interface Answered {
+  code?: unknown;
+  data?: { details?: unknown; code?: unknown } | null;
+}
+
+function answered(error: unknown): Answered {
+  return typeof error === 'object' && error !== null ? (error as Answered) : {};
+}
+
 function bridgeInClaudeSandbox(bridge: string): Record<string, unknown> {
   return process.platform === 'darwin' ? { allowUnixSockets: [bridge] } : { allowAllUnixSockets: true };
 }
@@ -98,6 +108,10 @@ export const CLIS: Record<string, Cli> = {
     args: [],
     fullAccess: 'agent-full-access',
     sessionMeta: () => ({}),
+    unknownSession: (error) => {
+      const { code, data } = answered(error);
+      return code === -32603 && typeof data?.details === 'string' && data.details.startsWith('no rollout found');
+    },
     renames: true,
     allowHouse: allowHouseInCodex,
     signedIn: { command: ['login', 'status'] },
@@ -127,6 +141,7 @@ export const CLIS: Record<string, Cli> = {
         emitRawSDKMessages: RAW_SUBTYPES.map((subtype) => ({ type: 'system', subtype })),
       },
     }),
+    unknownSession: (error) => answered(error).code === -32002,
     renames: false,
     allowHouse: nothing,
     signedIn: { command: ['auth', 'status'] },
@@ -141,6 +156,7 @@ export const CLIS: Record<string, Cli> = {
     args: ['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio'],
     fullAccess: null,
     sessionMeta: () => ({}),
+    unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
     renames: false,
     allowHouse: nothing,
     signedIn: { initializeMeta: 'defaultAuthMethodId' },

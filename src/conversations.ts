@@ -157,6 +157,7 @@ class Conversation {
   readonly subagents = new Map<string, { description: string; turn: Turn; index: number }>();
   readonly held: Part[] = [];
   opening: Bridge | null = null;
+  prompted: string | null = null;
   kills = 0;
   killed = new AbortController();
   interrupts = 0;
@@ -354,12 +355,17 @@ export class Conversations {
   private async send(conversation: Conversation, waiting: Waiting): Promise<void> {
     const { input } = waiting;
     let ack: Ack = {};
+    let started = false;
     const prompt: ContentBlock[] = [];
     try {
       if (conversation.running === null) {
         const stored = conversation.session ?? input.provider_session_id;
-        const opened = await this.start(conversation, waiting.route, stored, input.first === true);
-        if (opened !== stored) ack = { provider_session_id: opened };
+        const empty = input.first === true && conversation.prompted !== stored;
+        started = (await this.start(conversation, waiting.route, stored, empty)) !== stored;
+      }
+      const session = conversation.running!.sessionId;
+      if (started || (input.first === true && session !== input.provider_session_id)) {
+        ack = { provider_session_id: session };
       }
       if (input.first === true) {
         prompt.push({
@@ -369,7 +375,7 @@ export class Conversations {
       }
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
-      if ('provider_session_id' in ack) {
+      if (started) {
         conversation.session = null;
         await this.kill(conversation);
       }
@@ -492,7 +498,7 @@ export class Conversations {
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
       const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, conversation.id);
-      const resumed = sessionId === null ? null : await this.resume(conversation, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
+      const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
       const opened = resumed ?? (await step(NO_SESSION, agent.request('session/new', { cwd, mcpServers: [], _meta })));
       reader.session = opened.sessionId;
       if (opened.sessionId !== sessionId && CLIS[route.kind]!.renames) {
@@ -522,6 +528,7 @@ export class Conversations {
 
   private async resume(
     conversation: Conversation,
+    kind: string,
     adapter: Adapter,
     request: ResumeSessionRequest,
     empty: boolean,
@@ -529,7 +536,9 @@ export class Conversations {
     try {
       return { ...(await adapter.connection.agent.request('session/resume', request)), sessionId: request.sessionId };
     } catch (error) {
-      if (!empty || conversation.kills > 0) throw new NotStarted(NO_RESUME, { cause: error });
+      if (!empty || conversation.kills > 0 || !CLIS[kind]!.unknownSession(error)) {
+        throw new NotStarted(NO_RESUME, { cause: error });
+      }
       logged(new Error(`conversation ${conversation.id} opens a new session: ${NO_RESUME}: ${causeOf(error)}`));
       return null;
     }
@@ -655,6 +664,7 @@ export class Conversations {
     const running = conversation.running!;
     const turn = this.begin(conversation);
     turn.prompted = true;
+    conversation.prompted = running.sessionId;
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
       (answer) => {
         const notice = answeredFailure(answer);
