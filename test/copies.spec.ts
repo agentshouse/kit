@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
-import { until } from './double.ts';
+import { expect, it, onTestFinished } from 'vitest';
+import { until, type Answer } from './double.ts';
 import { hostKit, lastInput, type Hosted } from './environment.ts';
 import { temporaryHome } from './kit.ts';
-import { commitAll, git, house, serveRooms, tryGit, type Room } from './rooms.ts';
+import { commitAll, git, house, serveRooms, tryGit, type HouseRun, type Room, type Rooms } from './rooms.ts';
 
 function received(room: Room): string {
   return git(room.repository, 'rev-parse', 'refs/house/received').trim();
@@ -383,6 +383,99 @@ it('erases a Room House no longer answers as it connects', async () => {
   expect(existsSync(notes.repository)).toBe(false);
   expect(tracked(design)).toEqual(['brief.md']);
   expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+});
+
+async function erasureRefused(rooms: Rooms, room: Room): Promise<HouseRun> {
+  room.put('a.md', 'a\n');
+  await rooms.fetch([room]);
+  await writeFile(join(room.repository, 'a.md'), 'a, local\n');
+  commitAll(room.repository, 'local');
+  await chmod(room.repository, 0o000);
+  try {
+    return await rooms.fetch([]);
+  } finally {
+    await chmod(room.repository, 0o755);
+  }
+}
+
+it('finishes an erasure the filesystem refused before house fetch copies the returning Room afresh, and refuses a push from it meanwhile', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+
+  expect(await erasureRefused(rooms, notes)).toMatchObject({
+    status: 1,
+    stderr: expect.stringContaining('/rooms/notes: EACCES: permission denied'),
+  });
+  expect(await house(hosted, notes.repository, 'push', '--owner')).toMatchObject({
+    status: 1,
+    stderr: expect.stringContaining('is not a House Local copy; run house push inside one'),
+  });
+
+  notes.put('b.md', 'b\n');
+  expect(await rooms.fetch([notes])).toMatchObject({
+    status: 0,
+    stdout: `/rooms/notes: erased from the Local copy\n/rooms/notes: copied to ${notes.repository}\n`,
+  });
+  expect(tracked(notes)).toEqual(['a.md', 'b.md']);
+  expect(git(notes.repository, 'rev-list', 'HEAD').trim()).toBe(received(notes));
+  expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('a\n');
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/door/batch')).toEqual([]);
+});
+
+it('finishes an erasure the filesystem refused as it connects again, and copies the returning Room afresh', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  expect((await erasureRefused(rooms, notes)).status).toBe(1);
+  notes.put('b.md', 'b\n');
+  rooms.answered = [notes];
+
+  await hosted.restart();
+
+  await until(() => existsSync(join(notes.repository, 'b.md')));
+  expect(tracked(notes)).toEqual(['a.md', 'b.md']);
+  expect(git(notes.repository, 'rev-list', 'HEAD').trim()).toBe(received(notes));
+  expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('a\n');
+});
+
+it('refuses a push that waited for the house fetch erasing its Room, and sends House nothing from it', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  notes.put('a.md', 'a\n');
+  await rooms.fetch([notes]);
+  await writeFile(join(notes.repository, 'a.md'), 'a, local\n');
+  commitAll(notes.repository, 'local');
+  let release!: (answer: Answer) => void;
+  const held = new Promise<Answer>((resolve) => {
+    release = resolve;
+  });
+  const refused = { status: 409, body: { error: { code: 'edit_conflict', message: 'edit_conflict', conflicts: [], retryable: false } } };
+  onTestFinished(() => release(refused));
+  hosted.house.route('POST', '/kit/door/batch', () => held);
+  const asked = (path: string) => hosted.house.requests.filter((request) => request.path === path).length;
+  const pushing = house(hosted, notes.repository, 'push', '--owner');
+  await until(() => asked('/kit/door/batch') === 1);
+  const selections = asked('/kit/local-copy/selection');
+  const fetching = rooms.fetch([]);
+  await until(() => asked('/kit/local-copy/selection') > selections);
+
+  const waiting = house(hosted, notes.repository, 'push', '--owner');
+  // One second lets the waiting push reach the Room's queue behind the fetch; nothing the Kit says marks that moment.
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  release(refused);
+
+  expect((await pushing).status).toBe(1);
+  expect(await fetching).toMatchObject({
+    status: 0,
+    stdout: '/rooms/notes: no longer synced to this Environment; erased from the Local copy\n',
+  });
+  expect(await waiting).toMatchObject({
+    status: 1,
+    stderr: expect.stringContaining('is not a House Local copy; run house push inside one'),
+  });
+  expect(asked('/kit/door/batch')).toBe(1);
 });
 
 it('reads the Room whole again when House no longer holds the copy position, and fetches the other Rooms beside it', async () => {
