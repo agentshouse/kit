@@ -450,7 +450,7 @@ it("refuses a conversation whose connection cannot open in the Kit's words, and 
 
   hosted.input({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's computer could not open this conversation" });
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's computer could not open this conversation; try again" });
   expect(hosted.kit.stderr()).toContain(`${sockets} is not a directory`);
 });
 
@@ -472,7 +472,7 @@ it('opens a conversation whose credential House refused as retryable while it re
   expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(3);
 });
 
-it('refuses a conversation whose credential House refuses as final, without asking again', async () => {
+it('refuses a conversation House no longer holds in those words, without asking again', async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/conversations/:conversation/credential', () => ({
     status: 404,
@@ -481,7 +481,7 @@ it('refuses a conversation whose credential House refuses as final, without aski
 
   hosted.input({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's computer could not open this conversation" });
+  expect(await hosted.ack(lastInput())).toEqual({ refused: 'House no longer holds this conversation; start a new one' });
   expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(1);
 });
 
