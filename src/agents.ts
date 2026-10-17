@@ -6,7 +6,6 @@ import type { House } from './api.ts';
 import { CLIS, KIT_VERSION, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
 import { updatesItself } from './placement.ts';
-import { killTree } from './scope.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
 import { KIT_WIRE } from './wire.ts';
 
@@ -154,7 +153,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
       modes: known.modes,
     };
   } finally {
-    if (adapter !== undefined) killTree(adapter.child);
+    adapter?.retire();
   }
 }
 
