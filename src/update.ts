@@ -130,10 +130,13 @@ export class Updates {
   }
 
   private enqueue(inputId: string, work: () => Promise<Ack>): Promise<void> {
-    this.queue = this.queue.then(() =>
-      this.inputs.carry(inputId, async () => ({ ack: await work(), acknowledged: () => forget(inputId) })),
-    );
-    return this.queue;
+    const before = this.queue;
+    const carried = this.inputs.carry(inputId, async () => {
+      await before;
+      return { ack: await work(), acknowledged: () => forget(inputId) };
+    });
+    this.queue = before.then(() => carried);
+    return carried;
   }
 
   private async carry(input: Update): Promise<Ack> {

@@ -192,6 +192,32 @@ it('reports no idle while an update runs and reports idle once it acknowledged t
   expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf('/kit/inputs/update-9/ack'));
 });
 
+it('reports no idle while an update waits behind another and reports idle once it acknowledged both', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
+  const first = await serve(hosted, HELD);
+  const next = 'printf "%s\\n" "$*" >> "$HOUSE_KIT_HOME/bootstrap.ran"\n';
+  hosted.house.route('GET', '/releases/next/connect-linux.sh', () => ({
+    bytes: { type: 'text/x-shellscript', content: next },
+  }));
+  update(hosted, 'update-10', first);
+  await until(() => downloaded(hosted));
+  update(hosted, 'update-11', {
+    bootstrap: `${hosted.house.origin}/releases/next/connect-linux.sh`,
+    sha256: createHash('sha256').update(next).digest('hex'),
+  });
+  await settle();
+
+  await writeFile(join(hosted.home, 'go'), '');
+
+  await hosted.ack('update-11');
+  await until(() => hosted.idles[1]);
+  await settle();
+  const reported = hosted.house.requests
+    .map((request) => request.path)
+    .filter((path) => path === '/kit/idle' || path.endsWith('/ack'));
+  expect(reported).toEqual(['/kit/idle', '/kit/inputs/update-10/ack', '/kit/inputs/update-11/ack', '/kit/idle']);
+});
+
 async function restartAfter(hosted: Hosted, id: string, script: string): Promise<unknown> {
   const pin = await serve(hosted, script);
   update(hosted, id, pin);
