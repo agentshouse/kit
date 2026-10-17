@@ -507,11 +507,12 @@ export class Conversations {
     conversation.opening = bridge;
     const work = workFor(route.kind, route.working_directory, () => this.kit.changed());
     const scope = new Scope(marker(bridge), randomUUID(), cli);
+    let adapter: Adapter | null = null;
     try {
       await unlessAborted(createHowWeWork(bridge), conversation.killed.signal);
       await CLIS[route.kind]!.allowHouse(bridge.env.PATH!);
       const streamed = await step(NO_CONNECTION, work.open(cli));
-      const adapter = await step(
+      adapter = await step(
         NO_START,
         startAdapter(
           route.kind,
@@ -546,10 +547,10 @@ export class Conversations {
       this.kit.send({ type: 'process', conversation_id: conversation.id, running: true });
       if (conversation.commands !== null) this.commands(conversation, conversation.commands);
       this.options(conversation, options);
-      void adapter.exited.then((cause) => this.exited(conversation, adapter, cause));
+      void adapter.lost.then((cause) => this.exited(conversation, running, cause));
       return running.sessionId;
     } catch (error) {
-      scope.kill();
+      adapter?.retire();
       work.close();
       conversation.leftovers.add(scope);
       bridge.close();
@@ -602,9 +603,7 @@ export class Conversations {
     return options;
   }
 
-  private exited(conversation: Conversation, adapter: Adapter, cause: string): void {
-    const running = conversation.running;
-    if (running?.adapter !== adapter) return;
+  private exited(conversation: Conversation, running: Running, cause: string): void {
     this.detach(conversation, running);
     if (conversation.turn !== null) {
       this.end(conversation, conversation.turn, exitedWith(running, cause));
@@ -713,7 +712,7 @@ export class Conversations {
           this.end(conversation, turn, exitedWith(running, await running.adapter.exited));
         } else {
           if (conversation.open === 1 && conversation.running === running) {
-            running.scope.kill();
+            running.adapter.retire();
             this.detach(conversation, running);
           }
           this.end(conversation, turn, answeredWith(error));

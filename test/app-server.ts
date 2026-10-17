@@ -5,15 +5,16 @@ import { createInterface } from 'node:readline';
 const home = process.env.HOUSE_KIT_HOME ?? '/tmp';
 const memories = !process.argv.includes('memories') && existsSync(join(home, 'codex-memories'));
 const queues = new Map<string, number>();
+const hung = existsSync(join(home, 'hung-app-server'));
 
 appendFileSync(join(home, 'app-server.log'), `${JSON.stringify(process.argv.slice(2))}\n`);
-if (existsSync(join(home, 'hung-app-server'))) {
+if (hung) {
   // An idle tick each minute keeps a hung app server alive after its input ends, as a CLI stuck in its start stays.
   setInterval(() => undefined, 60_000);
 }
 
 function write(message: unknown): void {
-  process.stdout.write(`${JSON.stringify(message)}\n`);
+  if (!hung) process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
 createInterface({ input: process.stdin }).on('line', (line) => {

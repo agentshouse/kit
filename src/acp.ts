@@ -5,18 +5,21 @@ import {
   type ClientConnection,
   type InitializeResponse,
 } from '@agentclientprotocol/sdk';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { CLIS, KIT_VERSION, adapterCommand, withoutProxy } from './clis.ts';
 import type { Message } from './events.ts';
 import { killTree, type Scope } from './scope.ts';
 
 export interface Adapter {
-  child: ChildProcess;
   connection: ClientConnection;
   initialized: InitializeResponse;
   exited: Promise<string>;
+  lost: Promise<string>;
+  retire(): void;
 }
+
+const RETIRED = 'the CLI was retired';
 
 export async function startAdapter(
   kind: string,
@@ -37,19 +40,11 @@ export async function startAdapter(
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
-  const stop = () => killTree(child);
-  signal?.addEventListener('abort', stop, { once: true });
-  child.on('exit', () => signal?.removeEventListener('abort', stop));
+  let owned = true;
+  let retired = false;
   let stderr = '';
   child.stderr.on('data', (chunk: Buffer) => {
     stderr = (stderr + chunk.toString('utf8')).slice(-4000);
-  });
-  const exited = new Promise<string>((resolve) => {
-    child.on('error', (error) => resolve(`the CLI did not start: ${error.message}`));
-    child.on('exit', (code, signal) => {
-      const last = stderr.trim().split('\n').at(-1);
-      resolve(`the CLI exited with ${code ?? signal}${last ? `: ${last}` : ''}`);
-    });
   });
   const stream = ndJsonStream(
     Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
@@ -61,7 +56,7 @@ export async function startAdapter(
       new TransformStream({
         transform(message, controller) {
           const read = message as Message;
-          events(read);
+          if (owned) events(read);
           if (read.id !== undefined || (read.method !== 'session/update' && !read.method!.startsWith('_'))) {
             controller.enqueue(message);
           }
@@ -69,7 +64,30 @@ export async function startAdapter(
       }),
     ),
   });
-  void exited.then((cause) => connection.close(new Error(cause)));
+  const { promise: lost, resolve: lose } = Promise.withResolvers<string>();
+  const exited = new Promise<string>((resolve) => {
+    const end = (cause: string) => {
+      if (owned) lose(cause);
+      owned = false;
+      connection.close(new Error(cause));
+      resolve(cause);
+    };
+    child.on('error', (error) => end(`the CLI did not start: ${error.message}`));
+    child.on('exit', (code, signal) => {
+      const last = stderr.trim().split('\n').at(-1);
+      end(`the CLI exited with ${code ?? signal}${last ? `: ${last}` : ''}`);
+    });
+  });
+  const retire = () => {
+    owned = false;
+    if (retired) return;
+    retired = true;
+    if (child.pid !== undefined) killTree(child);
+    scope?.kill();
+    connection.close(new Error(RETIRED));
+  };
+  signal?.addEventListener('abort', retire, { once: true });
+  child.on('exit', () => signal?.removeEventListener('abort', retire));
   try {
     const initialized = await connection.agent.request('initialize', {
       protocolVersion: PROTOCOL_VERSION,
@@ -83,9 +101,9 @@ export async function startAdapter(
       clientInfo: { name: '@agentshouse/kit', version: KIT_VERSION },
     });
     scope?.entered(child.pid!);
-    return { child, connection, initialized, exited };
+    return { connection, initialized, exited, lost, retire };
   } catch (error) {
-    child.kill('SIGKILL');
+    retire();
     throw error;
   }
 }

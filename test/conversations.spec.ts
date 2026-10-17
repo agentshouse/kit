@@ -596,7 +596,7 @@ it('resumes the provider session for a message that waited while the process cra
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
 });
 
-it('keeps what a process it no longer runs writes after it crashed out of the process that resumed its session', async () => {
+it("keeps output a crashed Conversation process leaves behind out of the process that resumed its session", async () => {
   const hosted = await opened();
   hosted.input({ kind: 'message', text: '@linger late stale\n@exit 3', files: [], first: false });
   const lingering = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.lingering !== undefined))).lingering as number;
