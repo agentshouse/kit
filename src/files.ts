@@ -29,9 +29,8 @@ export async function placeFiles(
 ): Promise<string[]> {
   const paths: string[] = [];
   for (const file of files) {
-    const original = await house.post<Original>(
-      '/kit/conversation/originals/get',
-      { version: file.version, download: true },
+    const original = await retrying(
+      () => house.post<Original>('/kit/conversation/originals/get', { version: file.version, download: true }, signal),
       signal,
     );
     const answer = await fetch(relayed(original.download.url), { signal });

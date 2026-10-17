@@ -62,7 +62,7 @@ const KILLED = 'the conversation was killed';
 
 const REFUSED = 'the CLI refused the prompt';
 
-const NO_CONNECTION = "the Kit could not open this conversation's connection";
+const NO_CONNECTION = "the Agent's computer could not open this conversation";
 
 const NO_START = "the Agent's CLI did not start";
 
