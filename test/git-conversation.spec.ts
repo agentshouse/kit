@@ -146,7 +146,7 @@ it("names each Local copy, house fetch before work and house push after in a con
     (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
   );
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block.slice(4)).toEqual([
+  expect(block.slice(5)).toEqual([
     'House Local copies; before work run `house fetch` and rebase onto `refs/house/received`; after it commit, then `house push`:',
     `/rooms/notes: ${room.repository}`,
   ]);
@@ -325,7 +325,7 @@ it('names the copies a fetch is still reading in a first prompt that arrives mea
 
   const prompt = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block.slice(5)).toEqual([`/rooms/notes: ${room.repository}`]);
+  expect(block.slice(6)).toEqual([`/rooms/notes: ${room.repository}`]);
 });
 
 it("brings House's reference rewrites home when it finishes an expired rename House applied", async () => {
