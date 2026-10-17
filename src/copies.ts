@@ -70,7 +70,6 @@ interface Copy {
   room_ref: string;
   room_handle: string;
   repository: string;
-  active: boolean;
   house: string;
   position: string;
   log_epoch: string;
@@ -80,6 +79,7 @@ interface Copy {
   manifests: Record<string, Manifest>;
   moves: Move[];
   push?: Push;
+  erasing?: true;
 }
 
 interface Authority {
@@ -173,6 +173,10 @@ function textOnly(paths: string[]): string {
   return `${named} not text, and house push sends text only; remove ${them} from the commit and place ${them} with house upload`;
 }
 
+function outside(path: string): Pushed {
+  return { refused: true, text: `${path} is not a House Local copy; run house push inside one` };
+}
+
 function short(commit: string): string {
   return commit.slice(0, 12);
 }
@@ -200,6 +204,10 @@ function sidecar(path: string): string {
   const segments = path.split('/');
   segments.splice(-1, 0, PROVENANCE);
   return segments.join('/');
+}
+
+function recordOf(key: string): string {
+  return join(kitHome(), 'local-copies', `${key}.json`);
 }
 
 function rootOf(handle: string): string {
@@ -378,7 +386,7 @@ export class LocalCopies {
   async mapping(): Promise<string[]> {
     await this.answering;
     return [...this.copies.values()]
-      .filter((copy) => copy.active)
+      .filter((copy) => copy.erasing === undefined)
       .map((copy) => `${rootOf(copy.room_handle)}: ${copy.repository}`)
       .sort();
   }
@@ -406,22 +414,29 @@ export class LocalCopies {
     return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
       const said: string[] = [];
       let refused = false;
-      for (const copy of this.copies.values()) {
-        if (synced.has(copy.key) || !copy.active) continue;
-        await this.save({ ...copy, active: false });
-        said.push(`${rootOf(copy.room_handle)}: no longer synced to this Environment; its files stay`);
+      for (const copy of [...this.copies.values()]) {
+        const returned = synced.has(copy.key);
+        if (returned && copy.erasing === undefined) continue;
+        try {
+          await this.erase(copy);
+          said.push(
+            `${rootOf(copy.room_handle)}: ${returned ? '' : 'no longer synced to this Environment; '}erased from the Local copy`,
+          );
+        } catch (error) {
+          refused = true;
+          said.push(`${rootOf(copy.room_handle)}: ${causeOf(error)}`);
+        }
       }
       const current: Copy[] = [];
       for (const [key, handle] of synced) {
         try {
           const held = this.copies.get(key);
+          if (held?.erasing) continue;
           if (held === undefined || !(await exists(held.repository))) {
             said.push(await this.materialize(key, handle));
             continue;
           }
-          const copy = held.room_handle === handle ? held : await this.save({ ...held, room_handle: handle });
-          if (copy.active) current.push(copy);
-          else said.push(...moved(copy, await this.save(await this.received({ ...copy, active: true }))));
+          current.push(held.room_handle === handle ? held : await this.save({ ...held, room_handle: handle }));
         } catch (error) {
           refused = true;
           said.push(`${rootOf(handle)}: ${causeOf(error)}`);
@@ -444,7 +459,8 @@ export class LocalCopies {
     const key = await this.keyAt(dirname(report.common));
     if (key === undefined) return;
     await this.exclusive(key, async () => {
-      const copy = this.copies.get(key)!;
+      const copy = this.copies.get(key);
+      if (copy === undefined || copy.erasing) return;
       let moves = copy.moves;
       for (const { from, to } of report.moves) {
         const held = moves.find((move) => move.worktree === report.worktree && move.to === from);
@@ -465,10 +481,10 @@ export class LocalCopies {
 
   async push(cwd: string, selector: string, caller: Caller): Promise<Pushed> {
     const located = await run(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']);
-    if (located.status !== 0) return { refused: true, text: `${cwd} is not a House Local copy; run house push inside one` };
+    if (located.status !== 0) return outside(cwd);
     const [common, worktree] = located.stdout.toString('utf8').split('\n') as [string, string];
     const key = await this.keyAt(dirname(common));
-    if (key === undefined) return { refused: true, text: `${worktree} is not a House Local copy; run house push inside one` };
+    if (key === undefined) return outside(worktree);
     return this.exclusive(key, () => this.pushed(key, worktree, selector, caller));
   }
 
@@ -495,13 +511,20 @@ export class LocalCopies {
   }
 
   private async save(copy: Copy): Promise<Copy> {
-    const path = join(kitHome(), 'local-copies', `${copy.key}.json`);
+    const path = recordOf(copy.key);
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}`;
     await writeFile(temporary, JSON.stringify(copy), { mode: 0o600 });
     await rename(temporary, path);
     this.copies.set(copy.key, copy);
     return copy;
+  }
+
+  private async erase(copy: Copy): Promise<void> {
+    await this.save({ ...copy, erasing: true });
+    await rm(copy.repository, { recursive: true, force: true });
+    await rm(recordOf(copy.key), { force: true });
+    this.copies.delete(copy.key);
   }
 
   private async read(handle: string): Promise<Read | null> {
@@ -564,7 +587,6 @@ export class LocalCopies {
       room_ref: read.anchor,
       room_handle: handle,
       repository,
-      active: true,
       house,
       position: read.position,
       log_epoch: read.log_epoch,
@@ -691,7 +713,8 @@ export class LocalCopies {
   }
 
   private async pushed(key: string, worktree: string, selector: string, caller: Caller): Promise<Pushed> {
-    let copy = this.copies.get(key)!;
+    let copy = this.copies.get(key);
+    if (copy === undefined || copy.erasing) return outside(worktree);
     if (copy.push?.state === 'submitted') return this.settle(copy, caller);
     const selected = await run(worktree, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${selector}^{commit}`]);
     if (selected.status !== 0) return { refused: true, text: `${selector} names no commit` };
@@ -702,9 +725,6 @@ export class LocalCopies {
         return this.finished(copy);
       }
       copy = await this.save(without(copy));
-    }
-    if (!copy.active) {
-      return { refused: true, text: `${rootOf(copy.room_handle)} is no longer synced to this Environment, so House takes no push from it` };
     }
     const listed = (await git(copy.repository, ['rev-list', '--topo-order', commit])).split('\n');
     const base = listed.find((ancestor) => ancestor in copy.manifests);
