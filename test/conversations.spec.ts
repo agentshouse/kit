@@ -328,6 +328,102 @@ it("reports a refused resume in the Kit's words, never the CLI's, and logs the C
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ did not start: the Agent's CLI could not resume this conversation: .*the session cannot be resumed/m);
 });
 
+it.each(['a Kit restart', 'a kill'])(
+  'starts the first message of a Claude Code conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
+  async (ending) => {
+    const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+    hosted.input({ kind: 'open' });
+    const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+    if (ending === 'a kill') {
+      hosted.input({ kind: 'kill' });
+      await hosted.ack(lastInput());
+    } else {
+      await hosted.restart();
+    }
+
+    hosted.input({ kind: 'message', provider_session_id: stored, text: '@say started', files: [], first: true });
+
+    const { provider_session_id: opened } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+    expect(opened).not.toBe(stored);
+    const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+    expect(outcome(ended.body)).toEqual({ text: 'started' });
+    expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt')!.params).toMatchObject({ sessionId: opened });
+    expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ opens a new session: the Agent's CLI could not resume this conversation: Resource not found/m);
+  },
+);
+
+it.each(['codex-acp', 'grok-build'])('resumes the session %s wrote when the conversation opened for its first message after a Kit restart', async (kind) => {
+  const hosted = await hostKit([{ kind }]);
+  hosted.input({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  await hosted.restart();
+
+  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say resumed', files: [], first: true });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(outcome(ended.body)).toEqual({ text: 'resumed' });
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === 'session/new')).toHaveLength(1);
+  expect(log.find((entry) => entry.method === 'session/prompt')!.params).toMatchObject({ sessionId: stored });
+});
+
+it('names the new session in the acknowledgement of every first message House sent before it learned of it', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+  hosted.input({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  await hosted.restart();
+
+  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say one', files: [], first: true });
+  const one = lastInput();
+  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say two', files: [], first: true });
+
+  const opened = ((await hosted.ack(one)) as { provider_session_id: string }).provider_session_id;
+  expect(opened).not.toBe(stored);
+  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: opened });
+});
+
+it('refuses a first message whose session this Kit already prompted when the CLI cannot resume it, and opens no other session', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+  hosted.input({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say one', files: [], first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  hosted.input({ kind: 'kill' });
+  await hosted.ack(lastInput());
+  await writeFile(join(hosted.home, 'refuse-resume'), '');
+
+  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say two', files: [], first: true });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
+});
+
+it('refuses a first message whose resume the CLI refuses for another reason than not holding the session, and opens no other session', async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }]);
+  hosted.input({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  await hosted.restart();
+  await writeFile(join(hosted.home, 'refuse-resume'), '');
+
+  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say lost', files: [], first: true });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
+});
+
+it('refuses a later message of a Claude Code conversation whose session the CLI cannot resume, and opens no other session', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+  hosted.input({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  await hosted.restart();
+
+  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say lost', files: [], first: false });
+
+  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
+});
+
 it("refuses a conversation whose CLI does not install in the Kit's words, never the installer's, and logs the installer's cause", async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
     prepare: async (home) => {

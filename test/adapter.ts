@@ -2,7 +2,7 @@ import { agent, ndJsonStream, RequestError, type AgentContext, type PromptRespon
 import { spawn, spawnSync, type ChildProcess, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { appendFileSync, closeSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Readable, Writable } from 'node:stream';
@@ -31,6 +31,22 @@ function log(entry: Record<string, unknown>): void {
 
 if (process.argv.includes('status')) {
   process.exit(signedIn() ? 0 : 1);
+}
+
+const unwrittenSessions = join(home, 'unwritten-sessions');
+
+function unwritten(): string[] {
+  return existsSync(unwrittenSessions) ? readFileSync(unwrittenSessions, 'utf8').split('\n').filter((line) => line !== '') : [];
+}
+
+function written(sessionId: string): void {
+  writeFileSync(unwrittenSessions, unwritten().filter((held) => held !== sessionId).map((held) => `${held}\n`).join(''));
+}
+
+function neverWritten(sessionId: string): RequestError {
+  return kind === 'claude-agent-acp'
+    ? new RequestError(-32002, `Resource not found: ${sessionId}`, { uri: sessionId })
+    : new RequestError(-32603, 'Internal error', { details: `no rollout found for thread id ${sessionId}` });
 }
 
 const offered = join(home, 'models', kind);
@@ -408,6 +424,7 @@ const app = agent({ name: 'adapter-double' })
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
     if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
+    if (kind !== 'grok-build') appendFileSync(unwrittenSessions, `${sessionId}\n`);
     const probeHold = join(home, 'probe-hold');
     if (params.cwd === home && existsSync(probeHold) && readFileSync(probeHold, 'utf8') === models[0]!.id) {
       log({ heldProbe: models[0]!.id });
@@ -431,6 +448,7 @@ const app = agent({ name: 'adapter-double' })
     if (existsSync(join(home, 'refuse-resume'))) {
       throw new RequestError(-32002, 'the session cannot be resumed');
     }
+    if (unwritten().includes(params.sessionId)) throw neverWritten(params.sessionId);
     return { configOptions: options() };
   })
   .onRequest('session/set_config_option', ({ params }) => {
@@ -454,6 +472,7 @@ const app = agent({ name: 'adapter-double' })
   })
   .onRequest('session/prompt', async ({ params, client }) => {
     const text = params.prompt.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+    written(params.sessionId);
     if (kind === 'codex-acp' && text.startsWith('/rename ')) {
       log({ renamed: text.slice('/rename '.length), params });
       return { stopReason: 'end_turn' };
