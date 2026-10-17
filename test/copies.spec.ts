@@ -44,6 +44,27 @@ it('changes no Local copy on a stream frame, and still takes the agents signal a
   expect(received(room)).toBe(before);
 });
 
+it('reads its Local copy selection again when House says its authority changed on the open socket, copying a Room it gained and erasing one it lost on that socket', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  notes.put('a.md', 'a\n');
+  const design = rooms.room('design');
+  design.put('brief.md', 'Brief\n');
+  await rooms.fetch([notes]);
+  const record = join(hosted.home, 'local-copies/rooms', `${notes.ref}.json`);
+  const sockets = hosted.house.sockets.length;
+  rooms.answered = [design];
+
+  hosted.socket.send({ type: 'authority_changed' });
+
+  await until(() => !existsSync(record));
+  await until(() => existsSync(join(design.repository, 'brief.md')));
+  expect(existsSync(notes.repository)).toBe(false);
+  expect(tracked(design)).toEqual(['brief.md']);
+  expect(hosted.house.sockets).toHaveLength(sockets);
+});
+
 it('copies every Room it may sync as soon as it connects, and a reconnect copies none again and leaves the work in them', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);

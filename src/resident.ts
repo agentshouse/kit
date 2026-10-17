@@ -171,6 +171,7 @@ export async function resident(): Promise<void> {
     },
     frame: (arrived: Frame) => {
       if (arrived.type === 'watching') conversations.watching(arrived.watching === true);
+      if (arrived.type === 'authority_changed') logged(copies.connected());
       if (arrived.type === 'work_available' && arrived.subject === 'agents') logged(agents.refresh());
       if (arrived.type === 'input') {
         reported = false;
