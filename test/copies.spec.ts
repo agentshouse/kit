@@ -456,6 +456,34 @@ it('keeps what House answered when it refuses a later read, leaves the Rooms of 
   expect(git(plans.repository, 'show', 'refs/house/received:a.md')).toBe('plans, from House\n');
 });
 
+it('keeps a Room an enumeration leaves out where it was, beside the Rooms it answers, and asks it from that position on the next fetch', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  rooms.maxPrefixes = 2;
+  const [notes, design, plans] = ['notes', 'design', 'plans'].map((handle) => rooms.room(handle)) as [Room, Room, Room];
+  for (const room of [notes, design, plans]) room.put('a.md', 'a\n');
+  await rooms.fetch([notes, design, plans]);
+  const unread = received(design);
+  const designed = at(design);
+  for (const room of [notes, design, plans]) room.put('a.md', `a, from House to ${room.handle}\n`);
+  rooms.omitted.add(design.ref);
+
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: expect.stringMatching(movedLines(notes, plans)) });
+  expect(received(design)).toBe(unread);
+  expect(existsSync(design.repository)).toBe(true);
+  const asked = enumerations(hosted).length;
+  rooms.omitted.clear();
+
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: expect.stringMatching(movedLines(design)) });
+  expect(enumerations(hosted).slice(asked)).toEqual([
+    { prefixes: [notes.root, design.root], positions: [at(notes), designed] },
+    { prefixes: [plans.root], positions: [at(plans)] },
+  ]);
+  for (const room of [notes, design, plans]) {
+    expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe(`a, from House to ${room.handle}\n`);
+  }
+});
+
 it('keeps a copy where it is through a handle change', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);

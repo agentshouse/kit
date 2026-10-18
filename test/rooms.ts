@@ -276,6 +276,7 @@ export interface Rooms {
   unreadable: Set<string>;
   denied: Set<string>;
   expired: Set<string>;
+  omitted: Set<string>;
   dropping: number;
   dropsEdits: number;
   refusesBatches: Answer[];
@@ -309,6 +310,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     unreadable: new Set(),
     denied: new Set(),
     expired: new Set(),
+    omitted: new Set(),
     dropping: 0,
     dropsEdits: 0,
     refusesBatches: [],
@@ -389,7 +391,8 @@ export function serveRooms(hosted: Hosted): Rooms {
       const { authority, position } = expired;
       return { status: 409, body: { error: { code: 'expired', authority, position, retryable: false } } };
     }
-    return { body: { authorities: known.map(({ room, position }) => room.enumerated(Number(position), state.pass)) } };
+    const answered = known.filter(({ room }) => !state.omitted.has(room.ref));
+    return { body: { authorities: answered.map(({ room, position }) => room.enumerated(Number(position), state.pass)) } };
   });
   hosted.house.route('POST', '/kit/door/revisions', (request) => {
     const { path, revision } = request.body as { path: string; revision: string };
