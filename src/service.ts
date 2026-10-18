@@ -22,6 +22,14 @@ function physical(path: string): string {
   return existsSync(path) ? realpathSync(path) : resolve(path);
 }
 
+function systemdHome(environment: string): string | undefined {
+  for (const [, quoted, bare] of environment.matchAll(/"((?:[^"\\]|\\.)*)"|(\S+)/g)) {
+    const assignment = bare ?? quoted!.replace(/\\(.)/g, '$1');
+    if (assignment.startsWith('HOUSE_KIT_HOME=')) return assignment.slice('HOUSE_KIT_HOME='.length);
+  }
+  return undefined;
+}
+
 function runsThisHome(served: string | undefined): boolean {
   return served !== undefined && physical(served) === physical(kitHome());
 }
@@ -38,7 +46,7 @@ export function startService(): boolean {
   for (const scope of [['--user'], []]) {
     if (manage('systemctl', [...scope, 'is-enabled', '--quiet', UNIT]).status !== 0) continue;
     const environment = manage('systemctl', [...scope, 'show', '--property=Environment', '--value', UNIT]).stdout;
-    if (!runsThisHome(/(?:^|\s)HOUSE_KIT_HOME=(\S+)/.exec(environment)?.[1])) continue;
+    if (!runsThisHome(systemdHome(environment))) continue;
     if (manage('systemctl', [...scope, 'is-active', '--quiet', UNIT]).status === 0) return false;
     start('systemctl', [...scope, 'start', UNIT]);
     return true;

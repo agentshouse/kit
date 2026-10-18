@@ -702,7 +702,7 @@ const SYSTEMD = (scope: string, running: boolean) => `${SERVED}case "$1" in --us
 case "$1" in
   is-enabled) ;;
   is-active) ${running ? 'exit 0' : 'exit 3'} ;;
-  show) printf 'HOUSE_KIT_HOME=%s HOUSE_KIT_WORKSPACE=/agents/house\\n' "$served" ;;
+  show) case "$served" in *' '*) printf '"HOUSE_KIT_HOME=%s" HOUSE_KIT_WORKSPACE=/agents/house\\n' "$served" ;; *) printf 'HOUSE_KIT_HOME=%s HOUSE_KIT_WORKSPACE=/agents/house\\n' "$served" ;; esac ;;
   start) ;;
   *) exit 1 ;;
 esac
@@ -764,6 +764,22 @@ it.each([
 
   expect(await login.exited).toBe(0);
   expect(await starts()).toEqual([]);
+});
+
+it.each([
+  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', false), [], ['--user start house-kit.service']],
+  ["server's systemd service", 'systemctl', SYSTEMD('system', false), [], ['start house-kit.service']],
+  ['LaunchAgent on macOS', 'launchctl', LAUNCHD(false), MACOS, [`kickstart gui/${UID}/house-kit`]],
+] as const)('starts the stopped %s of its own Kit home when that home lies at a path with a space', async (_name, tool, script, node, started) => {
+  const house = await startHouse();
+  const home = join(await temporaryHome(), 'Kit Home');
+  await mkdir(home);
+  const { path, starts } = await serviceManager(home, tool, script);
+
+  const login = await loginWithCode(house, home, path, [...node]);
+
+  expect(await login.exited).toBe(0);
+  expect(await starts()).toEqual(started);
 });
 
 it.each([
