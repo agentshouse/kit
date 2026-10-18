@@ -252,7 +252,7 @@ export class Room {
             : change.op === 'replace_preamble'
               ? { kind: 'preamble', value: change.content!, prior: String(change.base) }
               : { kind: 'section', name: change.section!, value: change.content!, prior: String(change.base) };
-        const result = apply(parsed.document, structured);
+        const result = apply(parsed.document, [structured]);
         if (result.outcome !== 'applied') stale(`${structured.kind}_base_stale`);
         else set(path, 'replace', serialize(result.document));
       }
