@@ -142,7 +142,6 @@ function marker(bridge: Bridge): string {
 class Turn {
   readonly id = randomUUID();
   readonly parts: Parts;
-  admitted = false;
   questions = 0;
   secrets = 0;
   prompted = false;
@@ -635,7 +634,7 @@ export class Conversations {
   }
 
   private write(conversation: Conversation, turn: Turn, operation: Operation): void {
-    if (!turn.admitted || turn.ended || !this.watched) return;
+    if (turn.ended || !this.watched) return;
     this.kit.send({ type: 'turn', conversation_id: conversation.id, turn_id: turn.id, ...operation });
   }
 
@@ -646,12 +645,7 @@ export class Conversations {
   private begin(conversation: Conversation): Turn {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
     conversation.open++;
-    void this.deliver(conversation, turn, 'started', {})
-      .then(() => {
-        turn.admitted = true;
-        this.replay(conversation, turn);
-      })
-      .catch(logged);
+    void this.deliver(conversation, turn, 'started', {}).catch(logged);
     conversation.turn = turn;
     if (conversation.context !== null) turn.parts.measure(conversation.context);
     for (const part of conversation.held.splice(0)) turn.parts.start(part);
