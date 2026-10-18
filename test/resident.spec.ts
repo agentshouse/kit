@@ -319,14 +319,16 @@ it.each([
 it.each([
   [429, 'sockets_per_user_exceeded'],
   [500, 'stream_unavailable'],
-])('ends, left stopped, naming the refusal when House refuses its socket opening with a %i it does not mark retryable', async (status, code) => {
+])('names the refusal and opens its socket again on the doubling backoff, never ending, when House refuses its socket opening with a %i it does not mark retryable', async (status, code) => {
   const house = await startHouse();
-  house.route('UPGRADE', '/kit/stream', () => ({ status, body: { error: { code, retryable: false } } }));
+  house.route('UPGRADE', '/kit/stream', () =>
+    openings(house) <= 2 ? { status, body: { error: { code, retryable: false } } } : {},
+  );
   const kit = await resident(house);
 
-  expect(await ended(kit)).toBe(0);
+  await until(() => house.sockets[0]);
+  expect(openings(house)).toBe(3);
   expect(kit.stderr()).toContain(`kit: House refused /kit/stream with ${status}: {"error":{"code":"${code}","retryable":false}}\n`);
-  expect(openings(house)).toBe(1);
 });
 
 it('opens its socket again after House refuses its opening with a refusal it marks retryable, whatever its status', async () => {

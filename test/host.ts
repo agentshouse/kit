@@ -71,6 +71,7 @@ const TOOLS: Record<string, string> = {
   sha256sum: `${LOGGED}cat >/dev/null\n`,
   shasum: `${LOGGED}cat >/dev/null\n`,
   systemctl: `${LOGGED}case "$*" in
+  *show*) sed -n 's/^Environment="\\(.*\\)"$/\\1/p' "$HOME/.config/systemd/user/house-kit.service" | tr '\\n' ' ' ;;
   *is-enabled*) [ -e "$FAKE/enabled" ] ;;
   *is-active*) [ -e "$FAKE/active" ] ;;
   *disable*) rm -f "$FAKE/enabled" ;;
@@ -82,7 +83,8 @@ esac\n`,
   print)
     [ -e "$FAKE/loaded" ] || exit 113
     if [ -e "$FAKE/active" ]; then state=running; else state='not running'; fi
-    printf '%s = {\\n\\tactive count = 0\\n\\tstate = %s\\n\\n\\tprogram = kit\\n}\\n' "$2" "$state"
+    home=$(sed -n '/<key>HOUSE_KIT_HOME<\\/key>/{n;s/.*<string>\\(.*\\)<\\/string>.*/\\1/p;}' "$HOME/Library/LaunchAgents/house-kit.plist")
+    printf '%s = {\\n\\tactive count = 0\\n\\tstate = %s\\n\\n\\tprogram = kit\\n\\tenvironment = {\\n\\t\\tHOUSE_KIT_HOME => %s\\n\\t}\\n}\\n' "$2" "$state" "$home"
     ;;
   bootstrap) [ ! -e "$FAKE/loaded" ] && touch "$FAKE/loaded" "$FAKE/active" ;;
   bootout) rm -f "$FAKE/active" && rm "$FAKE/loaded" ;;

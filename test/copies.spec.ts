@@ -44,24 +44,36 @@ it('changes no Local copy on a stream frame, and still takes the agents signal a
   expect(received(room)).toBe(before);
 });
 
-it('reads its Local copy selection again when House says its authority changed on the open socket, copying a Room it gained and erasing one it lost on that socket', async () => {
+it('reads the selection of only the Rooms an authority change names on the open socket, copying one gained, erasing one lost and saving a new handle, and keeps every other Room as it is', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
   notes.put('a.md', 'a\n');
+  const plans = rooms.room('plans');
+  plans.put('p.md', 'p\n');
+  const kept = rooms.room('kept');
+  kept.put('k.md', 'k\n');
   const design = rooms.room('design');
   design.put('brief.md', 'Brief\n');
-  await rooms.fetch([notes]);
-  const record = join(hosted.home, 'local-copies/rooms', `${notes.ref}.json`);
+  await rooms.fetch([notes, plans, kept]);
+  const record = (room: Room) => join(hosted.home, 'local-copies/rooms', `${room.ref}.json`);
+  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection');
+  const asked = selections().length;
   const sockets = hosted.house.sockets.length;
-  rooms.answered = [design];
+  plans.handle = 'renamed-plans';
+  rooms.answered = [plans, design];
 
-  hosted.socket.send({ type: 'authority_changed' });
+  hosted.socket.send({ type: 'authority_changed', rooms: [] });
+  hosted.socket.send({ type: 'authority_changed', rooms: [notes.ref, plans.ref, design.ref] });
 
-  await until(() => !existsSync(record));
-  await until(() => existsSync(join(design.repository, 'brief.md')));
+  await until(() => !existsSync(record(notes)));
+  await until(() => existsSync(record(design)));
   expect(existsSync(notes.repository)).toBe(false);
   expect(tracked(design)).toEqual(['brief.md']);
+  expect(await readFile(record(plans), 'utf8')).toContain('renamed-plans');
+  expect(tracked(kept)).toEqual(['k.md']);
+  expect(existsSync(record(kept))).toBe(true);
+  expect(selections().slice(asked).map((request) => request.body)).toEqual([{ rooms: [notes.ref, plans.ref, design.ref] }]);
   expect(hosted.house.sockets).toHaveLength(sockets);
 });
 
