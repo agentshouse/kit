@@ -212,6 +212,7 @@ class Conversation {
   queue: Promise<unknown> = Promise.resolve();
   reports: Promise<unknown> = Promise.resolve();
   starting: Starting | null = null;
+  preparing: Starting | null = null;
   told: Starting | null = null;
   untold = false;
   shown: ReturnType<typeof setTimeout> | null = null;
@@ -353,33 +354,32 @@ export class Conversations {
 
   private async open(conversation: Conversation, input: Input): Promise<Ack> {
     if (conversation.running !== null) return {};
-    this.starts(conversation, 'session');
+    this.prepares(conversation, 'session');
     try {
       return { provider_session_id: await this.start(conversation, await this.route(conversation, input.agent_id), null, true) };
     } catch (error) {
       return { refused: refusal(conversation, error) };
     } finally {
-      this.starts(conversation, null);
+      this.prepares(conversation, null);
     }
   }
 
   private async message(conversation: Conversation, input: Input): Promise<{ ack: Promise<Ack> }> {
     const content: ContentBlock[] = [{ type: 'text', text: String(input.text) }];
-    const next = conversation.sending === null && conversation.open === 0;
     let route: Route;
     try {
       route = await this.route(conversation, input.agent_id);
       const files = input.files as MessageFile[];
-      if (next && files.length > 0) this.starts(conversation, 'files');
+      if (files.length > 0) this.prepares(conversation, 'files');
       const paths = await placeFiles(this.kit.house, route.working_directory, files, conversation.killed.signal);
-      const lines = await this.transcribed(conversation, files, paths, next);
+      const lines = await this.transcribed(conversation, files, paths);
       if (lines.length > 0) content.push({ type: 'text', text: lines.join('\n') });
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
-      if (next) this.starts(conversation, null);
+      this.prepares(conversation, null);
       return { ack: Promise.resolve({ refused: refusal(conversation, error) }) };
     }
-    if (next && (conversation.sending !== null || conversation.open > 0)) this.starts(conversation, null);
+    conversation.preparing = null;
     return {
       ack: new Promise<Ack>((settle) => {
         conversation.waiting.push({ input, route, content, settle });
@@ -391,7 +391,10 @@ export class Conversations {
   private next(conversation: Conversation): void {
     if (conversation.sending !== null || conversation.open > 0) return;
     const waiting = conversation.waiting.shift();
-    if (waiting === undefined) return;
+    if (waiting === undefined) {
+      if (conversation.starting !== conversation.preparing) this.starts(conversation, conversation.preparing);
+      return;
+    }
     conversation.sending = this.send(conversation, waiting).finally(() => {
       conversation.sending = null;
       this.next(conversation);
@@ -449,18 +452,23 @@ export class Conversations {
     }, STARTING_SHOWN_AFTER_MS);
   }
 
+  private prepares(conversation: Conversation, step: Starting | null): void {
+    conversation.preparing = step;
+    this.next(conversation);
+  }
+
   private tell(conversation: Conversation, step: Starting | null): void {
     if (conversation.told === step && !conversation.untold) return;
     conversation.told = step;
     conversation.untold = !this.kit.send({ type: 'starting', conversation_id: conversation.id, step });
   }
 
-  private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[], next: boolean): Promise<string[]> {
+  private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[]): Promise<string[]> {
     const lines: string[] = [];
     for (const [index, path] of paths.entries()) {
       lines.push(path);
       if (files[index]!.media_type?.startsWith('audio/') !== true) continue;
-      if (next) this.starts(conversation, 'transcription');
+      this.prepares(conversation, 'transcription');
       try {
         const text = await transcribe(path, AbortSignal.any([conversation.killed.signal, conversation.interrupted.signal]));
         if (text !== null && text !== '') lines.push(`Transcript: ${text}`);
