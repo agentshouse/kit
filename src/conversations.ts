@@ -159,6 +159,7 @@ class Turn {
   questions = 0;
   secrets = 0;
   prompted = false;
+  taken: (() => void) | null = null;
   ended = false;
   images = 0;
   readonly uploads: Promise<unknown>[] = [];
@@ -434,8 +435,7 @@ export class Conversations {
       return;
     }
     this.starts(conversation, null);
-    this.kit.inputs.hands(String(input.input_id), ack);
-    this.prompt(conversation, [...prompt, ...waiting.content]);
+    this.prompt(conversation, [...prompt, ...waiting.content], () => this.kit.inputs.hands(String(input.input_id), ack));
     waiting.settle(ack);
   }
 
@@ -739,13 +739,15 @@ export class Conversations {
     this.kit.changed();
   }
 
-  private prompt(conversation: Conversation, prompt: ContentBlock[]): void {
+  private prompt(conversation: Conversation, prompt: ContentBlock[], taken: () => void): void {
     const running = conversation.running!;
     const turn = this.begin(conversation);
     turn.prompted = true;
+    turn.taken = taken;
     conversation.prompted = running.sessionId;
     running.adapter.connection.agent.request('session/prompt', { sessionId: running.sessionId, prompt }).then(
       (answer) => {
+        this.took(turn);
         const notice = answeredFailure(answer);
         if (notice !== null) {
           this.end(conversation, turn, { failure: notice.limit ? 'limit' : 'error', cause: notice.title }, notice.title);
@@ -757,6 +759,7 @@ export class Conversations {
         if (running.adapter.connection.signal.aborted) {
           this.end(conversation, turn, exitedWith(running, await running.adapter.exited));
         } else {
+          this.took(turn);
           if (conversation.open === 1 && conversation.running === running) {
             running.adapter.retire();
             this.detach(conversation, running);
@@ -860,7 +863,15 @@ export class Conversations {
         if (event.kind === 'marker' && event.marker === 'job') conversation.held.push({ type: 'marker', marker: 'job', text: event.text });
         return;
     }
-    this.apply(conversation, this.started(conversation), event);
+    const turn = this.started(conversation);
+    this.took(turn);
+    this.apply(conversation, turn, event);
+  }
+
+  private took(turn: Turn): void {
+    const taken = turn.taken;
+    turn.taken = null;
+    taken?.();
   }
 
   private apply(conversation: Conversation, turn: Turn, event: Event): void {

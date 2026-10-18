@@ -419,7 +419,7 @@ it('acknowledges a message it prompted before a restart lost its acknowledgement
   hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
   hosted.input({ kind: 'message', text: '@say once', files: [], first: true });
   const sent = lastInput();
-  await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   await hosted.restart();
   hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
     hosted.acks.push(request);
@@ -431,6 +431,26 @@ it('acknowledges a message it prompted before a restart lost its acknowledgement
   expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
   await settle();
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(1);
+});
+
+it('prompts again a message House sends again after a restart when its CLI showed nothing of it before the restart', async () => {
+  const hosted = await hostKit();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
+  hosted.input({ kind: 'message', text: '@gate never-opened', files: [], first: true });
+  const sent = lastInput();
+  await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
+  await hosted.restart();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
+    hosted.acks.push(request);
+    return { body: {} };
+  });
+
+  hosted.input({ kind: 'message', input_id: sent, text: '@say again', files: [], first: true });
+
+  expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(outcome(ended.body)).toEqual({ text: 'again' });
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(2);
 });
 
 it.each(['a Kit restart', 'a kill'])(

@@ -20,6 +20,7 @@ export class Inputs {
   private readonly carried = new Map<string, Promise<Carried>>();
   private readonly path = join(kitHome(), 'handed-inputs.json');
   private readonly handed: Map<string, Ack>;
+  private readonly answered = new Set<string>();
   private open = 0;
 
   constructor(house: House, changed: () => void) {
@@ -31,6 +32,7 @@ export class Inputs {
   }
 
   hands(inputId: string, ack: Ack): void {
+    if (this.answered.has(inputId)) return;
     this.handed.set(inputId, ack);
     this.save();
   }
@@ -54,6 +56,7 @@ export class Inputs {
         try {
           await this.house.deliver(`/kit/inputs/${inputId}/ack`, ack);
         } finally {
+          this.answered.add(inputId);
           if (this.handed.delete(inputId)) this.save();
         }
         if (known === undefined) await acknowledged?.();
