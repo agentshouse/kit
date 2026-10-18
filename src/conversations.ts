@@ -213,6 +213,7 @@ class Conversation {
   reports: Promise<unknown> = Promise.resolve();
   starting: Starting | null = null;
   told: Starting | null = null;
+  untold = false;
   shown: ReturnType<typeof setTimeout> | null = null;
 
   constructor(id: string) {
@@ -303,6 +304,9 @@ export class Conversations {
 
   opened(): void {
     this.watched = false;
+    for (const conversation of this.conversations.values()) {
+      if (conversation.untold) this.tell(conversation, conversation.told);
+    }
   }
 
   watching(watched: boolean): void {
@@ -361,20 +365,21 @@ export class Conversations {
 
   private async message(conversation: Conversation, input: Input): Promise<{ ack: Promise<Ack> }> {
     const content: ContentBlock[] = [{ type: 'text', text: String(input.text) }];
+    const next = conversation.sending === null && conversation.open === 0;
     let route: Route;
     try {
       route = await this.route(conversation, input.agent_id);
       const files = input.files as MessageFile[];
-      if (files.length > 0) this.starts(conversation, 'files');
+      if (next && files.length > 0) this.starts(conversation, 'files');
       const paths = await placeFiles(this.kit.house, route.working_directory, files, conversation.killed.signal);
-      const lines = await this.transcribed(conversation, files, paths);
+      const lines = await this.transcribed(conversation, files, paths, next);
       if (lines.length > 0) content.push({ type: 'text', text: lines.join('\n') });
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
-      this.starts(conversation, null);
+      if (next) this.starts(conversation, null);
       return { ack: Promise.resolve({ refused: refusal(conversation, error) }) };
     }
-    if (conversation.sending !== null || conversation.open > 0) this.starts(conversation, null);
+    if (next && (conversation.sending !== null || conversation.open > 0)) this.starts(conversation, null);
     return {
       ack: new Promise<Ack>((settle) => {
         conversation.waiting.push({ input, route, content, settle });
@@ -445,17 +450,17 @@ export class Conversations {
   }
 
   private tell(conversation: Conversation, step: Starting | null): void {
-    if (conversation.told === step) return;
+    if (conversation.told === step && !conversation.untold) return;
     conversation.told = step;
-    this.kit.send({ type: 'starting', conversation_id: conversation.id, step });
+    conversation.untold = !this.kit.send({ type: 'starting', conversation_id: conversation.id, step });
   }
 
-  private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[]): Promise<string[]> {
+  private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[], next: boolean): Promise<string[]> {
     const lines: string[] = [];
     for (const [index, path] of paths.entries()) {
       lines.push(path);
       if (files[index]!.media_type?.startsWith('audio/') !== true) continue;
-      this.starts(conversation, 'transcription');
+      if (next) this.starts(conversation, 'transcription');
       try {
         const text = await transcribe(path, AbortSignal.any([conversation.killed.signal, conversation.interrupted.signal]));
         if (text !== null && text !== '') lines.push(`Transcript: ${text}`);

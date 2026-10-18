@@ -359,6 +359,41 @@ it('reports the start-up step of a message whose session takes over a second to 
   ]);
 });
 
+it('writes a start-up step that changed while its socket was closed once the socket reopens', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const starting = (socket = hosted.house.sockets.at(-1)!) =>
+    socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+  hosted.input({ kind: 'open' });
+  await until(() => starting().length > 0);
+
+  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  await settle();
+  await rm(join(hosted.home, 'hold-new'));
+  await hosted.ack(lastInput());
+  const reopened = await until(() => hosted.house.sockets[1]);
+
+  await until(() => starting(reopened).length > 0);
+  expect(starting(hosted.house.sockets[0])).toEqual(['session']);
+  expect(starting(reopened)).toEqual([null]);
+});
+
+it('keeps the start-up step of the message being started while a later one arrives', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+  hosted.input({ kind: 'message', text: '@say first', files: [], first: true });
+  await until(() => starting().length > 0);
+
+  hosted.input({ kind: 'message', text: '@say second', files: [], first: true });
+  await settle();
+  expect(starting()).toEqual(['session']);
+
+  await rm(join(hosted.home, 'hold-new'));
+  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/ended')).length === 2);
+  expect(starting()).toEqual(['session', null]);
+});
+
 it.each(['a Kit restart', 'a kill'])(
   'starts the first message of a Claude Code conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
   async (ending) => {
