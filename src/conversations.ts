@@ -306,7 +306,7 @@ export class Conversations {
   opened(): void {
     this.watched = false;
     for (const conversation of this.conversations.values()) {
-      if (conversation.untold) this.tell(conversation, conversation.told);
+      if (conversation.untold || conversation.told !== null) this.retell(conversation);
     }
   }
 
@@ -460,7 +460,11 @@ export class Conversations {
   private tell(conversation: Conversation, step: Starting | null): void {
     if (conversation.told === step && !conversation.untold) return;
     conversation.told = step;
-    conversation.untold = !this.kit.send({ type: 'starting', conversation_id: conversation.id, step });
+    this.retell(conversation);
+  }
+
+  private retell(conversation: Conversation): void {
+    conversation.untold = !this.kit.send({ type: 'starting', conversation_id: conversation.id, step: conversation.told });
   }
 
   private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[]): Promise<string[]> {

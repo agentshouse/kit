@@ -378,6 +378,26 @@ it('writes a start-up step that changed while its socket was closed once the soc
   expect(starting(reopened)).toEqual([null]);
 });
 
+it('writes the start-up step it is still in on a socket that reopens', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const starting = (socket = hosted.house.sockets.at(-1)!) =>
+    socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+  hosted.input({ kind: 'open' });
+  await until(() => starting().length > 0);
+
+  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  const reopened = await until(() => hosted.house.sockets[1]);
+
+  await until(() => starting(reopened).length > 0);
+  expect(starting(hosted.house.sockets[0])).toEqual(['session']);
+  expect(starting(reopened)).toEqual(['session']);
+  await rm(join(hosted.home, 'hold-new'));
+  await hosted.ack(lastInput());
+  await until(() => starting(reopened).length > 1);
+  expect(starting(reopened)).toEqual(['session', null]);
+});
+
 it('keeps the start-up step of the message being started while a later one arrives', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
