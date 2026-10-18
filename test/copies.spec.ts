@@ -19,6 +19,24 @@ function enumerations(hosted: Hosted): unknown[] {
   return hosted.house.requests.filter((request) => request.path === '/kit/door/enumerate').map((request) => request.body);
 }
 
+function discovered(hosted: Hosted): string[][] {
+  return hosted.house.requests
+    .filter((request) => request.path === '/kit/door/discover')
+    .map((request) => (request.body as { prefixes: string[] }).prefixes);
+}
+
+function at(room: Room, position = room.position): { authority: string; position: string; log_epoch: string } {
+  return { authority: room.ref, position: String(position), log_epoch: room.logEpoch };
+}
+
+function pairs<T>(items: readonly T[]): T[][] {
+  return items.flatMap((_, index) => (index % 2 === 0 ? [items.slice(index, index + 2)] : []));
+}
+
+function movedLines(...rooms: Room[]): RegExp {
+  return new RegExp(`^${rooms.map((room) => `${room.root}: refs/house/received is at [0-9a-f]{12}\n`).join('')}$`);
+}
+
 it('changes no Local copy on a stream frame, and still takes the agents signal and inputs', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
@@ -344,6 +362,98 @@ it('fetches one pass House bounds and the next fetch continues from it, and says
   expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: '/rooms/notes: read-only files refreshed\n' });
   expect(received(room)).toBe(ref);
   expect(await readFile(join(room.repository, 'capture/mail/one.md'), 'utf8')).toBe('one\n');
+});
+
+it.each([2, 3, 5])(
+  'fetches %i changed Rooms in reads of at most the two prefixes House declares, each enumeration asking its own Rooms from their positions',
+  async (count) => {
+    const hosted = await hostKit();
+    const rooms = serveRooms(hosted);
+    rooms.maxPrefixes = 2;
+    const copied = Array.from({ length: count }, (_, index) => rooms.room(`room-${index}`));
+    for (const room of copied) room.put('a.md', 'a\n');
+    await rooms.fetch(copied);
+    const discoveries = discovered(hosted).length;
+    const asked = pairs(copied.map((room) => ({ root: room.root, position: at(room) })));
+    for (const room of copied) room.put('a.md', `a, from House to ${room.handle}\n`);
+
+    expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: expect.stringMatching(movedLines(...copied)) });
+
+    const reads = discovered(hosted).slice(discoveries);
+    expect(reads.every((prefixes) => prefixes.length > 0 && prefixes.length <= 2)).toBe(true);
+    expect(reads.flat()).toEqual(copied.map((room) => room.root));
+    expect(enumerations(hosted)).toEqual(
+      asked.map((group) => ({ prefixes: group.map(({ root }) => root), positions: group.map(({ position }) => position) })),
+    );
+    for (const room of copied) {
+      expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe(`a, from House to ${room.handle}\n`);
+    }
+  },
+);
+
+it('reads a Room whole again when its grant changed or House no longer holds its position beyond the first read House bounds', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  rooms.maxPrefixes = 2;
+  const copied = ['notes', 'design', 'regranted', 'expired'].map((handle) => rooms.room(handle));
+  const [notes, design, regranted, expired] = copied as [Room, Room, Room, Room];
+  for (const room of copied) room.put('a.md', 'a\n');
+  await rooms.fetch(copied);
+  const bootstraps = () => hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap').map((request) => request.body);
+  const bootstrapped = bootstraps().length;
+  const positions = copied.map((room) => at(room));
+  for (const room of copied) room.put('a.md', `a, from House to ${room.handle}\n`);
+  regranted.protected = [...regranted.protected, 'archive'];
+  rooms.expired.add(expired.ref);
+
+  expect((await house(hosted, '/', 'fetch')).status).toBe(0);
+
+  for (const room of copied) {
+    expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe(`a, from House to ${room.handle}\n`);
+  }
+  expect(bootstraps().slice(bootstrapped)).toEqual([{ prefixes: [regranted.root] }, { prefixes: [expired.root] }]);
+  expect(enumerations(hosted)).toEqual([
+    { prefixes: [notes.root, design.root], positions: positions.slice(0, 2) },
+    { prefixes: [expired.root], positions: positions.slice(3) },
+  ]);
+});
+
+it('keeps what House answered when it refuses a later read, leaves the Rooms of that read where they were, and the next fetch asks each Room from the position it saved', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  rooms.maxPrefixes = 2;
+  const [notes, design, plans] = ['notes', 'design', 'plans'].map((handle) => rooms.room(handle)) as [Room, Room, Room];
+  for (const room of [notes, design, plans]) room.put('a.md', 'a\n');
+  await rooms.fetch([notes, design, plans]);
+  const unread = received(plans);
+  const from = notes.position;
+  const planned = at(plans);
+  rooms.pass = 1;
+  notes.put('one.md', 'one\n');
+  notes.put('two.md', 'two\n');
+  notes.put('three.md', 'three\n');
+  design.put('a.md', 'design, from House\n');
+  plans.put('a.md', 'plans, from House\n');
+  rooms.reads = [true, false];
+
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({
+    status: 1,
+    stderr: expect.stringMatching(
+      /^house: \/rooms\/notes: refs\/house\/received is at [0-9a-f]{12}\n\/rooms\/design: refs\/house\/received is at [0-9a-f]{12}\nhouse_unavailable\n$/,
+    ),
+  });
+  expect(git(notes.repository, 'ls-tree', '--name-only', 'refs/house/received').split('\n')).toEqual(['a.md', 'one.md', '']);
+  expect(git(design.repository, 'show', 'refs/house/received:a.md')).toBe('design, from House\n');
+  expect(received(plans)).toBe(unread);
+  const asked = enumerations(hosted).length;
+
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: expect.stringMatching(movedLines(notes, plans)) });
+  expect(enumerations(hosted).slice(asked)).toEqual([
+    { prefixes: [notes.root, design.root], positions: [at(notes, from + 1), at(design)] },
+    { prefixes: [plans.root], positions: [planned] },
+  ]);
+  expect(git(notes.repository, 'ls-tree', '--name-only', 'refs/house/received').split('\n')).toEqual(['a.md', 'one.md', 'two.md', '']);
+  expect(git(plans.repository, 'show', 'refs/house/received:a.md')).toBe('plans, from House\n');
 });
 
 it('keeps a copy where it is through a handle change', async () => {

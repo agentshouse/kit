@@ -287,12 +287,15 @@ export interface Rooms {
   byteReads: Received[];
   damages: boolean;
   authoredFileBytes: number;
+  maxPrefixes: number;
   edits(): Received[];
 }
 
 function prefixed(rooms: Room[], prefixes: string[]): Room[] {
   return rooms.filter((room) => prefixes.includes(room.root));
 }
+
+const INVALID = { status: 400, body: { error: { code: 'invalid_request', retryable: false } } };
 
 export const OVERLOADED = {
   error: { code: 'house_overloaded', message: 'house_overloaded: House is busy; call again in 5 s', retry_after: 5, retryable: true },
@@ -317,6 +320,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     byteReads: [],
     damages: false,
     authoredFileBytes: 1_000_000,
+    maxPrefixes: 256,
     room: (handle) => {
       const room = new Room(handle);
       rooms.push(room);
@@ -355,9 +359,10 @@ export function serveRooms(hosted: Hosted): Rooms {
   });
   hosted.house.route('POST', '/kit/door/discover', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
+    if (prefixes.length > state.maxPrefixes) return INVALID;
     return {
       body: {
-        bounds: { max_authored_file_bytes: state.authoredFileBytes },
+        bounds: { max_authored_file_bytes: state.authoredFileBytes, max_prefixes: state.maxPrefixes },
         authorities: prefixed(rooms, prefixes).map((room) => room.authority()),
       },
     };
@@ -371,7 +376,11 @@ export function serveRooms(hosted: Hosted): Rooms {
     return { body: { scopes: read.map((room) => room.bundle()) } };
   });
   hosted.house.route('POST', '/kit/door/enumerate', (request) => {
-    const { positions } = request.body as { positions: { authority: string; position: string; log_epoch: string }[] };
+    const { prefixes, positions } = request.body as {
+      prefixes: string[];
+      positions: { authority: string; position: string; log_epoch: string }[];
+    };
+    if (prefixes.length > state.maxPrefixes || positions.length > state.maxPrefixes) return INVALID;
     if (state.reads.shift() === false) return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
     const known = positions.map((position) => ({ ...position, room: rooms.find((candidate) => candidate.ref === position.authority)! }));
     const expired = known.find(({ room, log_epoch }) => state.expired.has(room.ref) || log_epoch !== room.logEpoch);
