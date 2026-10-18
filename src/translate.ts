@@ -14,13 +14,8 @@ function same(left: unknown, right: unknown): boolean {
 }
 
 function applied(document: Document, changes: Change[]): string | null {
-  let current = document;
-  for (const change of changes) {
-    const result = apply(current, change);
-    if (result.outcome !== 'applied') return null;
-    current = result.document;
-  }
-  return serialize(current);
+  const result = apply(document, changes);
+  return result.outcome === 'applied' ? serialize(result.document) : null;
 }
 
 function components(path: string, before: Document, after: Document, text: string): Edit[] | null {

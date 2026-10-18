@@ -190,7 +190,7 @@ it('sends a changed object field written in the form the MD model writes as one 
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
-  const shipped = MEMO.replace('status: draft\n', 'status: draft\nshipping:\n  {city: Paris, country: FR}\n');
+  const shipped = MEMO.replace('status: draft\n', 'status: draft\nshipping: {city: Paris, country: FR}\n');
   room.put('docs/memo.md', shipped);
   await rooms.fetch([room]);
   const local = shipped.replace('city: Paris', 'city: Lyon');
