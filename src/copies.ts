@@ -395,8 +395,8 @@ export class LocalCopies {
     return this.selected();
   }
 
-  async changed(rooms: readonly string[]): Promise<void> {
-    if (rooms.length > 0) await this.selected(rooms);
+  async changed(rooms: readonly string[] | undefined): Promise<void> {
+    if (rooms === undefined || rooms.length > 0) await this.selected(rooms);
   }
 
   fetch(): Promise<Pushed> {

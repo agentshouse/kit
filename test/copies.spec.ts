@@ -77,6 +77,30 @@ it('reads the selection of only the Rooms an authority change names on the open 
   expect(hosted.house.sockets).toHaveLength(sockets);
 });
 
+it('reads the whole selection when an authority change names no list of Rooms, copying a gained Room and erasing a lost one', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  notes.put('a.md', 'a\n');
+  const kept = rooms.room('kept');
+  kept.put('k.md', 'k\n');
+  const design = rooms.room('design');
+  design.put('brief.md', 'Brief\n');
+  await rooms.fetch([notes, kept]);
+  const record = (room: Room) => join(hosted.home, 'local-copies/rooms', `${room.ref}.json`);
+  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection');
+  const asked = selections().length;
+  rooms.answered = [kept, design];
+
+  hosted.socket.send({ type: 'authority_changed' });
+
+  await until(() => !existsSync(record(notes)));
+  await until(() => existsSync(record(design)));
+  expect(tracked(design)).toEqual(['brief.md']);
+  expect(tracked(kept)).toEqual(['k.md']);
+  expect(selections().slice(asked).map((request) => request.body)).toEqual([{}]);
+});
+
 it('copies every Room it may sync as soon as it connects, and a reconnect copies none again and leaves the work in them', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);

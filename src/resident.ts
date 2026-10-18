@@ -174,7 +174,7 @@ export async function resident(): Promise<void> {
     },
     frame: (arrived: Frame) => {
       if (arrived.type === 'watching') conversations.watching(arrived.watching === true);
-      if (arrived.type === 'authority_changed') logged(copies.changed(arrived.rooms as string[]));
+      if (arrived.type === 'authority_changed') logged(copies.changed(arrived.rooms as string[] | undefined));
       if (arrived.type === 'work_available' && arrived.subject === 'agents') logged(agents.refresh());
       if (arrived.type === 'input') {
         if (arrived.kind === 'sign_in') signIns.start(arrived as unknown as SignIn);
