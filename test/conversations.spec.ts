@@ -854,7 +854,7 @@ it("writes the running turn's operations so far once on a socket that reopens wa
   ]);
 });
 
-it('writes no operation of a turn before House answers its start report, then the operations so far', async () => {
+it("writes each operation of a turn as it happens, before House answers the turn's start report, so a turn that ends at once streams its text", async () => {
   const hosted = await opened();
   hosted.watch(true);
   let admit!: () => void;
@@ -868,19 +868,19 @@ it('writes no operation of a turn before House answers its start report, then th
     return { body: {} };
   });
 
-  const release = gated(hosted, 'rest');
-  hosted.input({ kind: 'message', text: '@say one\n@plan read|fix\n@ping\n@gate rest\n@say  two', files: [], first: true });
-  await until(async () => (await hosted.adapterLog()).some((entry) => entry.pinged === true));
-  await settle();
-  expect(operations(hosted)).toEqual([]);
+  hosted.input({ kind: 'message', text: '@say one\n@plan read|fix\n@say  two', files: [], first: true });
+  await until(() => operations(hosted).length === 3);
+  expect(hosted.turns).toEqual([]);
   admit();
-  await until(() => operations(hosted).length === 2);
-  await release();
 
   expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
-  expect(operations(hosted).map(({ op, index, part, text }) => ({ op, index, part, text }))).toEqual([
-    { op: 'start', index: 0, part: { type: 'text', text: 'one' }, text: undefined },
+  const turn = hosted.turns[0]!.params.turn;
+  expect(operations(hosted)).toEqual([
+    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 0, part: { type: 'text', text: 'one' } },
     {
+      type: 'turn',
+      conversation_id: 'conversation-1',
+      turn_id: turn,
       op: 'start',
       index: 1,
       part: {
@@ -890,9 +890,8 @@ it('writes no operation of a turn before House answers its start report, then th
           { content: 'fix', status: 'pending' },
         ],
       },
-      text: undefined,
     },
-    { op: 'start', index: 2, part: { type: 'text', text: ' two' }, text: undefined },
+    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 2, part: { type: 'text', text: ' two' } },
   ]);
 });
 
