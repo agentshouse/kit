@@ -80,6 +80,8 @@ const NO_SESSION = "the Agent's CLI did not open a session";
 
 const NO_RESUME = "the Agent's CLI could not resume this conversation";
 
+const NOT_SIGNED_IN = "the Agent's CLI is not signed in; sign it in on the Agent's machine";
+
 const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
 
 class NotStarted extends Error {}
@@ -91,6 +93,19 @@ async function step<T>(reason: string | ((error: unknown) => string), work: Prom
     throw new NotStarted(typeof reason === 'string' ? reason : reason(error), { cause: error });
   }
 }
+
+function signedOut(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === SIGNED_OUT;
+}
+
+function unopened(reason: string): (error: unknown) => string {
+  return (error) => (signedOut(error) ? NOT_SIGNED_IN : reason);
+}
+
+type Starting = 'files' | 'transcription' | 'session';
+
+// A start-up step is shown only once it has lasted a second, so a quick start shows none of them.
+const STARTING_SHOWN_AFTER_MS = 1_000;
 
 function unbridged(error: unknown): string {
   return (finalRefusal(error) ? ENDED[refusalOf(error.text)?.code ?? ''] : undefined) ?? NO_CONNECTION;
@@ -112,8 +127,7 @@ function causeOf(error: unknown): string {
 }
 
 function answeredWith(error: unknown): Failed {
-  const signedOut = typeof error === 'object' && error !== null && (error as { code?: unknown }).code === SIGNED_OUT;
-  return { failure: signedOut ? 'signed_out' : 'error', cause: causeOf(error) };
+  return { failure: signedOut(error) ? 'signed_out' : 'error', cause: causeOf(error) };
 }
 
 function exitedWith(running: Running, cause: string): Failed {
@@ -197,6 +211,9 @@ class Conversation {
   open = 0;
   queue: Promise<unknown> = Promise.resolve();
   reports: Promise<unknown> = Promise.resolve();
+  starting: Starting | null = null;
+  told: Starting | null = null;
+  shown: ReturnType<typeof setTimeout> | null = null;
 
   constructor(id: string) {
     this.id = id;
@@ -332,10 +349,13 @@ export class Conversations {
 
   private async open(conversation: Conversation, input: Input): Promise<Ack> {
     if (conversation.running !== null) return {};
+    this.starts(conversation, 'session');
     try {
       return { provider_session_id: await this.start(conversation, await this.route(conversation, input.agent_id), null, true) };
     } catch (error) {
       return { refused: refusal(conversation, error) };
+    } finally {
+      this.starts(conversation, null);
     }
   }
 
@@ -345,13 +365,16 @@ export class Conversations {
     try {
       route = await this.route(conversation, input.agent_id);
       const files = input.files as MessageFile[];
+      if (files.length > 0) this.starts(conversation, 'files');
       const paths = await placeFiles(this.kit.house, route.working_directory, files, conversation.killed.signal);
       const lines = await this.transcribed(conversation, files, paths);
       if (lines.length > 0) content.push({ type: 'text', text: lines.join('\n') });
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
+      this.starts(conversation, null);
       return { ack: Promise.resolve({ refused: refusal(conversation, error) }) };
     }
+    if (conversation.sending !== null || conversation.open > 0) this.starts(conversation, null);
     return {
       ack: new Promise<Ack>((settle) => {
         conversation.waiting.push({ input, route, content, settle });
@@ -377,6 +400,7 @@ export class Conversations {
     const prompt: ContentBlock[] = [];
     try {
       if (conversation.running === null) {
+        this.starts(conversation, 'session');
         const stored = conversation.session ?? input.provider_session_id;
         const empty = input.first === true && conversation.prompted !== stored;
         started = (await this.start(conversation, waiting.route, stored, empty)) !== stored;
@@ -393,6 +417,7 @@ export class Conversations {
       }
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
+      this.starts(conversation, null);
       if (started) {
         conversation.session = null;
         await this.kill(conversation);
@@ -400,8 +425,29 @@ export class Conversations {
       waiting.settle({ refused: refusal(conversation, error) });
       return;
     }
+    this.starts(conversation, null);
     this.prompt(conversation, [...prompt, ...waiting.content]);
     waiting.settle(ack);
+  }
+
+  private starts(conversation: Conversation, step: Starting | null): void {
+    conversation.starting = step;
+    if (conversation.shown !== null) clearTimeout(conversation.shown);
+    conversation.shown = null;
+    if (step === null || conversation.told !== null) {
+      this.tell(conversation, step);
+      return;
+    }
+    conversation.shown = setTimeout(() => {
+      conversation.shown = null;
+      if (conversation.starting === step) this.tell(conversation, step);
+    }, STARTING_SHOWN_AFTER_MS);
+  }
+
+  private tell(conversation: Conversation, step: Starting | null): void {
+    if (conversation.told === step) return;
+    conversation.told = step;
+    this.kit.send({ type: 'starting', conversation_id: conversation.id, step });
   }
 
   private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[]): Promise<string[]> {
@@ -409,6 +455,7 @@ export class Conversations {
     for (const [index, path] of paths.entries()) {
       lines.push(path);
       if (files[index]!.media_type?.startsWith('audio/') !== true) continue;
+      this.starts(conversation, 'transcription');
       try {
         const text = await transcribe(path, AbortSignal.any([conversation.killed.signal, conversation.interrupted.signal]));
         if (text !== null && text !== '') lines.push(`Transcript: ${text}`);
@@ -518,11 +565,12 @@ export class Conversations {
       const cwd = route.working_directory;
       const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, conversation.id);
       const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
-      const opened = resumed ?? (await step(NO_SESSION, agent.request('session/new', { cwd, mcpServers: [], _meta })));
+      const opened =
+        resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));
       reader.session = opened.sessionId;
       if (opened.sessionId !== sessionId && CLIS[route.kind]!.renames) {
         const prompt: ContentBlock[] = [{ type: 'text', text: `/rename ${conversation.id}` }];
-        await step(NO_SESSION, agent.request('session/prompt', { sessionId: opened.sessionId, prompt }));
+        await step(unopened(NO_SESSION), agent.request('session/prompt', { sessionId: opened.sessionId, prompt }));
       }
       const running: Running = { adapter, bridge, sessionId: opened.sessionId, killed: false, reader, work, scope };
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
@@ -556,7 +604,7 @@ export class Conversations {
       return { ...(await adapter.connection.agent.request('session/resume', request)), sessionId: request.sessionId };
     } catch (error) {
       if (!empty || conversation.kills > 0 || !CLIS[kind]!.unknownSession(error)) {
-        throw new NotStarted(NO_RESUME, { cause: error });
+        throw new NotStarted(unopened(NO_RESUME)(error), { cause: error });
       }
       logged(new Error(`conversation ${conversation.id} opens a new session: ${NO_RESUME}: ${causeOf(error)}`));
       return null;

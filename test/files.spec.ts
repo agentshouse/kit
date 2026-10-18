@@ -116,3 +116,26 @@ it('refuses a message whose file does not match the SHA-256 House sent with it, 
   expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('data.bin did not arrive whole') });
   await expect(stat(join(hosted.workingDirectory, '.house', 'files', 'message-1', 'version-2', 'data.bin'))).rejects.toThrow('ENOENT');
 });
+
+it("reports downloading a message's files as its start-up step while they take over a second, then the session's start", async () => {
+  const hosted = await hostKit();
+  serveFiles(hosted);
+  let release = (): void => {};
+  const held = new Promise<void>((settle) => {
+    release = settle;
+  });
+  hosted.house.route('GET', '/bytes/:version', async (received) => {
+    await held;
+    return { bytes: { type: 'application/octet-stream', content: STORED[received.params.version!]!.content } };
+  });
+  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+
+  hosted.input({ kind: 'message', text: 'read this', files: [described[0]!], first: true });
+
+  await until(() => starting().length > 0);
+  expect(starting()).toEqual(['files']);
+  release();
+  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  await until(() => starting().at(-1) === null);
+  expect(starting()).toEqual(['files', 'session', null]);
+});

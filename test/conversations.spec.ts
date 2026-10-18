@@ -328,6 +328,47 @@ it("reports a refused resume in the Kit's words, never the CLI's, and logs the C
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ did not start: the Agent's CLI could not resume this conversation: .*the session cannot be resumed/m);
 });
 
+it.each([
+  ['opening', null],
+  ['resuming', 'session-stored'],
+])("refuses a message whose CLI is not signed in when %s its session, saying so in the Kit's words", async (_step, stored) => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'signed-out'), '');
+
+  hosted.input({ kind: 'message', provider_session_id: stored, text: 'hello', files: [], first: stored === null });
+
+  expect(await hosted.ack(lastInput())).toEqual({
+    refused: "the Agent's CLI is not signed in; sign it in on the Agent's machine",
+  });
+});
+
+it('reports the start-up step of a message whose session takes over a second to open, and its end before the turn starts', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting');
+
+  hosted.input({ kind: 'message', text: '@say Hello', files: [], first: true });
+
+  await until(() => starting().length > 0);
+  expect(starting()).toEqual([{ type: 'starting', conversation_id: 'conversation-1', step: 'session' }]);
+  await rm(join(hosted.home, 'hold-new'));
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(starting()).toEqual([
+    { type: 'starting', conversation_id: 'conversation-1', step: 'session' },
+    { type: 'starting', conversation_id: 'conversation-1', step: null },
+  ]);
+});
+
+it('reports no start-up step for a message whose turn starts within a second', async () => {
+  const hosted = await hostKit();
+
+  hosted.input({ kind: 'message', text: '@say Hello', files: [], first: true });
+
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await settle();
+  expect(hosted.socket.frames.filter((frame) => frame.type === 'starting')).toEqual([]);
+});
+
 it.each(['a Kit restart', 'a kill'])(
   'starts the first message of a Claude Code conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
   async (ending) => {

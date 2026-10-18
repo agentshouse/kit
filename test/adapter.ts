@@ -437,6 +437,9 @@ const app = agent({ name: 'adapter-double' })
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
     if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
+    if (existsSync(join(home, 'signed-out'))) throw RequestError.authRequired();
+    // Twenty milliseconds opens the held session as soon as the spec removes its file.
+    while (existsSync(join(home, 'hold-new'))) await new Promise((resolve) => setTimeout(resolve, 20));
     if (kind !== 'grok-build') appendFileSync(unwrittenSessions, `${sessionId}\n`);
     const probeHold = join(home, 'probe-hold');
     if (params.cwd === home && existsSync(probeHold) && readFileSync(probeHold, 'utf8') === models[0]!.id) {
@@ -461,6 +464,7 @@ const app = agent({ name: 'adapter-double' })
     if (existsSync(join(home, 'refuse-resume'))) {
       throw new RequestError(-32002, 'the session cannot be resumed');
     }
+    if (existsSync(join(home, 'signed-out'))) throw RequestError.authRequired();
     if (unwritten().includes(params.sessionId)) throw neverWritten(params.sessionId);
     return { configOptions: options() };
   })
