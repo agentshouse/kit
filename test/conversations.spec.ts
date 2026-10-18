@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
@@ -396,6 +396,87 @@ it('writes the start-up step it is still in on a socket that reopens', async () 
   await hosted.ack(lastInput());
   await until(() => starting(reopened).length > 1);
   expect(starting(reopened)).toEqual(['session', null]);
+});
+
+it("prepares a new conversation's first message, its file and House's instructions included, while its CLI opens the session", async () => {
+  const hosted = await hostKit();
+  const content = Buffer.from('first file\n');
+  hosted.house.route('POST', '/kit/conversation/originals/get', () => ({
+    body: {
+      version: 'version-1',
+      message: 'message-1',
+      name: 'notes.txt',
+      download: { method: 'GET', url: `${hosted.house.origin}/bytes/version-1`, expires_at: '2026-10-03T12:00:00Z' },
+    },
+  }));
+  hosted.house.route('GET', '/bytes/:version', () => ({ bytes: { type: 'application/octet-stream', content } }));
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const file = {
+    version: 'version-1',
+    name: 'notes.txt',
+    media_type: 'text/plain',
+    bytes: content.length,
+    sha256: createHash('sha256').update(content).digest('hex'),
+  };
+
+  hosted.input({ kind: 'open' });
+  hosted.input({ kind: 'message', text: '@say hello', files: [file], first: true });
+
+  await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/new'));
+  await until(() => hosted.house.requests.find((received) => received.path === '/kit/conversation/originals/get'));
+  await until(() => hosted.mcp.find((received) => (received.body as { params?: { name?: string } }).params?.name === 'shell'));
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
+  await rm(join(hosted.home, 'hold-new'));
+  const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
+  expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
+    expect.stringMatching(/^From House:\n[^]*\n\nBe useful\.$/),
+    '@say hello',
+    join(hosted.workingDirectory, '.house', 'files', 'message-1', 'version-1', 'notes.txt'),
+  ]);
+});
+
+it("writes a running process's facts, its latest commands and options included, again on a socket that reopens", async () => {
+  const hosted = await hostKit();
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  hosted.input({ kind: 'message', text: '@commands\n@config', files: [], first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const facts = (socket: (typeof hosted.house.sockets)[number]) =>
+    socket.frames.filter((frame) => ['process', 'commands', 'options'].includes(String(frame.type)));
+  const before = facts(hosted.house.sockets[0]!);
+
+  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  const reopened = await until(() => hosted.house.sockets[1]);
+
+  await until(() => facts(reopened).length === 3);
+  expect(facts(reopened)).toEqual([
+    { type: 'process', conversation_id: 'conversation-1', running: true },
+    before.findLast((frame) => frame.type === 'commands'),
+    before.findLast((frame) => frame.type === 'options'),
+  ]);
+  expect(
+    (facts(reopened)[2]!.options as { id: string; currentValue: string }[]).find((option) => option.id === 'reasoning_effort')!
+      .currentValue,
+  ).toBe('from-cli');
+});
+
+it('writes the exit of a process a closed socket did not take once the socket reopens', async () => {
+  const hosted = await hostKit();
+  hosted.input({ kind: 'open' });
+  await hosted.ack(lastInput());
+  hosted.input({ kind: 'message', text: '@gate exit-now\n@exit 1', files: [], first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  const processes = (socket: (typeof hosted.house.sockets)[number]) => socket.frames.filter((frame) => frame.type === 'process');
+
+  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  await settle();
+  await writeFile(join(hosted.home, 'exit-now'), '');
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const reopened = await until(() => hosted.house.sockets[1]);
+
+  await until(() => processes(reopened).length > 0);
+  expect(processes(hosted.house.sockets[0]!)).toEqual([{ type: 'process', conversation_id: 'conversation-1', running: true }]);
+  expect(processes(reopened)).toEqual([{ type: 'process', conversation_id: 'conversation-1', running: false }]);
 });
 
 it('keeps the start-up step of the message being started while a later one arrives', async () => {

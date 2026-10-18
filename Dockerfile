@@ -4,7 +4,7 @@ LABEL org.opencontainers.image.source="https://github.com/agentshouse/kit" \
   org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git \
+  && apt-get install -y --no-install-recommends ca-certificates curl git tini \
   && rm -rf /var/lib/apt/lists/* \
   && cp /etc/skel/.profile /etc/profile.d/home.sh
 
@@ -13,5 +13,5 @@ RUN npm install --global --ignore-scripts /tmp/kit.tgz && rm /tmp/kit.tgz
 
 ENV HOME=/kit-home HOUSE_KIT_HOME=/kit-home SHELL=/bin/bash
 WORKDIR /agents/house
-ENTRYPOINT ["kit"]
+ENTRYPOINT ["tini", "--", "kit"]
 CMD ["resident"]

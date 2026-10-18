@@ -1,8 +1,9 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { access, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { RELEASES } from './cli.ts';
 import { settle, until } from './double.ts';
 import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
@@ -26,6 +27,27 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   await settle();
   expect(hosted.idles).toHaveLength(2);
+
+  await until(() => ended(hosted)[0]);
+  await until(() => hosted.idles[2]);
+});
+
+it("reports idle while an exited process of the Kit's user waits to be reaped beside a running conversation", async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  await until(() => hosted.idles[1]);
+  const parent = spawn('sh', ['-c', 'sleep 0.2 & exec sleep 60'], { stdio: 'ignore' });
+  onTestFinished(() => stop(parent.pid!));
+  const children = () => {
+    try {
+      return readFileSync(`/proc/${parent.pid}/task/${parent.pid}/children`, 'utf8').split(' ').filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  await until(() => children().some((child) => /\) Z /.test(readFileSync(`/proc/${child}/stat`, 'utf8'))));
+
+  hosted.input({ kind: 'message', text: '@say done', files: [], first: true });
 
   await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);
