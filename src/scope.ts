@@ -11,6 +11,7 @@ interface Running {
 const LISTING_BYTES = 1 << 28;
 const CGROUPS = '/sys/fs/cgroup';
 const GONE = new Set(['ENOENT', 'ESRCH']);
+const EXITED = new Set(['Z', 'X']);
 
 function failure(error: unknown): string {
   return (error as NodeJS.ErrnoException).code ?? '';
@@ -33,6 +34,7 @@ function read(pid: string): Running | null {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    if (EXITED.has(fields[0]!)) return null;
     const command = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ');
     return { parent: Number(fields[1]), session: fields[3]!, command };
   } catch (error) {
