@@ -5,7 +5,7 @@ import { expect, it, onTestFinished } from 'vitest';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { settle, until } from './double.ts';
 import { CLIS } from '../src/clis.ts';
-import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { hostKit, lastInput, userBin, type Hosted } from './environment.ts';
 import { alive, filesUnder, temporaryHome } from './kit.ts';
 
 interface Hold {
@@ -262,6 +262,30 @@ it('ends a login that never prints its link when the time House gave the sign-in
   expect(await hosted.ack(lastInput())).toEqual({});
   await until(() => !alive(login!.pid as number));
   await until(() => hosted.kit.stderr().includes('the codex-acp sign-in reached the end House set for it'));
+});
+
+it('reports a CLI its sign-in installs as installing until the install ends, then as the Kit held it while the CLI signs in', async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }]);
+  const codex = (report: Record<string, unknown>) =>
+    (report.agents as { kind: string }[]).find((agent) => agent.kind === 'codex-acp');
+  await until(() => hosted.reports.some((report) => codex(report) !== undefined));
+  await settle();
+  const held = codex(hosted.reports.at(-1)!);
+  const before = hosted.reports.length;
+  await rm(join(userBin(hosted.home), 'codex'));
+  const holds: unknown[] = [];
+  hosted.house.route('POST', '/kit/secret-input/:subject', async (request) => {
+    holds.push(request.body);
+    // House holds the page a tenth of a second each time, so the ceremony is seen holding.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { body: HELD };
+  });
+
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 600 });
+
+  await until(() => holds[0]);
+  const installing = { kind: 'codex-acp', release: null, failure: null, installing: true, signed_in: false, models: [], modes: [], full_access: 'agent-full-access' };
+  await until(() => JSON.stringify(hosted.reports.slice(before).map(codex)) === JSON.stringify([installing, held]));
 });
 
 it('ends the install a sign-in started when the time House gave the sign-in runs out, and acknowledges the input', async () => {
