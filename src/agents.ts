@@ -215,7 +215,7 @@ export class Agents {
   private reading: Promise<unknown> = Promise.resolve();
   private readonly queues = new Map<string, Promise<unknown>>();
   private installing: Promise<unknown> = Promise.resolve();
-  private readonly installs = new Set<string>();
+  private readonly installs = new Map<string, object>();
   private readonly readings = new Map<string, Reading>();
   private readonly reads = new Map<string, number>();
   private starts = 0;
@@ -297,7 +297,8 @@ export class Agents {
   }
 
   located(kind: string, signal: AbortSignal): Promise<string> {
-    return this.queue(kind, () => this.ensure(kind, signal), signal).finally(() => this.settle(kind));
+    const owner = {};
+    return this.queue(kind, () => this.ensure(kind, signal, owner).finally(() => this.settle(kind, owner)), signal);
   }
 
   async reread(kind: string): Promise<void> {
@@ -307,15 +308,17 @@ export class Agents {
 
   async recheck(kind: string, signal: AbortSignal): Promise<void> {
     const known = this.readings.get(kind) ?? SIGNED_OUT;
+    const owner = {};
     try {
       await this.examine(
         kind,
         known,
         async (kind, cli) => ((await signedIn(kind, cli, known, signal)) ? { ...known, signed_in: true } : SIGNED_OUT),
         signal,
+        owner,
       );
     } finally {
-      this.settle(kind);
+      this.settle(kind, owner);
     }
     if (!signal.aborted) await this.report();
   }
@@ -342,8 +345,10 @@ export class Agents {
     this.report().catch(logged);
   }
 
-  private settle(kind: string): void {
-    if (this.installs.delete(kind)) this.report().catch(logged);
+  private settle(kind: string, owner: object): void {
+    if (this.installs.get(kind) !== owner) return;
+    this.installs.delete(kind);
+    this.report().catch(logged);
   }
 
   private queue<T>(kind: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -358,12 +363,12 @@ export class Agents {
     return signal === undefined ? queued : Promise.race([queued, ended(signal)]);
   }
 
-  private async ensure(kind: string, signal?: AbortSignal): Promise<string> {
+  private async ensure(kind: string, signal?: AbortSignal, owner: object = {}): Promise<string> {
     const failed = await installAdapter(kind, signal);
     if (failed !== null) throw new Error(failed);
     const found = await locate(kind, signal);
     if (found !== null) return found;
-    this.installs.add(kind);
+    this.installs.set(kind, owner);
     this.report().catch(logged);
     const installing = this.installing.catch(() => undefined).then(() => installCli(kind, signal));
     this.installing = installing;
@@ -374,10 +379,14 @@ export class Agents {
     return installed;
   }
 
-  private async resolve(kind: string, signal?: AbortSignal): Promise<{ cli: string; release: string } | Reading> {
+  private async resolve(
+    kind: string,
+    signal?: AbortSignal,
+    owner?: object,
+  ): Promise<{ cli: string; release: string } | Reading> {
     let cli: string;
     try {
-      cli = await realpath(await this.ensure(kind, signal));
+      cli = await realpath(await this.ensure(kind, signal, owner));
     } catch (error) {
       const failure = causeOf(error);
       process.stderr.write(`kit: ${kind} did not install: ${failure}\n`);
@@ -395,9 +404,10 @@ export class Agents {
     known: Offer,
     read: (kind: string, cli: string, known: Offer) => Promise<Offer>,
     signal?: AbortSignal,
+    owner?: object,
   ): Promise<void> {
     const current = this.nextRead(kind);
-    const resolved = await this.queue(kind, () => this.resolve(kind, signal), signal);
+    const resolved = await this.queue(kind, () => this.resolve(kind, signal, owner), signal);
     const reading =
       'cli' in resolved ? { release: resolved.release, failure: null, ...(await read(kind, resolved.cli, known)) } : resolved;
     if (this.reads.get(kind) === current && !signal?.aborted) this.hold(kind, reading);

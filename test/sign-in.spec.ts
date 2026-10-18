@@ -288,6 +288,25 @@ it('reports a CLI its sign-in installs as installing until the install ends, the
   await until(() => JSON.stringify(hosted.reports.slice(before).map(codex)) === JSON.stringify([installing, held]));
 });
 
+it('keeps reporting a CLI installing when a sign-in queued behind its install runs out of time', async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }]);
+  const codex = (report: Record<string, unknown>) =>
+    (report.agents as { kind: string }[]).find((agent) => agent.kind === 'codex-acp');
+  await until(() => hosted.reports.some((report) => codex(report) !== undefined));
+  await rm(join(userBin(hosted.home), 'codex'));
+  await writeFile(join(hosted.home, 'install-stall-codex-acp'), '');
+  const installing = { kind: 'codex-acp', release: null, failure: null, installing: true, signed_in: false, models: [], modes: [], full_access: 'agent-full-access' };
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 600 });
+  await until(() => JSON.stringify(codex(hosted.reports.at(-1)!)) === JSON.stringify(installing));
+
+  hosted.input({ kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 1 });
+
+  expect(await hosted.ack(lastInput())).toEqual({});
+  await until(() => hosted.kit.stderr().includes('the codex-acp sign-in reached the end House set for it'));
+  await settle();
+  expect(codex(hosted.reports.at(-1)!)).toEqual(installing);
+});
+
 it('ends the install a sign-in started when the time House gave the sign-in runs out, and acknowledges the input', async () => {
   const hosted = await hostKit([{ kind: 'codex-acp' }]);
   const hold = join(hosted.home, 'npm-hold');
