@@ -328,6 +328,150 @@ it("reports a refused resume in the Kit's words, never the CLI's, and logs the C
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ did not start: the Agent's CLI could not resume this conversation: .*the session cannot be resumed/m);
 });
 
+it.each([
+  ['opening', null],
+  ['resuming', 'session-stored'],
+])("refuses a message whose CLI is not signed in when %s its session, saying so in the Kit's words", async (_step, stored) => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'signed-out'), '');
+
+  hosted.input({ kind: 'message', provider_session_id: stored, text: 'hello', files: [], first: stored === null });
+
+  expect(await hosted.ack(lastInput())).toEqual({
+    refused: "the Agent's CLI is not signed in; sign it in on the Agent's machine",
+  });
+});
+
+it('reports the start-up step of a message whose session takes over a second to open, and its end before the turn starts', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting');
+
+  hosted.input({ kind: 'message', text: '@say Hello', files: [], first: true });
+
+  await until(() => starting().length > 0);
+  expect(starting()).toEqual([{ type: 'starting', conversation_id: 'conversation-1', step: 'session' }]);
+  await rm(join(hosted.home, 'hold-new'));
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(starting()).toEqual([
+    { type: 'starting', conversation_id: 'conversation-1', step: 'session' },
+    { type: 'starting', conversation_id: 'conversation-1', step: null },
+  ]);
+});
+
+it('writes a start-up step that changed while its socket was closed once the socket reopens', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const starting = (socket = hosted.house.sockets.at(-1)!) =>
+    socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+  hosted.input({ kind: 'open' });
+  await until(() => starting().length > 0);
+
+  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  await settle();
+  await rm(join(hosted.home, 'hold-new'));
+  await hosted.ack(lastInput());
+  const reopened = await until(() => hosted.house.sockets[1]);
+
+  await until(() => starting(reopened).length > 0);
+  expect(starting(hosted.house.sockets[0])).toEqual(['session']);
+  expect(starting(reopened)).toEqual([null]);
+});
+
+it('writes the start-up step it is still in on a socket that reopens', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const starting = (socket = hosted.house.sockets.at(-1)!) =>
+    socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+  hosted.input({ kind: 'open' });
+  await until(() => starting().length > 0);
+
+  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  const reopened = await until(() => hosted.house.sockets[1]);
+
+  await until(() => starting(reopened).length > 0);
+  expect(starting(hosted.house.sockets[0])).toEqual(['session']);
+  expect(starting(reopened)).toEqual(['session']);
+  await rm(join(hosted.home, 'hold-new'));
+  await hosted.ack(lastInput());
+  await until(() => starting(reopened).length > 1);
+  expect(starting(reopened)).toEqual(['session', null]);
+});
+
+it('keeps the start-up step of the message being started while a later one arrives', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+  hosted.input({ kind: 'message', text: '@say first', files: [], first: true });
+  await until(() => starting().length > 0);
+
+  hosted.input({ kind: 'message', text: '@say second', files: [], first: true });
+  await settle();
+  expect(starting()).toEqual(['session']);
+
+  await rm(join(hosted.home, 'hold-new'));
+  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/ended')).length === 2);
+  expect(starting()).toEqual(['session', null]);
+});
+
+it('acknowledges a message it prompted before a restart lost its acknowledgement once House sends it again, and prompts it no second time', async () => {
+  const hosted = await hostKit();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
+  hosted.input({ kind: 'message', text: '@say once', files: [], first: true });
+  const sent = lastInput();
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await hosted.restart();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
+    hosted.acks.push(request);
+    return { body: {} };
+  });
+
+  hosted.input({ kind: 'message', input_id: sent, text: '@say once', files: [], first: true });
+
+  expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
+  await settle();
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(1);
+});
+
+it('prompts no second time a message whose CLI asked a question about it before a restart lost its acknowledgement', async () => {
+  const hosted = await hostKit();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
+  hosted.input({ kind: 'message', text: '@ask', files: [], first: true });
+  const sent = lastInput();
+  await until(() => hosted.interactions[0]);
+  await hosted.restart();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
+    hosted.acks.push(request);
+    return { body: {} };
+  });
+
+  hosted.input({ kind: 'message', input_id: sent, text: '@ask', files: [], first: true });
+
+  expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
+  await settle();
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(1);
+});
+
+it('prompts again a message House sends again after a restart when its CLI showed nothing of it before the restart', async () => {
+  const hosted = await hostKit();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
+  hosted.input({ kind: 'message', text: '@gate never-opened', files: [], first: true });
+  const sent = lastInput();
+  await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
+  await hosted.restart();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
+    hosted.acks.push(request);
+    return { body: {} };
+  });
+
+  hosted.input({ kind: 'message', input_id: sent, text: '@say again', files: [], first: true });
+
+  expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(outcome(ended.body)).toEqual({ text: 'again' });
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(2);
+});
+
 it.each(['a Kit restart', 'a kill'])(
   'starts the first message of a Claude Code conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
   async (ending) => {
