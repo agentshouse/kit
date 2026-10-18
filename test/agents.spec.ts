@@ -41,9 +41,19 @@ beforeEach(async () => {
 
 function completeReports(): Record<string, unknown>[] {
   return reports.filter((report) => {
-    const agents = report.agents as { kind: string }[];
-    return desired.every((kind) => agents.some((agent) => agent.kind === kind));
+    const agents = report.agents as { kind: string; installing?: true }[];
+    return desired.every((kind) => agents.some((agent) => agent.kind === kind && agent.installing === undefined));
   });
+}
+
+function installing(kind: string, full_access: string | null) {
+  return { kind, release: null, failure: null, installing: true, signed_in: false, models: [], modes: [], full_access };
+}
+
+function namedBefore(report: Record<string, unknown>, kind: string): unknown[] {
+  return reports
+    .slice(0, reports.indexOf(report))
+    .flatMap((earlier) => (earlier.agents as { kind: string }[]).filter((agent) => agent.kind === kind));
 }
 
 async function logged(name: string): Promise<string[]> {
@@ -71,7 +81,7 @@ async function probes(): Promise<number> {
   return (await logged('adapter.log')).filter((line) => line.includes('"method":"session/new"')).length;
 }
 
-it('reports a present signed-in CLI with its models while another CLI is still installing', async () => {
+it('reports a present signed-in CLI with its models beside another CLI it reports installing', async () => {
   desired = ['claude-agent-acp', 'codex-acp'];
   await signIn('codex-acp');
   await start(async () => {
@@ -83,8 +93,23 @@ it('reports a present signed-in CLI with its models while another CLI is still i
     (report.agents as { kind: string; signed_in: boolean }[]).some((agent) => agent.kind === 'codex-acp' && agent.signed_in),
   ));
   expect(report.agents).toEqual([
+    installing('claude-agent-acp', 'bypassPermissions'),
     expect.objectContaining({ kind: 'codex-acp', signed_in: true, models: expect.arrayContaining([expect.objectContaining({ model: 'gpt-5.5' })]) }),
   ]);
+});
+
+it('reports a CLI the login shell does not find as installing from the moment its install starts until it reports its release', async () => {
+  desired = ['claude-agent-acp'];
+  await start(() => rm(join(userBin(home), 'claude')));
+
+  const installed = await until(() => completeReports()[0]);
+
+  expect(installed.agents).toEqual([
+    { kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'], failure: null, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
+  ]);
+  const earlier = namedBefore(installed, 'claude-agent-acp');
+  expect(earlier.length).toBeGreaterThan(0);
+  expect(earlier).toEqual(earlier.map(() => installing('claude-agent-acp', 'bypassPermissions')));
 });
 
 it('pins in its package only the Codex and Claude Code adapters, no CLI and no Grok Build package', () => {
@@ -243,6 +268,7 @@ it("reports a CLI whose official install failed with no release and the installe
     expect.objectContaining({ kind: 'codex-acp', release: RELEASES['codex-acp'] }),
     { kind: 'claude-agent-acp', release: null, failure: 'Checksum verification failed', signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
   ]);
+  expect(namedBefore(failed, 'claude-agent-acp')).toContainEqual(installing('claude-agent-acp', 'bypassPermissions'));
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: Checksum verification failed');
 
   await rm(join(home, 'install-fail'));
