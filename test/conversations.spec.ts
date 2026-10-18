@@ -414,6 +414,25 @@ it('keeps the start-up step of the message being started while a later one arriv
   expect(starting()).toEqual(['session', null]);
 });
 
+it('acknowledges a message it prompted before a restart lost its acknowledgement once House sends it again, and prompts it no second time', async () => {
+  const hosted = await hostKit();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
+  hosted.input({ kind: 'message', text: '@say once', files: [], first: true });
+  const sent = lastInput();
+  await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
+  await hosted.restart();
+  hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
+    hosted.acks.push(request);
+    return { body: {} };
+  });
+
+  hosted.input({ kind: 'message', input_id: sent, text: '@say once', files: [], first: true });
+
+  expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
+  await settle();
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(1);
+});
+
 it.each(['a Kit restart', 'a kill'])(
   'starts the first message of a Claude Code conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
   async (ending) => {

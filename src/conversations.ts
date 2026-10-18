@@ -434,6 +434,7 @@ export class Conversations {
       return;
     }
     this.starts(conversation, null);
+    this.kit.inputs.hands(String(input.input_id), ack);
     this.prompt(conversation, [...prompt, ...waiting.content]);
     waiting.settle(ack);
   }
