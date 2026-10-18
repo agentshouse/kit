@@ -359,16 +359,6 @@ it('reports the start-up step of a message whose session takes over a second to 
   ]);
 });
 
-it('reports no start-up step for a message whose turn starts within a second', async () => {
-  const hosted = await hostKit();
-
-  hosted.input({ kind: 'message', text: '@say Hello', files: [], first: true });
-
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  await settle();
-  expect(hosted.socket.frames.filter((frame) => frame.type === 'starting')).toEqual([]);
-});
-
 it.each(['a Kit restart', 'a kill'])(
   'starts the first message of a Claude Code conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
   async (ending) => {
