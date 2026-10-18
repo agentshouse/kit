@@ -91,7 +91,7 @@ interface Authority {
 }
 
 interface Discovery {
-  bounds: { max_authored_file_bytes: number };
+  bounds: { max_authored_file_bytes: number; max_prefixes: number };
   authorities: Authority[];
 }
 
@@ -194,6 +194,10 @@ function expiredAuthority(error: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function grouped<T>(items: readonly T[], size: number): T[][] {
+  return items.flatMap((_, index) => (index % size === 0 ? [items.slice(index, index + size)] : []));
 }
 
 function covers(path: string, prefix: string): boolean {
@@ -453,12 +457,11 @@ export class LocalCopies {
         }
       }
       if (refreshing && current.length > 0) {
-        try {
-          const refreshed = await this.refreshed(current);
-          current.forEach((copy, index) => said.push(...moved(copy, refreshed[index]!)));
-        } catch (error) {
+        const failed = await this.refreshed(current).then(() => null, houseCause);
+        for (const copy of current) said.push(...moved(copy, this.copies.get(copy.key)!));
+        if (failed !== null) {
           refused = true;
-          said.push(houseCause(error));
+          said.push(failed);
         }
       }
       return { refused, text: said.length === 0 ? 'Nothing new from House.' : said.join('\n') };
@@ -631,22 +634,25 @@ export class LocalCopies {
     return next;
   }
 
-  private async refreshed(copies: readonly Copy[]): Promise<Copy[]> {
-    const discovery = await this.house.post<Discovery>('/kit/door/discover', {
-      prefixes: copies.map((copy) => rootOf(copy.room_handle)),
-    });
-    const regranted = new Map<string, Copy>();
+  private async refreshed(copies: readonly Copy[]): Promise<void> {
+    const discover = (group: readonly Copy[]) =>
+      this.house.post<Discovery>('/kit/door/discover', { prefixes: group.map((copy) => rootOf(copy.room_handle)) });
+    const [first, ...rest] = copies;
+    const { bounds, authorities } = await discover([first!]);
+    for (const group of grouped(rest, bounds.max_prefixes)) authorities.push(...(await discover(group)).authorities);
+    const unchanged: Copy[] = [];
     for (const copy of copies) {
-      const authority = discovery.authorities.find((entry) => entry.room_ref === copy.room_ref);
+      const authority = authorities.find((entry) => entry.room_ref === copy.room_ref);
       if (
         authority !== undefined &&
         JSON.stringify([authority.operations.write, authority.protected_paths]) !== JSON.stringify([copy.write, copy.protected])
       ) {
-        regranted.set(copy.key, await this.save(await this.received(copy)));
+        await this.save(await this.received(copy));
+      } else {
+        unchanged.push(copy);
       }
     }
-    const caught = await this.caughtUp(copies.filter((copy) => !regranted.has(copy.key)), false);
-    return copies.map((copy) => regranted.get(copy.key) ?? caught.find((held) => held.key === copy.key)!);
+    for (const group of grouped(unchanged, bounds.max_prefixes)) await this.caughtUp(group, false);
   }
 
   private async caughtUp(copies: readonly Copy[], whole: boolean): Promise<Copy[]> {
