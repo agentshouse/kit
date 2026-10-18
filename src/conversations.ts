@@ -771,7 +771,9 @@ export class Conversations {
   }
 
   private started(conversation: Conversation): Turn {
-    return conversation.turn ?? this.begin(conversation);
+    const turn = conversation.turn ?? this.begin(conversation);
+    this.took(turn);
+    return turn;
   }
 
   private ended(conversation: Conversation): void {
@@ -863,9 +865,7 @@ export class Conversations {
         if (event.kind === 'marker' && event.marker === 'job') conversation.held.push({ type: 'marker', marker: 'job', text: event.text });
         return;
     }
-    const turn = this.started(conversation);
-    this.took(turn);
-    this.apply(conversation, turn, event);
+    this.apply(conversation, this.started(conversation), event);
   }
 
   private took(turn: Turn): void {
