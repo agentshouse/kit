@@ -213,7 +213,6 @@ class Conversation {
   readonly held: Part[] = [];
   opening: Bridge | null = null;
   launch: Launch | null = null;
-  readonly bridged: ((bridge: Bridge) => void)[] = [];
   prompted: string | null = null;
   kills = 0;
   killed = new AbortController();
@@ -376,18 +375,15 @@ export class Conversations {
   }
 
   private launch(conversation: Conversation, route: Promise<Route>, sessionId: string | null, empty: boolean): Launch {
-    let bridged!: (bridge: Bridge) => void;
-    let unbridged!: (error: unknown) => void;
+    let opened!: (bridge: Bridge) => void;
+    let failed!: (error: unknown) => void;
     const bridge = new Promise<Bridge>((resolve, reject) => {
-      bridged = resolve;
-      unbridged = reject;
+      opened = resolve;
+      failed = reject;
     });
     bridge.catch(() => undefined);
-    const session = this.start(conversation, route, sessionId, empty, (opened) => {
-      bridged(opened);
-      for (const waiter of conversation.bridged.splice(0)) waiter(opened);
-    });
-    session.catch(unbridged);
+    const session = this.start(conversation, route, sessionId, empty, opened);
+    session.catch(failed);
     const launch: Launch = { bridge, session };
     conversation.launch = launch;
     void session
@@ -405,15 +401,14 @@ export class Conversations {
     while (conversation.launch !== null) await conversation.launch.session.catch(() => undefined);
   }
 
-  private bridgeOf(conversation: Conversation): Promise<Bridge> {
-    if (conversation.running !== null) return Promise.resolve(conversation.running.bridge);
-    const next = new Promise<Bridge>((resolve) => conversation.bridged.push(resolve));
-    return conversation.launch === null ? next : conversation.launch.bridge.catch(() => next);
-  }
-
-  private async instructed(conversation: Conversation, route: Route): Promise<string> {
-    const [bridge, copies] = await Promise.all([this.bridgeOf(conversation), this.kit.copies.mapping()]);
-    return instructions(bridge, route.base_instructions, copies);
+  private instructed(conversation: Conversation, route: Route): Promise<string> | null {
+    const bridge = conversation.running === null ? conversation.launch?.bridge : Promise.resolve(conversation.running.bridge);
+    if (bridge === undefined) return null;
+    const read = Promise.all([bridge, this.kit.copies.mapping()]).then(([opened, copies]) =>
+      instructions(opened, route.base_instructions, copies),
+    );
+    read.catch(() => undefined);
+    return read;
   }
 
   private async message(conversation: Conversation, input: Input): Promise<{ ack: Promise<Ack> }> {
@@ -422,10 +417,7 @@ export class Conversations {
     let instructing: Promise<string> | null = null;
     try {
       route = await this.route(conversation, input.agent_id);
-      if (input.first === true) {
-        instructing = this.instructed(conversation, route);
-        instructing.catch(() => undefined);
-      }
+      if (input.first === true) instructing = this.instructed(conversation, route);
       const files = input.files as MessageFile[];
       if (files.length > 0) this.prepares(conversation, 'files');
       const paths = await placeFiles(this.kit.house, route.working_directory, files, conversation.killed.signal);
@@ -463,6 +455,7 @@ export class Conversations {
     const { input } = waiting;
     let ack: Ack = {};
     let started = false;
+    let instructing = waiting.instructing;
     const prompt: ContentBlock[] = [];
     try {
       if (conversation.running === null) {
@@ -472,13 +465,17 @@ export class Conversations {
       if (conversation.running === null) {
         const stored = conversation.session ?? input.provider_session_id;
         const empty = input.first === true && conversation.prompted !== stored;
-        started = (await this.launch(conversation, Promise.resolve(waiting.route), stored, empty).session) !== stored;
+        const launch = this.launch(conversation, Promise.resolve(waiting.route), stored, empty);
+        if (input.first === true) instructing = this.instructed(conversation, waiting.route);
+        started = (await launch.session) !== stored;
       }
       const session = conversation.running!.sessionId;
       if (started || (input.first === true && session !== input.provider_session_id)) {
         ack = { provider_session_id: session };
       }
-      if (waiting.instructing !== null) prompt.push({ type: 'text', text: await waiting.instructing });
+      if (input.first === true) {
+        prompt.push({ type: 'text', text: await (instructing ?? this.instructed(conversation, waiting.route)!) });
+      }
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
       this.starts(conversation, null);

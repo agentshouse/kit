@@ -435,6 +435,42 @@ it("prepares a new conversation's first message, its file and House's instructio
   ]);
 });
 
+it("prompts a first message with House's instructions through the CLI it starts itself when its open's start failed while it read them", async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'refuse-new'), '');
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  onTestFinished(() => release());
+  let reads = 0;
+  hosted.house.route('POST', '/', async (request) => {
+    const message = request.body as { id: number };
+    if (reads++ === 0) await released;
+    return { body: { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: '' }] } } };
+  });
+  let credentials = 0;
+  hosted.house.route('POST', '/kit/conversations/:conversation/credential', async (request) => {
+    if (credentials++ === 1) await released;
+    return { body: { credential: conversationCredential(request.params.conversation!) } };
+  });
+
+  hosted.input({ kind: 'open' });
+  const open = lastInput();
+  hosted.input({ kind: 'message', text: '@say hello', files: [], first: true });
+  const message = lastInput();
+
+  expect(await hosted.ack(open)).toEqual({ refused: "the Agent's CLI did not open a session" });
+  await rm(join(hosted.home, 'refuse-new'));
+  release();
+  expect(await hosted.ack(message)).toHaveProperty('provider_session_id');
+  const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
+  expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
+    expect.stringMatching(/^From House:\n[^]*\n\nBe useful\.$/),
+    '@say hello',
+  ]);
+});
+
 it("writes a running process's facts, its latest commands and options included, again on a socket that reopens", async () => {
   const hosted = await hostKit();
   hosted.input({ kind: 'open' });
