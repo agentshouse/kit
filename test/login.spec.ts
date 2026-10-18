@@ -695,24 +695,31 @@ it('logs out and connects this computer as a new Environment of the other accoun
 const MACOS = ['--import', fileURLToPath(new URL('./darwin.ts', import.meta.url))];
 const UID = process.getuid!();
 
-const SYSTEMD = (scope: string, running: boolean) => `case "$1" in --user) held=user; shift ;; *) held=system ;; esac
+const SERVED = 'served=$(cat "$(dirname "$0")/served" 2>/dev/null || printf %s "$HOUSE_KIT_HOME")\n';
+
+const SYSTEMD = (scope: string, running: boolean) => `${SERVED}case "$1" in --user) held=user; shift ;; *) held=system ;; esac
 [ "$held" = ${scope} ] || exit 1
 case "$1" in
   is-enabled) ;;
   is-active) ${running ? 'exit 0' : 'exit 3'} ;;
+  show) case "$served" in *' '*) printf '"HOUSE_KIT_HOME=%s" HOUSE_KIT_WORKSPACE=/agents/house\\n' "$served" ;; *) printf 'HOUSE_KIT_HOME=%s HOUSE_KIT_WORKSPACE=/agents/house\\n' "$served" ;; esac ;;
   start) ;;
   *) exit 1 ;;
 esac
 `;
 
-const LAUNCHD = (running: boolean) => `case "$1" in
-  print) printf 'gui/%s/house-kit = {\\n\\tactive count = 0\\n\\tstate = ${running ? 'running' : 'not running'}\\n\\n\\tprogram = kit\\n}\\n' "$(id -u)" ;;
+const LAUNCHD = (running: boolean) => `${SERVED}case "$1" in
+  print) printf 'gui/%s/house-kit = {\\n\\tactive count = 0\\n\\tstate = ${running ? 'running' : 'not running'}\\n\\n\\tprogram = kit\\n\\tenvironment = {\\n\\t\\tHOUSE_KIT_HOME => %s\\n\\t}\\n}\\n' "$(id -u)" "$served" ;;
   kickstart) ;;
   *) exit 1 ;;
 esac
 `;
 
-async function serviceManager(home: string, tool: string, script: string): Promise<{ path: string; starts: () => Promise<string[]> }> {
+async function serviceManager(
+  home: string,
+  tool: string,
+  script: string,
+): Promise<{ path: string; starts: () => Promise<string[]>; serves: (served: string) => Promise<void> }> {
   const bin = join(home, 'manager');
   await mkdir(bin);
   const log = join(home, 'manager.log');
@@ -722,7 +729,7 @@ async function serviceManager(home: string, tool: string, script: string): Promi
     (await readFile(log, 'utf8').catch(() => ''))
       .split('\n')
       .filter((call) => /^(--user )?(start|kickstart) /.test(call));
-  return { path: `${bin}:${process.env.PATH}`, starts };
+  return { path: `${bin}:${process.env.PATH}`, starts, serves: (served) => writeFile(join(bin, 'served'), served) };
 }
 
 async function loginWithCode(house: House, home: string, path: string, node: string[] = []) {
@@ -756,6 +763,39 @@ it.each([
   const login = await loginWithCode(house, home, path, [...node]);
 
   expect(await login.exited).toBe(0);
+  expect(await starts()).toEqual([]);
+});
+
+it.each([
+  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', false), [], ['--user start house-kit.service']],
+  ["server's systemd service", 'systemctl', SYSTEMD('system', false), [], ['start house-kit.service']],
+  ['LaunchAgent on macOS', 'launchctl', LAUNCHD(false), MACOS, [`kickstart gui/${UID}/house-kit`]],
+] as const)('starts the stopped %s of its own Kit home when that home lies at a path with a space', async (_name, tool, script, node, started) => {
+  const house = await startHouse();
+  const home = join(await temporaryHome(), 'Kit Home');
+  await mkdir(home);
+  const { path, starts } = await serviceManager(home, tool, script);
+
+  const login = await loginWithCode(house, home, path, [...node]);
+
+  expect(await login.exited).toBe(0);
+  expect(await starts()).toEqual(started);
+});
+
+it.each([
+  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', false), []],
+  ["server's systemd service", 'systemctl', SYSTEMD('system', false), []],
+  ['LaunchAgent on macOS', 'launchctl', LAUNCHD(false), MACOS],
+] as const)('leaves a stopped %s alone when it runs another Kit home', async (_name, tool, script, node) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const { path, starts, serves } = await serviceManager(home, tool, script);
+  await serves(await temporaryHome());
+
+  const login = await loginWithCode(house, home, path, [...node]);
+
+  expect(await login.exited).toBe(0);
+  expect(login.stderr()).toBe('');
   expect(await starts()).toEqual([]);
 });
 

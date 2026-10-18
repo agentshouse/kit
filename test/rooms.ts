@@ -348,9 +348,11 @@ export function serveRooms(hosted: Hosted): Rooms {
       })),
     };
   };
-  hosted.house.route('POST', '/kit/local-copy/selection', () => ({
-    body: { local_copy: { rooms: state.answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) } },
-  }));
+  hosted.house.route('POST', '/kit/local-copy/selection', (request) => {
+    const { rooms: named } = request.body as { rooms?: string[] };
+    const answered = state.answered.filter((room) => named === undefined || named.includes(room.ref));
+    return { body: { local_copy: { rooms: answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) } } };
+  });
   hosted.house.route('POST', '/kit/door/discover', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
     return {

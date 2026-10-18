@@ -391,13 +391,21 @@ export class LocalCopies {
       .sort();
   }
 
-  async connected(): Promise<void> {
-    const copied = await this.answered(() => this.fetched(false));
-    if (copied.refused) logged(copied.text);
+  connected(): Promise<void> {
+    return this.selected();
+  }
+
+  async changed(rooms: readonly string[]): Promise<void> {
+    if (rooms.length > 0) await this.selected(rooms);
   }
 
   fetch(): Promise<Pushed> {
     return this.answered(() => this.fetched(true));
+  }
+
+  private async selected(rooms?: readonly string[]): Promise<void> {
+    const copied = await this.answered(() => this.fetched(false, rooms));
+    if (copied.refused) logged(copied.text);
   }
 
   private answered<T>(work: () => Promise<T>): Promise<T> {
@@ -406,15 +414,17 @@ export class LocalCopies {
     return answered;
   }
 
-  private async fetched(refreshing: boolean): Promise<Pushed> {
+  private async fetched(refreshing: boolean, rooms?: readonly string[]): Promise<Pushed> {
     const { local_copy: answer } = await this.house.post<{
       local_copy: { rooms: { room_ref: string; room_handle: string }[] };
-    }>('/kit/local-copy/selection', {});
+    }>('/kit/local-copy/selection', rooms === undefined ? {} : { rooms });
     const synced = new Map(answer.rooms.map((room) => [`rooms/${room.room_ref}`, room.room_handle]));
-    return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
+    const named = rooms === undefined ? null : new Set(rooms.map((room) => `rooms/${room}`));
+    const held = () => [...this.copies.values()].filter((copy) => named === null || named.has(copy.key));
+    return this.holding([...new Set([...held().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
       const said: string[] = [];
       let refused = false;
-      for (const copy of [...this.copies.values()]) {
+      for (const copy of held()) {
         const returned = synced.has(copy.key);
         if (returned && copy.erasing === undefined) continue;
         try {

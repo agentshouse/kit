@@ -1,5 +1,5 @@
 import { subscribe } from 'node:diagnostics_channel';
-import { finalRefusal, HouseRefusal, retryDelay } from './api.ts';
+import { HouseRefusal, retryDelay } from './api.ts';
 import { end, REPLACED, signInAgain, updateRequired } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
@@ -113,8 +113,8 @@ export function holdStream(handlers: StreamHandlers): Stream {
         return;
       }
       if (refused !== null && tooOld(refused.text)) updateRequired();
-      if (finalRefusal(refused)) end(refused.message);
-      // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; an opening House refused as retryable or left unanswered backs off on the jittered curve.
+      if (!opened && refused !== null) process.stderr.write(`kit: ${refused.message}\n`);
+      // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; an opening House refused or left unanswered backs off on the jittered curve, retryable or not, since a resident outlives a House deploy.
       setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));
     };
     opening.onopen = () => {

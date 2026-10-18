@@ -10,7 +10,7 @@ const LINK_LINE = `Open this link and confirm: ${LOGIN_LINK}`;
 const UID = process.getuid!();
 
 function acts(host: Host): string[] {
-  return [...host.calls('systemctl'), ...host.calls('launchctl')].filter((call) => !/^((--user )?is-(active|enabled)|print) /.test(call));
+  return [...host.calls('systemctl'), ...host.calls('launchctl')].filter((call) => !/^((--user )?(is-(active|enabled)|show)|print) /.test(call));
 }
 
 function notices(stdout: string): string[] {
