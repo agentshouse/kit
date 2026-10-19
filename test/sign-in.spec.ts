@@ -23,7 +23,7 @@ async function signingIn(
 ) {
   const hosted = await hostKit([{ kind }], home === undefined ? {} : { home });
   const holds: Hold[] = [];
-  hosted.house.route('POST', '/kit/secret-call/:subject', async (request) => {
+  hosted.house.route('POST', '/kit/secret-input/:subject', async (request) => {
     holds.push({ subject: request.params.subject!, body: request.body });
     // House holds the page a tenth of a second each time, so the ceremony is seen holding.
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -164,7 +164,7 @@ it('holds the page again after House answers its hold with a refusal it marks re
     { body: { outcome: 'released', release: 'withdrawn' } },
   ];
   let holds = 0;
-  hosted.house.route('POST', '/kit/secret-call/:subject', () => answers[holds++] ?? { body: HELD });
+  hosted.house.route('POST', '/kit/secret-input/:subject', () => answers[holds++] ?? { body: HELD });
   hosted.call({ kind: 'sign_in', conversation_id: null, cli: 'grok-build', ends_in: 600 });
 
   expect(await hosted.result(lastCall())).toEqual({});
@@ -274,7 +274,7 @@ it('reports a CLI its sign-in installs as installing until the install ends, the
   const before = hosted.reports.length;
   await rm(join(userBin(hosted.home), 'codex'));
   const holds: unknown[] = [];
-  hosted.house.route('POST', '/kit/secret-call/:subject', async (request) => {
+  hosted.house.route('POST', '/kit/secret-input/:subject', async (request) => {
     holds.push(request.body);
     // House holds the page a tenth of a second each time, so the ceremony is seen holding.
     await new Promise((resolve) => setTimeout(resolve, 100));
