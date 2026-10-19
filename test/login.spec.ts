@@ -545,7 +545,7 @@ it('ends with the cause when House refuses to start the login', async () => {
   expect(login.stderr()).toContain('kit_environment_not_found');
 });
 
-it("ends naming its version, the Building's Kit release and this computer's install command House named, when House refuses the login as newer than the Building", async () => {
+it("fails naming its version, the Building's Kit release and this computer's install command House named, when House refuses the login as newer than the Building", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   const commands = { macos: 'macos command', linux: 'linux command', container: 'container command', server: 'server command', windows: 'windows command' };
@@ -557,7 +557,7 @@ it("ends naming its version, the Building's Kit release and this computer's inst
 
   const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
 
-  expect(await login.exited).toBe(0);
+  expect(await login.exited).toBe(1);
   expect(login.stderr()).toContain(
     `kit: Kit ${version} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: linux command\n`,
   );

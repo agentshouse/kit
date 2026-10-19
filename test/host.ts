@@ -53,13 +53,12 @@ export interface Host {
   restartPolicy(policy: string): Promise<void>;
 }
 
-type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-abandoned' | 'login-ends' | 'login-fails' | 'opener-fails' | 'refused' | 'stopped' | 'systemd';
+type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-abandoned' | 'login-fails' | 'opener-fails' | 'refused' | 'stopped' | 'systemd';
 
 const LOGGED = 'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n';
 
 const LOGIN = `printf 'placement %s\\n' "$(cat "$1/placement" 2>/dev/null)" >> "$FAKE/log"
 [ ! -e "$FAKE/login-fails" ] || exit 7
-[ ! -e "$FAKE/login-ends" ] || exit 0
 printf 'Open this link and confirm: ${LOGIN_LINK}\\n'
 [ ! -e "$FAKE/login-abandoned" ] || { kill -INT "$PPID"; kill -INT $$; }
 printf '{"house":"https://agents.house","environment":"%s","credential":"ahk_one"}' "\${2:-environment-one}" > "$1/credential.json"

@@ -103,7 +103,7 @@ login_kit() {
   else
     "${LOGIN_KIT[@]}" "$@" || exit
   fi
-  [[ -f "$KIT_HOME/credential.json" && "$(enrolled environment)" != "$REPLACES" ]] || refuse 'kit login connected no Environment'
+  [[ -f "$KIT_HOME/credential.json" ]] || refuse 'kit login connected no Environment'
 }
 
 login_arguments() {

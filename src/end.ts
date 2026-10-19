@@ -12,7 +12,7 @@ function exit(reason: string, status: number): never {
 }
 
 export function end(reason: string): never {
-  exit(reason, 0);
+  exit(reason, process.env.HOUSE_KIT_RESIDENT === String(process.pid) ? 0 : 1);
 }
 
 export function restart(reason: string): never {

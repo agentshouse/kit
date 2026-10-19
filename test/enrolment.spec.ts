@@ -78,6 +78,27 @@ it('refuses a stored credential House rejects, with its cause', async () => {
   expect(refused.output).toContain('token_rejected');
 });
 
+const COMMANDS = { macos: 'macos command', linux: 'linux command', container: 'container command', server: 'server command', windows: 'windows command' };
+
+it.each([
+  ['too old', { code: 'kit_update_required', retryable: false }, 'This Kit is too old for House; install it again.'],
+  [
+    'newer than the Building',
+    { code: 'kit_newer_than_house', retryable: false, release: '0.2.0-c0ffee000001', commands: COMMANDS },
+    'is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: linux command',
+  ],
+] as const)('fails, saying why, when House refuses this Kit as %s', async (_, error, said) => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await enrolled(house, home, 'ahk_valid');
+  house.route('POST', '/kit/agents/desired', () => ({ status: 426, body: { error } }));
+
+  const refused = await entry('authority-main.ts', [], home);
+
+  expect(refused.status).toBe(1);
+  expect(refused.output).toContain(said);
+});
+
 it('keeps a stored credential when House does not answer', async () => {
   const home = await temporaryHome();
   await writeFile(
