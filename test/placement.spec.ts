@@ -37,6 +37,18 @@ it('records the placement of a Kit installed natively on a server', async () => 
   expect(await placement(host)).toBe('server\n');
 });
 
+it.each([
+  ['natively on a computer', false, [], 'native'],
+  ['in a container', false, ['--container'], 'container'],
+  ['natively on a server', true, ['--linux'], 'server'],
+])('records the placement of a Kit installed %s before its first login calls House', async (_, server, choice, placed) => {
+  const host = await fakeHost({ ...NATIVE, server });
+
+  expect(host.run(choice)).toMatchObject({ status: 0, stderr: '' });
+
+  expect(host.calls('placement')).toEqual([placed]);
+});
+
 const INSTALL = `HOUSE_KIT_RELAY=https://relay.example sh -c 'kit=$(curl -fsSL "$0") || exit 1; eval "$kit"' https://relay.example/agents.house/kit`;
 
 it.each([

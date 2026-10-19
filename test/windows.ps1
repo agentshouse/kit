@@ -78,6 +78,20 @@ $script:FailingCli = ''
 $script:ListStatus = 7
 $findings += @(Test-Updates $true $false @() 0 @() @('House Kit could not read the agent CLIs, so it updated none; docker run ended with status 7'))
 $script:ListStatus = 0
+$configuration = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-Configuration' }, $true)
+. ([scriptblock]::Create($configuration.Extent.Text))
+$ConfigureMain = 'configure-main.js'
+$NoSkills = @()
+foreach ($case in @(
+  @('installed', 'echo windows > /kit-home/placement; printenv HOUSE_KIT_INSTALL_COMMAND > /kit-home/install-command'),
+  @('', 'echo windows > /kit-home/placement')
+)) {
+  $env:HOUSE_KIT_INSTALL_COMMAND = $case[0]
+  $script:Ran = @()
+  [void](Set-Configuration)
+  if ($script:Ran[0] -cne "run --rm --network none --env HOUSE_KIT_INSTALL_COMMAND --mount home --entrypoint sh image -c $($case[1])") { $findings += "Set-Configuration recorded Kit home with: $($script:Ran[0])" }
+}
+Remove-Item Env:HOUSE_KIT_INSTALL_COMMAND -ErrorAction Ignore
 $workdir = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-HouseWorkdir' }, $true)
 . ([scriptblock]::Create($workdir.Extent.Text))
 foreach ($case in @(

@@ -422,6 +422,7 @@ connect_native() {
   else
     connected=restarted
   fi
+  record_placement server
   if [[ -f "$KIT_HOME/credential.json" ]]; then
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   fi
@@ -438,7 +439,6 @@ connect_native() {
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
-  record_placement server
   update_clis native_clis native_cli_update
   if ! service_manager; then
     printf 'House Kit %s is installed for Environment %s; no service manager runs on this host, so start it with: %s/kit resident\n' \
@@ -710,6 +710,7 @@ connect_desktop() {
     place_native_kit
   fi
   add_path_line
+  [[ -f "$KIT_HOME/credential.json" ]] || record_placement native
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
     check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
   fi
@@ -827,6 +828,7 @@ resume_kit() {
 }
 
 connect_kit() {
+  [[ -f "$KIT_HOME/credential.json" ]] || record_placement container
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
     check_authority "${AUTHORITY[@]}"
   fi

@@ -545,6 +545,26 @@ it('ends with the cause when House refuses to start the login', async () => {
   expect(login.stderr()).toContain('kit_environment_not_found');
 });
 
+it("fails naming its version, the Building's Kit release and this computer's install command House named, when House refuses the login as newer than the Building", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const commands = { macos: 'macos command', linux: 'linux command', container: 'container command', server: 'server command', windows: 'windows command' };
+  house.route('POST', '/kit', () => ({
+    status: 426,
+    body: { error: { code: 'kit_newer_than_house', retryable: false, release: '0.2.0-c0ffee000001', commands } },
+  }));
+  const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toContain(
+    `kit: Kit ${version} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: linux command\n`,
+  );
+  expect(house.requests.filter((request) => request.path === '/kit')).toHaveLength(1);
+  await expect(access(join(home, 'credential.json'))).rejects.toThrow();
+});
+
 it("asks for the User's own agent's connection when Kit holds none and keeps it owner-only beside the Kit credential", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
