@@ -79,7 +79,7 @@ interface Copy {
   manifests: Record<string, Manifest>;
   moves: Move[];
   push?: Push;
-  erasing?: true;
+  unfollowed?: 'unsaid' | 'said';
 }
 
 interface Authority {
@@ -390,7 +390,7 @@ export class LocalCopies {
   async mapping(): Promise<string[]> {
     await this.answering;
     return [...this.copies.values()]
-      .filter((copy) => copy.erasing === undefined)
+      .filter((copy) => copy.unfollowed === undefined)
       .map((copy) => `${rootOf(copy.room_handle)}: ${copy.repository}`)
       .sort();
   }
@@ -428,29 +428,24 @@ export class LocalCopies {
     return this.holding([...new Set([...held().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
       const said: string[] = [];
       let refused = false;
+      const mark = refreshing ? 'said' : 'unsaid';
       for (const copy of held()) {
-        const returned = synced.has(copy.key);
-        if (returned && copy.erasing === undefined) continue;
-        try {
-          await this.erase(copy);
-          said.push(
-            `${rootOf(copy.room_handle)}: ${returned ? '' : 'no longer synced to this Environment; '}erased from the Local copy`,
-          );
-        } catch (error) {
-          refused = true;
-          said.push(`${rootOf(copy.room_handle)}: ${causeOf(error)}`);
-        }
+        if (synced.has(copy.key) || copy.unfollowed === 'said' || copy.unfollowed === mark) continue;
+        await this.save({ ...copy, unfollowed: mark });
+        if (refreshing) said.push(`${rootOf(copy.room_handle)}: no longer followed; kept as it is`);
       }
       const current: Copy[] = [];
       for (const [key, handle] of synced) {
         try {
           const held = this.copies.get(key);
-          if (held?.erasing) continue;
           if (held === undefined || !(await exists(held.repository))) {
             said.push(await this.materialize(key, handle));
             continue;
           }
-          current.push(held.room_handle === handle ? held : await this.save({ ...held, room_handle: handle }));
+          const { unfollowed, ...followed } = held;
+          current.push(
+            unfollowed === undefined && held.room_handle === handle ? held : await this.save({ ...followed, room_handle: handle }),
+          );
         } catch (error) {
           refused = true;
           said.push(`${rootOf(handle)}: ${causeOf(error)}`);
@@ -472,8 +467,7 @@ export class LocalCopies {
     const key = await this.keyAt(dirname(report.common));
     if (key === undefined) return;
     await this.exclusive(key, async () => {
-      const copy = this.copies.get(key);
-      if (copy === undefined || copy.erasing) return;
+      const copy = this.copies.get(key)!;
       let moves = copy.moves;
       for (const { from, to } of report.moves) {
         const held = moves.find((move) => move.worktree === report.worktree && move.to === from);
@@ -531,13 +525,6 @@ export class LocalCopies {
     await rename(temporary, path);
     this.copies.set(copy.key, copy);
     return copy;
-  }
-
-  private async erase(copy: Copy): Promise<void> {
-    await this.save({ ...copy, erasing: true });
-    await rm(copy.repository, { recursive: true, force: true });
-    await rm(recordOf(copy.key), { force: true });
-    this.copies.delete(copy.key);
   }
 
   private async read(handle: string): Promise<Read | null> {
@@ -729,8 +716,7 @@ export class LocalCopies {
   }
 
   private async pushed(key: string, worktree: string, selector: string, caller: Caller): Promise<Pushed> {
-    let copy = this.copies.get(key);
-    if (copy === undefined || copy.erasing) return outside(worktree);
+    let copy = this.copies.get(key)!;
     if (copy.push?.state === 'submitted') return this.settle(copy, caller);
     const selected = await run(worktree, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${selector}^{commit}`]);
     if (selected.status !== 0) return { refused: true, text: `${selector} names no commit` };
@@ -836,8 +822,9 @@ export class LocalCopies {
         return this.settle(await this.save({ ...copy, push: unstaged }), caller, true);
       }
       if (outcome.refused.code === 'expired') return this.recovered(copy);
-      const rebased = rebaseFixes(outcome.refused);
       let settled = await this.save(without(copy));
+      if (settled.unfollowed !== undefined) return { refused: true, text: outcome.refused.text };
+      const rebased = rebaseFixes(outcome.refused);
       try {
         settled = (await this.caughtUp([settled], true))[0]!;
       } catch {

@@ -491,6 +491,53 @@ it.each(['claude-routines', 'codex-routines'])(
   },
 );
 
+function emitted(fixture: string, rewrites: [string, string][] = [], call?: string): string {
+  const events = recorded(fixture);
+  const own = events.find((event) => event.params.sessionId !== undefined)!.params.sessionId;
+  const id =
+    call === undefined
+      ? undefined
+      : events.find((event) => event.params.update?.toolCallId !== undefined && JSON.stringify(event).includes(call))!.params.update.toolCallId;
+  return events
+    .filter((event) => id === undefined || event.params.update?.toolCallId === id)
+    .map((event) => {
+      let line = JSON.stringify(event).split(own).join('$SESSION');
+      for (const [from, to] of rewrites) line = line.split(JSON.stringify(from).slice(1, -1)).join(JSON.stringify(to).slice(1, -1));
+      return `@emit ${line}`;
+    })
+    .join('\n');
+}
+
+const ROUTINE_SENT = '{"command":"send_routine_request","arguments":{"room_ref":null,"access":"ra_123","payload":"hi"}}';
+const ROUTINE_CANCELLED = '{"command":"cancel_routine_request","arguments":{"room_ref":null,"request":"rr_456"}}';
+const MAILED = '{"command":"send_mail","arguments":{"text":"Here is the summary.","request":"rr_789"}}';
+const ANSWERED = '{"command":"send_mail","arguments":{"text":"Done."}}';
+
+it.each(['claude', 'codex'])(
+  "shows %s's house send_mail as one part naming the request it names, or no target when it names none, and still counts the house call beside it",
+  async (cli) => {
+    const hosted = await hostKit([{ kind: KINDS[cli]! }]);
+    hosted.input({ kind: 'open' });
+    await hosted.ack(lastInput());
+    hosted.watch(true);
+    const searched = emitted(`${cli}-tools`, [], "house search '");
+    const mailed = emitted(`${cli}-routines`, [
+      [ROUTINE_SENT, MAILED],
+      [ROUTINE_CANCELLED, ANSWERED],
+    ]);
+
+    hosted.input({ kind: 'message', text: `${searched}\n${mailed}`, files: [], first: false });
+    const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+
+    const parts = (ended.body as Ended).parts;
+    expect(parts.filter((part) => part.type === 'commands' || part.type === 'message')).toEqual([
+      { type: 'commands', count: 1 },
+      { type: 'message', command: 'send_mail', target: 'rr_789' },
+      { type: 'message', command: 'send_mail', target: null },
+    ]);
+  },
+);
+
 it("shows Grok Build's recorded send_routine_request as one part and marks the retries its usage limit cut short", async () => {
   const { turns } = await replayed('grok-routines');
 

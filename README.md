@@ -46,8 +46,8 @@ this computer as a new one when House no longer holds it.
 In a container you do not control, such as ChatGPT's, `npm i -g @agentshouse/kit` and `kit chatgpt --key <key>` with a key made on Connections let `house <tool>` act as you, starting and configuring nothing else.
 
 `kit resident` keeps the Environment connected and, as it connects, copies the text of each Room you chose for it as a
-Git repository in the workspace's `local-copies`, and erases a Room's copy, unpushed commits included, once the Room
-may no longer be copied here. `house fetch` does the same and records House's changes on each copy's
+Git repository in the workspace's `local-copies`, and keeps a Room's copy as it is, no longer refreshing it, once the
+Room may no longer be copied here. `house fetch` does the same and records House's changes on each copy's
 `refs/house/received`; rebase onto it, commit and run `house push --owner` in the copy, through the install command in
 the container. An Agent runs both, without `--owner`. `house upload` and `house download` move a Room's other files.
 

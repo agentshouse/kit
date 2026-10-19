@@ -23,7 +23,7 @@ const SOURCE_LINE = "From House:";
 const HOUSE_LINE = "Work with House through the `house` CLI: run `house --help`, and `house find_command` for House's guides and formats.";
 const FILE_LINE = 'To give the User a file, upload it with `house upload` and link it; for an App, a Site or a website, follow `house find_command \'{"query":"app"}\'`. Never start a server.';
 const READ_LINE = "Optional per-Room instructions: `/rooms/private/rooms/<handle>/AGENTS.md`.";
-const WAIT_LINE = 'To get what another Agent will write into a Room, `create_trigger` on where it will land with a `conversation` action, then end your turn: this conversation continues when it lands.';
+const REQUEST_LINE = "For another Agent's help, `send_routine_request`; its mail comes back into this conversation. If an Agent of your User has no Routine to call, write one in the Private Room and `create_routine_access` with your User as its only caller.";
 
 function blockOf(prompt: Prompt): string[] {
   expect(prompt).toHaveLength(2);
@@ -31,7 +31,7 @@ function blockOf(prompt: Prompt): string[] {
   return prompt[0]!.text.split('\n');
 }
 
-it('begins a first message with the source line, the house line, the file line, the Room instructions line, the waiting line, the base instructions and the How-we-work text, the same for every CLI', async () => {
+it('begins a first message with the source line, the house line, the file line, the Room instructions line, the Routine Request line, the base instructions and the How-we-work text, the same for every CLI, and names no Trigger', async () => {
   const kinds = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   const hosted = await hostKit(kinds.map((kind) => ({ kind })));
   hosted.tools.shell = () => shelled(DOCUMENT);
@@ -48,7 +48,8 @@ it('begins a first message with the source line, the house line, the file line, 
   }
 
   const sent = await prompts(hosted, kinds.length);
-  expect(blockOf(sent[0]!)).toEqual([SOURCE_LINE, HOUSE_LINE, FILE_LINE, READ_LINE, WAIT_LINE, '', 'Be useful.', '', ...DOCUMENT.split('\n')]);
+  expect(blockOf(sent[0]!)).toEqual([SOURCE_LINE, HOUSE_LINE, FILE_LINE, READ_LINE, REQUEST_LINE, '', 'Be useful.', '', ...DOCUMENT.split('\n')]);
+  expect(sent[0]![0]!.text).not.toMatch(/trigger|`conversation` action/i);
   for (const prompt of sent) expect(prompt).toEqual(sent[0]);
   expect(
     hosted.mcp.map((received) => [received.headers.authorization, (received.body as McpCall).params.arguments]).sort(),
@@ -71,7 +72,7 @@ it.each([
   hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
 
   expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
-  expect(blockOf((await prompts(hosted, 1))[0]!)).toEqual([SOURCE_LINE, HOUSE_LINE, FILE_LINE, READ_LINE, WAIT_LINE, '', 'Be useful.']);
+  expect(blockOf((await prompts(hosted, 1))[0]!)).toEqual([SOURCE_LINE, HOUSE_LINE, FILE_LINE, READ_LINE, REQUEST_LINE, '', 'Be useful.']);
 });
 
 it('refuses a first message with the cause when House cannot answer the document read', async () => {

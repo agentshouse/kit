@@ -47,7 +47,7 @@ const COMMAND: Decision = { shown: 'command' };
 const HIDDEN: Decision = { shown: 'hidden' };
 const FINISHED = new Set(['completed', 'failed']);
 export const RUNNING_JOB = new Set(['running', 'paused']);
-const ROUTINE_TARGETS: Record<string, string> = { send_routine_request: 'access', cancel_routine_request: 'request' };
+const MESSAGE_TARGETS: Record<string, string> = { send_routine_request: 'access', cancel_routine_request: 'request', send_mail: 'request' };
 
 function words(line: string): string[] {
   const found: string[] = [];
@@ -84,7 +84,7 @@ export function houseMessage(line: string): Decision | null {
   } catch {
     return null;
   }
-  const argument = ROUTINE_TARGETS[call.command];
+  const argument = MESSAGE_TARGETS[call.command];
   if (argument === undefined) return null;
   const target = call.arguments?.[argument];
   return { shown: 'message', command: call.command, target: typeof target === 'string' ? target : null };
