@@ -36,7 +36,7 @@ it('cancels the running turn on interrupt and keeps the process and session', as
     session,
     session,
   ]);
-  expect(hosted.socket.notifications.filter((notification) => notification.type === 'process')).toEqual([
+  expect(hosted.connection.notifications.filter((notification) => notification.type === 'process')).toEqual([
     { type: 'process', conversation_id: 'conversation-1', running: true },
   ]);
 });
@@ -55,7 +55,7 @@ it('kills the process and every process it started, and the next message resumes
   expect(alive(adapter)).toBe(false);
   await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
   expect(await until(() => ended(hosted)[0])).toMatchObject({ body: { failed: 'killed' } });
-  await until(() => hosted.socket.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+  await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
 
   hosted.call({ kind: 'message', provider_session_id: session, text: 'after', files: [], first: false });
   await hosted.result(lastCall());
@@ -180,7 +180,7 @@ it('sets an option on the running process and relays the commands and options th
   const hosted = await hostKit();
   await opened(hosted);
   const options = (notification: Record<string, unknown>) => notification.type === 'options';
-  await until(() => hosted.socket.notifications.find(options));
+  await until(() => hosted.connection.notifications.find(options));
 
   hosted.call({ kind: 'option', option: 'model', value: 'other-model' });
   await hosted.result(lastCall());
@@ -194,12 +194,12 @@ it('sets an option on the running process and relays the commands and options th
   });
   const current = (notification: Record<string, unknown>) =>
     Object.fromEntries((notification.options as { id: string; currentValue: string }[]).map((option) => [option.id, option.currentValue]));
-  expect(hosted.socket.notifications.filter(options).map(current)).toEqual([
+  expect(hosted.connection.notifications.filter(options).map(current)).toEqual([
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'route-model', reasoning_effort: 'route-effort' },
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'route-effort' },
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'from-cli' },
   ]);
-  expect(hosted.socket.notifications.filter((notification) => notification.type === 'commands')).toEqual([
+  expect(hosted.connection.notifications.filter((notification) => notification.type === 'commands')).toEqual([
     {
       type: 'commands',
       conversation_id: 'conversation-1',
@@ -337,5 +337,5 @@ it('passes a secret from the held secret-input request to the CLI and keeps it n
     expect(await readFile(file, 'utf8')).not.toContain(secret);
   }
   expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(secret);
-  expect(JSON.stringify(hosted.socket.notifications)).not.toContain(secret);
+  expect(JSON.stringify(hosted.connection.notifications)).not.toContain(secret);
 });

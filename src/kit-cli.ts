@@ -23,7 +23,7 @@ const COMMANDS = new Map<string, Command>([
     'logout',
     {
       usage: 'usage: kit logout',
-      about: "disconnects this computer, stops Kit and ends your own agent's connection",
+      about: "disconnects this computer, stops the Kit process and ends your own agent's connection",
       operands: 0,
       run: logout,
     },

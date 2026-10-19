@@ -128,7 +128,7 @@ it("reports downloading a message's files as its start-up step while they take o
     await held;
     return { bytes: { type: 'application/octet-stream', content: STORED[received.params.version!]!.content } };
   });
-  const starting = () => hosted.socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  const starting = () => hosted.connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
 
   hosted.call({ kind: 'message', text: 'read this', files: [described[0]!], first: true });
 
@@ -151,7 +151,7 @@ it("reports downloading the files of a message that arrived during a turn once t
     await held;
     return { bytes: { type: 'application/octet-stream', content: STORED[received.params.version!]!.content } };
   });
-  const starting = () => hosted.socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  const starting = () => hosted.connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
   const ended = () => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
   hosted.call({ kind: 'message', text: '@gate turn-ends', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));

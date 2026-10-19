@@ -3,7 +3,7 @@ import { forgetRejected } from './home.ts';
 import { installCommand } from './placement.ts';
 import { killDescendants } from './scope.ts';
 
-export const REPLACED = 'another Kit started for this Environment';
+export const REPLACED = 'another Kit process started for this Environment';
 
 function exit(reason: string, status: number): never {
   process.stderr.write(`kit: ${reason}\n`);

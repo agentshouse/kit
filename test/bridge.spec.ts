@@ -47,7 +47,7 @@ it("reaches House with each process's own conversation credential and never show
     ['conversation-1', 'Bearer ahk_held'],
     ['conversation-2', 'Bearer ahk_held'],
   ]);
-  const seen = JSON.stringify([await hosted.adapterLog(), hosted.socket.notifications]);
+  const seen = JSON.stringify([await hosted.adapterLog(), hosted.connection.notifications]);
   expect(seen).not.toContain(conversationCredential('conversation-1'));
   expect(seen).not.toContain(conversationCredential('conversation-2'));
 });

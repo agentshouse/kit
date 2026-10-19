@@ -476,7 +476,7 @@ it('picks its copies up again when the resident starts anew', async () => {
   await hosted.kit.exited;
   room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
   runKit(['resident'], { HOUSE_KIT_HOME: hosted.home, PATH: await fakeBin(hosted.home), ...GIT_IDENTITY });
-  await until(() => hosted.house.sockets[1]);
+  await until(() => hosted.house.connections[1]);
   await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nthree\n');
   const pushedCommit = commitAll(room.repository, 'three');
 

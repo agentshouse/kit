@@ -106,7 +106,7 @@ it('signs Claude Code in with the code the page collects and keeps the code nowh
     expect(await readFile(file, 'utf8')).not.toContain(code);
   }
   expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(code);
-  expect(JSON.stringify(hosted.socket.notifications)).not.toContain(code);
+  expect(JSON.stringify(hosted.connection.notifications)).not.toContain(code);
   expect(JSON.stringify(hosted.house.requests)).not.toContain(code);
 });
 
@@ -199,8 +199,8 @@ it('holds the page and returns the result of a finished sign-in while a model re
 it('starts no second login for a sign-in call sent again while it runs, and returns its one result for each arrival', async () => {
   const { hosted, holds, call } = await signingIn('codex-acp');
   await until(() => holds[0]);
-  hosted.socket.close(1001, 'shutting_down');
-  await until(() => hosted.house.sockets[1]);
+  hosted.connection.close(1001, 'shutting_down');
+  await until(() => hosted.house.connections[1]);
 
   hosted.call({ input_id: call, kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 600 });
   await settle();
@@ -215,11 +215,11 @@ it('starts no second login for a sign-in call sent again while it runs, and retu
   ]);
 });
 
-it('starts no second login for a sign-in its reopened socket sends after the sign-in ended, and returns its result again', async () => {
+it('starts no second login for a sign-in its reopened Kit connection sends after the sign-in ended, and returns its result again', async () => {
   const { hosted, holds, call } = await signingIn('codex-acp');
   await until(() => holds[0]);
-  hosted.socket.close(1001, 'shutting_down');
-  await until(() => hosted.house.sockets[1]);
+  hosted.connection.close(1001, 'shutting_down');
+  await until(() => hosted.house.connections[1]);
   await finish(hosted, 'codex-acp');
   await hosted.result(call);
   await until(() => hosted.idles[1]);

@@ -6,7 +6,7 @@ import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
-import { certificate, startHouse, until, type House, type KitSocket, type Received } from './double.ts';
+import { certificate, startHouse, until, type House, type KitConnection, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './npm.ts';
 
@@ -145,7 +145,7 @@ export interface Hosted {
   house: House;
   home: string;
   kit: KitRun;
-  socket: KitSocket;
+  connection: KitConnection;
   workingDirectory: string;
   results: Received[];
   turns: Received[];
@@ -284,13 +284,13 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     ...hosting.environment,
   };
   const kit = runKit(['resident'], environment);
-  const socket = await until(() => house.sockets[0]);
+  const connection = await until(() => house.connections[0]);
   await until(() => house.requests.find((request) => request.path === '/kit/local-copy/selection'));
   const hosted: Hosted = {
     house,
     home,
     kit,
-    socket,
+    connection,
     workingDirectory,
     results,
     turns,
@@ -301,23 +301,23 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     mcp,
     tools,
     reports,
-    watch: (watching) => house.sockets.at(-1)!.send({ type: 'watching', watching }),
+    watch: (watching) => house.connections.at(-1)!.send({ type: 'watching', watching }),
     restart: async () => {
-      const opened = house.sockets.length;
+      const opened = house.connections.length;
       const idled = idles.length;
       stop(hosted.kit.pid);
       await hosted.kit.exited;
       hosted.kit = runKit(['resident'], environment);
-      await until(() => house.sockets.length > opened);
+      await until(() => house.connections.length > opened);
       await until(() => idles.length > idled);
     },
     transcribe: (on) => {
       transcribe = on;
-      house.sockets.at(-1)!.send({ type: 'work_available', subject: 'agents' });
+      house.connections.at(-1)!.send({ type: 'work_available', subject: 'agents' });
     },
     call: (fields) => {
       calls++;
-      house.sockets.at(-1)!.send({
+      house.connections.at(-1)!.send({
         type: 'input',
         input_id: `call-${calls}`,
         conversation_id: 'conversation-1',
@@ -393,7 +393,7 @@ export async function installHeld(hosted: Hosted): Promise<string> {
   hosted.house.route('POST', '/kit/agents/desired', () => ({
     body: { agents: ['codex-acp', 'claude-agent-acp'], routes: [added] },
   }));
-  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.connection.send({ type: 'work_available', subject: 'agents' });
   await until(async () =>
     (await readFile(join(hosted.home, 'npm.log'), 'utf8').catch(() => '')).includes(
       CLIS['claude-agent-acp']!.adapter!.package,

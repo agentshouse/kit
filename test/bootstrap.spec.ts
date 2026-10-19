@@ -296,7 +296,7 @@ container_cli_update /kit-home/.local/bin/codex </dev/null`,
   ]);
 });
 
-it('leaves a running container Kit and its conversations running after it updated a CLI, and asks it to restart once idle', async () => {
+it('leaves a running container Kit process and its conversations running after it updated a CLI, and asks it to restart once idle', async () => {
   const home = await temporaryHome();
   const ran = spawnSync(
     'bash',
@@ -327,7 +327,7 @@ resume_kit`,
 it.each([
   ['holding its credential', false],
   ['whose rejected credential it forgot', true],
-])('asks the server Kit %s to restart once idle when a rerun updates a CLI, and restarts no service itself', async (_name, rejected) => {
+])('asks the server Kit process %s to restart once idle when a rerun updates a CLI, and restarts no service itself', async (_name, rejected) => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true });
   await host.mark('systemd');
   expect(host.run(['--linux'])).toMatchObject({ status: 0, stderr: '' });

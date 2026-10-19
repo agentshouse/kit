@@ -15,8 +15,8 @@ Add `--container` to run Kit in one Docker container instead, with your
 workspace mounted at `/agents/house`; your Agents then reach only that
 workspace. On Windows 11 the container is the one choice. Append a `kit` or `house` command to the container's options to run it in that container.
 Running the command for the other choice on a connected computer asks you to
-confirm, then replaces its Environment, whose Agents end, with a new one. Running it with another `HOUSE_KIT_HOME`
-than the installed Kit's asks you to confirm before it replaces that Kit, and leaves that Kit home as it was.
+confirm, then replaces its Environment, whose Agents end, with a new one. Running it with a different `HOUSE_KIT_HOME`
+from the running Kit process asks you to confirm before it replaces that process, and leaves the earlier Kit home as it was.
 
 On your own Linux server, run the Linux command with `--linux` to
 install Kit natively, with its workspace at `/agents/house`; `kit` and
@@ -40,7 +40,7 @@ A login also connects your own agent: outside an Agent conversation, `house <too
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you, each through the Kit
 home `$HOUSE_KIT_HOME` names where it runs, until you revoke that connection on Connections. `house help` lists the Tools. Codex sessions started after a
 login run a lone `house` command outside their sandbox. `kit logout` disconnects this
-computer, stops Kit and ends your own agent's connection, so `house` and `git` no
+computer, stops the Kit process and ends your own agent's connection, so `house` and `git` no
 longer act as you here; a later `kit login` reconnects the same Environment, or connects
 this computer as a new one when House no longer holds it.
 In a container you do not control, such as ChatGPT's, `npm i -g @agentshouse/kit` and `kit chatgpt --key <key>` with a key made on Connections let `house <tool>` act as you, starting and configuring nothing else.

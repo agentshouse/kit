@@ -101,7 +101,7 @@ function rerun(script: string, callId: string, flags: string[]): Promise<Result 
       ...flags,
     ];
     const child = spawn(command!, args, { stdio: ['ignore', 'ignore', 'inherit'] });
-    child.on('error', () => resolve({ refused: 'no service manager runs this Kit' }));
+    child.on('error', () => resolve({ refused: 'no service manager runs this Kit process' }));
     child.on('close', () => resolve(null));
   });
 }

@@ -126,8 +126,8 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
 
   reports.length = 0;
   desired = ['codex-acp', 'claude-agent-acp'];
-  const socket = await until(() => house.sockets[0]);
-  socket.send({ type: 'work_available', subject: 'agents' });
+  const connection = await until(() => house.connections[0]);
+  connection.send({ type: 'work_available', subject: 'agents' });
 
   await until(() => completeReports()[0]);
   expect((await adapterInstalls()).slice(1)).toEqual([
@@ -272,7 +272,7 @@ it("reports a CLI whose official install failed with no release and the installe
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: Checksum verification failed');
 
   await rm(join(home, 'install-fail'));
-  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+  house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
 
   const recovered = await until(() => completeReports()[1]);
   expect(recovered.agents).toEqual([
@@ -358,7 +358,7 @@ it('reads a CLI below its minimum again at a later work_available notification a
   expect((await until(() => completeReports()[0])).agents).toEqual([expect.objectContaining({ kind: 'codex-acp', release: '0.150.0', minimum: '0.159.1' })]);
 
   placeUserCli(userBin(home), 'codex-acp', '0.160.0');
-  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+  house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
 
   const [current] = (await until(() => completeReports()[1])).agents as Record<string, unknown>[];
   expect(current).toMatchObject({ kind: 'codex-acp', release: '0.160.0', failure: null });
@@ -398,7 +398,7 @@ it('reads the models when it starts and on no timer after it, though House names
   await mkdir(join(home, 'models'));
   await writeFile(join(home, 'models', 'codex-acp'), JSON.stringify([{ id: 'gpt-5.5', name: '5.5', efforts: ['high'] }]));
 
-  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+  house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
   // A second and a half lets every Kit interval, capped at 300 ms, fire several times before the reads are counted.
   await new Promise((resolve) => setTimeout(resolve, 1500));
 

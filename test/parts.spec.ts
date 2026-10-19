@@ -88,7 +88,7 @@ function emittedImage(): string {
 }
 
 function streamed(hosted: Hosted, type: string): boolean {
-  return hosted.socket.notifications.some((notification) => notification.type === 'turn' && notification.op === 'start' && (notification.part as { type: string }).type === type);
+  return hosted.connection.notifications.some((notification) => notification.type === 'turn' && notification.op === 'start' && (notification.part as { type: string }).type === type);
 }
 
 function kinds(turn: Ended): string[] {
@@ -570,7 +570,7 @@ it.each(['claude-tools', 'codex-tools', 'grok-tools'])(
   async (fixture) => {
     const { hosted, turns } = await replayed(fixture, fixture === 'claude-tools' ? 2 : 1);
 
-    const operations = hosted.socket.notifications.filter((notification) => notification.type === 'turn').map((notification) => notification.op);
+    const operations = hosted.connection.notifications.filter((notification) => notification.type === 'turn').map((notification) => notification.op);
     expect(operations).toEqual(expect.arrayContaining(['start', 'append', 'context']));
     expect(operations.every((op) => ['start', 'append', 'count', 'status', 'plan', 'context'].includes(String(op)))).toBe(true);
     for (const turn of turns) {

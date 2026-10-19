@@ -26,8 +26,8 @@ it.each([
     `@git ls-remote ${hosted.house.origin}/app/a_app.git\n@house upload {"file":"report.txt","room_ref":"r_room","path":"report.txt"}`,
   );
   const [git, upload] = await runs(hosted, 2);
-  hosted.socket.close(1012, 'restart');
-  await until(() => hosted.house.sockets[1]);
+  hosted.connection.close(1012, 'restart');
+  await until(() => hosted.house.connections[1]);
 
   expect(git).toMatchObject({ status: 0, stdout: `${commit}\tHEAD\n${commit}\trefs/heads/main\n` });
   expect(credentials).toHaveLength(1);

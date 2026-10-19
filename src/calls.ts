@@ -73,22 +73,22 @@ export class Calls {
   private readonly house: House;
   private readonly changed: () => void;
   private readonly carried = new Map<string, Promise<Carried>>();
-  private readonly path = join(kitHome(), 'handed-inputs.json');
-  private readonly handed: Map<string, Result>;
+  private readonly path = join(kitHome(), 'call-results.json');
+  private readonly results: Map<string, Result>;
   private readonly returned = new Set<string>();
   private open = 0;
 
   constructor(house: House, changed: () => void) {
     this.house = house;
     this.changed = changed;
-    this.handed = new Map(
+    this.results = new Map(
       existsSync(this.path) ? Object.entries(JSON.parse(readFileSync(this.path, 'utf8')) as Record<string, Result>) : [],
     );
   }
 
-  hands(callId: string, result: Result): void {
+  keepResult(callId: string, result: Result): void {
     if (this.returned.has(callId)) return;
-    this.handed.set(callId, result);
+    this.results.set(callId, result);
     this.save();
   }
 
@@ -98,8 +98,8 @@ export class Calls {
 
   carry(callId: string, work: () => Promise<Carried>): Promise<void> {
     const known = this.carried.get(callId);
-    const handed = this.handed.get(callId);
-    const carried = known ?? (handed === undefined ? work() : Promise.resolve<Carried>({ result: handed }));
+    const result = this.results.get(callId);
+    const carried = known ?? (result === undefined ? work() : Promise.resolve<Carried>({ result }));
     if (known === undefined) {
       this.carried.set(callId, carried);
       carried.catch(() => this.carried.delete(callId));
@@ -112,7 +112,7 @@ export class Calls {
           await this.house.deliver(`/kit/inputs/${callId}/ack`, result);
         } finally {
           this.returned.add(callId);
-          if (this.handed.delete(callId)) this.save();
+          if (this.results.delete(callId)) this.save();
         }
         if (known === undefined) await returned?.();
       })
@@ -125,7 +125,7 @@ export class Calls {
 
   private save(): void {
     const temporary = `${this.path}.${process.pid}`;
-    writeFileSync(temporary, JSON.stringify(Object.fromEntries(this.handed)), { mode: 0o600 });
+    writeFileSync(temporary, JSON.stringify(Object.fromEntries(this.results)), { mode: 0o600 });
     renameSync(temporary, this.path);
   }
 }

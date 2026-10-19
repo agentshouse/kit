@@ -392,11 +392,11 @@ connect_native() {
   local connected=updated
   RECONNECT="run $NATIVE_BIN/kit login"
   if containerized; then
-    refuse "Kit runs in the container $NAME on this computer; remove that container, then rerun this bootstrap with --linux"
+    refuse "a Kit process runs in the container $NAME on this computer; remove that container, then rerun this bootstrap with --linux"
   fi
-  [[ ! -e "$DESKTOP_PREFIX" ]] || refuse 'Kit runs natively for this User; rerun this bootstrap without --linux'
+  [[ ! -e "$DESKTOP_PREFIX" ]] || refuse 'a Kit process runs natively for this User; rerun this bootstrap without --linux'
   if service_manager && [[ -f "$NATIVE_UNIT" ]] && ! grep -qx "User=$(id -un)" "$NATIVE_UNIT"; then
-    refuse 'Kit runs natively on this host for another account'
+    refuse 'a Kit process runs natively on this host for another account'
   fi
   keep_other_home
   establish_native_packages
@@ -546,11 +546,11 @@ keep_other_home() {
   [[ ! -d "$here" ]] || here=$(cd "$here" && pwd -P)
   homes=$(installed_homes)
   if ((CONTAINER == 0)) && [[ "$homes" != "$here" ]] && type -P docker >/dev/null && ! docker_answers; then
-    refuse "Docker does not answer: $(docker_cause); start Docker so this bootstrap can see whether Kit runs in its container with another Kit home, then rerun this bootstrap"
+    refuse "Docker does not answer: $(docker_cause); start Docker so this bootstrap can see whether a Kit process runs in its container with another Kit home, then rerun this bootstrap"
   fi
   while IFS= read -r held; do
     [[ -n "$held" && "$held" != "$here" ]] || continue
-    terminal || refuse "Kit runs on this computer with the Kit home $held; installing it with the Kit home $here replaces that Kit, so run this bootstrap in a terminal to confirm"
+    terminal || refuse "a Kit process runs on this computer with the Kit home $held; installing Kit with the Kit home $here replaces that process, so run this bootstrap in a terminal to confirm"
     confirmed "Kit is already installed on this computer with the Kit home $held. Replace it?" || refuse "the Kit home $held was kept; nothing changed"
     OTHER_HOME=1
     return 0
@@ -657,9 +657,9 @@ take_placement() {
   [[ "$held" != "$1" ]] || return 0
   environment=$(enrolled environment)
   if [[ "$held" == container ]] && type -P docker >/dev/null && ! docker_answers; then
-    refuse "Kit runs in the container $NAME for Environment $environment and Docker does not answer: $(docker_cause); start Docker so that container can be removed, then rerun this bootstrap"
+    refuse "a Kit process runs in the container $NAME for Environment $environment and Docker does not answer: $(docker_cause); start Docker so that container can be removed, then rerun this bootstrap"
   fi
-  terminal || refuse "Kit runs $(placed "$held") on this computer for Environment $environment; installing it $(placed "$1") ends that Environment and its Agents, so run this bootstrap in a terminal to confirm"
+  terminal || refuse "a Kit process runs $(placed "$held") on this computer for Environment $environment; installing Kit $(placed "$1") ends that Environment and its Agents, so run this bootstrap in a terminal to confirm"
   confirmed "Kit is already installed $(placed "$held"). Replace it?" || refuse "Environment $environment was kept; nothing changed"
   record_placement "$held"
   REPLACES=$environment
@@ -748,7 +748,7 @@ kit_installed() {
 
 check_installation() {
   [[ "$(docker inspect --format '{{len .Mounts}}' "$NAME")" == 2 ]] || refuse 'the installed Kit has unexpected mounts'
-  [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Source}}{{end}}{{end}}' "$NAME")" == "$KIT_HOME" ]] || refuse 'the installed Kit uses another Kit home'
+  [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Source}}{{end}}{{end}}' "$NAME")" == "$KIT_HOME" ]] || refuse 'the Kit process uses another Kit home'
   [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Type}}/{{.RW}}{{end}}{{end}}' "$NAME")" == bind/true ]] || refuse 'the installed Kit home is not a writable bind mount'
   [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/agents/house"}}{{.Source}}{{end}}{{end}}' "$NAME")" == "$WORKSPACE" ]] || refuse 'the installed Kit uses another workspace root'
   [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/agents/house"}}{{.Type}}/{{.RW}}{{end}}{{end}}' "$NAME")" == bind/true ]] || refuse 'the installed workspace is not a writable bind mount'
@@ -914,10 +914,10 @@ done
 if ((NATIVE)); then
   ((WORKSPACE_SELECTED == 0)) || refuse "--linux keeps its workspace at $NATIVE_WORKSPACE; --workspace is for a computer"
 elif [[ -e "$SERVER_PREFIX" ]]; then
-  ((FORWARDING == 0)) || refuse "Kit runs natively on this host; run $FORWARDED there directly"
-  refuse 'Kit runs natively on this host; rerun this bootstrap with --linux'
+  ((FORWARDING == 0)) || refuse "a Kit process runs natively on this host; run $FORWARDED there directly"
+  refuse 'a Kit process runs natively on this host; rerun this bootstrap with --linux'
 elif ((CONTAINER && FORWARDING)) && [[ -e "$DESKTOP_PREFIX" ]]; then
-  refuse "Kit runs natively on this computer; run $FORWARDED there directly"
+  refuse "a Kit process runs natively on this computer; run $FORWARDED there directly"
 fi
 [[ "$WORKSPACE" == /* ]] || refuse 'workspace root must be an absolute path'
 

@@ -482,7 +482,7 @@ export class Conversations {
       return;
     }
     this.starts(conversation, null);
-    this.prompt(conversation, [...prompt, ...waiting.content], () => this.kit.calls.hands(String(call.input_id), result));
+    this.prompt(conversation, [...prompt, ...waiting.content], () => this.kit.calls.keepResult(String(call.input_id), result));
     waiting.settle(result);
   }
 

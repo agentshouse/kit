@@ -92,7 +92,7 @@ subscribe('undici:request:headers', (message) => {
 });
 
 export function holdConnection(handlers: ConnectionHandlers): Connection {
-  let socket: WebSocket | null = null;
+  let connection: WebSocket | null = null;
   let failures = 0;
 
   const connect = async () => {
@@ -107,7 +107,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
     const closed = (event: CloseEvent) => {
       silence?.stop();
       silence = null;
-      if (socket === opening) socket = null;
+      if (connection === opening) connection = null;
       process.stderr.write(`kit: connection closed ${event.code} ${event.reason}\n`);
       if (event.reason === 'replaced') end(REPLACED);
       if (event.reason === 'credential_rejected' || refused?.status === 401) {
@@ -122,10 +122,10 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
     opening.onopen = () => {
       opened = true;
       failures = 0;
-      socket = opening;
+      connection = opening;
       silence = new ConnectionSilence(() => {
-        if (socket !== opening) return;
-        socket = null;
+        if (connection !== opening) return;
+        connection = null;
         opening.onclose = null;
         opening.close();
         closed(new CloseEvent('close', { code: 1006, reason: 'heartbeat_missed' }));
@@ -146,8 +146,8 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
   void connect();
   return {
     send(notification) {
-      if (socket === null || socket.readyState !== WebSocket.OPEN) return false;
-      socket.send(JSON.stringify(notification));
+      if (connection === null || connection.readyState !== WebSocket.OPEN) return false;
+      connection.send(JSON.stringify(notification));
       return true;
     },
   };

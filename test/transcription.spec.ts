@@ -223,7 +223,7 @@ it('sends no report when a read of the setting changes neither whether the engin
   hosted.transcribe(true);
 
   await until(() => desiredReads(hosted) > reads);
-  // Half a second outlasts the Kit reporting a change it read, so a report not sent by then is not coming.
+  // Half a second outlasts the Kit sending a change Notification, so one not sent by then is not coming.
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(hosted.reports).toHaveLength(reports);
   expect(await downloads(hosted)).toHaveLength(3);

@@ -394,7 +394,7 @@ function Connect-Kit {
   if (Test-Container) {
     $installed = Read-Inspect '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}'
     if ((Read-Inspect '{{len .Mounts}}') -cne '2') { Stop-Bootstrap 'the installed Kit has unexpected mounts' }
-    if ((Read-Inspect '{{range .Mounts}}{{if eq .Destination `/kit-home`}}{{.Name}}{{end}}{{end}}') -cne $KitHome) { Stop-Bootstrap 'the installed Kit uses another Kit home' }
+    if ((Read-Inspect '{{range .Mounts}}{{if eq .Destination `/kit-home`}}{{.Name}}{{end}}{{end}}') -cne $KitHome) { Stop-Bootstrap 'the Kit process uses another Kit home' }
     if ((Read-Inspect '{{range .Mounts}}{{if eq .Destination `/kit-home`}}{{.Type}}/{{.RW}}{{end}}{{end}}') -cne 'volume/true') { Stop-Bootstrap 'the installed Kit home is not a writable volume' }
     if ((Read-Source '/agents/house') -ine $Workspace) { Stop-Bootstrap 'the installed Kit uses another workspace root' }
     if ((Read-Inspect '{{range .Mounts}}{{if eq .Destination `/agents/house`}}{{.Type}}/{{.RW}}{{end}}{{end}}') -cne 'bind/true') { Stop-Bootstrap 'the installed workspace is not a writable bind mount' }

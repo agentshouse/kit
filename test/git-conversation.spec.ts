@@ -158,7 +158,7 @@ it("leaves a Room an authority change drops out of a conversation's first prompt
   const asked = selections();
   rooms.answered = [];
 
-  hosted.socket.send({ type: 'authority_changed', rooms: [room.ref] });
+  hosted.connection.send({ type: 'authority_changed', rooms: [room.ref] });
   await until(() => selections() > asked);
   hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 

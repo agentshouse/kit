@@ -36,7 +36,7 @@ it('opens the provider session in the launch directory with the route settings a
     { sessionId: opened.sessionId, configId: 'reasoning_effort', value: 'high' },
   ]);
   expect(new Set(log.map((entry) => entry.pid)).size).toBe(1);
-  expect(hosted.socket.notifications).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
+  expect(hosted.connection.notifications).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
 });
 
 it("opens the session in the mode the route names, and Codex runs each `house` on the conversation's PATH outside its sandbox whenever its shell starts it", async () => {
@@ -108,7 +108,7 @@ it("refuses the open in the Kit's words when the CLI does not take the route's e
   hosted.call({ kind: 'open' });
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI refused the Agent's model, mode or effort" });
-  expect(hosted.socket.notifications.filter((notification) => notification.type === 'process')).toEqual([]);
+  expect(hosted.connection.notifications.filter((notification) => notification.type === 'process')).toEqual([]);
   expect(hosted.kit.stderr()).toContain('Unknown config option: thought_level');
 });
 
@@ -161,7 +161,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
   hosted.house.route('POST', '/kit/agents/desired', () => ({
     body: { agents: ['codex-acp', 'grok-build'], routes: [route] },
   }));
-  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.connection.send({ type: 'work_available', subject: 'agents' });
   hosted.call({ kind: 'open', agent_id: agentId });
   const open = lastCall();
   await until(async () => (await stat(directory).catch(() => null))?.isDirectory());
@@ -170,7 +170,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
     moved = true;
     return { body: { agents: ['codex-acp'], routes: [{ ...route, kind: 'codex-acp' }] } };
   });
-  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.connection.send({ type: 'work_available', subject: 'agents' });
   await until(() => moved);
   // A tenth of a second lets the Kit take House's moved route before the spec releases the install the open waits on.
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -196,7 +196,7 @@ it('opens a conversation with the launch settings House changed while the Kit wa
     return { body: { agents: ['codex-acp'], routes: [changed] } };
   });
 
-  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.connection.send({ type: 'work_available', subject: 'agents' });
   hosted.call({ kind: 'open' });
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
@@ -220,7 +220,7 @@ async function reportHeld(hosted: Hosted): Promise<void> {
     return { body: {} };
   });
   await placeHostKey(hosted.home);
-  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.connection.send({ type: 'work_available', subject: 'agents' });
   await until(() => reporting);
 }
 
@@ -250,7 +250,7 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   };
   hosted.house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['codex-acp'], routes: [changed] } }));
 
-  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.connection.send({ type: 'work_available', subject: 'agents' });
   hosted.call({ kind: 'open' });
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
@@ -345,7 +345,7 @@ it.each([
 it('reports the start-up step of a message whose session takes over a second to open, and its end before the turn starts', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const starting = () => hosted.socket.notifications.filter((notification) => notification.type === 'starting');
+  const starting = () => hosted.connection.notifications.filter((notification) => notification.type === 'starting');
 
   hosted.call({ kind: 'message', text: '@say Hello', files: [], first: true });
 
@@ -359,38 +359,38 @@ it('reports the start-up step of a message whose session takes over a second to 
   ]);
 });
 
-it('writes a start-up step that changed while its socket was closed once the socket reopens', async () => {
+it('writes a start-up step that changed while its Kit connection was closed once the connection reopens', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const starting = (socket = hosted.house.sockets.at(-1)!) =>
-    socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  const starting = (connection = hosted.house.connections.at(-1)!) =>
+    connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
   hosted.call({ kind: 'open' });
   await until(() => starting().length > 0);
 
-  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
   await settle();
   await rm(join(hosted.home, 'hold-new'));
   await hosted.result(lastCall());
-  const reopened = await until(() => hosted.house.sockets[1]);
+  const reopened = await until(() => hosted.house.connections[1]);
 
   await until(() => starting(reopened).length > 0);
-  expect(starting(hosted.house.sockets[0])).toEqual(['session']);
+  expect(starting(hosted.house.connections[0])).toEqual(['session']);
   expect(starting(reopened)).toEqual([null]);
 });
 
-it('writes the start-up step it is still in on a socket that reopens', async () => {
+it('writes the start-up step it is still in on a Kit connection that reopens', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const starting = (socket = hosted.house.sockets.at(-1)!) =>
-    socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  const starting = (connection = hosted.house.connections.at(-1)!) =>
+    connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
   hosted.call({ kind: 'open' });
   await until(() => starting().length > 0);
 
-  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
-  const reopened = await until(() => hosted.house.sockets[1]);
+  hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
+  const reopened = await until(() => hosted.house.connections[1]);
 
   await until(() => starting(reopened).length > 0);
-  expect(starting(hosted.house.sockets[0])).toEqual(['session']);
+  expect(starting(hosted.house.connections[0])).toEqual(['session']);
   expect(starting(reopened)).toEqual(['session']);
   await rm(join(hosted.home, 'hold-new'));
   await hosted.result(lastCall());
@@ -471,18 +471,18 @@ it("prompts a first message with House's instructions through the CLI it starts 
   ]);
 });
 
-it("writes a running process's facts, its latest commands and options included, again on a socket that reopens", async () => {
+it("writes a running process's facts, its latest commands and options included, again on a Kit connection that reopens", async () => {
   const hosted = await hostKit();
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
   hosted.call({ kind: 'message', text: '@commands\n@config', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  const facts = (socket: (typeof hosted.house.sockets)[number]) =>
-    socket.notifications.filter((notification) => ['process', 'commands', 'options'].includes(String(notification.type)));
-  const before = facts(hosted.house.sockets[0]!);
+  const facts = (connection: (typeof hosted.house.connections)[number]) =>
+    connection.notifications.filter((notification) => ['process', 'commands', 'options'].includes(String(notification.type)));
+  const before = facts(hosted.house.connections[0]!);
 
-  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
-  const reopened = await until(() => hosted.house.sockets[1]);
+  hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
+  const reopened = await until(() => hosted.house.connections[1]);
 
   await until(() => facts(reopened).length === 3);
   expect(facts(reopened)).toEqual([
@@ -496,29 +496,30 @@ it("writes a running process's facts, its latest commands and options included, 
   ).toBe('from-cli');
 });
 
-it('writes the exit of a process a closed socket did not take once the socket reopens', async () => {
+it('writes the exit of a process a closed Kit connection did not take once the connection reopens', async () => {
   const hosted = await hostKit();
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
   hosted.call({ kind: 'message', text: '@gate exit-now\n@exit 1', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  const processes = (socket: (typeof hosted.house.sockets)[number]) => socket.notifications.filter((notification) => notification.type === 'process');
+  const processes = (connection: (typeof hosted.house.connections)[number]) =>
+    connection.notifications.filter((notification) => notification.type === 'process');
 
-  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
+  hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
   await settle();
   await writeFile(join(hosted.home, 'exit-now'), '');
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  const reopened = await until(() => hosted.house.sockets[1]);
+  const reopened = await until(() => hosted.house.connections[1]);
 
   await until(() => processes(reopened).length > 0);
-  expect(processes(hosted.house.sockets[0]!)).toEqual([{ type: 'process', conversation_id: 'conversation-1', running: true }]);
+  expect(processes(hosted.house.connections[0]!)).toEqual([{ type: 'process', conversation_id: 'conversation-1', running: true }]);
   expect(processes(reopened)).toEqual([{ type: 'process', conversation_id: 'conversation-1', running: false }]);
 });
 
 it('keeps the start-up step of the message being started while a later one arrives', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const starting = () => hosted.socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  const starting = () => hosted.connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
   hosted.call({ kind: 'message', text: '@say first', files: [], first: true });
   await until(() => starting().length > 0);
 
@@ -794,8 +795,8 @@ async function prompts(hosted: Hosted): Promise<string[]> {
   return (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt').map((entry) => String(entry.text));
 }
 
-function operations(hosted: Hosted, socket = hosted.house.sockets.at(-1)!): Record<string, unknown>[] {
-  return socket.notifications.filter((notification) => notification.type === 'turn');
+function operations(hosted: Hosted, connection = hosted.house.connections.at(-1)!): Record<string, unknown>[] {
+  return connection.notifications.filter((notification) => notification.type === 'turn');
 }
 
 function gated(hosted: Hosted, gate: string): () => Promise<void> {
@@ -863,7 +864,7 @@ it('keeps output a crashed Conversation process leaves behind out of the process
   const release = gated(hosted, 'replaced');
   hosted.call({ kind: 'message', text: '@linger late stale\n@exit 3', files: [], first: false });
   const lingering = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.lingering !== undefined))).lingering as number;
-  await until(() => hosted.socket.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+  await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
   hosted.call({ kind: 'message', text: '@gate replaced\n@say fresh', files: [], first: false });
   await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started'))[1]);
 
@@ -888,7 +889,7 @@ it("does not return a result for a waiting message, so a restarted Kit process r
   expect(hosted.results.map((result) => result.params.input)).not.toContain(waiting);
 
   await hosted.restart();
-  hosted.house.sockets.at(-1)!.send({
+  hosted.house.connections.at(-1)!.send({
     type: 'input',
     input_id: waiting,
     kind: 'message',
@@ -929,7 +930,7 @@ it('ends a turn failed as exited when its process exits during it, with the part
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'exited' });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: the CLI exited with 3/m);
-  await until(() => hosted.socket.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+  await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
 });
 
 it.each(['codex-acp', 'claude-agent-acp'])(
@@ -941,7 +942,7 @@ it.each(['codex-acp', 'claude-agent-acp'])(
     hosted.call({ kind: 'message', text: '@fail The agent process exited unexpectedly', files: [], first: true });
 
     expect(await ends(hosted, 1)).toEqual([{ failed: 'error' }]);
-    await until(() => hosted.socket.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+    await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
     hosted.call({ kind: 'message', text: '@say back', files: [], first: false, provider_session_id: session });
     expect(await ends(hosted, 2)).toEqual([{ failed: 'error' }, { text: 'back' }]);
     const log = await hosted.adapterLog();
@@ -1091,19 +1092,19 @@ it('writes the operations so far once when the owner becomes watched mid-turn, t
   ]);
 });
 
-it("writes the running turn's operations so far once on a socket that reopens watched, and none on one that reopens unwatched", async () => {
+it("writes the running turn's operations so far once on a Kit connection that reopens watched, and none on one that reopens unwatched", async () => {
   const hosted = await opened();
   hosted.watch(true);
   const release = gated(hosted, 'later');
   hosted.call({ kind: 'message', text: '@say one\n@gate later\n@say  two', files: [], first: true });
   const turn = (await until(() => operations(hosted)[0])).turn_id;
 
-  hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
-  const unwatched = await until(() => hosted.house.sockets[1]);
+  hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
+  const unwatched = await until(() => hosted.house.connections[1]);
   await settle();
   expect(operations(hosted, unwatched)).toEqual([]);
   unwatched.close(1001, 'shutting_down');
-  const watched = await until(() => hosted.house.sockets[2]);
+  const watched = await until(() => hosted.house.connections[2]);
   hosted.watch(true);
   await until(() => operations(hosted, watched)[0]);
   await release();
@@ -1156,7 +1157,7 @@ it("writes each operation of a turn as it happens, before House answers the turn
   ]);
 });
 
-it('calls restarted before it opens its socket', async () => {
+it('calls restarted before it opens its Kit connection', async () => {
   const hosted = await hostKit();
 
   const order = hosted.house.requests.map((request) => request.path);

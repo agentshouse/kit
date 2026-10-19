@@ -50,7 +50,9 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
   if (!claimed(lock)) {
     lock.close();
     const running = await runningResident();
-    throw new Error(`${running === null ? 'another Kit' : `Kit ${running}`} already runs this Environment from Kit home ${kitHome()}; stop it first to run another here`);
+    throw new Error(
+      `${running === null ? 'another Kit process' : `Kit process ${running}`} already runs this Environment from Kit home ${kitHome()}; stop it first to run another Kit process here`,
+    );
   }
   const server = createServer(async (request, response) => {
     try {

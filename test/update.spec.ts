@@ -30,7 +30,7 @@ async function serve(hosted: Hosted, script: string): Promise<{ bootstrap: strin
 }
 
 function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string; update_clis?: boolean }): void {
-  hosted.house.sockets.at(-1)!.send({
+  hosted.house.connections.at(-1)!.send({
     type: 'input',
     input_id: id,
     kind: 'update',
@@ -154,13 +154,13 @@ it('refuses the update with the exit status of a bootstrap that fails', async ()
   expect(await hosted.result('update-3')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
 });
 
-it('reruns no bootstrap for an update its reopened socket sends after the update ended, and returns its result again', async () => {
+it('reruns no bootstrap for an update its reopened Kit connection sends after the update ended, and returns its result again', async () => {
   const hosted = await hostKit();
   const pin = await serve(hosted, HELD);
   update(hosted, 'update-8', pin);
   await until(() => downloaded(hosted));
-  hosted.socket.close(1001, 'shutting_down');
-  await until(() => hosted.house.sockets[1]);
+  hosted.connection.close(1001, 'shutting_down');
+  await until(() => hosted.house.connections[1]);
   await writeFile(join(hosted.home, 'go'), '');
   await hosted.result('update-8');
   await until(async () => (await checkpoint(hosted)) === undefined);
@@ -226,19 +226,19 @@ async function restartAfter(hosted: Hosted, id: string, script: string): Promise
   expect(hosted.results).toHaveLength(0);
   const restarted = runKit(['resident'], { HOUSE_KIT_HOME: hosted.home, PATH: await fakeBin(hosted.home) });
   const result = await hosted.result(id);
-  await until(() => hosted.house.sockets[1]);
+  await until(() => hosted.house.connections[1]);
   process.kill(restarted.pid, 'SIGKILL');
   await restarted.exited;
   return result;
 }
 
-it('returns the result of the update once the Kit it restarted runs again', async () => {
+it('returns the result of the update once the restarted Kit process runs again', async () => {
   const hosted = await hostKit();
 
   expect(await restartAfter(hosted, 'update-4', KILL_RESIDENT)).toEqual({});
 });
 
-it('refuses an update whose bootstrap failed after it stopped the Kit', async () => {
+it('refuses an update whose bootstrap failed after it stopped the Kit process', async () => {
   const hosted = await hostKit();
 
   expect(await restartAfter(hosted, 'update-5', `${KILL_RESIDENT}exit 3\n`)).toEqual({
