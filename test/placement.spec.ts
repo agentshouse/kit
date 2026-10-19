@@ -196,14 +196,19 @@ it('replaces a container Environment with a new native one once the User confirm
   expect(await enrolled(host)).toBe('environment-two');
 });
 
-it('asks again after a switch whose login did not finish, and returning to the old placement keeps its Environment', async () => {
+it.each([
+  ['did not finish', 'login-fails'],
+  ['ended without connecting an Environment', 'login-ends'],
+] as const)('asks again after a switch whose login %s, and returning to the old placement keeps its Environment', async (_, mark) => {
   const host = await contained();
-  await host.mark('login-fails');
+  await host.mark(mark);
 
-  expect(host.terminal([], 'y\n').status).not.toBe(0);
+  const switched = host.terminal([], 'y\n');
+  expect(switched.status).not.toBe(0);
+  expect(switched.stdout).not.toContain('House Kit connected');
   expect(await enrolled(host)).toBe('environment-one');
   expect(await placement(host)).toBe('container\n');
-  await host.clear('login-fails');
+  await host.clear(mark);
   expect(host.run()).toMatchObject({ status: 1, stderr: expect.stringContaining(ENDS) });
   await host.forget();
 
