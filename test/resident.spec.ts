@@ -375,6 +375,49 @@ it('ends, left stopped, saying it must be installed again, when House refuses it
   expect(openings(house)).toBe(1);
 });
 
+const KIT_VERSION = (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+
+const COMMANDS = {
+  macos: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit",
+  linux: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit",
+  container: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit --container",
+  server: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit --linux",
+  windows: "& { try { $kit = irm bank.example/kit.ps1 } catch { throw 'failed' }; & ([scriptblock]::Create($kit)) @args }",
+};
+
+const NEWER = { status: 426, body: { error: { code: 'kit_newer_than_house', retryable: false, release: '0.2.0-c0ffee000001', commands: COMMANDS } } };
+
+it.each(['container', 'server', 'windows'] as const)(
+  "ends, left stopped, naming its version, the Building's Kit release and the %s install command House named, when House refuses its socket opening as newer than the Building",
+  async (placement) => {
+    const house = await startHouse();
+    house.route('UPGRADE', '/kit/stream', () => NEWER);
+    const home = await temporaryHome();
+    await writeFile(join(home, 'placement'), `${placement}\n`);
+    const kit = await resident(house, home);
+
+    expect(await ended(kit)).toBe(0);
+    expect(kit.stderr()).toContain(
+      `kit: Kit ${KIT_VERSION} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS[placement]}\n`,
+    );
+    expect(openings(house)).toBe(1);
+  },
+);
+
+it("ends, left stopped, naming the native install command House named for this computer, when House refuses any of its calls as newer than the Building", async () => {
+  const house = await startHouse();
+  house.route('POST', '/kit/restarted', () => NEWER);
+  const home = await temporaryHome();
+  await writeFile(join(home, 'placement'), 'native\n');
+  const kit = await resident(house, home);
+
+  expect(await ended(kit)).toBe(0);
+  expect(kit.stderr()).toContain(
+    `kit: Kit ${KIT_VERSION} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS.linux}\n`,
+  );
+  expect(openings(house)).toBe(0);
+});
+
 it('ends, left stopped, naming the install command its bootstrap recorded even outside its service, when House refuses any of its calls as too old', async () => {
   const house = await startHouse();
   house.route('POST', '/kit/restarted', () => TOO_OLD);

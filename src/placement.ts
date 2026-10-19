@@ -21,11 +21,23 @@ export async function updatesItself(): Promise<boolean> {
   return (await run('sudo', ['-n', 'true'], 10_000)).status === 0;
 }
 
-export function installCommand(): string | null {
+export type Machine = 'macos' | 'linux' | 'container' | 'server' | 'windows';
+
+function recorded(name: string): string | null {
   try {
-    return readFileSync(join(kitHome(), 'install-command'), 'utf8').trim();
+    return readFileSync(join(kitHome(), name), 'utf8').trim();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
+}
+
+export function installCommand(): string | null {
+  return recorded('install-command');
+}
+
+export function machine(): Machine {
+  const placed = recorded('placement');
+  if (placed === 'container' || placed === 'server' || placed === 'windows') return placed;
+  return process.platform === 'darwin' ? 'macos' : 'linux';
 }
