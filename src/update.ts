@@ -5,15 +5,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { run } from './clis.ts';
 import { kitHome, workspaceRoot } from './home.ts';
-import type { Ack, Inputs } from './inputs.ts';
+import type { Call, Calls, Result } from './calls.ts';
 import { service, throughSudo } from './placement.ts';
 
-export interface Update {
-  input_id: string;
-  bootstrap: string;
-  sha256: string;
-  update_clis?: boolean;
-}
+export type UpdateCall = Call<'update'>;
 
 function directory(): string {
   return join(kitHome(), 'update');
@@ -27,8 +22,8 @@ function outcome(): string {
   return join(directory(), 'outcome');
 }
 
-function unit(inputId: string): string {
-  return `house-kit-update-${inputId}`;
+function unit(callId: string): string {
+  return `house-kit-update-${callId}`;
 }
 
 function manager(): string[] {
@@ -51,7 +46,7 @@ function record(): string {
   return `outcome=$1; shift; bash "$0" "$@"; printf %s "$?" > "$outcome"; ${[...elevated(), 'systemctl', ...manager(), 'start', 'house-kit.service'].join(' ')}`;
 }
 
-async function pendingInput(): Promise<string | null> {
+async function pendingCall(): Promise<string | null> {
   try {
     return (JSON.parse(await readFile(pending(), 'utf8')) as { input_id: string }).input_id;
   } catch {
@@ -59,24 +54,24 @@ async function pendingInput(): Promise<string | null> {
   }
 }
 
-async function recorded(): Promise<Ack | null> {
+async function recorded(): Promise<Result | null> {
   const status = await readFile(outcome(), 'utf8').catch(() => null);
   if (status === null) return null;
   return status.trim() === '0' ? {} : { refused: `the Kit bootstrap exited with ${status.trim()}` };
 }
 
-async function forget(inputId: string): Promise<void> {
-  if ((await pendingInput()) !== inputId) return;
+async function forget(callId: string): Promise<void> {
+  if ((await pendingCall()) !== callId) return;
   await rm(pending(), { force: true });
   await rm(outcome(), { force: true });
 }
 
-async function finished(inputId: string): Promise<Ack> {
+async function finished(callId: string): Promise<Result> {
   for (;;) {
-    const ack = await recorded();
-    if (ack !== null) return ack;
+    const result = await recorded();
+    if (result !== null) return result;
     // systemctl answers at once, so ten seconds only bounds a stuck service manager.
-    if ((await run('systemctl', [...manager(), 'is-active', '--quiet', unit(inputId)], 10_000)).status !== 0) {
+    if ((await run('systemctl', [...manager(), 'is-active', '--quiet', unit(callId)], 10_000)).status !== 0) {
       return (await recorded()) ?? { refused: 'the Kit bootstrap did not finish' };
     }
     // The bootstrap runs for minutes, so checking each second sees its outcome within a second at little cost.
@@ -84,7 +79,7 @@ async function finished(inputId: string): Promise<Ack> {
   }
 }
 
-function rerun(script: string, inputId: string, flags: string[]): Promise<Ack | null> {
+function rerun(script: string, callId: string, flags: string[]): Promise<Result | null> {
   return new Promise((resolve) => {
     const [command, ...args] = [
       ...elevated(),
@@ -94,7 +89,7 @@ function rerun(script: string, inputId: string, flags: string[]): Promise<Ack | 
       '--wait',
       '--collect',
       '--quiet',
-      `--unit=${unit(inputId)}`,
+      `--unit=${unit(callId)}`,
       `--setenv=HOME=${homedir()}`,
       `--setenv=HOUSE_KIT_HOME=${kitHome()}`,
       '/bin/sh',
@@ -111,48 +106,48 @@ function rerun(script: string, inputId: string, flags: string[]): Promise<Ack | 
   });
 }
 
-export class Updates {
-  private readonly inputs: Inputs;
+export class KitUpdate {
+  private readonly calls: Calls;
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(inputs: Inputs) {
-    this.inputs = inputs;
+  constructor(calls: Calls) {
+    this.calls = calls;
   }
 
   async resumed(): Promise<void> {
-    const inputId = await pendingInput();
-    if (inputId === null) return;
-    await this.enqueue(inputId, () => finished(inputId));
+    const callId = await pendingCall();
+    if (callId === null) return;
+    await this.enqueue(callId, () => finished(callId));
   }
 
-  start(input: Update): void {
-    void this.enqueue(input.input_id, () => this.carry(input));
+  start(call: UpdateCall): void {
+    void this.enqueue(call.input_id, () => this.carry(call));
   }
 
-  private enqueue(inputId: string, work: () => Promise<Ack>): Promise<void> {
+  private enqueue(callId: string, work: () => Promise<Result>): Promise<void> {
     const before = this.queue;
-    const carried = this.inputs.carry(inputId, async () => {
+    const carried = this.calls.carry(callId, async () => {
       await before;
-      return { ack: await work(), acknowledged: () => forget(inputId) };
+      return { result: await work(), returned: () => forget(callId) };
     });
     this.queue = before.then(() => carried);
     return carried;
   }
 
-  private async carry(input: Update): Promise<Ack> {
-    if ((await pendingInput()) === input.input_id) return finished(input.input_id);
-    const answer = await fetch(input.bootstrap);
+  private async carry(call: UpdateCall): Promise<Result> {
+    if ((await pendingCall()) === call.input_id) return finished(call.input_id);
+    const answer = await fetch(call.bootstrap);
     if (!answer.ok) return { refused: `the Kit bootstrap could not be downloaded: ${answer.status}` };
     const script = Buffer.from(await answer.arrayBuffer());
-    if (createHash('sha256').update(script).digest('hex') !== input.sha256) {
+    if (createHash('sha256').update(script).digest('hex') !== call.sha256) {
       return { refused: 'the Kit bootstrap does not match its sha256' };
     }
     await mkdir(directory(), { recursive: true, mode: 0o700 });
     const path = join(directory(), 'connect-linux.sh');
     await writeFile(path, script, { mode: 0o700 });
     await rm(outcome(), { force: true });
-    await writeFile(pending(), `${JSON.stringify({ input_id: input.input_id })}\n`, { mode: 0o600 });
-    return (await rerun(path, input.input_id, input.update_clis ? ['--update-clis'] : [])) ?? (await recorded()) ?? {
+    await writeFile(pending(), `${JSON.stringify({ input_id: call.input_id })}\n`, { mode: 0o600 });
+    return (await rerun(path, call.input_id, call.update_clis ? ['--update-clis'] : [])) ?? (await recorded()) ?? {
       refused: 'the Kit bootstrap did not finish',
     };
   }

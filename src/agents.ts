@@ -3,7 +3,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
-import { CLIS, KIT_VERSION, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
+import { CLIS, KIT_RELEASE, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
 import { updatesItself } from './placement.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
@@ -438,7 +438,7 @@ export class Agents {
     const body = {
       os: await operatingSystem(),
       ...(form === undefined ? {} : { form }),
-      kit_version: KIT_VERSION,
+      kit_release: KIT_RELEASE,
       wire: KIT_WIRE,
       updates_itself: await updatesItself(),
       agent_base: agentBase(),

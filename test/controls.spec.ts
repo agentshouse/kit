@@ -3,31 +3,31 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until, type Answer } from './double.ts';
-import { hostKit, installHeld, lastInput, outcome, type Hosted } from './environment.ts';
+import { hostKit, installHeld, lastCall, outcome, type Hosted } from './environment.ts';
 import { alive, filesUnder } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/started'));
 
 async function opened(hosted: Hosted): Promise<string> {
-  hosted.input({ kind: 'open' });
-  return ((await hosted.ack(lastInput())) as { provider_session_id: string }).provider_session_id;
+  hosted.call({ kind: 'open' });
+  return ((await hosted.result(lastCall())) as { provider_session_id: string }).provider_session_id;
 }
 
 it('cancels the running turn on interrupt and keeps the process and session', async () => {
   const hosted = await hostKit();
   const session = await opened(hosted);
-  hosted.input({ kind: 'message', text: '@wait', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@wait', files: [], first: true });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
 
-  hosted.input({ kind: 'interrupt', turn_id: turn });
+  hosted.call({ kind: 'interrupt', turn_id: turn });
 
   const interrupted = await until(() => ended(hosted)[0]);
   expect(interrupted.params.turn).toBe(turn);
   expect(outcome(interrupted.body)).toEqual({ text: '' });
-  hosted.input({ kind: 'interrupt', turn_id: turn });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: '@say again', files: [], first: false });
+  hosted.call({ kind: 'interrupt', turn_id: turn });
+  await hosted.result(lastCall());
+  hosted.call({ kind: 'message', text: '@say again', files: [], first: false });
   await until(() => ended(hosted)[1]);
   const log = await hosted.adapterLog();
   expect(log.filter((entry) => entry.method === 'session/cancel')).toHaveLength(1);
@@ -36,7 +36,7 @@ it('cancels the running turn on interrupt and keeps the process and session', as
     session,
     session,
   ]);
-  expect(hosted.socket.frames.filter((frame) => frame.type === 'process')).toEqual([
+  expect(hosted.socket.notifications.filter((notification) => notification.type === 'process')).toEqual([
     { type: 'process', conversation_id: 'conversation-1', running: true },
   ]);
 });
@@ -44,21 +44,21 @@ it('cancels the running turn on interrupt and keeps the process and session', as
 it('kills the process and every process it started, and the next message resumes the session', async () => {
   const hosted = await hostKit();
   const session = await opened(hosted);
-  hosted.input({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
   const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
   const adapter = spawned.pid as number;
   expect(alive(spawned.spawned as number)).toBe(true);
 
-  hosted.input({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
   expect(alive(adapter)).toBe(false);
   await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
   expect(await until(() => ended(hosted)[0])).toMatchObject({ body: { failed: 'killed' } });
-  await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
+  await until(() => hosted.socket.notifications.find((notification) => notification.type === 'process' && notification.running === false));
 
-  hosted.input({ kind: 'message', provider_session_id: session, text: 'after', files: [], first: false });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'message', provider_session_id: session, text: 'after', files: [], first: false });
+  await hosted.result(lastCall());
   const resumed = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/resume'));
   expect(resumed.params).toMatchObject({ sessionId: session });
 });
@@ -66,19 +66,19 @@ it('kills the process and every process it started, and the next message resumes
 it('kills a process still opening its session and refuses the open, and the next message opens a new one', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-open'), '');
-  hosted.input({ kind: 'open' });
-  const open = lastInput();
+  hosted.call({ kind: 'open' });
+  const open = lastCall();
   const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
 
-  hosted.input({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
-  expect(await hosted.ack(open)).toEqual({ refused: 'the conversation was killed' });
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(await hosted.result(open)).toEqual({ refused: 'the conversation was killed' });
   expect(alive(spawned.pid as number)).toBe(false);
   await until(() => !alive(spawned.spawned as number));
   await rm(join(hosted.home, 'hold-open'));
-  hosted.input({ kind: 'message', text: '@say again', files: [], first: false });
-  expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
+  hosted.call({ kind: 'message', text: '@say again', files: [], first: false });
+  expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
 });
 
 it.each([
@@ -96,31 +96,31 @@ it.each([
     });
     onTestFinished(() => release({ body }));
     hosted.house.route('POST', path, () => held);
-    hosted.input({ kind: 'message', text: '@say hello', files, first: true });
-    const message = lastInput();
+    hosted.call({ kind: 'message', text: '@say hello', files, first: true });
+    const message = lastCall();
     await until(() => hosted.house.requests.find((request) => request.path === path));
 
-    hosted.input({ kind: 'kill' });
+    hosted.call({ kind: 'kill' });
 
-    expect(await hosted.ack(message)).toEqual({ refused: 'the conversation was killed' });
-    expect(await hosted.ack(lastInput())).toEqual({});
+    expect(await hosted.result(message)).toEqual({ refused: 'the conversation was killed' });
+    expect(await hosted.result(lastCall())).toEqual({});
     expect(alive(adapter)).toBe(false);
   },
 );
 
-it('refuses an open and acknowledges the kill at once while the Kit still installs the CLI the open needs', async () => {
+it('refuses an open and returns the result of the kill at once while the Kit still installs the CLI the open needs', async () => {
   const hosted = await hostKit();
   await installHeld(hosted);
-  hosted.input({ kind: 'open', agent_id: 'agent-2' });
-  const open = lastInput();
+  hosted.call({ kind: 'open', agent_id: 'agent-2' });
+  const open = lastCall();
 
-  hosted.input({ kind: 'kill', agent_id: 'agent-2' });
+  hosted.call({ kind: 'kill', agent_id: 'agent-2' });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
-  expect(await hosted.ack(open)).toEqual({ refused: 'the conversation was killed' });
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(await hosted.result(open)).toEqual({ refused: 'the conversation was killed' });
 });
 
-it('refuses an open and acknowledges the kill at once while House holds the credential for its process', async () => {
+it('refuses an open and returns the result of the kill at once while House holds the credential for its process', async () => {
   const hosted = await hostKit();
   let release!: (answer: Answer) => void;
   const held = new Promise<Answer>((resolve) => {
@@ -128,14 +128,14 @@ it('refuses an open and acknowledges the kill at once while House holds the cred
   });
   onTestFinished(() => release({ status: 503, body: {} }));
   hosted.house.route('POST', '/kit/conversations/:conversation/credential', () => held);
-  hosted.input({ kind: 'open' });
-  const open = lastInput();
+  hosted.call({ kind: 'open' });
+  const open = lastCall();
   await until(() => hosted.house.requests.find((request) => request.path === '/kit/conversations/conversation-1/credential'));
 
-  hosted.input({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
-  expect(await hosted.ack(open)).toEqual({ refused: 'the conversation was killed' });
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(await hosted.result(open)).toEqual({ refused: 'the conversation was killed' });
 });
 
 it.each(['SIGTERM', 'SIGINT'] as const)(
@@ -143,10 +143,10 @@ it.each(['SIGTERM', 'SIGINT'] as const)(
   async (signal) => {
     const hosted = await hostKit();
     await opened(hosted);
-    hosted.input({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
+    hosted.call({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
     await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
     await writeFile(join(hosted.home, 'hold-open'), '');
-    hosted.input({ kind: 'open', conversation_id: 'conversation-2' });
+    hosted.call({ kind: 'open', conversation_id: 'conversation-2' });
     const spawned = await until(async () => {
       const entries = (await hosted.adapterLog()).filter((entry) => entry.spawned);
       return entries.length === 2 ? entries : undefined;
@@ -163,7 +163,7 @@ it.each(['SIGTERM', 'SIGINT'] as const)(
 
 it('kills a background job its crashed process left behind when SIGTERM stops it', async () => {
   const hosted = await hostKit();
-  hosted.input({ kind: 'message', text: '@spawn\n@exit 1', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@spawn\n@exit 1', files: [], first: false });
   const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
   await until(() => ended(hosted)[0]);
   expect(alive(spawned.pid as number)).toBe(false);
@@ -179,12 +179,12 @@ it('kills a background job its crashed process left behind when SIGTERM stops it
 it('sets an option on the running process and relays the commands and options the CLI sends', async () => {
   const hosted = await hostKit();
   await opened(hosted);
-  const options = (frame: Record<string, unknown>) => frame.type === 'options';
-  await until(() => hosted.socket.frames.find(options));
+  const options = (notification: Record<string, unknown>) => notification.type === 'options';
+  await until(() => hosted.socket.notifications.find(options));
 
-  hosted.input({ kind: 'option', option: 'model', value: 'other-model' });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: '@commands\n@config', files: [], first: true });
+  hosted.call({ kind: 'option', option: 'model', value: 'other-model' });
+  await hosted.result(lastCall());
+  hosted.call({ kind: 'message', text: '@commands\n@config', files: [], first: true });
   await until(() => ended(hosted)[0]);
 
   const log = await hosted.adapterLog();
@@ -192,14 +192,14 @@ it('sets an option on the running process and relays the commands and options th
     configId: 'model',
     value: 'other-model',
   });
-  const current = (frame: Record<string, unknown>) =>
-    Object.fromEntries((frame.options as { id: string; currentValue: string }[]).map((option) => [option.id, option.currentValue]));
-  expect(hosted.socket.frames.filter(options).map(current)).toEqual([
+  const current = (notification: Record<string, unknown>) =>
+    Object.fromEntries((notification.options as { id: string; currentValue: string }[]).map((option) => [option.id, option.currentValue]));
+  expect(hosted.socket.notifications.filter(options).map(current)).toEqual([
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'route-model', reasoning_effort: 'route-effort' },
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'route-effort' },
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'from-cli' },
   ]);
-  expect(hosted.socket.frames.filter((frame) => frame.type === 'commands')).toEqual([
+  expect(hosted.socket.notifications.filter((notification) => notification.type === 'commands')).toEqual([
     {
       type: 'commands',
       conversation_id: 'conversation-1',
@@ -211,7 +211,7 @@ it('sets an option on the running process and relays the commands and options th
 it('reports a question with the CLI request unchanged and passes the answer back unchanged', async () => {
   const hosted = await hostKit();
   await opened(hosted);
-  hosted.input({ kind: 'message', text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@ask', files: [], first: true });
 
   const question = await until(() => hosted.interactions[0]);
   const turn = started(hosted)[0]!.params.turn;
@@ -234,11 +234,11 @@ it('reports a question with the CLI request unchanged and passes the answer back
   const { interaction_id } = question.body as { interaction_id: string };
   const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
 
-  hosted.input({ kind: 'answer', interaction_id, response });
+  hosted.call({ kind: 'answer', interaction_id, response });
 
   expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: JSON.stringify(response) });
-  hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'cancelled' } } });
-  expect(await hosted.ack(lastInput())).toEqual({});
+  hosted.call({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'cancelled' } } });
+  expect(await hosted.result(lastCall())).toEqual({});
 });
 
 it('resumes the session for an answer no process waits on and writes the question and the answer as one message whose turn reaches House', async () => {
@@ -253,9 +253,9 @@ it('resumes the session for an answer no process waits on and writes the questio
   };
   const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
 
-  hosted.input({ kind: 'answer', provider_session_id: 'session-stored', interaction_id: 'interaction-1', request, response });
+  hosted.call({ kind: 'answer', provider_session_id: 'session-stored', interaction_id: 'interaction-1', request, response });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
   expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'ok' });
   expect(started(hosted)).toHaveLength(1);
   const log = await hosted.adapterLog();
@@ -285,7 +285,7 @@ it.each([0, 2500])(
     await opened(hosted);
     await until(() => hosted.idles[1]);
     // The CLI stops waiting 300 ms in and ends its turn 1.5 s later, before a late report lands.
-    hosted.input({ kind: 'message', text: '@abandon 300\n@hold 1500\n@say after', files: [], first: true });
+    hosted.call({ kind: 'message', text: '@abandon 300\n@hold 1500\n@say after', files: [], first: true });
     await until(() => hosted.idles[2]);
 
     const abandoned = async () => (await hosted.adapterLog()).filter((entry) => 'abandoned' in entry);
@@ -293,9 +293,9 @@ it.each([0, 2500])(
     expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'after' });
     const { interaction_id, request } = (await until(() => hosted.interactions[0])).body as { interaction_id: string; request: unknown };
     const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
-    hosted.input({ kind: 'answer', interaction_id, request, response });
+    hosted.call({ kind: 'answer', interaction_id, request, response });
 
-    expect(await hosted.ack(lastInput())).toEqual({});
+    expect(await hosted.result(lastCall())).toEqual({});
     expect(outcome((await until(() => ended(hosted)[1])).body)).toEqual({ text: 'ok' });
     await until(() => hosted.idles[3]);
     expect(await abandoned()).toHaveLength(1);
@@ -319,7 +319,7 @@ it('passes a secret from the held secret-input request to the CLI and keeps it n
   });
   await opened(hosted);
 
-  hosted.input({
+  hosted.call({
     kind: 'message',
     text: `@secret ${createHash('sha256').update(secret).digest('hex')}`,
     files: [],
@@ -337,5 +337,5 @@ it('passes a secret from the held secret-input request to the CLI and keeps it n
     expect(await readFile(file, 'utf8')).not.toContain(secret);
   }
   expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(secret);
-  expect(JSON.stringify(hosted.socket.frames)).not.toContain(secret);
+  expect(JSON.stringify(hosted.socket.notifications)).not.toContain(secret);
 });

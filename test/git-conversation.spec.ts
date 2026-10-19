@@ -17,7 +17,7 @@ const EXPIRED = 'expired: this has expired; read the files again and start over\
 
 async function shell(hosted: Hosted, command: string, conversation = 'conversation-1', agent = 'agent-1'): Promise<Shelled> {
   const before = (await hosted.adapterLog()).filter((entry) => 'sh' in entry).length;
-  hosted.input({ kind: 'message', conversation_id: conversation, agent_id: agent, text: `@sh ${command}`, files: [], first: false });
+  hosted.call({ kind: 'message', conversation_id: conversation, agent_id: agent, text: `@sh ${command}`, files: [], first: false });
   return until(async () => (await hosted.adapterLog()).filter((entry) => 'sh' in entry)[before] as unknown as Shelled | undefined);
 }
 
@@ -140,7 +140,7 @@ it("fetches House's changes onto the House ref from a Conversation process", asy
 it("names each Local copy, house fetch before work and house push after in a conversation's first prompt", async () => {
   const { hosted, room } = await copied();
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 
   const prompt = await until(async () =>
     (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
@@ -160,7 +160,7 @@ it("leaves a Room an authority change drops out of a conversation's first prompt
 
   hosted.socket.send({ type: 'authority_changed', rooms: [room.ref] });
   await until(() => selections() > asked);
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 
   const prompt = await until(async () =>
     (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
@@ -335,7 +335,7 @@ it('names the copies a fetch is still reading in a first prompt that arrives mea
   const fetched = rooms.fetch([room]);
   await until(() => hosted.house.requests.some((request) => request.path === '/kit/door/bootstrap'));
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
   // Three tenths of a second let the message reach the Kit while the copy it reads is still held.
   await new Promise((resolve) => setTimeout(resolve, 300));
   release();

@@ -17,7 +17,7 @@ export async function published(): Promise<string> {
   const script = join(home, 'connect-linux.sh');
   await writeFile(
     script,
-    (await readFile(LINUX, 'utf8')).replace('__IMAGE_DIGEST__', 'a'.repeat(64)).replace('__KIT_VERSION__', PUBLISHED_VERSION),
+    (await readFile(LINUX, 'utf8')).replace('__IMAGE_DIGEST__', 'a'.repeat(64)).replace('__KIT_RELEASE__', PUBLISHED_VERSION),
   );
   return script;
 }

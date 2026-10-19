@@ -117,7 +117,7 @@ it('pins in its package only the Codex and Claude Code adapters, no CLI and no G
   expect(Object.keys({ ...KIT_PACKAGE.dependencies, ...PINNED }).join(' ')).not.toMatch(/grok|@openai\/codex|claude-code/);
 });
 
-it('installs the pinned adapter of each named CLI that has one, and of one a later work frame names', async () => {
+it('installs the pinned adapter of each named CLI that has one, and of one a later work_available notification names', async () => {
   desired = ['codex-acp', 'grok-build'];
   await start();
 
@@ -148,7 +148,7 @@ it("installs a pinned adapter from a read-only home, keeping npm's cache in Kit 
   expect((await stat(join(home, 'npm-cache'))).isDirectory()).toBe(true);
 });
 
-it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit version, its wire, whether it updates itself and its transcription engine', async () => {
+it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit release, its wire, whether it updates itself and its transcription engine', async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -158,7 +158,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
   expect(report).toEqual({
     os: expect.stringMatching(/\S/),
     ...('form' in report ? { form: expect.stringMatching(/^(laptop|desktop|server)$/) } : {}),
-    kit_version: KIT_PACKAGE.version,
+    kit_release: KIT_PACKAGE.version,
     wire: 2,
     updates_itself: false,
     agent_base: '/agents/house/agents',
@@ -255,7 +255,7 @@ it('installs a chosen CLI the login shell does not find though its profile print
   expect(await logged('curl.log')).toEqual(['https://claude.ai/install.sh']);
 });
 
-it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work frame", async () => {
+it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work_available notification", async () => {
   desired = ['codex-acp', 'claude-agent-acp'];
   await start(async () => {
     await rm(join(userBin(home), 'claude'));
@@ -350,7 +350,7 @@ it('reports a CLI below its minimum with the version found and the minimum, and 
   expect(await probes()).toBe(0);
 });
 
-it('reads a CLI below its minimum again at a later work frame and reports the release the User updated it to', async () => {
+it('reads a CLI below its minimum again at a later work_available notification and reports the release the User updated it to', async () => {
   desired = ['codex-acp'];
   await start(async () => {
     placeUserCli(userBin(home), 'codex-acp', '0.150.0');

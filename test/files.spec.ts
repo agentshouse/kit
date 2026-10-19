@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { hostKit, lastCall, type Hosted } from './environment.ts';
 
 const STORED: Record<string, { name: string; content: Buffer }> = {
   'version-1': { name: 'notes.txt', content: Buffer.from('first file\n') },
@@ -40,12 +40,12 @@ const described = Object.entries(STORED).map(([version, file]) => ({
 it("places a message's files under .house/files/<message id>/ with their stored bytes, each its own, and lists their paths", async () => {
   const hosted = await hostKit();
   serveFiles(hosted);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
 
-  hosted.input({ kind: 'message', text: 'read these', files: described, first: false });
+  hosted.call({ kind: 'message', text: 'read these', files: described, first: false });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
   const paths = Object.entries(STORED).map(([version, file]) =>
     join(hosted.workingDirectory, '.house', 'files', 'message-1', version, file.name),
   );
@@ -82,12 +82,12 @@ it("places a message's file once House answers its original after a refusal Hous
       },
     };
   });
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
 
-  hosted.input({ kind: 'message', text: 'read this', files: [described[0]!], first: false });
+  hosted.call({ kind: 'message', text: 'read this', files: [described[0]!], first: false });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
   const path = join(hosted.workingDirectory, '.house', 'files', 'message-1', 'version-1', 'notes.txt');
   expect(await readFile(path)).toEqual(STORED['version-1']!.content);
 });
@@ -98,9 +98,9 @@ it('refuses a message with files for a launch directory that does not exist and 
   const hosted = await hostKit([{ working_directory: directory }]);
   serveFiles(hosted);
 
-  hosted.input({ kind: 'message', text: 'read these', files: described, first: true });
+  hosted.call({ kind: 'message', text: 'read these', files: described, first: true });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining(directory) });
+  expect(await hosted.result(lastCall())).toEqual({ refused: expect.stringContaining(directory) });
   await expect(stat(directory)).rejects.toThrow('ENOENT');
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toEqual([]);
 });
@@ -108,12 +108,12 @@ it('refuses a message with files for a launch directory that does not exist and 
 it('refuses a message whose file does not match the SHA-256 House sent with it, and places none of it', async () => {
   const hosted = await hostKit();
   serveFiles(hosted);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
 
-  hosted.input({ kind: 'message', text: 'read this', files: [{ ...described[1]!, sha256: described[0]!.sha256 }], first: false });
+  hosted.call({ kind: 'message', text: 'read this', files: [{ ...described[1]!, sha256: described[0]!.sha256 }], first: false });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('data.bin did not arrive whole') });
+  expect(await hosted.result(lastCall())).toEqual({ refused: expect.stringContaining('data.bin did not arrive whole') });
   await expect(stat(join(hosted.workingDirectory, '.house', 'files', 'message-1', 'version-2', 'data.bin'))).rejects.toThrow('ENOENT');
 });
 
@@ -128,14 +128,14 @@ it("reports downloading a message's files as its start-up step while they take o
     await held;
     return { bytes: { type: 'application/octet-stream', content: STORED[received.params.version!]!.content } };
   });
-  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+  const starting = () => hosted.socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
 
-  hosted.input({ kind: 'message', text: 'read this', files: [described[0]!], first: true });
+  hosted.call({ kind: 'message', text: 'read this', files: [described[0]!], first: true });
 
   await until(() => starting().length > 0);
   expect(starting()).toEqual(['files']);
   release();
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   await until(() => starting().at(-1) === null);
   expect(starting()).toEqual(['files', 'session', null]);
 });
@@ -151,13 +151,13 @@ it("reports downloading the files of a message that arrived during a turn once t
     await held;
     return { bytes: { type: 'application/octet-stream', content: STORED[received.params.version!]!.content } };
   });
-  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
+  const starting = () => hosted.socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
   const ended = () => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-  hosted.input({ kind: 'message', text: '@gate turn-ends', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@gate turn-ends', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   const before = starting().length;
 
-  hosted.input({ kind: 'message', text: 'read this', files: [described[0]!], first: false });
+  hosted.call({ kind: 'message', text: 'read this', files: [described[0]!], first: false });
   await until(() => hosted.house.requests.find((received) => received.path.startsWith('/bytes/')));
   await writeFile(join(hosted.home, 'turn-ends'), '');
   await until(() => ended().length === 1);

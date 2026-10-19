@@ -76,7 +76,7 @@ $findings += @(Test-Updates $true $false @() 0 @(
 ) @('claude could not be updated; it stays at 2.1.200'))
 $script:FailingCli = ''
 $script:ListStatus = 7
-$findings += @(Test-Updates $true $false @() 0 @() @('House Kit could not read the agent CLIs, so it updated none; docker run ended with status 7'))
+$findings += @(Test-Updates $true $false @() 0 @() @('Kit could not read the agent CLIs, so it updated none; docker run ended with status 7'))
 $script:ListStatus = 0
 $configuration = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-Configuration' }, $true)
 . ([scriptblock]::Create($configuration.Extent.Text))

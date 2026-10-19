@@ -828,6 +828,6 @@ it('keeps the stored credential and names the cause when the stopped service doe
   const login = await loginWithCode(house, home, path);
 
   expect(await login.exited).toBe(0);
-  expect(login.stderr()).toBe('kit: the House Kit service could not be started: Failed to start house-kit.service: Unit house-kit.service is masked.\n');
+  expect(login.stderr()).toBe('kit: the Kit service could not be started: Failed to start house-kit.service: Unit house-kit.service is masked.\n');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_code_credential' });
 });

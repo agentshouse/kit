@@ -1,4 +1,4 @@
-import { KIT_VERSION } from './clis.ts';
+import { KIT_RELEASE } from './clis.ts';
 import { forgetRejected } from './home.ts';
 import { installCommand } from './placement.ts';
 import { killDescendants } from './scope.ts';
@@ -25,7 +25,7 @@ export function updateRequired(): never {
 }
 
 export function newerThanHouse(release: string, command: string): never {
-  end(`Kit ${KIT_VERSION} is newer than this Building supports (Kit ${release}). Install Kit ${release}: ${command}`);
+  end(`Kit ${KIT_RELEASE} is newer than this Building supports (Kit ${release}). Install Kit ${release}: ${command}`);
 }
 
 export async function signInAgain(rejected: string): Promise<never> {

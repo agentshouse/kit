@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { conversationCredential, hostKit, lastInput, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
+import { conversationCredential, hostKit, lastCall, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
 import { alive } from './kit.ts';
 
 const DOCUMENT = '# How we work\n\nWork goes into the Room it belongs to.';
@@ -37,7 +37,7 @@ it('begins a first message with the source line, the house line, the file line, 
   hosted.tools.shell = () => shelled(DOCUMENT);
 
   for (const [index] of kinds.entries()) {
-    hosted.input({
+    hosted.call({
       kind: 'message',
       conversation_id: `conversation-${index + 1}`,
       agent_id: `agent-${index + 1}`,
@@ -69,9 +69,9 @@ it.each([
   const hosted = await hostKit();
   hosted.tools.shell = () => answer;
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   expect(blockOf((await prompts(hosted, 1))[0]!)).toEqual([SOURCE_LINE, HOUSE_LINE, FILE_LINE, READ_LINE, REQUEST_LINE, '', 'Be useful.']);
 });
 
@@ -79,9 +79,9 @@ it('refuses a first message with the cause when House cannot answer the document
   const hosted = await hostKit();
   hosted.house.route('POST', '/', () => ({ status: 503, body: { error: { code: 'house_unavailable', retryable: false } } }));
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('503') });
+  expect(await hosted.result(lastCall())).toEqual({ refused: expect.stringContaining('503') });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
 });
 
@@ -92,9 +92,9 @@ it.each([
   const hosted = await hostKit();
   hosted.tools.shell = () => answer;
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining(code) });
+  expect(await hosted.result(lastCall())).toEqual({ refused: expect.stringContaining(code) });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
 });
 
@@ -108,7 +108,7 @@ it('reads a document longer than one House reply whole by following its continua
       ? shelled(shown, 0, [`shell: output_cut 32769 of ${Buffer.byteLength(document)} bytes; continue with: ${next}`])
       : shelled(Buffer.from(document).subarray(32_769).toString());
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 
   expect(blockOf((await prompts(hosted, 1))[0]!).slice(5).join('\n')).toBe(`\nBe useful.\n\n${document.replace(/\n$/, '')}`);
   expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
@@ -124,7 +124,7 @@ it('keeps document lines that read like House diagnostics, in one reply and afte
       ? shelled(first, 0, [`shell: output_cut ${first.length} of ${(first + rest).length} bytes; continue with: ${next}`])
       : shelled(rest);
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 
   expect(blockOf((await prompts(hosted, 1))[0]!).slice(5).join('\n')).toBe(`\nBe useful.\n\n${first}${rest}`);
   expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
@@ -133,25 +133,25 @@ it('keeps document lines that read like House diagnostics, in one reply and afte
 it('stops the session it opened for a first message it refuses, so the next message opens one and reports it', async () => {
   const hosted = await hostKit();
   hosted.tools.shell = () => refused('house_unavailable');
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
+  await hosted.result(lastCall());
   hosted.tools.shell = () => shelled(DOCUMENT);
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: true });
 
-  const acked = await hosted.ack(lastInput());
+  const returned = await hosted.result(lastCall());
   const opened = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new');
   expect(opened).toHaveLength(2);
-  expect(acked).toEqual({ provider_session_id: opened[1]!.sessionId });
+  expect(returned).toEqual({ provider_session_id: opened[1]!.sessionId });
   expect(alive(opened[0]!.pid as number)).toBe(false);
 });
 
 it('carries no block on a message that is not first', async () => {
   const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
 
-  hosted.input({ kind: 'message', text: 'hello', files: [], first: false });
+  hosted.call({ kind: 'message', text: 'hello', files: [], first: false });
 
   expect((await prompts(hosted, 1))[0]).toEqual([{ type: 'text', text: 'hello' }]);
   expect(hosted.mcp).toEqual([]);

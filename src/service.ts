@@ -15,7 +15,7 @@ function start(command: string, args: string[]): void {
   const started = manage(command, args);
   if (started.status === 0) return;
   const cause = started.error?.message ?? (started.stderr.trim() || `${command} exited with ${started.status ?? 'a signal'}`);
-  throw new Error(`the House Kit service could not be started: ${cause}`);
+  throw new Error(`the Kit service could not be started: ${cause}`);
 }
 
 function physical(path: string): string {

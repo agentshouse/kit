@@ -375,7 +375,7 @@ it('ends, left stopped, saying it must be installed again, when House refuses it
   expect(openings(house)).toBe(1);
 });
 
-const KIT_VERSION = (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+const KIT_RELEASE = (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
 const COMMANDS = {
   macos: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit",
@@ -398,7 +398,7 @@ it.each(['container', 'server', 'windows'] as const)(
 
     expect(await ended(kit)).toBe(0);
     expect(kit.stderr()).toContain(
-      `kit: Kit ${KIT_VERSION} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS[placement]}\n`,
+      `kit: Kit ${KIT_RELEASE} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS[placement]}\n`,
     );
     expect(openings(house)).toBe(1);
   },
@@ -413,7 +413,7 @@ it("ends, left stopped, naming the native install command House named for this c
 
   expect(await ended(kit)).toBe(0);
   expect(kit.stderr()).toContain(
-    `kit: Kit ${KIT_VERSION} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS.linux}\n`,
+    `kit: Kit ${KIT_RELEASE} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS.linux}\n`,
   );
   expect(openings(house)).toBe(0);
 });

@@ -24,7 +24,7 @@ import { relayed } from './relay.ts';
 
 const BRANCH = 'main';
 const PROVENANCE = '_provenance';
-const IDENTITY = { GIT_COMMITTER_NAME: 'House Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
+const IDENTITY = { GIT_COMMITTER_NAME: 'Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
 
 interface Manifest {
   parent: string | null;
@@ -291,7 +291,7 @@ async function ignoreRules(repository: string, writable: readonly string[], copy
   await ruled(
     join(repository, '.gitignore'),
     [
-      '# House Kit writes this file and .ignore. The paths below are read-only House',
+      '# Kit writes this file and .ignore. The paths below are read-only House',
       '# content: Git does not track them, and House refuses a change to them even',
       '# when this file is edited or a path is force-added.',
       '/.gitignore',
@@ -309,7 +309,7 @@ async function ignoreRules(repository: string, writable: readonly string[], copy
   await ruled(
     join(repository, '.ignore'),
     [
-      '# House Kit writes this file so native search still reads the read-only House',
+      '# Kit writes this file so native search still reads the read-only House',
       '# content that .gitignore keeps out of Git.',
       `!${PROVENANCE}`,
       ...[...house, ...granted].map((rule) => `!${rule}`),
@@ -563,7 +563,7 @@ export class LocalCopies {
     const read = await this.read(handle);
     if (read === null) throw new Error('House serves nothing of it to copy');
     const repository = join(localCopies(), 'rooms', read.anchor);
-    if (await exists(repository)) throw new Error(`${repository} already exists and House Kit leaves it as it is`);
+    if (await exists(repository)) throw new Error(`${repository} already exists and Kit leaves it as it is`);
     const staging = join(dirname(repository), `.${randomUUID()}`);
     await mkdir(staging, { recursive: true });
     let house: string;

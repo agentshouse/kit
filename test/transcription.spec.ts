@@ -6,7 +6,7 @@ import { beforeAll, expect, it } from 'vitest';
 import { cacheArtifacts, pinnedArtifacts } from './curl.ts';
 import { until } from './double.ts';
 import type { TranscriptionReport } from '../src/transcription.ts';
-import { hostKit, hostMac, lastInput, opened, type Hosted, type Hosting } from './environment.ts';
+import { hostKit, hostMac, lastCall, opened, type Hosted, type Hosting } from './environment.ts';
 import { alive, stop } from './kit.ts';
 
 interface Sent {
@@ -120,9 +120,9 @@ it('follows each audio path with its transcript in the prompt and leaves every o
     { name: 'untyped', media_type: null, content: Buffer.from('no media type\n') },
   ]);
 
-  hosted.input({ kind: 'message', text: 'listen to these', files: described, first: false });
+  hosted.call({ kind: 'message', text: 'listen to these', files: described, first: false });
 
-  expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
+  expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
   const lines = await prompted(hosted, 0);
   expect(lines).toEqual([
     'listen to these',
@@ -141,7 +141,7 @@ it.each([['en.ogg', 'audio/ogg'], ['en.webm', 'audio/webm'], ['en.m4a', 'audio/m
     const hosted = await transcribing();
     const { described, paths } = sent(hosted, [{ name, media_type: mediaType, content: fixture(name) }]);
 
-    hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+    hosted.call({ kind: 'message', text: 'listen', files: described, first: false });
 
     expect(await prompted(hosted, 0)).toEqual(['listen', paths[0], expect.stringMatching(ENGLISH)]);
   },
@@ -165,7 +165,7 @@ it('downloads the pinned engine, decoder and model into Kit home at its start, b
   }
 
   const { described, paths } = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
-  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+  hosted.call({ kind: 'message', text: 'listen', files: described, first: false });
 
   expect(await prompted(hosted, 0)).toEqual(['listen', paths[0], expect.stringMatching(RUSSIAN)]);
   expect(await downloads(hosted)).toHaveLength(3);
@@ -182,7 +182,7 @@ it('deletes the three artifacts when the setting turns off, keeps a later audio 
   await settled(hosted, { installed: false, failure: null }, reports);
   expect(existsSync(directory)).toBe(false);
   const off = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
-  hosted.input({ kind: 'message', text: 'off', files: off.described, first: false });
+  hosted.call({ kind: 'message', text: 'off', files: off.described, first: false });
   expect(await prompted(hosted, 0)).toEqual(['off', off.paths[0]]);
   expect(await downloads(hosted)).toHaveLength(3);
 
@@ -193,7 +193,7 @@ it('deletes the three artifacts when the setting turns off, keeps a later audio 
   expect(await downloads(hosted)).toHaveLength(6);
   expect(await readdir(directory)).toHaveLength(3);
   const on = sent(hosted, [{ name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') }]);
-  hosted.input({ kind: 'message', text: 'on', files: on.described, first: false });
+  hosted.call({ kind: 'message', text: 'on', files: on.described, first: false });
   expect(await prompted(hosted, 1)).toEqual(['on', on.paths[0], expect.stringMatching(ENGLISH)]);
 });
 
@@ -251,8 +251,8 @@ it('refuses an artifact that does not match its hash, installs nothing, reports 
   expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
   const tried = (await downloads(hosted)).length;
   const first = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
-  hosted.input({ kind: 'message', text: 'first', files: first.described, first: false });
-  expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
+  hosted.call({ kind: 'message', text: 'first', files: first.described, first: false });
+  expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
   expect(await prompted(hosted, 0)).toEqual(['first', first.paths[0]]);
 
   const reads = desiredReads(hosted);
@@ -270,7 +270,7 @@ it('refuses an artifact that does not match its hash, installs nothing, reports 
   hosted.transcribe(true);
   await settled(hosted, { installed: true, failure: null }, again);
   const second = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
-  hosted.input({ kind: 'message', text: 'second', files: second.described, first: false });
+  hosted.call({ kind: 'message', text: 'second', files: second.described, first: false });
 
   expect(await prompted(hosted, 1)).toEqual(['second', second.paths[0], expect.stringMatching(RUSSIAN)]);
 });
@@ -282,7 +282,7 @@ it('keeps the bare path of an audio file it cannot decode', async () => {
     { name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') },
   ]);
 
-  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+  hosted.call({ kind: 'message', text: 'listen', files: described, first: false });
 
   expect(await prompted(hosted, 0)).toEqual(['listen', paths[0], paths[1], expect.stringMatching(ENGLISH)]);
 });
@@ -292,7 +292,7 @@ it('runs the engine on half the CPUs the Environment grants, so work beside it d
   await opened(hosted);
   const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(60) }]);
 
-  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+  hosted.call({ kind: 'message', text: 'listen', files: described, first: false });
 
   // Thirty seconds cover the engine starting on a loaded runner.
   const engine = await until(() => engines(hosted)[0], 30_000);
@@ -307,13 +307,13 @@ it('reports no idle while a transcription runs and reports idle once it has ende
   await until(() => hosted.idles[1]);
   const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(240) }]);
 
-  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
-  const message = lastInput();
+  hosted.call({ kind: 'message', text: 'listen', files: described, first: false });
+  const message = lastCall();
 
   // Thirty seconds cover the engine starting on a loaded runner.
   stop(await until(() => engines(hosted)[0], 30_000));
 
-  await hosted.ack(message);
+  await hosted.result(message);
   const idled = hosted.house.requests.indexOf(await until(() => hosted.idles[2]));
   expect(idled).toBeGreaterThan(hosted.house.requests.findIndex((request) => request.path === `/kit/inputs/${message}/ack`));
 });
@@ -337,17 +337,17 @@ it(
       most = Math.max(most, running.length);
     }, 20);
 
-    hosted.input({ kind: 'message', conversation_id: 'conversation-1', text: 'first', files: [files.described[0]], first: false });
-    const first = lastInput();
+    hosted.call({ kind: 'message', conversation_id: 'conversation-1', text: 'first', files: [files.described[0]], first: false });
+    const first = lastCall();
     // Thirty seconds cover the first engine starting on a loaded runner.
     await until(() => engines(hosted)[0], 30_000);
-    hosted.input({ kind: 'message', conversation_id: 'conversation-2', text: 'second', files: [files.described[1]], first: false });
-    const second = lastInput();
+    hosted.call({ kind: 'message', conversation_id: 'conversation-2', text: 'second', files: [files.described[1]], first: false });
+    const second = lastCall();
 
     try {
-      const acked = (input: string) => hosted.acks.some((ack) => ack.params.input === input);
+      const returned = (call: string) => hosted.results.some((result) => result.params.input === call);
       // A minute covers transcribing both samples one after the other.
-      await until(() => acked(first) && acked(second), 60_000);
+      await until(() => returned(first) && returned(second), 60_000);
     } finally {
       clearInterval(sampling);
     }
@@ -362,20 +362,20 @@ it(
 it('ends a running transcription on an interrupt and writes the message with its bare path once the interrupt has cancelled the turn', async () => {
   const hosted = await transcribing();
   await opened(hosted);
-  hosted.input({ kind: 'message', text: '@wait', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@wait', files: [], first: false });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
   const { described, paths } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(240) }]);
   // The prompt holds two seconds, so the interrupt reaches the turn while it still runs.
-  hosted.input({ kind: 'message', text: '@hold 2000', files: described, first: false });
-  const message = lastInput();
+  hosted.call({ kind: 'message', text: '@hold 2000', files: described, first: false });
+  const message = lastCall();
   // Thirty seconds cover the engine starting on a loaded runner.
   const engine = await until(() => engines(hosted)[0], 30_000);
 
-  hosted.input({ kind: 'interrupt', turn_id: turn });
+  hosted.call({ kind: 'interrupt', turn_id: turn });
 
   // Three seconds cover the Kit ending the engine it started.
   await until(() => !alive(engine), 3000);
-  expect(await hosted.ack(message)).toEqual({});
+  expect(await hosted.result(message)).toEqual({});
   expect(await prompted(hosted, 1)).toEqual(['@hold 2000', paths[0]]);
   await until(() => ended(hosted)[0]);
   const log = await hosted.adapterLog();
@@ -387,33 +387,33 @@ it('ends a running transcription on a kill and refuses its message', async () =>
   const hosted = await transcribing();
   await opened(hosted);
   const { described } = sent(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(240) }]);
-  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
-  const message = lastInput();
+  hosted.call({ kind: 'message', text: 'listen', files: described, first: false });
+  const message = lastCall();
   // Thirty seconds cover the engine starting on a loaded runner.
   const engine = await until(() => engines(hosted)[0], 30_000);
 
-  hosted.input({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
 
   // Three seconds cover the Kit ending the engine it started.
   await until(() => !alive(engine), 3000);
-  expect(await hosted.ack(message)).toEqual({ refused: 'the conversation was killed' });
+  expect(await hosted.result(message)).toEqual({ refused: 'the conversation was killed' });
 });
 
 it('transcribes the next audio file after an interrupt whose cancel could not reach the CLI', async () => {
   const hosted = await transcribing();
   await opened(hosted);
-  hosted.input({ kind: 'message', text: '@deaf\n@gate exit\n@exit 0', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@deaf\n@gate exit\n@exit 0', files: [], first: false });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
   await until(async () => (await hosted.adapterLog()).some((entry) => entry.deaf === true));
-  hosted.input({ kind: 'interrupt', turn_id: turn });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'interrupt', turn_id: turn });
+  hosted.call({ kind: 'interrupt', turn_id: turn });
+  await hosted.result(lastCall());
+  hosted.call({ kind: 'interrupt', turn_id: turn });
   await until(() => hosted.kit.stderr().includes('EPIPE'));
   const { described } = sent(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
 
-  hosted.input({ kind: 'message', text: 'listen', files: described, first: false });
+  hosted.call({ kind: 'message', text: 'listen', files: described, first: false });
   await writeFile(join(hosted.home, 'exit'), '');
 
-  await hosted.ack(lastInput());
+  await hosted.result(lastCall());
   expect(hosted.kit.stderr()).not.toContain('voice.ogg was not transcribed');
 });

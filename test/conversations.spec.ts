@@ -4,15 +4,15 @@ import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
 import { settle, until } from './double.ts';
-import { conversationCredential, hostKit, installHeld, lastInput, outcome, userBin, type Hosted } from './environment.ts';
+import { conversationCredential, hostKit, installHeld, lastCall, outcome, userBin, type Hosted } from './environment.ts';
 import { alive, placeHostKey, temporaryHome } from './kit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])("leaves %s on its own default model and effort when the Profile names neither", async (kind) => {
   const hosted = await hostKit([{ kind, model: null, effort: null }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   const log = await hosted.adapterLog();
   expect(log.some((entry) => entry.method === 'session/new')).toBe(true);
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => (entry.params as { configId: string }).configId)).toEqual(
@@ -23,12 +23,12 @@ it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])("leaves %s on its own d
 it('opens the provider session in the launch directory with the route settings and full access and reports its id', async () => {
   const hosted = await hostKit([{ model: 'gpt-route', effort: 'high' }]);
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  const ack = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  const result = (await hosted.result(lastCall())) as { provider_session_id: string };
   const log = await hosted.adapterLog();
   const opened = log.find((entry) => entry.method === 'session/new')!;
-  expect(ack).toEqual({ provider_session_id: opened.sessionId });
+  expect(result).toEqual({ provider_session_id: opened.sessionId });
   expect(opened.params).toMatchObject({ cwd: hosted.workingDirectory });
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     { sessionId: opened.sessionId, configId: 'mode', value: 'agent-full-access' },
@@ -36,7 +36,7 @@ it('opens the provider session in the launch directory with the route settings a
     { sessionId: opened.sessionId, configId: 'reasoning_effort', value: 'high' },
   ]);
   expect(new Set(log.map((entry) => entry.pid)).size).toBe(1);
-  expect(hosted.socket.frames).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
+  expect(hosted.socket.notifications).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
 });
 
 it("opens the session in the mode the route names, and Codex runs each `house` on the conversation's PATH outside its sandbox whenever its shell starts it", async () => {
@@ -47,9 +47,9 @@ it("opens the session in the mode the route names, and Codex runs each `house` o
     },
   });
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  await hosted.ack(lastInput());
+  await hosted.result(lastCall());
   const log = await hosted.adapterLog();
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'read-only' }),
@@ -66,9 +66,9 @@ it("opens the session in the mode the route names, and Codex runs each `house` o
 it('opens a Claude Code session in bypass permissions with `house` allowed in every mode and its sandbox open to unix sockets', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp', model: 'default', effort: null }]);
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  await hosted.ack(lastInput());
+  await hosted.result(lastCall());
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'initialize')!.env).toMatchObject({ IS_SANDBOX: '1' });
   expect(log.find((entry) => entry.method === 'session/new')!.params).toMatchObject({
@@ -90,9 +90,9 @@ it('opens a Claude Code session in bypass permissions with `house` allowed in ev
 it('starts Grok approving every tool, since it offers no mode', async () => {
   const hosted = await hostKit([{ kind: 'grok-build', model: 'grok-4.6', effort: null }]);
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  await hosted.ack(lastInput());
+  await hosted.result(lastCall());
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'initialize')!.argv).toEqual(
     expect.arrayContaining(['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio']),
@@ -105,10 +105,10 @@ it('starts Grok approving every tool, since it offers no mode', async () => {
 it("refuses the open in the Kit's words when the CLI does not take the route's effort, and logs the CLI's cause", async () => {
   const hosted = await hostKit([{ model: 'codex-instant', effort: 'high' }]);
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI refused the Agent's model, mode or effort" });
-  expect(hosted.socket.frames.filter((frame) => frame.type === 'process')).toEqual([]);
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI refused the Agent's model, mode or effort" });
+  expect(hosted.socket.notifications.filter((notification) => notification.type === 'process')).toEqual([]);
   expect(hosted.kit.stderr()).toContain('Unknown config option: thought_level');
 });
 
@@ -125,22 +125,22 @@ it('opens a conversation of an Agent House added after the Kit read its Agents',
   };
   hosted.house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['codex-acp'], routes: [added] } }));
 
-  hosted.input({ kind: 'open', agent_id: 'agent-2' });
+  hosted.call({ kind: 'open', agent_id: 'agent-2' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
 });
 
 it('opens a conversation of an Agent whose CLI House added once the Kit has installed that CLI', async () => {
   const hosted = await hostKit();
   const hold = await installHeld(hosted);
 
-  hosted.input({ kind: 'open', agent_id: 'agent-2' });
-  const open = lastInput();
+  hosted.call({ kind: 'open', agent_id: 'agent-2' });
+  const open = lastCall();
   // Half a second lets the open reach the held install before the spec releases it.
   await new Promise((resolve) => setTimeout(resolve, 500));
   await rm(hold);
 
-  expect(await hosted.ack(open)).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(open)).toEqual({ provider_session_id: expect.any(String) });
   expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')).toBeDefined();
 });
 
@@ -162,8 +162,8 @@ it('opens a conversation with the CLI its route named after House moved that Age
     body: { agents: ['codex-acp', 'grok-build'], routes: [route] },
   }));
   hosted.socket.send({ type: 'work_available', subject: 'agents' });
-  hosted.input({ kind: 'open', agent_id: agentId });
-  const open = lastInput();
+  hosted.call({ kind: 'open', agent_id: agentId });
+  const open = lastCall();
   await until(async () => (await stat(directory).catch(() => null))?.isDirectory());
   let moved = false;
   hosted.house.route('POST', '/kit/agents/desired', () => {
@@ -176,7 +176,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
   await new Promise((resolve) => setTimeout(resolve, 100));
   await rm(hold);
 
-  expect(await hosted.ack(open)).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(open)).toEqual({ provider_session_id: expect.any(String) });
 });
 
 it('opens a conversation with the launch settings House changed while the Kit was still reading them', async () => {
@@ -197,9 +197,9 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   });
 
   hosted.socket.send({ type: 'work_available', subject: 'agents' });
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
   expect(settings.map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'agent-full-access' }),
@@ -226,13 +226,13 @@ async function reportHeld(hosted: Hosted): Promise<void> {
 
 it('writes a message to a running process while the Kit is still reporting its CLIs', async () => {
   const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   await reportHeld(hosted);
 
-  hosted.input({ kind: 'message', text: '@say reached', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say reached', files: [], first: false });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
   const sent = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect(sent.text).toBe('@say reached');
 });
@@ -251,9 +251,9 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   hosted.house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['codex-acp'], routes: [changed] } }));
 
   hosted.socket.send({ type: 'work_available', subject: 'agents' });
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
   expect(settings.map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'agent-full-access' }),
@@ -267,9 +267,9 @@ it('creates an absent default launch directory beneath /agents/house/agents befo
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   const hosted = await hostKit([{ agent_id: agentId, working_directory: directory }]);
 
-  hosted.input({ kind: 'open', agent_id: agentId });
+  hosted.call({ kind: 'open', agent_id: agentId });
 
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   expect((await stat(directory)).isDirectory()).toBe(true);
   const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
   expect(opened.params).toMatchObject({ cwd: directory });
@@ -286,10 +286,10 @@ it('creates an absent default launch directory beneath the native workspace root
     { environment: { HOUSE_KIT_WORKSPACE: workspace } },
   );
 
-  hosted.input({ kind: 'open', agent_id: agentId });
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
-  hosted.input({ kind: 'open', agent_id: rootAgentId, conversation_id: 'conversation-2' });
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.any(String) });
+  hosted.call({ kind: 'open', agent_id: agentId });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
+  hosted.call({ kind: 'open', agent_id: rootAgentId, conversation_id: 'conversation-2' });
+  expect(await hosted.result(lastCall())).toEqual({ refused: expect.any(String) });
 
   expect((await stat(join(workspace, 'agents', agentId))).isDirectory()).toBe(true);
   await expect(stat(join(workspace, rootAgentId))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -301,9 +301,9 @@ it('creates an absent default launch directory beneath the native workspace root
 it('resumes the stored provider session for a message with no process and prompts it', async () => {
   const hosted = await hostKit();
 
-  hosted.input({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', files: [], first: false });
+  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', files: [], first: false });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
   const log = await until(async () => {
     const entries = await hosted.adapterLog();
     return entries.some((entry) => entry.method === 'session/prompt') ? entries : undefined;
@@ -322,9 +322,9 @@ it("reports a refused resume in the Kit's words, never the CLI's, and logs the C
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'refuse-resume'), '');
 
-  hosted.input({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', files: [], first: false });
+  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', files: [], first: false });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ did not start: the Agent's CLI could not resume this conversation: .*the session cannot be resumed/m);
 });
 
@@ -335,9 +335,9 @@ it.each([
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'signed-out'), '');
 
-  hosted.input({ kind: 'message', provider_session_id: stored, text: 'hello', files: [], first: stored === null });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: 'hello', files: [], first: stored === null });
 
-  expect(await hosted.ack(lastInput())).toEqual({
+  expect(await hosted.result(lastCall())).toEqual({
     refused: "the Agent's CLI is not signed in; sign it in on the Agent's machine",
   });
 });
@@ -345,9 +345,9 @@ it.each([
 it('reports the start-up step of a message whose session takes over a second to open, and its end before the turn starts', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting');
+  const starting = () => hosted.socket.notifications.filter((notification) => notification.type === 'starting');
 
-  hosted.input({ kind: 'message', text: '@say Hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say Hello', files: [], first: true });
 
   await until(() => starting().length > 0);
   expect(starting()).toEqual([{ type: 'starting', conversation_id: 'conversation-1', step: 'session' }]);
@@ -363,14 +363,14 @@ it('writes a start-up step that changed while its socket was closed once the soc
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
   const starting = (socket = hosted.house.sockets.at(-1)!) =>
-    socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
-  hosted.input({ kind: 'open' });
+    socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  hosted.call({ kind: 'open' });
   await until(() => starting().length > 0);
 
   hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
   await settle();
   await rm(join(hosted.home, 'hold-new'));
-  await hosted.ack(lastInput());
+  await hosted.result(lastCall());
   const reopened = await until(() => hosted.house.sockets[1]);
 
   await until(() => starting(reopened).length > 0);
@@ -382,8 +382,8 @@ it('writes the start-up step it is still in on a socket that reopens', async () 
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
   const starting = (socket = hosted.house.sockets.at(-1)!) =>
-    socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
-  hosted.input({ kind: 'open' });
+    socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  hosted.call({ kind: 'open' });
   await until(() => starting().length > 0);
 
   hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
@@ -393,7 +393,7 @@ it('writes the start-up step it is still in on a socket that reopens', async () 
   expect(starting(hosted.house.sockets[0])).toEqual(['session']);
   expect(starting(reopened)).toEqual(['session']);
   await rm(join(hosted.home, 'hold-new'));
-  await hosted.ack(lastInput());
+  await hosted.result(lastCall());
   await until(() => starting(reopened).length > 1);
   expect(starting(reopened)).toEqual(['session', null]);
 });
@@ -419,8 +419,8 @@ it("prepares a new conversation's first message, its file and House's instructio
     sha256: createHash('sha256').update(content).digest('hex'),
   };
 
-  hosted.input({ kind: 'open' });
-  hosted.input({ kind: 'message', text: '@say hello', files: [file], first: true });
+  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'message', text: '@say hello', files: [file], first: true });
 
   await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/new'));
   await until(() => hosted.house.requests.find((received) => received.path === '/kit/conversation/originals/get'));
@@ -455,15 +455,15 @@ it("prompts a first message with House's instructions through the CLI it starts 
     return { body: { credential: conversationCredential(request.params.conversation!) } };
   });
 
-  hosted.input({ kind: 'open' });
-  const open = lastInput();
-  hosted.input({ kind: 'message', text: '@say hello', files: [], first: true });
-  const message = lastInput();
+  hosted.call({ kind: 'open' });
+  const open = lastCall();
+  hosted.call({ kind: 'message', text: '@say hello', files: [], first: true });
+  const message = lastCall();
 
-  expect(await hosted.ack(open)).toEqual({ refused: "the Agent's CLI did not open a session" });
+  expect(await hosted.result(open)).toEqual({ refused: "the Agent's CLI did not open a session" });
   await rm(join(hosted.home, 'refuse-new'));
   release();
-  expect(await hosted.ack(message)).toHaveProperty('provider_session_id');
+  expect(await hosted.result(message)).toHaveProperty('provider_session_id');
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
     expect.stringMatching(/^From House:\n[^]*\n\nBe useful\.$/),
@@ -473,12 +473,12 @@ it("prompts a first message with House's instructions through the CLI it starts 
 
 it("writes a running process's facts, its latest commands and options included, again on a socket that reopens", async () => {
   const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: '@commands\n@config', files: [], first: true });
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
+  hosted.call({ kind: 'message', text: '@commands\n@config', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   const facts = (socket: (typeof hosted.house.sockets)[number]) =>
-    socket.frames.filter((frame) => ['process', 'commands', 'options'].includes(String(frame.type)));
+    socket.notifications.filter((notification) => ['process', 'commands', 'options'].includes(String(notification.type)));
   const before = facts(hosted.house.sockets[0]!);
 
   hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
@@ -487,8 +487,8 @@ it("writes a running process's facts, its latest commands and options included, 
   await until(() => facts(reopened).length === 3);
   expect(facts(reopened)).toEqual([
     { type: 'process', conversation_id: 'conversation-1', running: true },
-    before.findLast((frame) => frame.type === 'commands'),
-    before.findLast((frame) => frame.type === 'options'),
+    before.findLast((notification) => notification.type === 'commands'),
+    before.findLast((notification) => notification.type === 'options'),
   ]);
   expect(
     (facts(reopened)[2]!.options as { id: string; currentValue: string }[]).find((option) => option.id === 'reasoning_effort')!
@@ -498,11 +498,11 @@ it("writes a running process's facts, its latest commands and options included, 
 
 it('writes the exit of a process a closed socket did not take once the socket reopens', async () => {
   const hosted = await hostKit();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'message', text: '@gate exit-now\n@exit 1', files: [], first: true });
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
+  hosted.call({ kind: 'message', text: '@gate exit-now\n@exit 1', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  const processes = (socket: (typeof hosted.house.sockets)[number]) => socket.frames.filter((frame) => frame.type === 'process');
+  const processes = (socket: (typeof hosted.house.sockets)[number]) => socket.notifications.filter((notification) => notification.type === 'process');
 
   hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
   await settle();
@@ -518,11 +518,11 @@ it('writes the exit of a process a closed socket did not take once the socket re
 it('keeps the start-up step of the message being started while a later one arrives', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const starting = () => hosted.socket.frames.filter((frame) => frame.type === 'starting').map((frame) => frame.step);
-  hosted.input({ kind: 'message', text: '@say first', files: [], first: true });
+  const starting = () => hosted.socket.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  hosted.call({ kind: 'message', text: '@say first', files: [], first: true });
   await until(() => starting().length > 0);
 
-  hosted.input({ kind: 'message', text: '@say second', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say second', files: [], first: true });
   await settle();
   expect(starting()).toEqual(['session']);
 
@@ -531,40 +531,40 @@ it('keeps the start-up step of the message being started while a later one arriv
   expect(starting()).toEqual(['session', null]);
 });
 
-it('acknowledges a message it prompted before a restart lost its acknowledgement once House sends it again, and prompts it no second time', async () => {
+it('returns the result of a message it prompted before a restart lost its result once House sends it again, and prompts it no second time', async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
-  hosted.input({ kind: 'message', text: '@say once', files: [], first: true });
-  const sent = lastInput();
+  hosted.call({ kind: 'message', text: '@say once', files: [], first: true });
+  const sent = lastCall();
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   await hosted.restart();
   hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
-    hosted.acks.push(request);
+    hosted.results.push(request);
     return { body: {} };
   });
 
-  hosted.input({ kind: 'message', input_id: sent, text: '@say once', files: [], first: true });
+  hosted.call({ kind: 'message', input_id: sent, text: '@say once', files: [], first: true });
 
-  expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(sent)).toEqual({ provider_session_id: expect.any(String) });
   await settle();
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(1);
 });
 
-it('prompts no second time a message whose CLI asked a question about it before a restart lost its acknowledgement', async () => {
+it('prompts no second time a message whose CLI asked a question about it before a restart lost its result', async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
-  hosted.input({ kind: 'message', text: '@ask', files: [], first: true });
-  const sent = lastInput();
+  hosted.call({ kind: 'message', text: '@ask', files: [], first: true });
+  const sent = lastCall();
   await until(() => hosted.interactions[0]);
   await hosted.restart();
   hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
-    hosted.acks.push(request);
+    hosted.results.push(request);
     return { body: {} };
   });
 
-  hosted.input({ kind: 'message', input_id: sent, text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', input_id: sent, text: '@ask', files: [], first: true });
 
-  expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(sent)).toEqual({ provider_session_id: expect.any(String) });
   await settle();
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(1);
 });
@@ -572,18 +572,18 @@ it('prompts no second time a message whose CLI asked a question about it before 
 it('prompts again a message House sends again after a restart when its CLI showed nothing of it before the restart', async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
-  hosted.input({ kind: 'message', text: '@gate never-opened', files: [], first: true });
-  const sent = lastInput();
+  hosted.call({ kind: 'message', text: '@gate never-opened', files: [], first: true });
+  const sent = lastCall();
   await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   await hosted.restart();
   hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
-    hosted.acks.push(request);
+    hosted.results.push(request);
     return { body: {} };
   });
 
-  hosted.input({ kind: 'message', input_id: sent, text: '@say again', files: [], first: true });
+  hosted.call({ kind: 'message', input_id: sent, text: '@say again', files: [], first: true });
 
-  expect(await hosted.ack(sent)).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(sent)).toEqual({ provider_session_id: expect.any(String) });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(outcome(ended.body)).toEqual({ text: 'again' });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(2);
@@ -593,18 +593,18 @@ it.each(['a Kit restart', 'a kill'])(
   'starts the first message of a Claude Code conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
   async (ending) => {
     const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-    hosted.input({ kind: 'open' });
-    const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+    hosted.call({ kind: 'open' });
+    const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
     if (ending === 'a kill') {
-      hosted.input({ kind: 'kill' });
-      await hosted.ack(lastInput());
+      hosted.call({ kind: 'kill' });
+      await hosted.result(lastCall());
     } else {
       await hosted.restart();
     }
 
-    hosted.input({ kind: 'message', provider_session_id: stored, text: '@say started', files: [], first: true });
+    hosted.call({ kind: 'message', provider_session_id: stored, text: '@say started', files: [], first: true });
 
-    const { provider_session_id: opened } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+    const { provider_session_id: opened } = (await hosted.result(lastCall())) as { provider_session_id: string };
     expect(opened).not.toBe(stored);
     const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
     expect(outcome(ended.body)).toEqual({ text: 'started' });
@@ -615,13 +615,13 @@ it.each(['a Kit restart', 'a kill'])(
 
 it.each(['codex-acp', 'grok-build'])('resumes the session %s wrote when the conversation opened for its first message after a Kit restart', async (kind) => {
   const hosted = await hostKit([{ kind }]);
-  hosted.input({ kind: 'open' });
-  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  hosted.call({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   await hosted.restart();
 
-  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say resumed', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say resumed', files: [], first: true });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(outcome(ended.body)).toEqual({ text: 'resumed' });
   const log = await hosted.adapterLog();
@@ -629,59 +629,59 @@ it.each(['codex-acp', 'grok-build'])('resumes the session %s wrote when the conv
   expect(log.find((entry) => entry.method === 'session/prompt')!.params).toMatchObject({ sessionId: stored });
 });
 
-it('names the new session in the acknowledgement of every first message House sent before it learned of it', async () => {
+it('names the new session in the result of every first message House sent before it learned of it', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.input({ kind: 'open' });
-  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  hosted.call({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   await hosted.restart();
 
-  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say one', files: [], first: true });
-  const one = lastInput();
-  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say two', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say one', files: [], first: true });
+  const one = lastCall();
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say two', files: [], first: true });
 
-  const opened = ((await hosted.ack(one)) as { provider_session_id: string }).provider_session_id;
+  const opened = ((await hosted.result(one)) as { provider_session_id: string }).provider_session_id;
   expect(opened).not.toBe(stored);
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: opened });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: opened });
 });
 
 it('refuses a first message whose session this Kit already prompted when the CLI cannot resume it, and opens no other session', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.input({ kind: 'open' });
-  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
-  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say one', files: [], first: true });
+  hosted.call({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say one', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  hosted.input({ kind: 'kill' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'kill' });
+  await hosted.result(lastCall());
   await writeFile(join(hosted.home, 'refuse-resume'), '');
 
-  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say two', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say two', files: [], first: true });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
 });
 
 it('refuses a first message whose resume the CLI refuses for another reason than not holding the session, and opens no other session', async () => {
   const hosted = await hostKit([{ kind: 'codex-acp' }]);
-  hosted.input({ kind: 'open' });
-  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  hosted.call({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   await hosted.restart();
   await writeFile(join(hosted.home, 'refuse-resume'), '');
 
-  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say lost', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say lost', files: [], first: true });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
 });
 
 it('refuses a later message of a Claude Code conversation whose session the CLI cannot resume, and opens no other session', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.input({ kind: 'open' });
-  const { provider_session_id: stored } = (await hosted.ack(lastInput())) as { provider_session_id: string };
+  hosted.call({ kind: 'open' });
+  const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   await hosted.restart();
 
-  hosted.input({ kind: 'message', provider_session_id: stored, text: '@say lost', files: [], first: false });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say lost', files: [], first: false });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
 });
 
@@ -694,9 +694,9 @@ it("refuses a conversation whose CLI does not install in the Kit's words, never 
     },
   });
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
   expect(hosted.kit.stderr()).toContain('claude-agent-acp did not install: Claude installer private diagnostic\nChecksum verification failed');
 });
 
@@ -709,9 +709,9 @@ it("refuses a conversation whose connection cannot open in the Kit's words, and 
   await writeFile(sockets, '');
   onTestFinished(() => rm(sockets, { force: true }));
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: "the Agent's computer could not open this conversation; try again" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's computer could not open this conversation; try again" });
   expect(hosted.kit.stderr()).toContain(`${sockets} is not a directory`);
 });
 
@@ -724,12 +724,12 @@ it('opens a conversation whose credential House refused as retryable while it re
       : { body: { credential: conversationCredential(request.params.conversation!) } },
   );
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  const ack = await hosted.ack(lastInput());
-  expect(ack).toEqual({ provider_session_id: expect.any(String) });
+  const result = await hosted.result(lastCall());
+  expect(result).toEqual({ provider_session_id: expect.any(String) });
   const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
-  expect(ack).toEqual({ provider_session_id: opened.sessionId });
+  expect(result).toEqual({ provider_session_id: opened.sessionId });
   expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(3);
 });
 
@@ -743,9 +743,9 @@ it.each([
     body: { error: { code, retryable: false } },
   }));
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused });
+  expect(await hosted.result(lastCall())).toEqual({ refused });
   expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(1);
 });
 
@@ -753,15 +753,15 @@ const KINDS = ['codex-acp', 'claude-agent-acp', 'grok-build'];
 
 async function opened(kind = 'codex-acp'): Promise<Hosted> {
   const hosted = await hostKit([{ kind }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   return hosted;
 }
 
 it('relays Grok plan approval with its recorded request and the owner response', async () => {
   const hosted = await opened('grok-build');
 
-  hosted.input({ kind: 'message', text: '@replay grok-plan', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@replay grok-plan', files: [], first: false });
 
   const question = await until(() => hosted.interactions[0]);
   expect(question.body).toMatchObject({
@@ -775,7 +775,7 @@ it('relays Grok plan approval with its recorded request and the owner response',
     },
     secret: false,
   });
-  hosted.input({
+  hosted.call({
     kind: 'answer',
     interaction_id: (question.body as { interaction_id: string }).interaction_id,
     response: 'approved',
@@ -795,7 +795,7 @@ async function prompts(hosted: Hosted): Promise<string[]> {
 }
 
 function operations(hosted: Hosted, socket = hosted.house.sockets.at(-1)!): Record<string, unknown>[] {
-  return socket.frames.filter((frame) => frame.type === 'turn');
+  return socket.notifications.filter((notification) => notification.type === 'turn');
 }
 
 function gated(hosted: Hosted, gate: string): () => Promise<void> {
@@ -806,20 +806,20 @@ it.each(KINDS)("holds a message that reaches %s mid-turn until that turn ends, t
   const hosted = await opened(kind);
   const release = gated(hosted, 'first');
 
-  hosted.input({ kind: 'message', text: '@gate first\n@say first', files: [], first: false });
-  const first = lastInput();
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', files: [], first: false });
+  const first = lastCall();
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.input({ kind: 'message', text: '@say second', files: [], first: false });
-  const second = lastInput();
-  await hosted.ack(first);
+  hosted.call({ kind: 'message', text: '@say second', files: [], first: false });
+  const second = lastCall();
+  await hosted.result(first);
   await settle();
 
   expect(await prompts(hosted)).toEqual(['@gate first\n@say first']);
-  expect(hosted.acks.map((ack) => ack.params.input)).not.toContain(second);
+  expect(hosted.results.map((result) => result.params.input)).not.toContain(second);
   await release();
   expect(await ends(hosted, 2)).toEqual([{ text: 'first' }, { text: 'second' }]);
   expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say second']);
-  expect(await hosted.ack(second)).toEqual({});
+  expect(await hosted.result(second)).toEqual({});
   const [startedFirst, endedFirst, startedSecond] = hosted.turns.map((turn) => turn.path.split('/').at(-1));
   expect([startedFirst, endedFirst, startedSecond]).toEqual(['started', 'ended', 'started']);
 });
@@ -827,11 +827,11 @@ it.each(KINDS)("holds a message that reaches %s mid-turn until that turn ends, t
 it('sends two messages that arrived mid-turn as two turns in the order they arrived', async () => {
   const hosted = await opened();
   const release = gated(hosted, 'first');
-  hosted.input({ kind: 'message', text: '@gate first\n@say first', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', files: [], first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
 
-  hosted.input({ kind: 'message', text: '@say second', files: [], first: false });
-  hosted.input({ kind: 'message', text: '@say third', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say second', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say third', files: [], first: false });
   await settle();
   await release();
 
@@ -844,9 +844,9 @@ it('resumes the provider session for a message that waited while the process cra
   const hosted = await opened();
   const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
   const release = gated(hosted, 'crash');
-  hosted.input({ kind: 'message', text: '@gate crash\n@exit 3', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@gate crash\n@exit 3', files: [], first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.input({ kind: 'message', text: '@say after', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say after', files: [], first: false });
   await settle();
 
   await release();
@@ -861,10 +861,10 @@ it('keeps output a crashed Conversation process leaves behind out of the process
   const hosted = await opened();
   const late = gated(hosted, 'late');
   const release = gated(hosted, 'replaced');
-  hosted.input({ kind: 'message', text: '@linger late stale\n@exit 3', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@linger late stale\n@exit 3', files: [], first: false });
   const lingering = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.lingering !== undefined))).lingering as number;
-  await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
-  hosted.input({ kind: 'message', text: '@gate replaced\n@say fresh', files: [], first: false });
+  await until(() => hosted.socket.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+  hosted.call({ kind: 'message', text: '@gate replaced\n@say fresh', files: [], first: false });
   await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started'))[1]);
 
   await late();
@@ -877,15 +877,15 @@ it('keeps output a crashed Conversation process leaves behind out of the process
   expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(2);
 });
 
-it("does not acknowledge a waiting message, so a restarted Kit receives it again at its socket's opening and sends it as the next turn", async () => {
+it("does not return a result for a waiting message, so a restarted Kit process receives it again when its connection opens and sends it as the next turn", async () => {
   const hosted = await opened();
   const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
-  hosted.input({ kind: 'message', text: '@wait', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@wait', files: [], first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.input({ kind: 'message', text: '@say again', files: [], first: false });
-  const waiting = lastInput();
+  hosted.call({ kind: 'message', text: '@say again', files: [], first: false });
+  const waiting = lastCall();
   await settle();
-  expect(hosted.acks.map((ack) => ack.params.input)).not.toContain(waiting);
+  expect(hosted.results.map((result) => result.params.input)).not.toContain(waiting);
 
   await hosted.restart();
   hosted.house.sockets.at(-1)!.send({
@@ -900,7 +900,7 @@ it("does not acknowledge a waiting message, so a restarted Kit receives it again
     first: false,
   });
 
-  expect(await hosted.ack(waiting)).toEqual({});
+  expect(await hosted.result(waiting)).toEqual({});
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(outcome(ended.body)).toEqual({ text: 'again' });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/resume').map((entry) => entry.params)).toEqual([
@@ -911,7 +911,7 @@ it("does not acknowledge a waiting message, so a restarted Kit receives it again
 it('reports a turn start and end once each under the turn id Kit gave it', async () => {
   const hosted = await opened();
 
-  hosted.input({ kind: 'message', text: '@say Hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say Hello', files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   const started = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
@@ -924,12 +924,12 @@ it('reports a turn start and end once each under the turn id Kit gave it', async
 it('ends a turn failed as exited when its process exits during it, with the parts it had, and logs the exit only on its computer', async () => {
   const hosted = await opened();
 
-  hosted.input({ kind: 'message', text: '@say partial\n@exit 3', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say partial\n@exit 3', files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'exited' });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: the CLI exited with 3/m);
-  await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
+  await until(() => hosted.socket.notifications.find((notification) => notification.type === 'process' && notification.running === false));
 });
 
 it.each(['codex-acp', 'claude-agent-acp'])(
@@ -938,11 +938,11 @@ it.each(['codex-acp', 'claude-agent-acp'])(
     const hosted = await opened(kind);
     const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
 
-    hosted.input({ kind: 'message', text: '@fail The agent process exited unexpectedly', files: [], first: true });
+    hosted.call({ kind: 'message', text: '@fail The agent process exited unexpectedly', files: [], first: true });
 
     expect(await ends(hosted, 1)).toEqual([{ failed: 'error' }]);
-    await until(() => hosted.socket.frames.find((frame) => frame.type === 'process' && frame.running === false));
-    hosted.input({ kind: 'message', text: '@say back', files: [], first: false, provider_session_id: session });
+    await until(() => hosted.socket.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+    hosted.call({ kind: 'message', text: '@say back', files: [], first: false, provider_session_id: session });
     expect(await ends(hosted, 2)).toEqual([{ failed: 'error' }, { text: 'back' }]);
     const log = await hosted.adapterLog();
     expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: session });
@@ -953,9 +953,9 @@ it.each(['codex-acp', 'claude-agent-acp'])(
 it('sends a message that waited on a prompt the CLI failed to a fresh process that resumes the session', async () => {
   const hosted = await opened();
   const release = gated(hosted, 'failing');
-  hosted.input({ kind: 'message', text: '@gate failing\n@fail provider request failed', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@gate failing\n@fail provider request failed', files: [], first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.input({ kind: 'message', text: '@say next', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say next', files: [], first: false });
   await settle();
 
   await release();
@@ -969,7 +969,7 @@ it.each(KINDS)('ends a turn failed as an error when %s fails the prompt after it
   const hosted = await opened(kind);
 
   // The prompt fails a tenth of a second after the CLI ends its turn, so the failure arrives after the end.
-  hosted.input({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(outcome(ended.body)).toEqual({ failed: 'error' });
@@ -983,11 +983,11 @@ it('ends a turn failed as a limit when Claude answers its prompt with an exhaust
   const hosted = await opened('claude-agent-acp');
   const limit = "You've hit your weekly limit · resets 11am (UTC)";
 
-  hosted.input({ kind: 'message', text: `@sessionfailure ${limit}`, files: [], first: true });
+  hosted.call({ kind: 'message', text: `@sessionfailure ${limit}`, files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(ended.body).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: 'limit' });
-  hosted.input({ kind: 'message', text: '@say back', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say back', files: [], first: false });
   expect(await ends(hosted, 2)).toEqual([{ failed: 'limit' }, { text: 'back' }]);
   const log = await hosted.adapterLog();
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(1);
@@ -996,8 +996,8 @@ it('ends a turn failed as a limit when Claude answers its prompt with an exhaust
 it.each(KINDS)('ends a turn failed when %s refuses its prompt, with the explanation it gave or none', async (kind) => {
   const hosted = await opened(kind);
 
-  hosted.input({ kind: 'message', text: '@refusal', files: [], first: true });
-  hosted.input({ kind: 'message', text: '@say I cannot help with that.\n@refusal', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@refusal', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say I cannot help with that.\n@refusal', files: [], first: false });
 
   await ends(hosted, 2);
   expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended')).map((turn) => turn.body)).toEqual([
@@ -1009,7 +1009,7 @@ it.each(KINDS)('ends a turn failed when %s refuses its prompt, with the explanat
 it.each(KINDS)('ends a turn failed as signed out when %s answers its prompt that it needs a sign-in, its answer only in the Kit log', async (kind) => {
   const hosted = await opened(kind);
 
-  hosted.input({ kind: 'message', text: '@say partial\n@signedout', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say partial\n@signedout', files: [], first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'signed_out' });
@@ -1019,7 +1019,7 @@ it.each(KINDS)('ends a turn failed as signed out when %s answers its prompt that
 it('ends a turn when Claude answers its prompt without an end notice, as it does for a local command', async () => {
   const hosted = await opened('claude-agent-acp');
 
-  hosted.input({ kind: 'message', text: '@say local output\n@answer', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say local output\n@answer', files: [], first: true });
 
   expect(await ends(hosted, 1)).toEqual([{ text: 'local output' }]);
 });
@@ -1028,7 +1028,7 @@ it.each(KINDS)('reports a turn the CLI starts by itself like any other and ends 
   const hosted = await opened(kind);
 
   // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
-  hosted.input({ kind: 'message', text: '@later 500 by itself', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@later 500 by itself', files: [], first: true });
 
   expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: 'by itself' }]);
   const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
@@ -1040,7 +1040,7 @@ it.each(KINDS)('reports a turn %s starts by itself when it starts it, before it 
   const hosted = await opened(kind);
 
   // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
-  hosted.input({ kind: 'message', text: '@later 500', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@later 500', files: [], first: true });
 
   expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: '' }]);
 });
@@ -1048,9 +1048,9 @@ it.each(KINDS)('reports a turn %s starts by itself when it starts it, before it 
 it('writes no part operation while nobody watches, and still reports the turn start, its question and its finished parts', async () => {
   const hosted = await opened();
 
-  hosted.input({ kind: 'message', text: '@say Hello\n@tool Read the file\n@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say Hello\n@tool Read the file\n@ask', files: [], first: true });
   const question = await until(() => hosted.interactions[0]);
-  hosted.input({
+  hosted.call({
     kind: 'answer',
     interaction_id: (question.body as { interaction_id: string }).interaction_id,
     response: { outcome: { outcome: 'selected', optionId: 'allow' } },
@@ -1070,7 +1070,7 @@ it('writes the operations so far once when the owner becomes watched mid-turn, t
   const hosted = await opened();
   const release = gated(hosted, 'second');
   const stopAgain = gated(hosted, 'third');
-  hosted.input({ kind: 'message', text: '@say one\n@tool Read it\n@gate second\n@say two\n@gate third\n@say three', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say one\n@tool Read it\n@gate second\n@say two\n@gate third\n@say three', files: [], first: true });
   const turn = (await until(() => hosted.turns.find((report) => report.path.endsWith('/started')))).params.turn;
   await settle();
   expect(operations(hosted)).toEqual([]);
@@ -1095,7 +1095,7 @@ it("writes the running turn's operations so far once on a socket that reopens wa
   const hosted = await opened();
   hosted.watch(true);
   const release = gated(hosted, 'later');
-  hosted.input({ kind: 'message', text: '@say one\n@gate later\n@say  two', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say one\n@gate later\n@say  two', files: [], first: true });
   const turn = (await until(() => operations(hosted)[0])).turn_id;
 
   hosted.house.sockets.at(-1)!.close(1001, 'shutting_down');
@@ -1129,7 +1129,7 @@ it("writes each operation of a turn as it happens, before House answers the turn
     return { body: {} };
   });
 
-  hosted.input({ kind: 'message', text: '@say one\n@plan read|fix\n@say  two', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say one\n@plan read|fix\n@say  two', files: [], first: true });
   await until(() => operations(hosted).length === 3);
   expect(hosted.turns).toEqual([]);
   admit();
@@ -1178,8 +1178,8 @@ it('reads the CLI again only after the conversation it opens has had two quiet s
   const sessions = async () => (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new').length;
   const before = await sessions();
   const opening = Date.now();
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   await until(async () => (await sessions()) === before + 1);
   await until(async () => (await sessions()) === before + 2);
   expect(Date.now() - opening).toBeGreaterThanOrEqual(2_000);

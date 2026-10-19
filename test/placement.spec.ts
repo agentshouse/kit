@@ -106,12 +106,12 @@ it('tells a native computer run with the container choice that its Environment e
   expect(unattended).toEqual({
     status: 1,
     stdout: '',
-    stderr: `kit_bootstrap_refused: House Kit runs natively on this computer for Environment environment-one; installing it in a container ${ENDS}, so run this bootstrap in a terminal to confirm\n`,
+    stderr: `kit_bootstrap_refused: Kit runs natively on this computer for Environment environment-one; installing it in a container ${ENDS}, so run this bootstrap in a terminal to confirm\n`,
   });
   for (const typed of ['n\n', '\n']) {
     const declined = host.terminal(['--container'], typed);
     expect(declined.status).toBe(1);
-    expect(declined.stdout).toContain('House Kit is already installed natively. Replace it? [y/N]');
+    expect(declined.stdout).toContain('Kit is already installed natively. Replace it? [y/N]');
     expect(declined.stdout).toContain('kit_bootstrap_refused: Environment environment-one was kept; nothing changed');
   }
 
@@ -124,11 +124,11 @@ it('tells a container computer run natively that its Environment ends, and chang
 
   expect(host.run()).toMatchObject({
     status: 1,
-    stderr: `kit_bootstrap_refused: House Kit runs in a container on this computer for Environment environment-one; installing it natively ${ENDS}, so run this bootstrap in a terminal to confirm\n`,
+    stderr: `kit_bootstrap_refused: Kit runs in a container on this computer for Environment environment-one; installing it natively ${ENDS}, so run this bootstrap in a terminal to confirm\n`,
   });
   const declined = host.terminal([], 'no\n');
   expect(declined.status).toBe(1);
-  expect(declined.stdout).toContain('House Kit is already installed in a container. Replace it? [y/N]');
+  expect(declined.stdout).toContain('Kit is already installed in a container. Replace it? [y/N]');
 
   await containerUnchanged(host);
   await keptTheRest(host);
@@ -141,7 +141,7 @@ it('asks nothing before Docker answers when the container it would remove cannot
   expect(host.terminal([], 'y\n')).toMatchObject({ status: 1 });
   expect(host.run()).toMatchObject({
     status: 1,
-    stderr: expect.stringMatching(/^kit_bootstrap_refused: House Kit runs in the container house-kit for Environment environment-one and Docker does not answer: .*; start Docker so that container can be removed, then rerun this bootstrap\n$/),
+    stderr: expect.stringMatching(/^kit_bootstrap_refused: Kit runs in the container house-kit for Environment environment-one and Docker does not answer: .*; start Docker so that container can be removed, then rerun this bootstrap\n$/),
   });
 
   await host.clear('docker-down');
@@ -154,7 +154,7 @@ it('replaces a native Environment with a new one in the container once the User 
   const ran = host.terminal(['--container'], 'y\n');
 
   expect(ran.status).toBe(0);
-  expect(ran.stdout).toContain('House Kit connected for Environment environment-two.');
+  expect(ran.stdout).toContain('Kit connected for Environment environment-two.');
   expect(host.calls('systemctl')).toEqual(
     expect.arrayContaining(['--user stop house-kit.service', '--user --quiet disable house-kit.service', '--user daemon-reload']),
   );
@@ -177,7 +177,7 @@ it('replaces a container Environment with a new native one once the User confirm
   const ran = host.terminal([], 'yes\n');
 
   expect(ran.status).toBe(0);
-  expect(ran.stdout).toContain('House Kit connected for Environment environment-two.');
+  expect(ran.stdout).toContain('Kit connected for Environment environment-two.');
   expect(host.calls('docker')).toContain('rm -f house-kit');
   expect(host.calls('kit')).toEqual([
     `login HOUSE_KIT_HOME=${host.home}/.house-kit HOUSE_KIT_REPLACES=environment-one`,
@@ -191,7 +191,7 @@ it('replaces a container Environment with a new native one once the User confirm
   const again = host.run();
 
   expect(again).toMatchObject({ status: 0, stderr: '' });
-  expect(again.stdout).toContain('House Kit is already installed.');
+  expect(again.stdout).toContain('Kit is already installed.');
   expect(host.calls('kit')).toEqual([]);
   expect(await enrolled(host)).toBe('environment-two');
 });
@@ -233,7 +233,7 @@ it('forwards nothing into the container of a computer whose Kit runs natively', 
   expect(host.run(['--container', 'kit', 'login'])).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'kit_bootstrap_refused: House Kit runs natively on this computer; run kit there directly\n',
+    stderr: 'kit_bootstrap_refused: Kit runs natively on this computer; run kit there directly\n',
   });
   await nativeUnchanged(host);
 });
@@ -241,7 +241,7 @@ it('forwards nothing into the container of a computer whose Kit runs natively', 
 const UNIT = ['.config', 'systemd', 'user', 'house-kit.service'];
 
 function replacing(held: string, home: string): string {
-  return `kit_bootstrap_refused: House Kit runs on this computer with the Kit home ${held}; installing it with the Kit home ${home} replaces that Kit, so run this bootstrap in a terminal to confirm\n`;
+  return `kit_bootstrap_refused: Kit runs on this computer with the Kit home ${held}; installing it with the Kit home ${home} replaces that Kit, so run this bootstrap in a terminal to confirm\n`;
 }
 
 it.each([
@@ -255,7 +255,7 @@ it.each([
   expect(host.run(choice, added)).toEqual({ status: 1, stdout: '', stderr: replacing(held, added.HOUSE_KIT_HOME) });
   const declined = host.terminal(choice, 'n\n', added);
   expect(declined.status).toBe(1);
-  expect(declined.stdout).toContain(`House Kit is already installed on this computer with the Kit home ${held}. Replace it? [y/N]`);
+  expect(declined.stdout).toContain(`Kit is already installed on this computer with the Kit home ${held}. Replace it? [y/N]`);
   expect(declined.stdout).toContain(`kit_bootstrap_refused: the Kit home ${held} was kept; nothing changed`);
 
   await nativeUnchanged(host);
@@ -303,7 +303,7 @@ it('replaces a native Kit another Kit home runs once the User confirms, and leav
   const ran = host.terminal([], 'y\n', added);
 
   expect(ran.status).toBe(0);
-  expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
+  expect(ran.stdout).toContain('Kit connected for Environment environment-one.');
   expect(host.calls('kit')).toEqual([`login HOUSE_KIT_HOME=${added.HOUSE_KIT_HOME}`]);
   expect(await readFile(join(host.home, ...UNIT), 'utf8')).toContain(`Environment="HOUSE_KIT_HOME=${added.HOUSE_KIT_HOME}"`);
   expect(await enrolled(host)).toBe('environment-one');
@@ -320,7 +320,7 @@ it('replaces a server Kit another Kit home runs once the User confirms, restarti
   const ran = host.terminal(['--linux'], 'y\n', added);
 
   expect(ran.status).toBe(0);
-  expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
+  expect(ran.stdout).toContain('Kit connected for Environment environment-one.');
   expect(host.calls('systemctl')).toContain('stop house-kit.service');
   expect(host.calls('systemctl').at(-1)).toBe('--quiet enable --now house-kit.service');
   expect(await host.serverUnit()).toContain(`Environment="HOUSE_KIT_HOME=${added.HOUSE_KIT_HOME}"`);
@@ -334,7 +334,7 @@ it('changes nothing while Docker does not answer and the computer may run a cont
   const ran = host.run([], added);
 
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toMatch(/^kit_bootstrap_refused: Docker does not answer: .*; start Docker so this bootstrap can see whether House Kit runs in its container with another Kit home, then rerun this bootstrap\n$/u);
+  expect(ran.stderr).toMatch(/^kit_bootstrap_refused: Docker does not answer: .*; start Docker so this bootstrap can see whether Kit runs in its container with another Kit home, then rerun this bootstrap\n$/u);
   await absent(join(host.home, '.local'));
   await absent(added.HOUSE_KIT_HOME);
   await host.clear('docker-down');

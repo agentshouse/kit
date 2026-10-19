@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 import { BINS, RELEASES, placeUserCli } from './cli.ts';
 import { LOCATIONS } from './curl.ts';
 import { settle, until } from './double.ts';
-import { hostKit, lastInput, outcome, userBin, type Hosted } from './environment.ts';
+import { hostKit, lastCall, outcome, userBin, type Hosted } from './environment.ts';
 import { alive } from './kit.ts';
 
 const KINDS = Object.keys(BINS);
@@ -23,13 +23,13 @@ async function reportOf(hosted: Hosted, agents: unknown[]): Promise<void> {
 }
 
 async function open(hosted: Hosted, conversation: string, agent = 'agent-1'): Promise<unknown> {
-  hosted.input({ kind: 'open', conversation_id: conversation, agent_id: agent });
-  return hosted.ack(lastInput());
+  hosted.call({ kind: 'open', conversation_id: conversation, agent_id: agent });
+  return hosted.result(lastCall());
 }
 
 async function answer(hosted: Hosted, conversation: string, text: string): Promise<unknown> {
   const before = hosted.turns.length;
-  hosted.input({ kind: 'message', conversation_id: conversation, text, files: [], first: false });
+  hosted.call({ kind: 'message', conversation_id: conversation, text, files: [], first: false });
   const ended = await until(() =>
     hosted.turns
       .slice(before)
@@ -83,11 +83,11 @@ it('opens and resumes Claude sessions under the adapter entrypoint instead of an
     environment: { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' },
   });
   const opened = (await open(hosted, 'conversation-1')) as { provider_session_id: string };
-  hosted.input({ kind: 'kill' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'kill' });
+  await hosted.result(lastCall());
 
-  hosted.input({ kind: 'message', provider_session_id: opened.provider_session_id, text: '@say resumed', files: [], first: false });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'message', provider_session_id: opened.provider_session_id, text: '@say resumed', files: [], first: false });
+  await hosted.result(lastCall());
 
   const entries = await initialized(hosted);
   expect(entries).toHaveLength(2);

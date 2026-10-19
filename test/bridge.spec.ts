@@ -12,7 +12,7 @@ import {
   directed,
   helpLine,
   hostKit,
-  lastInput,
+  lastCall,
   LISTING,
   opened,
   runs,
@@ -47,7 +47,7 @@ it("reaches House with each process's own conversation credential and never show
     ['conversation-1', 'Bearer ahk_held'],
     ['conversation-2', 'Bearer ahk_held'],
   ]);
-  const seen = JSON.stringify([await hosted.adapterLog(), hosted.socket.frames]);
+  const seen = JSON.stringify([await hosted.adapterLog(), hosted.socket.notifications]);
   expect(seen).not.toContain(conversationCredential('conversation-1'));
   expect(seen).not.toContain(conversationCredential('conversation-2'));
 });
@@ -57,9 +57,9 @@ it.each([60, 120])("opens a conversation and answers its house calls under a Kit
   await mkdir(home);
   const hosted = await hostKit([{}], { home, skills: false });
 
-  hosted.input({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
+  hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   directed(hosted, '@house search {"query":"one"}');
   expect((await runs(hosted, 1)).map((ran) => ran.status)).toEqual([0]);
 });
@@ -306,8 +306,8 @@ it("closes the process's socket and Git proxy when the process exits", async () 
   expect(env.GIT_CONFIG_VALUE_0).toBe(`${hosted.house.origin}/app/`);
   expect(await answers(env.HOUSE_BRIDGE!)).toBe(true);
 
-  hosted.input({ kind: 'kill' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'kill' });
+  await hosted.result(lastCall());
 
   await until(() => !existsSync(env.HOUSE_BRIDGE!));
   expect(await answers(env.HOUSE_BRIDGE!)).toBe(false);

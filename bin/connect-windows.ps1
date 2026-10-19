@@ -133,7 +133,7 @@ function Initialize-DockerDesktop {
   $docker = Read-Docker
   if ($docker.Answers) { return $docker }
   if ($Forwarding) {
-    if (-not $location) { Stop-Bootstrap 'House Kit is not installed; run this bootstrap without arguments first' }
+    if (-not $location) { Stop-Bootstrap 'Kit is not installed; run this bootstrap without arguments first' }
     Stop-Bootstrap "Docker Desktop does not answer: $($docker.Cause); start Docker Desktop, then rerun this command"
   }
   Initialize-Wsl
@@ -248,12 +248,12 @@ function Set-Configuration {
 function Update-Clis {
   $ErrorActionPreference = 'Continue'
   $listed = @(& docker run --rm @Network --entrypoint node @Common $ClisMain)
-  if ($LASTEXITCODE -ne 0) { return "House Kit could not read the agent CLIs, so it updated none; docker run ended with status $LASTEXITCODE" }
+  if ($LASTEXITCODE -ne 0) { return "Kit could not read the agent CLIs, so it updated none; docker run ended with status $LASTEXITCODE" }
   foreach ($line in $listed) {
     $name, $path, $release, $minimum, $state = "$line".Split("`t")
     if (-not $UpdateClis) {
       if ($state -cne 'old' -or -not $Interactive) { continue }
-      $answer = Read-Host "$name $release is older than $minimum, the oldest this House Kit runs. Update it? [Y/n]"
+      $answer = Read-Host "$name $release is older than $minimum, the oldest this Kit runs. Update it? [Y/n]"
       if ($answer -and $answer -notmatch '^[Yy]') { continue }
     }
     Write-Host "Updating $name $release."
@@ -357,7 +357,7 @@ function Connect-Kit {
   if ($docker.Kernel -notlike '*WSL2*') { Stop-Bootstrap "Docker Desktop does not use its WSL 2 engine; turn on Use the WSL 2 based engine in its settings, then rerun this bootstrap" }
   if ($docker.Platform -ne 'linux/x86_64' -and $docker.Platform -ne 'linux/amd64') { Stop-Bootstrap "host linux/amd64 does not match Docker Desktop $($docker.Platform)" }
   if ($Forwarding) {
-    if (-not (Test-Container)) { Stop-Bootstrap 'House Kit is not installed; run this bootstrap without arguments first' }
+    if (-not (Test-Container)) { Stop-Bootstrap 'Kit is not installed; run this bootstrap without arguments first' }
     if ((Read-Inspect '{{.Config.Image}}') -cne $Image) { Stop-Bootstrap 'an installed Kit uses a different image; rerun this bootstrap without arguments to update it' }
     $Workspace = Read-Source '/agents/house'
     if ($Workspace -notmatch '^[A-Za-z]:\\' -or -not (Test-Path -LiteralPath $Workspace -PathType Container)) {
@@ -376,7 +376,7 @@ function Connect-Kit {
     if (-not $enrolment.ContainsKey('house')) { Stop-Bootstrap 'the stored credential names no House origin' }
     if ($HouseSelected -and $House -cne $enrolment['house']) {
       if ($Forwarding -or -not $Interactive) { Stop-Bootstrap 'this Environment is bound to another House origin' }
-      $answer = Read-Host 'House Kit is already installed for another account. Replace it? [y/N]'
+      $answer = Read-Host 'Kit is already installed for another account. Replace it? [y/N]'
       if ($answer -notmatch '^(y|yes)$') { Stop-Bootstrap "Environment $($enrolment['environment']) was kept; nothing changed" }
       Clear-KitHome
       $enrolment = @{}
@@ -434,15 +434,15 @@ function Connect-Kit {
     if ($installed -cne "$Image on-failure") {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
-      Write-Host 'House Kit updated.'
+      Write-Host 'Kit updated.'
     } elseif ((Read-Inspect '{{.State.Running}}') -cne 'true') {
       Invoke-Docker start $Name | Out-Null
-      Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
+      Write-Host "Kit restarted for Environment $($enrolment['environment'])."
     } elseif ($configured) {
       Invoke-Docker restart $Name | Out-Null
-      Write-Host "House Kit restarted for Environment $($enrolment['environment'])."
+      Write-Host "Kit restarted for Environment $($enrolment['environment'])."
     } else {
-      Write-Host 'House Kit is already installed.'
+      Write-Host 'Kit is already installed.'
     }
     if ($Rooms.Count -gt 0) { Invoke-Login $Rooms }
     if ($failed.Count -gt 0) { Stop-Bootstrap ($failed -join '; ') }
@@ -459,7 +459,7 @@ function Connect-Kit {
   }
   $failed = @(Update-Clis)
   Start-Resident
-  Write-Host "House Kit connected for Environment $($enrolment['environment'])."
+  Write-Host "Kit connected for Environment $($enrolment['environment'])."
   if ($alreadyConnected -and $Rooms.Count -gt 0) { Invoke-Login $Rooms }
   if ($failed.Count -gt 0) { Stop-Bootstrap ($failed -join '; ') }
 }

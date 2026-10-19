@@ -31,9 +31,9 @@ export type Route = (request: Received) => Answer | Promise<Answer>;
 export interface KitSocket {
   headers: IncomingHttpHeaders;
   protocol: string;
-  frames: Record<string, unknown>[];
+  notifications: Record<string, unknown>[];
   socket: WebSocket;
-  send(frame: Record<string, unknown>): void;
+  send(notification: Record<string, unknown>): void;
   close(code: number, reason: string): void;
 }
 
@@ -54,7 +54,7 @@ export interface House {
   requests: Received[];
   sockets: KitSocket[];
   route(method: string, path: string, handler: Route): void;
-  holdStreams(): () => void;
+  holdConnections(): () => void;
 }
 
 function matched(pattern: string, path: string): Record<string, string> | null {
@@ -199,12 +199,12 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
       const held: KitSocket = {
         headers: request.headers,
         protocol: socket.protocol,
-        frames: [],
+        notifications: [],
         socket,
-        send: (frame) => socket.send(JSON.stringify(frame)),
+        send: (notification) => socket.send(JSON.stringify(notification)),
         close: (code, reason) => socket.close(code, reason),
       };
-      socket.on('message', (data) => held.frames.push(JSON.parse(String(data)) as Record<string, unknown>));
+      socket.on('message', (data) => held.notifications.push(JSON.parse(String(data)) as Record<string, unknown>));
       sockets.push(held);
     });
   });
@@ -223,7 +223,7 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
     route: (method, pattern, handler) => {
       routes.unshift({ method, pattern, handler });
     },
-    holdStreams: () => {
+    holdConnections: () => {
       let release!: () => void;
       streamsHeld = new Promise<void>((resolve) => {
         release = resolve;

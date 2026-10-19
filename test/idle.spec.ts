@@ -6,14 +6,14 @@ import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { RELEASES } from './cli.ts';
 import { settle, until } from './double.ts';
-import { hostKit, installHeld, lastInput, type Hosted } from './environment.ts';
+import { hostKit, installHeld, lastCall, type Hosted } from './environment.ts';
 import { alive, stop } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 
 async function opened(hosted: Hosted): Promise<void> {
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
 }
 
 it('reports idle once no turn runs and not while a turn runs without waiting on a question', async () => {
@@ -23,7 +23,7 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
   await until(() => hosted.idles[1]);
 
   // The turn holds a second and a half, outlasting the half second the spec watches for an idle report.
-  hosted.input({ kind: 'message', text: '@hold 1500\n@say done', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@hold 1500\n@say done', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   await settle();
   expect(hosted.idles).toHaveLength(2);
@@ -47,7 +47,7 @@ it("reports idle while an exited process of the Kit's user waits to be reaped be
   };
   await until(() => children().some((child) => /\) Z /.test(readFileSync(`/proc/${child}/stat`, 'utf8'))));
 
-  hosted.input({ kind: 'message', text: '@say done', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say done', files: [], first: true });
 
   await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);
@@ -88,7 +88,7 @@ it('restarts with a failure at its first idle moment after a CLI update asks it 
   });
 
   // The turn holds four seconds, outlasting the two seconds after which the Kit looks at its work again.
-  hosted.input({ kind: 'message', text: '@hold 4000\n@say done', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@hold 4000\n@say done', files: [], first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   await writeFile(join(hosted.home, 'restart'), '');
   // Two and a half seconds outlast the Kit's next look at its work while the turn still runs.
@@ -108,7 +108,7 @@ it('restarts for a CLI update not while a turn it reports idle waits on a questi
   void hosted.kit.exited.then((exited) => {
     code = exited;
   });
-  hosted.input({ kind: 'message', text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@ask', files: [], first: true });
   const question = await until(() => hosted.interactions[0]);
   await until(() => hosted.idles[2]);
 
@@ -118,7 +118,7 @@ it('restarts for a CLI update not while a turn it reports idle waits on a questi
   expect(code).toBeUndefined();
 
   const { interaction_id } = question.body as { interaction_id: string };
-  hosted.input({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
+  hosted.call({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
   await until(() => ended(hosted)[0]);
   expect(await hosted.kit.exited).toBe(1);
   expect(hosted.kit.stderr()).toContain('kit: restarting for an updated CLI\n');
@@ -132,21 +132,21 @@ it('forgets a restart a CLI update asked for before it connected', async () => {
   expect(alive(hosted.kit.pid)).toBe(true);
 });
 
-it('reports idle only after it acknowledges the input it carried out', async () => {
+it('reports idle only after it returns the result of the Kit call it carried out', async () => {
   const hosted = await hostKit();
   await until(() => hosted.idles[0]);
   hosted.house.route('POST', '/kit/inputs/:input/ack', async (request) => {
-    // The acknowledgement takes three tenths of a second, so an idle report sent before it would show.
+    // The result takes three tenths of a second to return, so an idle report sent before it would show.
     await new Promise((resolve) => setTimeout(resolve, 300));
-    hosted.acks.push(request);
+    hosted.results.push(request);
     return { body: {} };
   });
 
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  await hosted.ack(lastInput());
+  await hosted.result(lastCall());
   const paths = (await until(() => hosted.idles[1] && hosted.house.requests)).map((request) => request.path);
-  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf(`/kit/inputs/${lastInput()}/ack`));
+  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf(`/kit/inputs/${lastCall()}/ack`));
   expect(paths.filter((path) => path === '/kit/idle')).toHaveLength(2);
 });
 
@@ -155,7 +155,7 @@ it('counts a turn waiting on a non-secret question as idle', async () => {
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.input({ kind: 'message', text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@ask', files: [], first: true });
   await until(() => hosted.interactions[0]);
 
   await until(() => hosted.idles[2]);
@@ -166,7 +166,7 @@ it('does not count a turn waiting on a question as idle while a process the conv
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.input({ kind: 'message', text: '@spawn\n@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@spawn\n@ask', files: [], first: true });
   await until(() => hosted.interactions[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
@@ -187,7 +187,7 @@ it('does not count a turn waiting on a secret question as idle', async () => {
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.input({ kind: 'message', text: `@secret ${createHash('sha256').update('x').digest('hex')}`, files: [], first: true });
+  hosted.call({ kind: 'message', text: `@secret ${createHash('sha256').update('x').digest('hex')}`, files: [], first: true });
   await until(() => hosted.interactions[0]);
   await settle();
 
@@ -204,12 +204,12 @@ it.each(['codex-acp', 'claude-agent-acp'])('does not report idle while %s report
   expect(clientCapabilities.session).toEqual({ compaction: {}, notices: {} });
   expect(clientCapabilities._meta.jetbrains.air.capabilities).toContain('asyncTasks');
 
-  hosted.input({ kind: 'message', text: '@job job-1\n@say started', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@job job-1\n@say started', files: [], first: true });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
 
-  hosted.input({ kind: 'message', text: '@jobdone job-1', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@jobdone job-1', files: [], first: false });
   await until(() => ended(hosted)[1]);
   await until(() => hosted.idles[2]);
 });
@@ -227,11 +227,11 @@ it('drops an idle report House did not take once the CLI reports a running backg
   await opened(hosted);
   await until(() => endedAtReport.length > 0);
 
-  hosted.input({ kind: 'message', text: '@job job-1\n@say started', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@job job-1\n@say started', files: [], first: true });
   await until(() => ended(hosted)[0]);
   // A second outlasts the first retry of the refused idle report, which the running job must drop.
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  hosted.input({ kind: 'message', text: '@jobdone job-1', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@jobdone job-1', files: [], first: false });
   await until(() => ended(hosted)[1]);
   await until(() => hosted.idles[1]);
 
@@ -303,12 +303,12 @@ it.each(FORMS)('does not report idle while %s reports %s, from its start until i
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.input({ kind: 'message', text: `${start}\n@say started`, files: [], first: true });
+  hosted.call({ kind: 'message', text: `${start}\n@say started`, files: [], first: true });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
 
-  hosted.input({ kind: 'message', text: `${end}\n@say done`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${end}\n@say done`, files: [], first: false });
   await until(() => ended(hosted)[1]);
   await until(() => hosted.idles[2]);
 });
@@ -317,12 +317,12 @@ it('keeps a background form whose end never arrives busy until the Conversation 
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   await opened(hosted);
   await until(() => hosted.idles[1]);
-  hosted.input({ kind: 'message', text: `${tasks('local_bash')[0]}\n@say started`, files: [], first: true });
+  hosted.call({ kind: 'message', text: `${tasks('local_bash')[0]}\n@say started`, files: [], first: true });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
 
-  hosted.input({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
 
   await until(() => hosted.idles[2]);
 });

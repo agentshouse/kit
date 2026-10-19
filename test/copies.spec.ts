@@ -3,7 +3,7 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { hostKit, lastCall, type Hosted } from './environment.ts';
 import { temporaryHome } from './kit.ts';
 import { commitAll, git, house, serveRooms, tryGit, type Room, type Rooms } from './rooms.ts';
 
@@ -37,7 +37,7 @@ function movedLines(...rooms: Room[]): RegExp {
   return new RegExp(`^${rooms.map((room) => `${room.root}: refs/house/received is at [0-9a-f]{12}\n`).join('')}$`);
 }
 
-it('changes no Local copy on a stream frame, and still takes the agents signal and inputs', async () => {
+it('changes no Local copy on a Kit connection notification, and still takes the agents notification and Kit calls', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -50,9 +50,9 @@ it('changes no Local copy on a stream frame, and still takes the agents signal a
   hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
   hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
   hosted.socket.send({ type: 'work_available', subject: 'agents' });
-  hosted.input({ kind: 'open' });
+  hosted.call({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
+  expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
   expect(hosted.house.requests.slice(asked).some((request) => request.path === '/kit/agents/desired')).toBe(true);
   expect(
     hosted.house.requests

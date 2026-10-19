@@ -1,17 +1,17 @@
-# House Kit
+# Kit
 
-House Kit connects an Environment, a Linux computer or server, to [agents.house](https://agents.house). It runs
+Kit connects an Environment, a Linux computer or server, to [agents.house](https://agents.house). It runs
 your Agents' conversations through the agent CLIs you chose and gives each Agent the `house` command.
 
 ## Install
 
-Run `sh -c 'kit=$(curl -fsSL "$0") || { echo "House Kit could not be downloaded; run this command again." >&2; exit 1; }; eval "$kit"' agents.house/kit`,
-or `& { try { $kit = irm agents.house/kit.ps1 } catch { throw 'House Kit could not be downloaded; run this command again.' }; & ([scriptblock]::Create($kit)) @args }` on Windows, which run nothing of a failed download, and again to update; options follow `agents.house/kit`.
-On macOS and Linux it installs House Kit natively under your own account, without an admin password, as a service that runs
+Run `sh -c 'kit=$(curl -fsSL "$0") || { echo "Kit could not be downloaded; run this command again." >&2; exit 1; }; eval "$kit"' agents.house/kit`,
+or `& { try { $kit = irm agents.house/kit.ps1 } catch { throw 'Kit could not be downloaded; run this command again.' }; & ([scriptblock]::Create($kit)) @args }` on Windows, which run nothing of a failed download, and again to update; options follow `agents.house/kit`.
+On macOS and Linux it installs Kit natively under your own account, without an admin password, as a service that runs
 while you are logged in. `kit` and `house` are then on your login shell's `PATH`, and your workspace is `~/AgentsHouse` unless you
 pass `--workspace <path>`.
 
-Add `--container` to run House Kit in one Docker container instead, with your
+Add `--container` to run Kit in one Docker container instead, with your
 workspace mounted at `/agents/house`; your Agents then reach only that
 workspace. On Windows 11 the container is the one choice. Append a `kit` or `house` command to the container's options to run it in that container.
 Running the command for the other choice on a connected computer asks you to
@@ -19,13 +19,13 @@ confirm, then replaces its Environment, whose Agents end, with a new one. Runnin
 than the installed Kit's asks you to confirm before it replaces that Kit, and leaves that Kit home as it was.
 
 On your own Linux server, run the Linux command with `--linux` to
-install House Kit natively, with its workspace at `/agents/house`; `kit` and
+install Kit natively, with its workspace at `/agents/house`; `kit` and
 `house` are then on the server's `PATH`.
 
-House Kit runs the agent CLIs your login shell finds and installs a missing one
+Kit runs the agent CLIs your login shell finds and installs a missing one
 through that CLI's own installer. Running the command again offers to update
-each CLI older than House Kit needs; add `--update-clis` to update every one to
-its latest release without asking. House Kit also gives every Agent on the
+each CLI older than Kit needs; add `--update-clis` to update every one to
+its latest release without asking. Kit also gives every Agent on the
 Environment a set of agent skills. Add `--no-skills` to the command to leave
 them out; running it again without the flag brings them back.
 
@@ -40,7 +40,7 @@ A login also connects your own agent: outside an Agent conversation, `house <too
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you, each through the Kit
 home `$HOUSE_KIT_HOME` names where it runs, until you revoke that connection on Connections. `house help` lists the Tools. Codex sessions started after a
 login run a lone `house` command outside their sandbox. `kit logout` disconnects this
-computer, stops House Kit and ends your own agent's connection, so `house` and `git` no
+computer, stops Kit and ends your own agent's connection, so `house` and `git` no
 longer act as you here; a later `kit login` reconnects the same Environment, or connects
 this computer as a new one when House no longer holds it.
 In a container you do not control, such as ChatGPT's, `npm i -g @agentshouse/kit` and `kit chatgpt --key <key>` with a key made on Connections let `house <tool>` act as you, starting and configuring nothing else.
@@ -51,7 +51,7 @@ Room may no longer be copied here. `house fetch` does the same and records House
 `refs/house/received`; rebase onto it, commit and run `house push --owner` in the copy, through the install command in
 the container. An Agent runs both, without `--owner`. `house upload` and `house download` move a Room's other files.
 
-House Kit turns each audio file of your message to an Agent into text on this
+Kit turns each audio file of your message to an Agent into text on this
 computer before the Agent reads it. While transcription is on, the speech
 engine and model use about 425 MB beside the Environment's credential; turning it off deletes them.
 
