@@ -44,7 +44,7 @@ it('holds the control stream with its credential and opens a new socket after ev
 
   const first = await until(() => house.sockets[0]);
   expect(first.headers.authorization).toBe('Bearer ahk_held');
-  expect(first.protocol).toBe('house.kit.stream.2');
+  expect(first.protocol).toBe('house.kit.stream.3');
 
   first.close(1008, 'heartbeat_missed');
   const second = await until(() => house.sockets[1]);
@@ -359,10 +359,10 @@ it('names its wire in its stream subprotocol and in a header on every other /kit
   const house = await startHouse();
   await resident(house);
 
-  expect((await until(() => house.sockets[0])).protocol).toBe('house.kit.stream.2');
+  expect((await until(() => house.sockets[0])).protocol).toBe('house.kit.stream.3');
   const requests = house.requests.filter((request) => request.method === 'POST' && request.path.startsWith('/kit/'));
   expect(requests.map((request) => request.path)).toContain('/kit/restarted');
-  expect(requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(requests.map(() => '2'));
+  expect(requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(requests.map(() => '3'));
 });
 
 it('ends, left stopped, saying it must be installed again, when House refuses its socket opening as too old and no bootstrap recorded its install command', async () => {
