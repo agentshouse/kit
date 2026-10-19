@@ -152,6 +152,24 @@ it("names each Local copy, house fetch before work and house push after in a con
   ]);
 });
 
+it("leaves a Room an authority change drops out of a conversation's first prompt, which then names no Local copy", async () => {
+  const { hosted, rooms, room } = await copied();
+  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection').length;
+  const asked = selections();
+  rooms.answered = [];
+
+  hosted.socket.send({ type: 'authority_changed', rooms: [room.ref] });
+  await until(() => selections() > asked);
+  hosted.input({ kind: 'message', text: 'hello', files: [], first: true });
+
+  const prompt = await until(async () =>
+    (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
+  );
+  const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
+  expect(block).toHaveLength(5);
+  expect(block.join('\n')).not.toContain(room.repository);
+});
+
 it(
   'sends a change set above the MCP bound as one prepared upload under the push operation, and resends that edit when its answer is lost',
   async () => {
