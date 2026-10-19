@@ -1,19 +1,21 @@
 import { subscribe } from 'node:diagnostics_channel';
 import { HouseRefusal, retryDelay } from './api.ts';
+import type { Call } from './calls.ts';
 import { end, REPLACED, signInAgain } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
 import { endUnserved, KIT_WIRE } from './wire.ts';
 
-export type Frame = { type: string } & Record<string, unknown>;
+export type Notification = { type: string } & Record<string, unknown>;
 
-export interface StreamHandlers {
+export interface ConnectionHandlers {
   opened(): void;
-  frame(frame: Frame): void;
+  call(call: Call): void;
+  notification(notification: Notification): void;
 }
 
-export interface Stream {
-  send(frame: Frame): boolean;
+export interface Connection {
+  send(notification: Notification): boolean;
 }
 
 interface Answered {
@@ -24,29 +26,29 @@ interface Answered {
 const PATH = '/kit/stream';
 const SUBPROTOCOL = `house.kit.stream.${KIT_WIRE}`;
 const REFUSAL_HEADER = 'x-house-refusal';
-// House beats each stream every thirty seconds, so two silent beats mean this Kit cannot hear House.
-export const STREAM_SILENCE_MS = 60_000;
+// House beats each Kit connection every thirty seconds, so two silent beats mean this Kit process cannot hear House.
+export const CONNECTION_SILENCE_MS = 60_000;
 
-export interface StreamClock {
+export interface ConnectionClock {
   later(delay: number, callback: () => void): ReturnType<typeof setTimeout>;
   clear(timer: ReturnType<typeof setTimeout>): void;
 }
 
-const SYSTEM_STREAM_CLOCK: StreamClock = {
+const SYSTEM_CONNECTION_CLOCK: ConnectionClock = {
   later: (delay, callback) => setTimeout(callback, delay),
   clear: (timer) => clearTimeout(timer),
 };
 
-export class StreamSilence {
+export class ConnectionSilence {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly silent: () => void;
-  private readonly clock: StreamClock;
+  private readonly clock: ConnectionClock;
   private readonly interval: number;
 
   constructor(
     silent: () => void,
-    clock: StreamClock = SYSTEM_STREAM_CLOCK,
-    interval = STREAM_SILENCE_MS,
+    clock: ConnectionClock = SYSTEM_CONNECTION_CLOCK,
+    interval = CONNECTION_SILENCE_MS,
   ) {
     this.silent = silent;
     this.clock = clock;
@@ -68,7 +70,7 @@ export class StreamSilence {
   }
 }
 
-function streamUrl(house: string): URL {
+function connectionUrl(house: string): URL {
   const url = new URL(PATH, house);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url;
@@ -89,24 +91,24 @@ subscribe('undici:request:headers', (message) => {
   refused = new HouseRefusal(PATH, response.statusCode, header(response.headers, REFUSAL_HEADER) || response.statusText);
 });
 
-export function holdStream(handlers: StreamHandlers): Stream {
-  let socket: WebSocket | null = null;
+export function holdConnection(handlers: ConnectionHandlers): Connection {
+  let connection: WebSocket | null = null;
   let failures = 0;
 
   const connect = async () => {
     const { house, credential } = (await readEnrolment())!;
     refused = null;
-    const opening = new WebSocket(relayed(streamUrl(house)), {
+    const opening = new WebSocket(relayed(connectionUrl(house)), {
       protocols: [SUBPROTOCOL],
       headers: { authorization: `Bearer ${credential}` },
     } as unknown as string[]);
     let opened = false;
-    let silence: StreamSilence | null = null;
+    let silence: ConnectionSilence | null = null;
     const closed = (event: CloseEvent) => {
       silence?.stop();
       silence = null;
-      if (socket === opening) socket = null;
-      process.stderr.write(`kit: control stream closed ${event.code} ${event.reason}\n`);
+      if (connection === opening) connection = null;
+      process.stderr.write(`kit: connection closed ${event.code} ${event.reason}\n`);
       if (event.reason === 'replaced') end(REPLACED);
       if (event.reason === 'credential_rejected' || refused?.status === 401) {
         void signInAgain(credential);
@@ -114,16 +116,16 @@ export function holdStream(handlers: StreamHandlers): Stream {
       }
       if (refused !== null) endUnserved(refused.text);
       if (!opened && refused !== null) process.stderr.write(`kit: ${refused.message}\n`);
-      // A closed socket reopens in one to three seconds, spread so Kits one restart closed return apart; an opening House refused or left unanswered backs off on the jittered curve, retryable or not, since a resident outlives a House deploy.
+      // A closed connection reopens in one to three seconds, spread so Kit processes one restart closed return apart; an opening House refused or left unanswered backs off on the jittered curve, retryable or not, since a resident outlives a House deploy.
       setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));
     };
     opening.onopen = () => {
       opened = true;
       failures = 0;
-      socket = opening;
-      silence = new StreamSilence(() => {
-        if (socket !== opening) return;
-        socket = null;
+      connection = opening;
+      silence = new ConnectionSilence(() => {
+        if (connection !== opening) return;
+        connection = null;
         opening.onclose = null;
         opening.close();
         closed(new CloseEvent('close', { code: 1006, reason: 'heartbeat_missed' }));
@@ -133,8 +135,9 @@ export function holdStream(handlers: StreamHandlers): Stream {
     };
     opening.onmessage = (event) => {
       silence?.heard();
-      const frame = JSON.parse(String(event.data)) as Frame;
-      if (frame.type !== 'beat') handlers.frame(frame);
+      const arrived = JSON.parse(String(event.data)) as Notification;
+      if (arrived.type === 'input') handlers.call(arrived as unknown as Call);
+      else if (arrived.type !== 'beat') handlers.notification(arrived);
     };
     opening.onerror = () => undefined;
     opening.onclose = closed;
@@ -142,9 +145,9 @@ export function holdStream(handlers: StreamHandlers): Stream {
 
   void connect();
   return {
-    send(frame) {
-      if (socket === null || socket.readyState !== WebSocket.OPEN) return false;
-      socket.send(JSON.stringify(frame));
+    send(notification) {
+      if (connection === null || connection.readyState !== WebSocket.OPEN) return false;
+      connection.send(JSON.stringify(notification));
       return true;
     },
   };

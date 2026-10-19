@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { received } from './bridge.ts';
-import { CONVERSATION_INPUTS, Conversations, type Input } from './conversations.ts';
+import { CONVERSATION_METHODS, Conversations, type ConversationCall } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
 import { restart } from './end.ts';
 import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, restartAsked } from './home.ts';
-import { Inputs } from './inputs.ts';
+import { Calls, type Call } from './calls.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
-import { SignIns, type SignIn } from './sign-in.ts';
+import { SignIns } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
-import { holdStream, type Frame, type Stream } from './stream.ts';
-import { Updates, type Update } from './update.ts';
+import { holdConnection, type Connection, type Notification } from './connection.ts';
+import { KitUpdate } from './update.ts';
 import { codexLauncher } from './work.ts';
 
 function report(error: unknown): void {
@@ -50,7 +50,9 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
   if (!claimed(lock)) {
     lock.close();
     const running = await runningResident();
-    throw new Error(`${running === null ? 'another Kit' : `Kit ${running}`} already runs this Environment from Kit home ${kitHome()}; stop it first to run another here`);
+    throw new Error(
+      `${running === null ? 'another Kit process' : `Kit process ${running}`} already runs this Environment from Kit home ${kitHome()}; stop it first to run another Kit process here`,
+    );
   }
   const server = createServer(async (request, response) => {
     try {
@@ -132,9 +134,9 @@ export async function resident(): Promise<void> {
   });
   process.env.HOUSE_KIT_RESIDENT = String(process.pid);
   const agents = new Agents(house, () => changed());
-  let stream: Stream | null = null;
+  let connection: Connection | null = null;
   let reported = false;
-  const idle = () => inputs.idle() && conversations.idle() && agents.idle();
+  const idle = () => calls.idle() && conversations.idle() && agents.idle();
   const changed = () => {
     if (!idle()) {
       reported = false;
@@ -145,17 +147,17 @@ export async function resident(): Promise<void> {
       logged(house.deliver('/kit/idle', {}, idle));
     }
   };
-  const inputs = new Inputs(house, changed);
+  const calls = new Calls(house, changed);
   const conversations: Conversations = new Conversations({
     house,
     agents,
     copies,
-    inputs,
-    send: (frame) => stream?.send(frame) ?? false,
+    calls,
+    send: (notification) => connection?.send(notification) ?? false,
     changed,
   });
-  const signIns = new SignIns(house, agents, inputs);
-  const updates = new Updates(inputs);
+  const signIns = new SignIns(house, agents, calls);
+  const update = new KitUpdate(calls);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
       killDescendants();
@@ -164,27 +166,27 @@ export async function resident(): Promise<void> {
   }
 
   await house.deliver('/kit/restarted', {}).catch(report);
-  await updates.resumed().catch(report);
+  await update.resumed().catch(report);
   logged(agents.refresh());
-  stream = holdStream({
+  connection = holdConnection({
     opened: () => {
       conversations.opened();
       changed();
       logged(copies.connected());
     },
-    frame: (arrived: Frame) => {
-      if (arrived.type === 'watching') conversations.watching(arrived.watching === true);
-      if (arrived.type === 'authority_changed') logged(copies.changed(arrived.rooms as string[]));
-      if (arrived.type === 'work_available' && arrived.subject === 'agents') logged(agents.refresh());
-      if (arrived.type === 'input') {
-        if (arrived.kind === 'sign_in') signIns.start(arrived as unknown as SignIn);
-        else if (arrived.kind === 'update') updates.start(arrived as unknown as Update);
-        else if (CONVERSATION_INPUTS.has(arrived.kind as string)) conversations.input(arrived as unknown as Input);
-        else {
-          const refused = { refused: `This Kit does not know ${arrived.kind}; update the Kit` };
-          void inputs.carry(String(arrived.input_id), async () => ({ ack: refused }));
-        }
+    call: (call: Call) => {
+      if (call.kind === 'sign_in') signIns.start(call);
+      else if (call.kind === 'update') update.start(call);
+      else if (CONVERSATION_METHODS.has(call.kind)) conversations.call(call as ConversationCall);
+      else {
+        const refused = { refused: `This Kit does not know ${(call as { kind: string }).kind}; update the Kit` };
+        void calls.carry(call.input_id, async () => ({ result: refused }));
       }
+    },
+    notification: (notification: Notification) => {
+      if (notification.type === 'watching') conversations.watching(notification.watching === true);
+      if (notification.type === 'authority_changed') logged(copies.changed(notification.rooms as string[]));
+      if (notification.type === 'work_available' && notification.subject === 'agents') logged(agents.refresh());
     },
   });
 }

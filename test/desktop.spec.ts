@@ -36,7 +36,7 @@ async function installed(host: Host): Promise<void> {
 
 function userUnit(home: string, workspace = join(home, 'AgentsHouse')): string {
   return `[Unit]
-Description=House Kit
+Description=Kit
 PartOf=graphical-session.target
 After=graphical-session.target
 
@@ -93,7 +93,7 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
   const ran = host.run();
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout).toContain('House Kit connected for Environment environment-one.\n');
+  expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
   expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.21\.0\/node-v24\.21\.0-linux-x64\.tar\.gz$/)]);
   expect(host.calls('sha256sum')).toEqual(['--check']);
   expect(host.calls('npm')).toEqual([expect.stringMatching(/ @agentshouse\/kit@0\.2\.1-alpha\.1$/)]);
@@ -118,7 +118,7 @@ it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, w
   const ran = host.run();
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout).toContain('House Kit connected for Environment environment-one.\n');
+  expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
   expect(notices(ran.stdout)).toEqual([]);
   expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.21\.0\/node-v24\.21\.0-darwin-arm64\.tar\.gz$/)]);
   expect(host.calls('shasum')).toEqual(['-a 256 --check']);
@@ -148,7 +148,7 @@ it.each([
     const ran = host.run();
 
     expect(ran).toMatchObject({ status: 0, stderr: '' });
-    expect(ran.stdout).toContain('House Kit is already installed.\n');
+    expect(ran.stdout).toContain('Kit is already installed.\n');
     expect(host.calls('curl')).toEqual([]);
     expect(host.calls('kit')).toEqual([]);
     expect(acts(host)).toEqual([]);
@@ -173,7 +173,7 @@ it.each([
   const ran = host.run();
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout).toContain('House Kit restarted for Environment environment-one.\n');
+  expect(ran.stdout).toContain('Kit restarted for Environment environment-one.\n');
   expect(host.calls('node')).toContain('service-main.js');
   expect(acts(host)).toEqual(start);
 });
@@ -202,7 +202,7 @@ it.each([
   const ran = host.run(['--workspace', join(host.home, 'Agents')]);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout).toContain('House Kit restarted for Environment environment-one.\n');
+  expect(ran.stdout).toContain('Kit restarted for Environment environment-one.\n');
   expect(acts(host)).toEqual(restart);
   const definition =
     platform.system === 'Linux'
@@ -306,7 +306,7 @@ it('restarts the running service when a rerun changes the Kit configuration', as
 
   const ran = host.run(['--no-skills']);
 
-  expect(ran.stdout).toContain('House Kit restarted for Environment environment-one.\n');
+  expect(ran.stdout).toContain('Kit restarted for Environment environment-one.\n');
   expect(acts(host)).toEqual(['--user restart house-kit.service']);
 });
 
@@ -327,7 +327,7 @@ it.each([
 
     expect(ran).toMatchObject({ status: 0, stderr: '' });
     expect(ran.stdout).toContain('Updating codex 0.160.0.\n');
-    expect(ran.stdout).toContain('House Kit is already installed.\n');
+    expect(ran.stdout).toContain('Kit is already installed.\n');
     expect(host.calls('node')).toContain('clis-main.js');
     expect(host.calls('codex')).toEqual(['update']);
     expect(acts(host)).toEqual([]);
@@ -346,7 +346,7 @@ it('asks the Kit for no restart when the one CLI update it tried failed', async 
   const ran = host.run(['--update-clis']);
 
   expect(ran).toMatchObject({ status: 0, stderr: 'codex could not be updated; it stays at 0.160.0.\n' });
-  expect(ran.stdout).toContain('House Kit is already installed.\n');
+  expect(ran.stdout).toContain('Kit is already installed.\n');
   expect(acts(host)).toEqual([]);
   await expect(access(join(host.home, '.house-kit', 'restart'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
@@ -360,7 +360,7 @@ it.each([
   const ran = host.run();
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(notices(ran.stdout)).toEqual([`House Kit supports ${notice}; ${UNSUPPORTED}`]);
+  expect(notices(ran.stdout)).toEqual([`Kit supports ${notice}; ${UNSUPPORTED}`]);
   expect(host.calls('curl')).toEqual([expect.stringContaining(`/node-v24.21.0-${node}.tar.gz`)]);
   await installed(host);
 });
@@ -394,7 +394,7 @@ it('warns once on an Intel Mac and installs', async () => {
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout.split('\n').filter((line) => line.startsWith('Warning:'))).toEqual([
-    'Warning: House Kit supports Apple silicon, not an Intel chip.',
+    'Warning: Kit supports Apple silicon, not an Intel chip.',
   ]);
   await installed(host);
 });
@@ -407,10 +407,10 @@ it('says the Kit updated when a rerun installs a newer release', async () => {
   const ran = host.run();
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout.split('\n').at(-2)).toBe('House Kit updated.');
+  expect(ran.stdout.split('\n').at(-2)).toBe('Kit updated.');
 });
 
-const OTHER_ACCOUNT = 'House Kit is already installed for another account. Replace it? [y/N]';
+const OTHER_ACCOUNT = 'Kit is already installed for another account. Replace it? [y/N]';
 
 const HOUSE = ['--house', 'https://agents.house'];
 
@@ -435,7 +435,7 @@ it('asks from the terminal whether to replace another account, clears it on yes 
   expect(ran.status).toBe(0);
   expect(ran.stdout.match(/Replace it\?/g)).toHaveLength(1);
   expect(ran.stdout).toContain(OTHER_ACCOUNT);
-  expect(ran.stdout).toContain('House Kit connected for Environment environment-one.');
+  expect(ran.stdout).toContain('Kit connected for Environment environment-one.');
   expect(host.calls('kit')).toEqual([`login --house https://agents.house --code ahk_code_one HOUSE_KIT_HOME=${host.home}/.house-kit`]);
   expect(host.calls('systemctl')).toEqual(expect.arrayContaining(['--user stop house-kit.service', '--user start house-kit.service']));
   await expect(access(join(host.home, '.house-kit', 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -501,7 +501,7 @@ it('installs the container exactly as before only with the container choice', as
 
   expect(ran).toEqual({
     status: 0,
-    stdout: `${LINK_LINE}\nHouse Kit connected for Environment environment-one.\n`,
+    stdout: `${LINK_LINE}\nKit connected for Environment environment-one.\n`,
     stderr: '',
   });
   expect(host.calls('docker')).toEqual([
@@ -527,7 +527,7 @@ it('installs the container on macOS through Docker Desktop, publishing no port, 
 
   const ran = host.run(['--container']);
 
-  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nHouse Kit connected for Environment environment-one.\n`, stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nKit connected for Environment environment-one.\n`, stderr: '' });
   expect(host.calls('docker').filter((call) => call.endsWith(' login'))).toEqual([
     `run --rm --hostname ${hostname()} --user ${uid} ${mounts} ${image} login`,
   ]);
@@ -544,7 +544,7 @@ it.each([
 
   const ran = host.run(['--container']);
 
-  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nHouse Kit connected for Environment environment-one.\n`, stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nKit connected for Environment environment-one.\n`, stderr: '' });
   expect(JSON.parse(await readFile(join(host.home, '.house-kit', 'credential.json'), 'utf8'))).toMatchObject({
     environment: 'environment-one',
   });
@@ -622,7 +622,7 @@ it.each(CONNECTED)('sets the Rooms of the connected Environment again through ki
   const ran = host.run(['--no-private', ...placement]);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout.split('\n').slice(-3)).toEqual(['House Kit is already installed.', LINK_LINE, '']);
+  expect(ran.stdout.split('\n').slice(-3)).toEqual(['Kit is already installed.', LINK_LINE, '']);
   expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --no-private( |$)/)]);
 });
 
@@ -642,7 +642,7 @@ it('sets the Rooms of the connected Environment again through kit login when a r
   const ran = host.run(['--no-private', '--container']);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout.split('\n').slice(-3)).toEqual(['House Kit connected for Environment environment-one.', LINK_LINE, '']);
+  expect(ran.stdout.split('\n').slice(-3)).toEqual(['Kit connected for Environment environment-one.', LINK_LINE, '']);
   expect(logins(host, ['--container'])).toEqual([expect.stringMatching(/ login --no-private$/)]);
 });
 
@@ -652,7 +652,7 @@ it.each(CONNECTED)('leaves a login code unused when a rerun on the connected com
   const ran = host.run(['--code', 'ahk_code_unused', ...placement]);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout.split('\n').at(-2)).toBe('House Kit is already installed.');
+  expect(ran.stdout.split('\n').at(-2)).toBe('Kit is already installed.');
   expect(logins(host, placement)).toEqual([]);
 });
 
@@ -703,7 +703,7 @@ it.each(
     const ran = host.run(['--no-private', ...placement]);
 
     expect(ran.status).not.toBe(0);
-    expect(ran.stdout).toContain('House Kit updated.\n');
+    expect(ran.stdout).toContain('Kit updated.\n');
     expect(acts(host)).toEqual(started);
     expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --no-private( |$)/)]);
   },
@@ -716,7 +716,7 @@ it.each(STARTED_AGAIN)('updates the Kit and leaves a login code unused when a re
   const ran = host.run(['--code', 'ahk_code_unused', ...placement]);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout.split('\n').at(-2)).toBe('House Kit updated.');
+  expect(ran.stdout.split('\n').at(-2)).toBe('Kit updated.');
   expect(acts(host)).toEqual(started);
   expect(logins(host, placement)).toEqual([]);
 });
@@ -813,7 +813,7 @@ it('keeps an installed container on the pinned image and on-failure, and replace
   const kept = host.run(['--container']);
 
   expect(kept).toMatchObject({ status: 0, stderr: '' });
-  expect(kept.stdout.split('\n').at(-2)).toBe('House Kit is already installed.');
+  expect(kept.stdout.split('\n').at(-2)).toBe('Kit is already installed.');
   expect(host.calls('docker').filter((call) => /^(rm|run -d) /.test(call))).toEqual([]);
   await host.restartPolicy('unless-stopped');
   await host.forget();
@@ -821,7 +821,7 @@ it('keeps an installed container on the pinned image and on-failure, and replace
   const replaced = host.run(['--container']);
 
   expect(replaced).toMatchObject({ status: 0, stderr: '' });
-  expect(replaced.stdout.split('\n').at(-2)).toBe('House Kit updated.');
+  expect(replaced.stdout.split('\n').at(-2)).toBe('Kit updated.');
   expect(host.calls('docker').filter((call) => /^(rm|run -d) /.test(call))).toEqual([
     'rm -f house-kit',
     expect.stringMatching(/^run -d --name house-kit --restart on-failure .* resident$/),

@@ -6,7 +6,7 @@ import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
-import { certificate, startHouse, until, type House, type KitSocket, type Received } from './double.ts';
+import { certificate, startHouse, until, type House, type KitConnection, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './npm.ts';
 
@@ -145,9 +145,9 @@ export interface Hosted {
   house: House;
   home: string;
   kit: KitRun;
-  socket: KitSocket;
+  connection: KitConnection;
   workingDirectory: string;
-  acks: Received[];
+  results: Received[];
   turns: Received[];
   interactions: Received[];
   images: Received[];
@@ -156,11 +156,11 @@ export interface Hosted {
   mcp: Received[];
   tools: Record<string, ToolAnswer>;
   reports: Record<string, unknown>[];
-  input(fields: Record<string, unknown>): void;
+  call(fields: Record<string, unknown>): void;
   watch(watching: boolean): void;
   restart(): Promise<void>;
   transcribe(on: boolean): void;
-  ack(inputId: string): Promise<unknown>;
+  result(callId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
 }
 
@@ -171,7 +171,7 @@ export const GIT_IDENTITY = {
   GIT_COMMITTER_EMAIL: 'agent@example.com',
 };
 
-let inputs = 0;
+let calls = 0;
 
 export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): Promise<Hosted> {
   const house = await startHouse(hosting.tls ? certificate() : undefined);
@@ -208,7 +208,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   for (const kind of kinds) placePinnedAdapter(home, kind);
   await placeUserClis(home);
   await hosting.prepare?.(home);
-  const acks: Received[] = [];
+  const results: Received[] = [];
   const turns: Received[] = [];
   const interactions: Received[] = [];
   const images: Received[] = [];
@@ -239,7 +239,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     return { body: {} };
   });
   house.route('POST', '/kit/inputs/:input/ack', (request) => {
-    acks.push(request);
+    results.push(request);
     return { body: {} };
   });
   for (const event of ['started', 'ended']) {
@@ -284,15 +284,15 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     ...hosting.environment,
   };
   const kit = runKit(['resident'], environment);
-  const socket = await until(() => house.sockets[0]);
+  const connection = await until(() => house.connections[0]);
   await until(() => house.requests.find((request) => request.path === '/kit/local-copy/selection'));
   const hosted: Hosted = {
     house,
     home,
     kit,
-    socket,
+    connection,
     workingDirectory,
-    acks,
+    results,
     turns,
     interactions,
     images,
@@ -301,36 +301,36 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     mcp,
     tools,
     reports,
-    watch: (watching) => house.sockets.at(-1)!.send({ type: 'watching', watching }),
+    watch: (watching) => house.connections.at(-1)!.send({ type: 'watching', watching }),
     restart: async () => {
-      const opened = house.sockets.length;
+      const opened = house.connections.length;
       const idled = idles.length;
       stop(hosted.kit.pid);
       await hosted.kit.exited;
       hosted.kit = runKit(['resident'], environment);
-      await until(() => house.sockets.length > opened);
+      await until(() => house.connections.length > opened);
       await until(() => idles.length > idled);
     },
     transcribe: (on) => {
       transcribe = on;
-      house.sockets.at(-1)!.send({ type: 'work_available', subject: 'agents' });
+      house.connections.at(-1)!.send({ type: 'work_available', subject: 'agents' });
     },
-    input: (fields) => {
-      inputs++;
-      house.sockets.at(-1)!.send({
+    call: (fields) => {
+      calls++;
+      house.connections.at(-1)!.send({
         type: 'input',
-        input_id: `input-${inputs}`,
+        input_id: `call-${calls}`,
         conversation_id: 'conversation-1',
         agent_id: 'agent-1',
         provider_session_id: null,
         ...fields,
       });
     },
-    ack: async (inputId) =>
+    result: async (callId) =>
       (
         await until(
-          () => acks.find((ack) => ack.params.input === inputId),
-          // Acknowledgement follows local transcription and can exceed thirty seconds under constrained CPU.
+          () => results.find((result) => result.params.input === callId),
+          // The result follows local transcription and can exceed thirty seconds under constrained CPU.
           45_000,
         )
       ).body,
@@ -374,8 +374,8 @@ export function outcome(body: unknown): { text: string } | { failed: string } {
   return { text: ended.parts.flatMap((part) => (part.type === 'text' ? [part.text!] : [])).join('') };
 }
 
-export function lastInput(): string {
-  return `input-${inputs}`;
+export function lastCall(): string {
+  return `call-${calls}`;
 }
 
 export async function installHeld(hosted: Hosted): Promise<string> {
@@ -393,7 +393,7 @@ export async function installHeld(hosted: Hosted): Promise<string> {
   hosted.house.route('POST', '/kit/agents/desired', () => ({
     body: { agents: ['codex-acp', 'claude-agent-acp'], routes: [added] },
   }));
-  hosted.socket.send({ type: 'work_available', subject: 'agents' });
+  hosted.connection.send({ type: 'work_available', subject: 'agents' });
   await until(async () =>
     (await readFile(join(hosted.home, 'npm.log'), 'utf8').catch(() => '')).includes(
       CLIS['claude-agent-acp']!.adapter!.package,
@@ -411,12 +411,12 @@ export interface Ran {
 }
 
 export async function opened(hosted: Hosted, conversation = 'conversation-1', agent = 'agent-1'): Promise<void> {
-  hosted.input({ kind: 'open', conversation_id: conversation, agent_id: agent });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open', conversation_id: conversation, agent_id: agent });
+  await hosted.result(lastCall());
 }
 
 export function directed(hosted: Hosted, text: string, conversation = 'conversation-1', agent = 'agent-1'): void {
-  hosted.input({ kind: 'message', conversation_id: conversation, agent_id: agent, text, files: [], first: false });
+  hosted.call({ kind: 'message', conversation_id: conversation, agent_id: agent, text, files: [], first: false });
 }
 
 export async function runs(hosted: Hosted, count: number): Promise<Ran[]> {

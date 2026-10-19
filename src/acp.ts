@@ -7,7 +7,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_VERSION, adapterCommand, withoutProxy } from './clis.ts';
+import { CLIS, KIT_RELEASE, adapterCommand, withoutProxy } from './clis.ts';
 import type { Message } from './events.ts';
 import { killTree, type Scope } from './scope.ts';
 
@@ -98,7 +98,7 @@ export async function startAdapter(
         session: { compaction: {}, notices: {} },
         _meta: { jetbrains: { air: { version: 1, capabilities: CLIS[kind]!.air } } },
       },
-      clientInfo: { name: '@agentshouse/kit', version: KIT_VERSION },
+      clientInfo: { name: '@agentshouse/kit', version: KIT_RELEASE },
     });
     scope?.entered(child.pid!);
     return { connection, initialized, exited, lost, retire };

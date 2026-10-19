@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { settle, until, type Received } from './double.ts';
-import { hostKit, lastInput, type Hosted, type RouteOverrides } from './environment.ts';
+import { hostKit, lastCall, type Hosted, type RouteOverrides } from './environment.ts';
 
 const KINDS: Record<string, string> = { claude: 'claude-agent-acp', codex: 'codex-acp', grok: 'grok-build' };
 
@@ -33,14 +33,14 @@ interface Recording {
 
 async function replayed(fixture: string, count = 1, recording: Recording = {}): Promise<Replayed> {
   const hosted = await hostKit([{ kind: KINDS[fixture.split('-')[0]!]!, ...recording.route }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   for (const [option, value] of recording.options ?? []) {
-    hosted.input({ kind: 'option', option, value });
-    await hosted.ack(lastInput());
+    hosted.call({ kind: 'option', option, value });
+    await hosted.result(lastCall());
   }
   hosted.watch(true);
-  hosted.input({ kind: 'message', text: `@gate admitted\n@replay ${fixture}`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `@gate admitted\n@replay ${fixture}`, files: [], first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   await writeFile(join(hosted.home, 'admitted'), '');
   for (let index = 0; index < (recording.questions ?? 0); index++) {
@@ -51,7 +51,7 @@ async function replayed(fixture: string, count = 1, recording: Recording = {}): 
     const response =
       recording.responses?.[index] ??
       { outcome: { outcome: 'selected', optionId: request.params.options.find((option) => option.kind.startsWith('allow'))!.optionId } };
-    hosted.input({ kind: 'answer', interaction_id, response });
+    hosted.call({ kind: 'answer', interaction_id, response });
   }
   const ended = await until(() => {
     const found = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
@@ -88,7 +88,7 @@ function emittedImage(): string {
 }
 
 function streamed(hosted: Hosted, type: string): boolean {
-  return hosted.socket.frames.some((frame) => frame.type === 'turn' && frame.op === 'start' && (frame.part as { type: string }).type === type);
+  return hosted.connection.notifications.some((notification) => notification.type === 'turn' && notification.op === 'start' && (notification.part as { type: string }).type === type);
 }
 
 function kinds(turn: Ended): string[] {
@@ -332,10 +332,10 @@ it("marks an image House did not save with the Kit's cause in place of its image
   hosted.house.route('POST', '/bytes/:grant', () => ({
     body: { version: 'version-1', save: { status: 'failed', failure: 'storage unavailable' } },
   }));
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
 
-  hosted.input({ kind: 'message', text: emittedImage(), files: [], first: false });
+  hosted.call({ kind: 'message', text: emittedImage(), files: [], first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([
@@ -349,11 +349,11 @@ it('streams the text after an image and declares the next image while the first 
     if (request.params.grant === 'image-1') await until(() => hosted.images[1] && streamed(hosted, 'text'));
     return { body: { version: `version-${request.params.grant!.slice('image-'.length)}`, save: { status: 'saved', failure: null } } };
   });
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   hosted.watch(true);
 
-  hosted.input({ kind: 'message', text: `${emittedImage()}\n${emittedImage()}\n@say Done.\n@gate streamed`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${emittedImage()}\n${emittedImage()}\n@say Done.\n@gate streamed`, files: [], first: false });
   await until(() => streamed(hosted, 'image'));
   await writeFile(join(hosted.home, 'streamed'), '');
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
@@ -371,11 +371,11 @@ it('keeps writing the text an image was saved in the middle of, and saves the im
     await until(() => streamed(hosted, 'text'));
     return { body: { version: 'version-1', save: { status: 'saved', failure: null } } };
   });
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   hosted.watch(true);
 
-  hosted.input({ kind: 'message', text: `${emittedImage()}\n@say All nine\n@gate saved\n@say  steps completed.`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${emittedImage()}\n@say All nine\n@gate saved\n@say  steps completed.`, files: [], first: false });
   await until(() => streamed(hosted, 'image'));
   await writeFile(join(hosted.home, 'saved'), '');
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
@@ -401,12 +401,12 @@ function switched(value: string): string {
 
 it('marks every model switch Claude Code makes after the Kit asked for a model, a switch back to that model included', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
-  hosted.input({ kind: 'option', option: 'model', value: 'sonnet' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
+  hosted.call({ kind: 'option', option: 'model', value: 'sonnet' });
+  await hosted.result(lastCall());
 
-  hosted.input({ kind: 'message', text: `${switched('haiku')}\n${switched('sonnet')}`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${switched('haiku')}\n${switched('sonnet')}`, files: [], first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([
@@ -417,13 +417,13 @@ it('marks every model switch Claude Code makes after the Kit asked for a model, 
 
 it('marks a model switch Claude Code makes to a model the Kit asked for and the CLI refused', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   await writeFile(join(hosted.home, 'refuse-model'), 'opus');
-  hosted.input({ kind: 'option', option: 'model', value: 'opus' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'option', option: 'model', value: 'opus' });
+  await hosted.result(lastCall());
 
-  hosted.input({ kind: 'message', text: switched('opus'), files: [], first: false });
+  hosted.call({ kind: 'message', text: switched('opus'), files: [], first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([{ type: 'marker', marker: 'model', text: 'opus' }]);
@@ -453,13 +453,13 @@ it.each(['claude-web', 'codex-web'])(
 
 it('counts a recorded Codex MCP call when it starts', async () => {
   const hosted = await hostKit([{ kind: 'codex-acp' }]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   const events = recorded('codex-web');
   const own = events.find((event) => event.params.sessionId !== undefined)!.params.sessionId;
   const started = events.find((event) => event.params.update?.sessionUpdate === 'tool_call' && event.params.update.rawInput?.server === 'echo')!;
 
-  hosted.input({ kind: 'message', text: `@emit ${JSON.stringify(started).split(own).join('$SESSION')}\n@say after`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `@emit ${JSON.stringify(started).split(own).join('$SESSION')}\n@say after`, files: [], first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([
@@ -470,7 +470,7 @@ it('counts a recorded Codex MCP call when it starts', async () => {
 
 it("marks a recorded Codex background terminal's start in its turn and its end, which came after that turn, first in the next", async () => {
   const { hosted, turns } = await replayed('codex-terminal');
-  hosted.input({ kind: 'message', text: '@say ok', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say ok', files: [], first: false });
   const next = await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/ended'))[1]);
 
   expect(turns[0]!.parts.filter((part) => part.type === 'marker')).toEqual([
@@ -517,8 +517,8 @@ it.each(['claude', 'codex'])(
   "shows %s's house send_mail as one part naming the request it names, or no target when it names none, and still counts the house call beside it",
   async (cli) => {
     const hosted = await hostKit([{ kind: KINDS[cli]! }]);
-    hosted.input({ kind: 'open' });
-    await hosted.ack(lastInput());
+    hosted.call({ kind: 'open' });
+    await hosted.result(lastCall());
     hosted.watch(true);
     const searched = emitted(`${cli}-tools`, [], "house search '");
     const mailed = emitted(`${cli}-routines`, [
@@ -526,7 +526,7 @@ it.each(['claude', 'codex'])(
       [ROUTINE_CANCELLED, ANSWERED],
     ]);
 
-    hosted.input({ kind: 'message', text: `${searched}\n${mailed}`, files: [], first: false });
+    hosted.call({ kind: 'message', text: `${searched}\n${mailed}`, files: [], first: false });
     const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
     const parts = (ended.body as Ended).parts;
@@ -570,7 +570,7 @@ it.each(['claude-tools', 'codex-tools', 'grok-tools'])(
   async (fixture) => {
     const { hosted, turns } = await replayed(fixture, fixture === 'claude-tools' ? 2 : 1);
 
-    const operations = hosted.socket.frames.filter((frame) => frame.type === 'turn').map((frame) => frame.op);
+    const operations = hosted.connection.notifications.filter((notification) => notification.type === 'turn').map((notification) => notification.op);
     expect(operations).toEqual(expect.arrayContaining(['start', 'append', 'context']));
     expect(operations.every((op) => ['start', 'append', 'count', 'status', 'plan', 'context'].includes(String(op)))).toBe(true);
     for (const turn of turns) {

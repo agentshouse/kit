@@ -28,12 +28,12 @@ export interface Answer {
 
 export type Route = (request: Received) => Answer | Promise<Answer>;
 
-export interface KitSocket {
+export interface KitConnection {
   headers: IncomingHttpHeaders;
   protocol: string;
-  frames: Record<string, unknown>[];
-  socket: WebSocket;
-  send(frame: Record<string, unknown>): void;
+  notifications: Record<string, unknown>[];
+  transport: WebSocket;
+  send(notification: Record<string, unknown>): void;
   close(code: number, reason: string): void;
 }
 
@@ -52,9 +52,9 @@ export interface Proxy {
 export interface House {
   origin: string;
   requests: Received[];
-  sockets: KitSocket[];
+  connections: KitConnection[];
   route(method: string, path: string, handler: Route): void;
-  holdStreams(): () => void;
+  holdConnections(): () => void;
 }
 
 function matched(pattern: string, path: string): Record<string, string> | null {
@@ -128,7 +128,7 @@ export async function startProxy(): Promise<Proxy> {
 export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'): Promise<House> {
   const routes: { method: string; pattern: string; handler: Route }[] = [];
   const requests: Received[] = [];
-  const sockets: KitSocket[] = [];
+  const connections: KitConnection[] = [];
   const serve = (request: IncomingMessage, response: ServerResponse) => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -161,8 +161,8 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
     });
   };
   const server = tls === undefined ? createServer(serve) : createTlsServer({ key: tls.key, cert: tls.cert }, serve);
-  const streams = new WebSocketServer({ noServer: true, handleProtocols: (offered) => [...offered][0] ?? false });
-  let streamsHeld = Promise.resolve();
+  const connectionServer = new WebSocketServer({ noServer: true, handleProtocols: (offered) => [...offered][0] ?? false });
+  let connectionsHeld = Promise.resolve();
   server.on('upgrade', async (request, duplex, head) => {
     if (new URL(request.url ?? '/', 'http://house').pathname !== streamPath) {
       duplex.destroy();
@@ -194,38 +194,38 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
       );
       return;
     }
-    await streamsHeld;
-    streams.handleUpgrade(request, duplex, head, (socket) => {
-      const held: KitSocket = {
+    await connectionsHeld;
+    connectionServer.handleUpgrade(request, duplex, head, (transport) => {
+      const connection: KitConnection = {
         headers: request.headers,
-        protocol: socket.protocol,
-        frames: [],
-        socket,
-        send: (frame) => socket.send(JSON.stringify(frame)),
-        close: (code, reason) => socket.close(code, reason),
+        protocol: transport.protocol,
+        notifications: [],
+        transport,
+        send: (notification) => transport.send(JSON.stringify(notification)),
+        close: (code, reason) => transport.close(code, reason),
       };
-      socket.on('message', (data) => held.frames.push(JSON.parse(String(data)) as Record<string, unknown>));
-      sockets.push(held);
+      transport.on('message', (data) => connection.notifications.push(JSON.parse(String(data)) as Record<string, unknown>));
+      connections.push(connection);
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   onTestFinished(async () => {
-    for (const held of sockets) held.socket.terminate();
-    streams.close();
+    for (const connection of connections) connection.transport.terminate();
+    connectionServer.close();
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
   return {
     origin: `${tls === undefined ? 'http' : 'https'}://127.0.0.1:${port}`,
     requests,
-    sockets,
+    connections,
     route: (method, pattern, handler) => {
       routes.unshift({ method, pattern, handler });
     },
-    holdStreams: () => {
+    holdConnections: () => {
       let release!: () => void;
-      streamsHeld = new Promise<void>((resolve) => {
+      connectionsHeld = new Promise<void>((resolve) => {
         release = resolve;
       });
       onTestFinished(release);

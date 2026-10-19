@@ -3,7 +3,7 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, lastInput, type Hosted } from './environment.ts';
+import { hostKit, lastCall, type Hosted } from './environment.ts';
 import { temporaryHome } from './kit.ts';
 import { commitAll, git, house, serveRooms, tryGit, type Room, type Rooms } from './rooms.ts';
 
@@ -37,7 +37,7 @@ function movedLines(...rooms: Room[]): RegExp {
   return new RegExp(`^${rooms.map((room) => `${room.root}: refs/house/received is at [0-9a-f]{12}\n`).join('')}$`);
 }
 
-it('changes no Local copy on a stream frame, and still takes the agents signal and inputs', async () => {
+it('changes no Local copy on a Kit connection notification, and still takes the agents notification and Kit calls', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -47,12 +47,12 @@ it('changes no Local copy on a stream frame, and still takes the agents signal a
   const asked = hosted.house.requests.length;
 
   room.put('a.md', 'a, from House\n');
-  hosted.socket.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
-  hosted.socket.send({ type: 'work_available', subject: 'local_copy' });
-  hosted.socket.send({ type: 'work_available', subject: 'agents' });
-  hosted.input({ kind: 'open' });
+  hosted.connection.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
+  hosted.connection.send({ type: 'work_available', subject: 'local_copy' });
+  hosted.connection.send({ type: 'work_available', subject: 'agents' });
+  hosted.call({ kind: 'open' });
 
-  expect(await hosted.ack(lastInput())).toHaveProperty('provider_session_id');
+  expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
   expect(hosted.house.requests.slice(asked).some((request) => request.path === '/kit/agents/desired')).toBe(true);
   expect(
     hosted.house.requests
@@ -62,7 +62,7 @@ it('changes no Local copy on a stream frame, and still takes the agents signal a
   expect(received(room)).toBe(before);
 });
 
-it('reads the selection of only the Rooms an authority change names on the open socket, copying one gained, keeping one lost as it was and saving a new handle, and the next house fetch says once that it no longer follows the lost one', async () => {
+it('reads the selection of only the Rooms an authority change names on the open Kit connection, copying one gained, keeping one lost as it was and saving a new handle, and the next house fetch says once that it no longer follows the lost one', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -75,13 +75,13 @@ it('reads the selection of only the Rooms an authority change names on the open 
   const record = (room: Room) => join(hosted.home, 'local-copies/rooms', `${room.ref}.json`);
   const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection');
   const asked = selections().length;
-  const sockets = hosted.house.sockets.length;
+  const connections = hosted.house.connections.length;
   const notesHouse = received(notes);
   plans.handle = 'renamed-plans';
   rooms.answered = [plans, design];
 
-  hosted.socket.send({ type: 'authority_changed', rooms: [] });
-  hosted.socket.send({ type: 'authority_changed', rooms: [notes.ref, plans.ref, design.ref] });
+  hosted.connection.send({ type: 'authority_changed', rooms: [] });
+  hosted.connection.send({ type: 'authority_changed', rooms: [notes.ref, plans.ref, design.ref] });
 
   await until(() => existsSync(record(design)));
   await until(async () => (await readFile(record(plans), 'utf8')).includes('renamed-plans'));
@@ -90,7 +90,7 @@ it('reads the selection of only the Rooms an authority change names on the open 
   expect(received(notes)).toBe(notesHouse);
   expect(existsSync(record(notes))).toBe(true);
   expect(selections().slice(asked).map((request) => request.body)).toEqual([{ rooms: [notes.ref, plans.ref, design.ref] }]);
-  expect(hosted.house.sockets).toHaveLength(sockets);
+  expect(hosted.house.connections).toHaveLength(connections);
 
   expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: `${notes.root}: no longer followed; kept as it is\n` });
   expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });

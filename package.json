@@ -1,7 +1,7 @@
 {
   "name": "@agentshouse/kit",
   "version": "0.2.1",
-  "description": "House Kit connects an Environment to agents.house.",
+  "description": "Kit connects an Environment to agents.house.",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { until, type Received } from './double.ts';
-import { conversationCredential, hostKit, lastInput, opened, uploadDouble, type Hosted, type McpCall } from './environment.ts';
+import { conversationCredential, hostKit, lastCall, opened, uploadDouble, type Hosted, type McpCall } from './environment.ts';
 import { commitAll, git, house, serveRooms, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
@@ -19,7 +19,7 @@ interface Shelled {
 
 async function ran(hosted: Hosted, line: string): Promise<Shelled> {
   const before = (await hosted.adapterLog()).filter((entry) => 'house' in entry || 'sh' in entry).length;
-  hosted.input({ kind: 'message', text: line, files: [], first: false });
+  hosted.call({ kind: 'message', text: line, files: [], first: false });
   return until(
     async () => (await hosted.adapterLog()).filter((entry) => 'house' in entry || 'sh' in entry)[before] as unknown as Shelled | undefined,
   );
@@ -254,14 +254,14 @@ it("downloads an incoming message's direct file into the conversation's fixed fo
   hosted.house.route('GET', '/message-files/:file', () => ({ bytes: { type: 'application/octet-stream', content: JPEG } }));
   await opened(hosted);
 
-  hosted.input({
+  hosted.call({
     kind: 'message',
     text: 'look',
     files: [{ version: 'file-1', name: 'photo.jpg', media_type: 'image/jpeg', bytes: JPEG.length, sha256: digest(JPEG) }],
     first: false,
   });
 
-  expect(await hosted.ack(lastInput())).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
   expect(await readFile(join(hosted.workingDirectory, '.house', 'files', 'message-1', 'file-1', 'photo.jpg'))).toEqual(JPEG);
   expect(
     hosted.house.requests.filter((request) => request.path === '/kit/conversation/originals/get').map((request) => request.body),

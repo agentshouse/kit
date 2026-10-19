@@ -117,7 +117,7 @@ it('pins in its package only the Codex and Claude Code adapters, no CLI and no G
   expect(Object.keys({ ...KIT_PACKAGE.dependencies, ...PINNED }).join(' ')).not.toMatch(/grok|@openai\/codex|claude-code/);
 });
 
-it('installs the pinned adapter of each named CLI that has one, and of one a later work frame names', async () => {
+it('installs the pinned adapter of each named CLI that has one, and of one a later work_available notification names', async () => {
   desired = ['codex-acp', 'grok-build'];
   await start();
 
@@ -126,8 +126,8 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
 
   reports.length = 0;
   desired = ['codex-acp', 'claude-agent-acp'];
-  const socket = await until(() => house.sockets[0]);
-  socket.send({ type: 'work_available', subject: 'agents' });
+  const connection = await until(() => house.connections[0]);
+  connection.send({ type: 'work_available', subject: 'agents' });
 
   await until(() => completeReports()[0]);
   expect((await adapterInstalls()).slice(1)).toEqual([
@@ -148,7 +148,7 @@ it("installs a pinned adapter from a read-only home, keeping npm's cache in Kit 
   expect((await stat(join(home, 'npm-cache'))).isDirectory()).toBe(true);
 });
 
-it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit version, its wire, whether it updates itself and its transcription engine', async () => {
+it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit release, its wire, whether it updates itself and its transcription engine', async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -158,8 +158,8 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
   expect(report).toEqual({
     os: expect.stringMatching(/\S/),
     ...('form' in report ? { form: expect.stringMatching(/^(laptop|desktop|server)$/) } : {}),
-    kit_version: KIT_PACKAGE.version,
-    wire: 2,
+    kit_release: KIT_PACKAGE.version,
+    wire: 3,
     updates_itself: false,
     agent_base: '/agents/house/agents',
     agents: [
@@ -255,7 +255,7 @@ it('installs a chosen CLI the login shell does not find though its profile print
   expect(await logged('curl.log')).toEqual(['https://claude.ai/install.sh']);
 });
 
-it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work frame", async () => {
+it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work_available notification", async () => {
   desired = ['codex-acp', 'claude-agent-acp'];
   await start(async () => {
     await rm(join(userBin(home), 'claude'));
@@ -272,7 +272,7 @@ it("reports a CLI whose official install failed with no release and the installe
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: Checksum verification failed');
 
   await rm(join(home, 'install-fail'));
-  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+  house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
 
   const recovered = await until(() => completeReports()[1]);
   expect(recovered.agents).toEqual([
@@ -350,7 +350,7 @@ it('reports a CLI below its minimum with the version found and the minimum, and 
   expect(await probes()).toBe(0);
 });
 
-it('reads a CLI below its minimum again at a later work frame and reports the release the User updated it to', async () => {
+it('reads a CLI below its minimum again at a later work_available notification and reports the release the User updated it to', async () => {
   desired = ['codex-acp'];
   await start(async () => {
     placeUserCli(userBin(home), 'codex-acp', '0.150.0');
@@ -358,7 +358,7 @@ it('reads a CLI below its minimum again at a later work frame and reports the re
   expect((await until(() => completeReports()[0])).agents).toEqual([expect.objectContaining({ kind: 'codex-acp', release: '0.150.0', minimum: '0.159.1' })]);
 
   placeUserCli(userBin(home), 'codex-acp', '0.160.0');
-  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+  house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
 
   const [current] = (await until(() => completeReports()[1])).agents as Record<string, unknown>[];
   expect(current).toMatchObject({ kind: 'codex-acp', release: '0.160.0', failure: null });
@@ -398,7 +398,7 @@ it('reads the models when it starts and on no timer after it, though House names
   await mkdir(join(home, 'models'));
   await writeFile(join(home, 'models', 'codex-acp'), JSON.stringify([{ id: 'gpt-5.5', name: '5.5', efforts: ['high'] }]));
 
-  house.sockets[0]!.send({ type: 'work_available', subject: 'agents' });
+  house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
   // A second and a half lets every Kit interval, capped at 300 ms, fire several times before the reads are counted.
   await new Promise((resolve) => setTimeout(resolve, 1500));
 

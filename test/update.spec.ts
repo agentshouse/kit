@@ -30,7 +30,7 @@ async function serve(hosted: Hosted, script: string): Promise<{ bootstrap: strin
 }
 
 function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string; update_clis?: boolean }): void {
-  hosted.house.sockets.at(-1)!.send({
+  hosted.house.connections.at(-1)!.send({
     type: 'input',
     input_id: id,
     kind: 'update',
@@ -52,13 +52,13 @@ const downloaded = (hosted: Hosted) => hosted.house.requests.find((request) => r
 
 const checkpoint = (hosted: Hosted) => readFile(join(hosted.home, 'update', 'pending.json'), 'utf8').catch(() => undefined);
 
-it('reruns the verified bootstrap with --linux outside its own service and acknowledges the update', async () => {
+it('reruns the verified bootstrap with --linux outside its own service and returns the result of the update', async () => {
   const hosted = await hostKit();
   const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
 
   update(hosted, 'update-1', pin);
 
-  expect(await hosted.ack('update-1')).toEqual({});
+  expect(await hosted.result('update-1')).toEqual({});
   expect(await ran(hosted)).toBe('--linux\n');
   const launched = await readFile(join(hosted.home, 'systemd-run.log'), 'utf8');
   expect(launched).toMatch(
@@ -78,7 +78,7 @@ it('reruns the bootstrap of its desktop placement in its workspace through the u
 
   update(hosted, 'update-user', { ...pin, update_clis: true });
 
-  expect(await hosted.ack('update-user')).toEqual({});
+  expect(await hosted.result('update-user')).toEqual({});
   expect(await ran(hosted)).toBe(`--workspace ${workspace} --update-clis\n`);
   expect(await readFile(join(hosted.home, 'systemd-run.log'), 'utf8')).toMatch(
     /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+ --update-clis\n$/,
@@ -94,7 +94,7 @@ it('reruns the bootstrap with --linux as its own account through sudo when it ru
 
   update(hosted, 'update-sudo', pin);
 
-  expect(await hosted.ack('update-sudo')).toEqual({});
+  expect(await hosted.result('update-sudo')).toEqual({});
   expect(await ran(hosted)).toBe('--linux\n');
   const elevated = (await readFile(join(hosted.home, 'sudo.log'), 'utf8')).split('\n');
   expect(elevated).toContainEqual(expect.stringMatching(new RegExp(`^-n systemd-run --uid=${process.getuid!()} --gid=${process.getgid!()} --wait `)));
@@ -104,13 +104,13 @@ it('reruns the bootstrap with --linux as its own account through sudo when it ru
 it.each([
   [true, '--linux --update-clis\n'],
   [false, '--linux\n'],
-])('reruns the bootstrap with --update-clis only when the update input carries the flag (%s)', async (flag, argv) => {
+])('reruns the bootstrap with --update-clis only when the update Kit call carries the flag (%s)', async (flag, argv) => {
   const hosted = await hostKit();
   const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
 
   update(hosted, `update-flag-${flag}`, { ...pin, update_clis: flag });
 
-  expect(await hosted.ack(`update-flag-${flag}`)).toEqual({});
+  expect(await hosted.result(`update-flag-${flag}`)).toEqual({});
   expect(await ran(hosted)).toBe(argv);
 });
 
@@ -120,7 +120,7 @@ it('refuses a bootstrap that does not match its sha256 and runs nothing', async 
 
   update(hosted, 'update-2', { ...pin, sha256: '0'.repeat(64) });
 
-  expect(await hosted.ack('update-2')).toEqual({ refused: 'the Kit bootstrap does not match its sha256' });
+  expect(await hosted.result('update-2')).toEqual({ refused: 'the Kit bootstrap does not match its sha256' });
   expect(await ran(hosted)).toBeUndefined();
 });
 
@@ -139,10 +139,10 @@ it('carries two updates one after the other, each with its own bootstrap and sta
   update(hosted, 'update-6', failing);
   update(hosted, 'update-7', passing);
 
-  expect(await hosted.ack('update-6')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
-  expect(await hosted.ack('update-7')).toEqual({});
+  expect(await hosted.result('update-6')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
+  expect(await hosted.result('update-7')).toEqual({});
   expect(await ran(hosted)).toBe('--linux\n');
-  expect(hosted.acks.map((ack) => ack.params.input)).toEqual(['update-6', 'update-7']);
+  expect(hosted.results.map((result) => result.params.input)).toEqual(['update-6', 'update-7']);
 });
 
 it('refuses the update with the exit status of a bootstrap that fails', async () => {
@@ -151,32 +151,32 @@ it('refuses the update with the exit status of a bootstrap that fails', async ()
 
   update(hosted, 'update-3', pin);
 
-  expect(await hosted.ack('update-3')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
+  expect(await hosted.result('update-3')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
 });
 
-it('reruns no bootstrap for an update its reopened socket sends after the update ended, and acknowledges it again', async () => {
+it('reruns no bootstrap for an update its reopened Kit connection sends after the update ended, and returns its result again', async () => {
   const hosted = await hostKit();
   const pin = await serve(hosted, HELD);
   update(hosted, 'update-8', pin);
   await until(() => downloaded(hosted));
-  hosted.socket.close(1001, 'shutting_down');
-  await until(() => hosted.house.sockets[1]);
+  hosted.connection.close(1001, 'shutting_down');
+  await until(() => hosted.house.connections[1]);
   await writeFile(join(hosted.home, 'go'), '');
-  await hosted.ack('update-8');
+  await hosted.result('update-8');
   await until(async () => (await checkpoint(hosted)) === undefined);
 
   update(hosted, 'update-8', pin);
 
-  await until(() => hosted.acks[1]);
+  await until(() => hosted.results[1]);
   await settle();
   expect(await ran(hosted)).toBe('--linux\n');
-  expect(hosted.acks.map((ack) => [ack.params.input, ack.body])).toEqual([
+  expect(hosted.results.map((result) => [result.params.input, result.body])).toEqual([
     ['update-8', {}],
     ['update-8', {}],
   ]);
 });
 
-it('reports no idle while an update runs and reports idle once it acknowledged the update', async () => {
+it('reports no idle while an update runs and reports idle once it returned the result of the update', async () => {
   const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
   const pin = await serve(hosted, HELD);
   update(hosted, 'update-9', pin);
@@ -186,13 +186,13 @@ it('reports no idle while an update runs and reports idle once it acknowledged t
 
   await writeFile(join(hosted.home, 'go'), '');
 
-  await hosted.ack('update-9');
+  await hosted.result('update-9');
   await until(() => hosted.idles[1]);
   const paths = hosted.house.requests.map((request) => request.path);
   expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf('/kit/inputs/update-9/ack'));
 });
 
-it('reports no idle while an update waits behind another and reports idle once it acknowledged both', async () => {
+it('reports no idle while an update waits behind another and reports idle once it returned both results', async () => {
   const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
   const first = await serve(hosted, HELD);
   const next = 'printf "%s\\n" "$*" >> "$HOUSE_KIT_HOME/bootstrap.ran"\n';
@@ -209,7 +209,7 @@ it('reports no idle while an update waits behind another and reports idle once i
 
   await writeFile(join(hosted.home, 'go'), '');
 
-  await hosted.ack('update-11');
+  await hosted.result('update-11');
   await until(() => hosted.idles[1]);
   await settle();
   const reported = hosted.house.requests
@@ -223,22 +223,22 @@ async function restartAfter(hosted: Hosted, id: string, script: string): Promise
   update(hosted, id, pin);
   await hosted.kit.exited;
   await until(() => readFile(join(hosted.home, 'update', 'outcome'), 'utf8').catch(() => undefined));
-  expect(hosted.acks).toHaveLength(0);
+  expect(hosted.results).toHaveLength(0);
   const restarted = runKit(['resident'], { HOUSE_KIT_HOME: hosted.home, PATH: await fakeBin(hosted.home) });
-  const ack = await hosted.ack(id);
-  await until(() => hosted.house.sockets[1]);
+  const result = await hosted.result(id);
+  await until(() => hosted.house.connections[1]);
   process.kill(restarted.pid, 'SIGKILL');
   await restarted.exited;
-  return ack;
+  return result;
 }
 
-it('acknowledges the update once the Kit it restarted runs again', async () => {
+it('returns the result of the update once the restarted Kit process runs again', async () => {
   const hosted = await hostKit();
 
   expect(await restartAfter(hosted, 'update-4', KILL_RESIDENT)).toEqual({});
 });
 
-it('refuses an update whose bootstrap failed after it stopped the Kit', async () => {
+it('refuses an update whose bootstrap failed after it stopped the Kit process', async () => {
   const hosted = await hostKit();
 
   expect(await restartAfter(hosted, 'update-5', `${KILL_RESIDENT}exit 3\n`)).toEqual({

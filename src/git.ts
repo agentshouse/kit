@@ -11,7 +11,7 @@ export function localCopies(): string {
 
 export const HOUSE_REF = 'refs/house/received';
 
-const COMMITTER = 'House Kit <house-kit@localhost>';
+const COMMITTER = 'Kit <house-kit@localhost>';
 
 export interface Ran {
   status: number | null;

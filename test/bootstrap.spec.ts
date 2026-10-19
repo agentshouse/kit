@@ -20,13 +20,13 @@ function bootstrap(script: string, argv: string[]) {
   return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
 }
 
-it('leaves the release exactly one image digest and one Kit version to fill', async () => {
+it('leaves the release exactly one image digest and one Kit release to fill', async () => {
   const linux = await readFile(LINUX, 'utf8');
   const windows = await readFile(WINDOWS, 'utf8');
 
   expect(spawnSync('bash', ['-n', LINUX]).status).toBe(0);
   expect(linux.split('__IMAGE_DIGEST__')).toHaveLength(2);
-  expect(linux.split('__KIT_VERSION__')).toHaveLength(2);
+  expect(linux.split('__KIT_RELEASE__')).toHaveLength(2);
   expect(windows.split('__IMAGE_DIGEST__')).toHaveLength(2);
   expect(windows).toMatch(/^[\x09\x0a\x20-\x7e]*$/);
 });
@@ -101,7 +101,7 @@ place_native_kit`,
   );
 
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toContain(`refused: House Kit could not be installed in ${home}/opt/house-kit`);
+  expect(ran.stderr).toContain(`refused: Kit could not be installed in ${home}/opt/house-kit`);
   expect(await readFile(join(home, 'opt', 'house-kit', 'release'), 'utf8')).toBe('old');
 });
 
@@ -241,8 +241,8 @@ it('asks once for each CLI below its minimum, updates one on Enter, leaves one i
   const { output, updated } = await updatingClis(0, true, '\nn\n');
 
   expect(output.match(/Update it\? \[Y\/n\]/g)).toHaveLength(2);
-  expect(output).toContain('codex 0.150.0 is older than 0.159.1, the oldest this House Kit runs. Update it? [Y/n]');
-  expect(output).toContain('claude 2.1.200 is older than 2.1.286, the oldest this House Kit runs. Update it? [Y/n]');
+  expect(output).toContain('codex 0.150.0 is older than 0.159.1, the oldest this Kit runs. Update it? [Y/n]');
+  expect(output).toContain('claude 2.1.200 is older than 2.1.286, the oldest this Kit runs. Update it? [Y/n]');
   expect(output).not.toContain('grok 1.0.50 is older');
   expect(updated).toEqual(['/home/u/.local/bin/codex']);
 });
@@ -296,7 +296,7 @@ container_cli_update /kit-home/.local/bin/codex </dev/null`,
   ]);
 });
 
-it('leaves a running container Kit and its conversations running after it updated a CLI, and asks it to restart once idle', async () => {
+it('leaves a running container Kit process and its conversations running after it updated a CLI, and asks it to restart once idle', async () => {
   const home = await temporaryHome();
   const ran = spawnSync(
     'bash',
@@ -320,14 +320,14 @@ resume_kit`,
   );
 
   expect(ran.stderr).toBe('updated /kit-home/.local/bin/codex\n');
-  expect(ran.stdout).toBe('Updating codex 0.150.0.\nHouse Kit is already installed.\n');
+  expect(ran.stdout).toBe('Updating codex 0.150.0.\nKit is already installed.\n');
   await expect(access(join(home, 'restart'))).resolves.toBeUndefined();
 });
 
 it.each([
   ['holding its credential', false],
   ['whose rejected credential it forgot', true],
-])('asks the server Kit %s to restart once idle when a rerun updates a CLI, and restarts no service itself', async (_name, rejected) => {
+])('asks the server Kit process %s to restart once idle when a rerun updates a CLI, and restarts no service itself', async (_name, rejected) => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true });
   await host.mark('systemd');
   expect(host.run(['--linux'])).toMatchObject({ status: 0, stderr: '' });

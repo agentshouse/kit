@@ -6,7 +6,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import type { Bridge } from './bridge.ts';
-import { KIT_VERSION } from './clis.ts';
+import { KIT_RELEASE } from './clis.ts';
 import { kitHome, readConfiguration, readHome, writeHome } from './home.ts';
 import { refusalOf } from './refusals.ts';
 
@@ -69,7 +69,7 @@ async function install(): Promise<void> {
     await cp(join(SKILL_SET, name), join(skillsDirectory(), name), { recursive: true });
     if (claude !== skills) await symlink(relative(claude, join(skills, name)), join(claudeDirectory(), name));
   }
-  await writeHome(RECORD, { version: KIT_VERSION, names } satisfies Installed);
+  await writeHome(RECORD, { version: KIT_RELEASE, names } satisfies Installed);
 }
 
 export async function placeSkillSet(): Promise<void> {
@@ -83,7 +83,7 @@ export async function placeSkillSet(): Promise<void> {
 async function replaceSkillSet(): Promise<void> {
   const accepted = (await readConfiguration()).skills;
   const installed = await readHome<Installed>(RECORD);
-  if (accepted && installed?.version === KIT_VERSION) return;
+  if (accepted && installed?.version === KIT_RELEASE) return;
   for (const name of installed?.names ?? []) {
     await rm(join(claudeDirectory(), name), { recursive: true, force: true });
     await rm(join(skillsDirectory(), name), { recursive: true, force: true });

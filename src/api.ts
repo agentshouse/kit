@@ -21,7 +21,7 @@ export function finalRefusal(error: unknown): error is HouseRefusal {
 }
 
 export function retryDelay(attempt: number): number {
-  // Full jitter, doubling from one second to a 30-second cap, spreads the Kits one outage dropped and retries within half a minute of House's return.
+  // Full jitter, doubling from one second to a 30-second cap, spreads the Kit processes one outage dropped and retries within half a minute of House's return.
   return Math.random() * Math.min(30_000, 1000 * 2 ** attempt);
 }
 

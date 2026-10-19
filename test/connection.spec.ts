@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { STREAM_SILENCE_MS, StreamSilence, type StreamClock } from '../src/stream.ts';
+import { CONNECTION_SILENCE_MS, ConnectionSilence, type ConnectionClock } from '../src/connection.ts';
 
 interface Timer {
   delay: number;
@@ -7,7 +7,7 @@ interface Timer {
   cleared: boolean;
 }
 
-function clock(): { clock: StreamClock; timers: Timer[] } {
+function clock(): { clock: ConnectionClock; timers: Timer[] } {
   const timers: Timer[] = [];
   return {
     clock: {
@@ -28,20 +28,20 @@ function fire(timer: Timer): void {
   if (!timer.cleared) timer.callback();
 }
 
-it('drops a stream only after two missed House beats, and each received frame restarts that deadline', () => {
+it('drops the Kit connection only after two missed House beats, and each received notification restarts that deadline', () => {
   const fake = clock();
   let dropped = 0;
-  const silence = new StreamSilence(() => {
+  const silence = new ConnectionSilence(() => {
     dropped += 1;
   }, fake.clock);
 
   silence.heard();
   expect(fake.timers).toHaveLength(1);
-  expect(fake.timers[0]).toMatchObject({ delay: STREAM_SILENCE_MS, cleared: false });
+  expect(fake.timers[0]).toMatchObject({ delay: CONNECTION_SILENCE_MS, cleared: false });
 
   silence.heard();
   expect(fake.timers[0]!.cleared).toBe(true);
-  expect(fake.timers[1]).toMatchObject({ delay: STREAM_SILENCE_MS, cleared: false });
+  expect(fake.timers[1]).toMatchObject({ delay: CONNECTION_SILENCE_MS, cleared: false });
   fire(fake.timers[0]!);
   expect(dropped).toBe(0);
 

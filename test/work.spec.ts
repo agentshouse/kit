@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { settle, until } from './double.ts';
-import { hostKit, lastInput, type Hosted, type Hosting } from './environment.ts';
+import { hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
 
 type Recorded = { method: string; params: Record<string, any> };
 
@@ -33,8 +33,8 @@ function raw(line: Recorded): Record<string, any> {
 
 async function opened(kind: string, hosting: Hosting = {}): Promise<Hosted> {
   const hosted = await hostKit([{ kind }], hosting);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   await until(() => hosted.idles[1]);
   return hosted;
 }
@@ -42,7 +42,7 @@ async function opened(kind: string, hosting: Hosting = {}): Promise<Hosted> {
 async function stays(hosted: Hosted, text: string, idle: boolean): Promise<void> {
   const idles = hosted.idles.length;
   const turns = ended(hosted).length;
-  hosted.input({ kind: 'message', text: `${text}\n@say ok`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${text}\n@say ok`, files: [], first: false });
   await until(() => ended(hosted)[turns]);
   if (idle) {
     await until(() => hosted.idles[idles]);
@@ -161,7 +161,7 @@ it('stays busy while the working directory holds a durable schedule when a sessi
   const tasks = join(hosted.workingDirectory, '.claude', 'scheduled_tasks.json');
   await writeFile(tasks, JSON.stringify({ tasks: [{ id: '7b99af94', cron: '0 3 1 1 *', prompt: 'say hi', createdAt: 1791648534000, recurring: true }] }));
 
-  hosted.input({ kind: 'message', text: '@say resumed', files: [], first: false, provider_session_id: 'session-earlier' });
+  hosted.call({ kind: 'message', text: '@say resumed', files: [], first: false, provider_session_id: 'session-earlier' });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(1);
@@ -243,7 +243,7 @@ it.each([
 
   await stays(hosted, directive, false);
 
-  hosted.input({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
   await until(() => hosted.idles[2]);
 });
 
@@ -263,12 +263,12 @@ it.each([
 ])('keeps %s busy until its process exits', async (_case, kind) => {
   const hosted = await hostKit([{ kind }], { prepare: (home) => writeFile(join(home, 'codex-memories'), '') });
   await until(() => hosted.idles[0]);
-  hosted.input({ kind: 'open' });
-  await hosted.ack(lastInput());
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
   await settle();
   expect(hosted.idles).toHaveLength(1);
 
-  hosted.input({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
 
   await until(() => hosted.idles[1]);
 });
@@ -278,7 +278,7 @@ it('keeps work whose end never arrives busy until the Conversation process exits
   const start = recorded('claude-shell').findIndex((line) => raw(line).subtype === 'task_started');
   await stays(hosted, `@play ${fixture('claude-shell')} 0 ${start + 1}`, false);
 
-  hosted.input({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
 
   await until(() => hosted.idles[2]);
 });
@@ -308,7 +308,7 @@ it('names a new Claude Code session itself and passes the CLI’s background rep
 it('names a new Codex session itself before its first prompt and outside any turn', async () => {
   const hosted = await opened('codex-acp');
 
-  hosted.input({ kind: 'message', text: '@say first', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say first', files: [], first: false });
   await until(() => ended(hosted)[0]);
 
   const log = await hosted.adapterLog();

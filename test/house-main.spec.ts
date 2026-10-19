@@ -288,7 +288,7 @@ it.each([
   [['push', '--owner', '--dry-run'], false, '--dry-run', 'usage: house push [commit] [--owner]'],
   [['push', 'HEAD', '--owner', '--dry-run'], false, '--dry-run', 'usage: house push [commit] [--owner]'],
   [['fetch', '--x'], false, '--x', 'usage: house fetch'],
-])('refuses house %j with its usage before it opens a socket', async (argv, conversation, unexpected, usage) => {
+])('refuses house %j with its usage before it opens a Kit connection', async (argv, conversation, unexpected, usage) => {
   const home = await temporaryHome();
   vi.stubEnv('HOUSE_KIT_HOME', home);
   const owner = ownerSocket();

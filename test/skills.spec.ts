@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import { startHouse } from './double.ts';
-import { conversationCredential, hostKit, lastInput, opened, shelled, userBin, type Hosted, type Hosting, type McpCall, type ToolResult } from './environment.ts';
+import { conversationCredential, hostKit, lastCall, opened, shelled, userBin, type Hosted, type Hosting, type McpCall, type ToolResult } from './environment.ts';
 import { readOnlyHome, temporaryHome } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 
@@ -15,7 +15,7 @@ const SHIPPED = new URL('./fixtures/how-we-work/', import.meta.url);
 const SHIPPED_TEXTS = await Promise.all((await readdir(SHIPPED)).sort().map((name) => readFile(new URL(name, SHIPPED), 'utf8')));
 const EARLIER_TEXTS = SHIPPED_TEXTS.filter((text) => text !== HOW_WE_WORK_TEXT);
 const EARLIER_TEXT = EARLIER_TEXTS[0]!;
-const { version: KIT_VERSION } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+const { version: KIT_RELEASE } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
 };
 const UPSTREAM = JSON.parse(await readFile(new URL('../skills-upstream.json', import.meta.url), 'utf8')) as {
@@ -165,7 +165,7 @@ it('installs every skill for the home it launches agent CLIs with, with a relati
       expect(await readFile(join(skills(hosted.home, name), file), 'utf8')).toBe(await readFile(join(SKILL_SET, name, file), 'utf8'));
     }
   }
-  expect(await recorded(hosted.home)).toEqual({ version: KIT_VERSION, names: vendored });
+  expect(await recorded(hosted.home)).toEqual({ version: KIT_RELEASE, names: vendored });
 });
 
 it('links each skill so it resolves when the Claude skill directory is redirected elsewhere', async () => {
@@ -194,7 +194,7 @@ it('makes no per-skill link when the Claude skill directory already resolves to 
   for (const name of await names()) {
     expect((await lstat(skills(home, name))).isDirectory()).toBe(true);
   }
-  expect(await recorded(home)).toEqual({ version: KIT_VERSION, names: await names() });
+  expect(await recorded(home)).toEqual({ version: KIT_RELEASE, names: await names() });
 });
 
 it('leaves a skill directory or link the record does not name untouched and installs nothing under its name', async () => {
@@ -212,12 +212,12 @@ it('leaves a skill directory or link the record does not name untouched and inst
   expect(await readlink(claude(home, SECOND))).toBe(join(home, 'elsewhere'));
   await absent(skills(home, SECOND));
   expect(await recorded(home)).toEqual({
-    version: KIT_VERSION,
+    version: KIT_RELEASE,
     names: (await names()).filter((name) => name !== FIRST && name !== SECOND),
   });
 });
 
-it('keeps an installed skill as the owner edited it while the Kit version is the same', async () => {
+it('keeps an installed skill as the owner edited it while the Kit release is the same', async () => {
   const hosted = await hostKit([{}], { skills: true });
   await writeFile(join(skills(hosted.home, FIRST), 'SKILL.md'), "the owner's own skill\n");
 
@@ -226,7 +226,7 @@ it('keeps an installed skill as the owner edited it while the Kit version is the
   expect(await readFile(join(skills(hosted.home, FIRST), 'SKILL.md'), 'utf8')).toBe("the owner's own skill\n");
 });
 
-it('replaces only the names an earlier Kit version recorded when a new version starts', async () => {
+it('replaces only the names an earlier Kit release recorded when a new version starts', async () => {
   const hosted = await hostKit([{}], { skills: true });
   const home = hosted.home;
   await writeFile(join(skills(home, FIRST), 'SKILL.md'), "the owner's own skill\n");
@@ -246,10 +246,10 @@ it('replaces only the names an earlier Kit version recorded when a new version s
   await absent(skills(home, 'retired'));
   await absent(claude(home, 'retired'));
   expect(await readFile(join(skills(home, 'my-tdd'), 'SKILL.md'), 'utf8')).toBe('my copy\n');
-  expect(await recorded(home)).toEqual({ version: KIT_VERSION, names: await names() });
+  expect(await recorded(home)).toEqual({ version: KIT_RELEASE, names: await names() });
 });
 
-it("brings an updated upstream set with a new Kit version: a skill upstream dropped leaves both directories and one it added arrives", async () => {
+it("brings an updated upstream set with a new Kit release: a skill upstream dropped leaves both directories and one it added arrives", async () => {
   const hosted = await hostKit([{}], { skills: true });
   const home = hosted.home;
   const current = await names();
@@ -269,7 +269,7 @@ it("brings an updated upstream set with a new Kit version: a skill upstream drop
   expect(await tree(skills(home, added))).toEqual(await tree(join(SKILL_SET, added)));
   expect(await realpath(claude(home, added))).toBe(await realpath(skills(home, added)));
   expect((await readdir(skills(home))).sort()).toEqual(current);
-  expect(await recorded(home)).toEqual({ version: KIT_VERSION, names: current });
+  expect(await recorded(home)).toEqual({ version: KIT_RELEASE, names: current });
 });
 
 it('removes every recorded skill and the record and installs nothing when the Skill set is declined', async () => {
@@ -313,7 +313,7 @@ it('places every skill at kit login in the home of whoever runs it, with no resi
   for (const name of await names()) {
     expect(await realpath(claude(home, name))).toBe(await realpath(skills(home, name)));
   }
-  expect(await recorded(join(home, '.house-kit'))).toEqual({ version: KIT_VERSION, names: await names() });
+  expect(await recorded(join(home, '.house-kit'))).toEqual({ version: KIT_RELEASE, names: await names() });
 });
 
 it('places no skill at kit login when the Skill set is declined', async () => {
@@ -337,9 +337,9 @@ it('keeps the Environment connected from a read-only home, saying the skills cou
   await readOnlyHome(readOnly);
 
   const hosted = await hostKit([{}], { home, skills: true, environment: { HOME: readOnly, CODEX_HOME: await temporaryHome() } });
-  hosted.input({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
+  hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   expect(hosted.kit.stderr()).toMatch(/^kit: the skills could not be placed: EACCES: .*\.agents/m);
   expect(edits(hosted)).toEqual([]);
 });
@@ -349,7 +349,7 @@ it('creates no How-we-work document for a declined Skill set whose recorded skil
     skills: false,
     prepare: async (home) => {
       await mkdir(skills(home, 'grill-me'), { recursive: true });
-      await writeFile(join(home, RECORD), JSON.stringify({ version: KIT_VERSION, names: ['grill-me'] }));
+      await writeFile(join(home, RECORD), JSON.stringify({ version: KIT_RELEASE, names: ['grill-me'] }));
       await chmod(skills(home), 0o555);
       onTestFinished(() => chmod(skills(home), 0o700));
     },
@@ -391,9 +391,9 @@ it.each(['operation_denied', 'room_not_found'])(
         ? refused(code)
         : { content: [{ type: 'text', text: 'results: []' }] };
 
-    hosted.input({ kind: 'open', conversation_id: 'conversation-1' });
+    hosted.call({ kind: 'open', conversation_id: 'conversation-1' });
 
-    expect(await hosted.ack(lastInput())).toEqual({ provider_session_id: expect.any(String) });
+    expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
     await opened(hosted, 'conversation-2');
     await opened(hosted, 'conversation-3');
     expect(edits(hosted)).toHaveLength(2);
@@ -433,13 +433,13 @@ it('keeps a present document that already holds the current text', async () => {
 it('opens every conversation that starts together while it brings the text', async () => {
   const hosted = await hostKit([{}], { skills: true });
   held(hosted, EARLIER_TEXT);
-  const inputs = [];
+  const calls = [];
   for (const conversation of ['conversation-1', 'conversation-2', 'conversation-3', 'conversation-4']) {
-    hosted.input({ kind: 'open', conversation_id: conversation, agent_id: 'agent-1' });
-    inputs.push(lastInput());
+    hosted.call({ kind: 'open', conversation_id: conversation, agent_id: 'agent-1' });
+    calls.push(lastCall());
   }
 
-  for (const input of inputs) expect(await hosted.ack(input)).toEqual({ provider_session_id: expect.any(String) });
+  for (const call of calls) expect(await hosted.result(call)).toEqual({ provider_session_id: expect.any(String) });
 });
 
 it('keeps a present document the User edited as it is and never writes it again', async () => {
@@ -475,9 +475,9 @@ it("refuses to open a conversation with House's answer when another refusal stop
   const hosted = await hostKit([{}], { skills: true });
   hosted.tools.edit = () => refused('invalid_documents');
 
-  hosted.input({ kind: 'open', conversation_id: 'conversation-1' });
+  hosted.call({ kind: 'open', conversation_id: 'conversation-1' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('invalid_documents') });
+  expect(await hosted.result(lastCall())).toEqual({ refused: expect.stringContaining('invalid_documents') });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toEqual([]);
   hosted.tools.edit = () => ({ content: [{ type: 'text', text: 'results: []' }] });
   await opened(hosted, 'conversation-2');
@@ -488,9 +488,9 @@ it('refuses to open a conversation while another path blocks the absent document
   const hosted = await hostKit([{}], { skills: true });
   hosted.tools.edit = () => conflicted('ancestor_conflict');
 
-  hosted.input({ kind: 'open', conversation_id: 'conversation-1' });
+  hosted.call({ kind: 'open', conversation_id: 'conversation-1' });
 
-  expect(await hosted.ack(lastInput())).toEqual({ refused: expect.stringContaining('ancestor_conflict') });
+  expect(await hosted.result(lastCall())).toEqual({ refused: expect.stringContaining('ancestor_conflict') });
   hosted.tools.edit = () => ({ content: [{ type: 'text', text: 'results: []' }] });
   await opened(hosted, 'conversation-2');
   await opened(hosted, 'conversation-3');

@@ -23,7 +23,7 @@ const COMMANDS = new Map<string, Command>([
     'logout',
     {
       usage: 'usage: kit logout',
-      about: "disconnects this computer, stops House Kit and ends your own agent's connection",
+      about: "disconnects this computer, stops the Kit process and ends your own agent's connection",
       operands: 0,
       run: logout,
     },
@@ -32,7 +32,7 @@ const COMMANDS = new Map<string, Command>([
     'resident',
     {
       usage: 'usage: kit resident',
-      about: "keeps this Environment connected; House Kit's service runs it",
+      about: "keeps this Environment connected; Kit's service runs it",
       operands: 0,
       run: resident,
     },

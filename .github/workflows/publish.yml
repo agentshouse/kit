@@ -1,4 +1,4 @@
-name: Publish House Kit
+name: Publish Kit
 
 on:
   push:
@@ -90,10 +90,10 @@ jobs:
             fi
           done
           mkdir -p tmp/release
-          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_VERSION__/$VERSION/" bin/connect-linux.sh > tmp/release/connect-linux.sh
+          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_RELEASE__/$VERSION/" bin/connect-linux.sh > tmp/release/connect-linux.sh
           sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" bin/connect-windows.ps1 > tmp/release/connect-windows.ps1
           cp dist/bootstrap.json tmp/release/bootstrap.json
-          gh release create "v$VERSION" tmp/release/* --target "$GITHUB_SHA" --title "House Kit v$VERSION" --notes "Image: ghcr.io/agentshouse/kit@$digest"
+          gh release create "v$VERSION" tmp/release/* --target "$GITHUB_SHA" --title "Kit v$VERSION" --notes "Image: ghcr.io/agentshouse/kit@$digest"
           gh release download "v$VERSION" --dir tmp/release-readback
           diff -r tmp/release tmp/release-readback
       - name: Publish the package as latest

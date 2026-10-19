@@ -246,8 +246,8 @@ it('records the login-code relay and the resident uses it without an ambient var
   }));
   runKit(['resident'], { HOUSE_KIT_HOME: home, NODE_EXTRA_CA_CERTS: tls.path });
 
-  const socket = await until(() => relay.sockets[0]);
-  expect(socket.headers.authorization).toBe('Bearer ahk_code_credential');
+  const connection = await until(() => relay.connections[0]);
+  expect(connection.headers.authorization).toBe('Bearer ahk_code_credential');
   expect(relay.requests.map((request) => request.path)).toContain(`${prefix}/kit/restarted`);
   expect(relay.requests.map((request) => request.path)).toContain(`${prefix}/kit/stream`);
   expect(house.requests).toEqual([]);
@@ -656,7 +656,7 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   serveLogin(house, 'environment-one', 'ahk_first');
   await logIn(house, home);
   const resident = runKit(['resident'], { HOUSE_KIT_HOME: home });
-  await until(() => house.sockets[0]);
+  await until(() => house.connections[0]);
   house.route('POST', '/kit/logout', () => ({ body: {} }));
   house.requests.length = 0;
 
@@ -671,7 +671,7 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   expect(await resident.exited).toBe(1);
   const restarted = runKit(['resident'], { HOUSE_KIT_HOME: home });
   await until(() => restarted.stderr().includes('run kit login'));
-  expect(house.sockets).toHaveLength(1);
+  expect(house.connections).toHaveLength(1);
 
   serveLogin(house, 'environment-one', 'ahk_second');
   const { started, exit } = await logIn(house, home);
@@ -684,7 +684,7 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
     credential: 'ahk_second',
   });
   await expect(access(join(home, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
-  const reconnected = await until(() => house.sockets[1]);
+  const reconnected = await until(() => house.connections[1]);
   expect(reconnected.headers.authorization).toBe('Bearer ahk_second');
 });
 
@@ -828,6 +828,6 @@ it('keeps the stored credential and names the cause when the stopped service doe
   const login = await loginWithCode(house, home, path);
 
   expect(await login.exited).toBe(0);
-  expect(login.stderr()).toBe('kit: the House Kit service could not be started: Failed to start house-kit.service: Unit house-kit.service is masked.\n');
+  expect(login.stderr()).toBe('kit: the Kit service could not be started: Failed to start house-kit.service: Unit house-kit.service is masked.\n');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_code_credential' });
 });

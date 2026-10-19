@@ -170,7 +170,7 @@ const KIT_PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.me
   peerDependencies: Record<string, string>;
 };
 
-export const KIT_VERSION = KIT_PACKAGE.version;
+export const KIT_RELEASE = KIT_PACKAGE.version;
 
 const PROXY = /^https?_proxy$/i;
 const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/;

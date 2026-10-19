@@ -21,14 +21,14 @@ import type { LocalCopies } from './copies.ts';
 import { answeredFailure, readerFor, type Event, type Message, type Reader } from './events.ts';
 import { placeFiles, uploadBytes, type MessageFile, type SavedFile } from './files.ts';
 import { agentBase } from './home.ts';
-import type { Ack, Inputs } from './inputs.ts';
+import type { Call, Calls, Result } from './calls.ts';
 import { instructions } from './instructions.ts';
 import { Parts, type Context, type Operation, type Part } from './parts.ts';
 import { refusalOf } from './refusals.ts';
 import { killMarked, Scope } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 import { createHowWeWork } from './skills.ts';
-import type { Frame } from './stream.ts';
+import type { Notification } from './connection.ts';
 import { transcribe } from './transcription.ts';
 import { workFor, type Work } from './work.ts';
 
@@ -36,19 +36,14 @@ export interface Kit {
   house: House;
   agents: Agents;
   copies: LocalCopies;
-  inputs: Inputs;
-  send(frame: Frame): boolean;
+  calls: Calls;
+  send(notification: Notification): boolean;
   changed(): void;
 }
 
-export interface Input {
-  input_id: string;
-  kind: string;
-  conversation_id: string;
-  agent_id: string;
-  provider_session_id: string | null;
-  [field: string]: unknown;
-}
+export type ConversationMethod = 'open' | 'message' | 'interrupt' | 'kill' | 'option' | 'answer';
+
+export type ConversationCall = Call<ConversationMethod> & { [field: string]: unknown };
 
 type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error';
 
@@ -120,7 +115,7 @@ const EXIT_PLAN_MODE = {
   },
 };
 
-export const CONVERSATION_INPUTS: ReadonlySet<string> = new Set(['open', 'message', 'interrupt', 'kill', 'option', 'answer']);
+export const CONVERSATION_METHODS: ReadonlySet<string> = new Set<ConversationMethod>(['open', 'message', 'interrupt', 'kill', 'option', 'answer']);
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -180,11 +175,11 @@ interface Running {
 }
 
 interface Waiting {
-  input: Input;
+  call: ConversationCall;
   route: Route;
   content: ContentBlock[];
   instructing: Promise<string> | null;
-  settle(ack: Ack): void;
+  settle(result: Result): void;
 }
 
 interface Launch {
@@ -264,22 +259,22 @@ export class Conversations {
     setInterval(() => this.look(), 2_000);
   }
 
-  input(input: Input): void {
-    void this.kit.inputs.carry(input.input_id, () => {
-      const conversation = this.conversation(input.conversation_id);
-      if (input.kind === 'kill') {
+  call(call: ConversationCall): void {
+    void this.kit.calls.carry(call.input_id, () => {
+      const conversation = this.conversation(call.conversation_id);
+      if (call.kind === 'kill') {
         conversation.kills++;
         conversation.killed.abort(new Error(KILLED));
         for (const waiting of conversation.waiting.splice(0)) waiting.settle({ refused: KILLED });
         this.halt(conversation);
       }
-      if (input.kind === 'interrupt') {
+      if (call.kind === 'interrupt') {
         conversation.interrupts++;
         conversation.interrupted.abort();
       }
-      const handled = conversation.queue.then(() => this.carry(conversation, input));
+      const handled = conversation.queue.then(() => this.carry(conversation, call));
       conversation.queue = handled.catch(() => undefined);
-      return handled.then(async ({ ack }) => ({ ack: await ack }));
+      return handled.then(async ({ result }) => ({ result: await result }));
     });
   }
 
@@ -340,34 +335,34 @@ export class Conversations {
     return conversation;
   }
 
-  private async carry(conversation: Conversation, input: Input): Promise<{ ack: Promise<Ack> }> {
-    if (input.kind === 'open') return { ack: this.open(conversation, input) };
-    if (input.kind === 'message') return this.message(conversation, input);
+  private async carry(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
+    if (call.kind === 'open') return { result: this.open(conversation, call) };
+    if (call.kind === 'message') return this.message(conversation, call);
     await this.launched(conversation);
-    if (input.kind === 'interrupt') {
+    if (call.kind === 'interrupt') {
       if (--conversation.interrupts === 0) conversation.interrupted = new AbortController();
-      await this.interrupt(conversation, String(input.turn_id));
+      await this.interrupt(conversation, String(call.turn_id));
     }
-    if (input.kind === 'kill') {
+    if (call.kind === 'kill') {
       await this.kill(conversation);
       await conversation.sending;
       if (--conversation.kills === 0) conversation.killed = new AbortController();
     }
-    if (input.kind === 'option') await this.option(conversation, String(input.option), input.value);
-    if (input.kind === 'answer') {
-      const question = this.questions.get(String(input.interaction_id));
+    if (call.kind === 'option') await this.option(conversation, String(call.option), call.value);
+    if (call.kind === 'answer') {
+      const question = this.questions.get(String(call.interaction_id));
       if (question === undefined) {
-        const text = answerMessage(input.request, input.response);
-        return this.message(conversation, { ...input, text, files: [], first: false });
+        const text = answerMessage(call.request, call.response);
+        return this.message(conversation, { ...call, text, files: [], first: false });
       }
-      question.answer(input.response);
+      question.answer(call.response);
     }
-    return { ack: Promise.resolve({}) };
+    return { result: Promise.resolve({}) };
   }
 
-  private open(conversation: Conversation, input: Input): Promise<Ack> {
+  private open(conversation: Conversation, call: ConversationCall): Promise<Result> {
     if (conversation.running !== null) return Promise.resolve({});
-    const launch = conversation.launch ?? this.launch(conversation, this.route(conversation, input.agent_id), null, true);
+    const launch = conversation.launch ?? this.launch(conversation, this.route(conversation, call.agent_id), null, true);
     return launch.session.then(
       (session) => ({ provider_session_id: session }),
       (error: unknown) => ({ refused: refusal(conversation, error) }),
@@ -411,14 +406,14 @@ export class Conversations {
     return read;
   }
 
-  private async message(conversation: Conversation, input: Input): Promise<{ ack: Promise<Ack> }> {
-    const content: ContentBlock[] = [{ type: 'text', text: String(input.text) }];
+  private async message(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
+    const content: ContentBlock[] = [{ type: 'text', text: String(call.text) }];
     let route: Route;
     let instructing: Promise<string> | null = null;
     try {
-      route = await this.route(conversation, input.agent_id);
-      if (input.first === true) instructing = this.instructed(conversation, route);
-      const files = input.files as MessageFile[];
+      route = await this.route(conversation, call.agent_id);
+      if (call.first === true) instructing = this.instructed(conversation, route);
+      const files = call.files as MessageFile[];
       if (files.length > 0) this.prepares(conversation, 'files');
       const paths = await placeFiles(this.kit.house, route.working_directory, files, conversation.killed.signal);
       const lines = await this.transcribed(conversation, files, paths);
@@ -426,12 +421,12 @@ export class Conversations {
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
       this.prepares(conversation, null);
-      return { ack: Promise.resolve({ refused: refusal(conversation, error) }) };
+      return { result: Promise.resolve({ refused: refusal(conversation, error) }) };
     }
     conversation.preparing = null;
     return {
-      ack: new Promise<Ack>((settle) => {
-        conversation.waiting.push({ input, route, content, instructing, settle });
+      result: new Promise<Result>((settle) => {
+        conversation.waiting.push({ call, route, content, instructing, settle });
         this.next(conversation);
       }),
     };
@@ -452,8 +447,8 @@ export class Conversations {
   }
 
   private async send(conversation: Conversation, waiting: Waiting): Promise<void> {
-    const { input } = waiting;
-    let ack: Ack = {};
+    const { call } = waiting;
+    let result: Result = {};
     let started = false;
     let instructing = waiting.instructing;
     const prompt: ContentBlock[] = [];
@@ -463,17 +458,17 @@ export class Conversations {
         await this.launched(conversation);
       }
       if (conversation.running === null) {
-        const stored = conversation.session ?? input.provider_session_id;
-        const empty = input.first === true && conversation.prompted !== stored;
+        const stored = conversation.session ?? call.provider_session_id;
+        const empty = call.first === true && conversation.prompted !== stored;
         const launch = this.launch(conversation, Promise.resolve(waiting.route), stored, empty);
-        if (input.first === true) instructing = this.instructed(conversation, waiting.route);
+        if (call.first === true) instructing = this.instructed(conversation, waiting.route);
         started = (await launch.session) !== stored;
       }
       const session = conversation.running!.sessionId;
-      if (started || (input.first === true && session !== input.provider_session_id)) {
-        ack = { provider_session_id: session };
+      if (started || (call.first === true && session !== call.provider_session_id)) {
+        result = { provider_session_id: session };
       }
-      if (input.first === true) {
+      if (call.first === true) {
         prompt.push({ type: 'text', text: await (instructing ?? this.instructed(conversation, waiting.route)!) });
       }
       if (conversation.kills > 0) throw new Error(KILLED);
@@ -487,8 +482,8 @@ export class Conversations {
       return;
     }
     this.starts(conversation, null);
-    this.prompt(conversation, [...prompt, ...waiting.content], () => this.kit.inputs.hands(String(input.input_id), ack));
-    waiting.settle(ack);
+    this.prompt(conversation, [...prompt, ...waiting.content], () => this.kit.calls.keepResult(String(call.input_id), result));
+    waiting.settle(result);
   }
 
   private starts(conversation: Conversation, step: Starting | null): void {

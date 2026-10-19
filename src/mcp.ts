@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { KIT_VERSION } from './clis.ts';
+import { KIT_RELEASE } from './clis.ts';
 import { relayed } from './relay.ts';
 
 export interface Message {
@@ -29,7 +29,7 @@ export function mcpBody(message: Message, operation: string | null): string {
       ...message.params,
       _meta: {
         'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
-        'io.modelcontextprotocol/clientInfo': { name: '@agentshouse/kit', version: KIT_VERSION },
+        'io.modelcontextprotocol/clientInfo': { name: '@agentshouse/kit', version: KIT_RELEASE },
         'io.modelcontextprotocol/clientCapabilities': {},
         ...(operation === null ? {} : { 'agents.house/agent-operation': operation }),
       },
