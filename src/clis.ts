@@ -283,9 +283,13 @@ function inLoginShell(script: string, argument = '', signal?: AbortSignal): Prom
   return run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${USER_BIN}; ${script}' sh ${argument}`], READ_MS, true, signal);
 }
 
-export async function locate(kind: string, signal?: AbortSignal): Promise<string | null> {
-  const ran = await inLoginShell(LOOKUP, CLIS[kind]!.bin, signal);
+export async function onLoginPath(program: string, signal?: AbortSignal): Promise<string | null> {
+  const ran = await inLoginShell(LOOKUP, program, signal);
   return ran.stdout.split('\n').findLast((line) => line.startsWith(FOUND))?.slice(FOUND.length) ?? null;
+}
+
+export function locate(kind: string, signal?: AbortSignal): Promise<string | null> {
+  return onLoginPath(CLIS[kind]!.bin, signal);
 }
 
 export async function loginPath(): Promise<string> {

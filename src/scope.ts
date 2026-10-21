@@ -95,7 +95,7 @@ function killAll(pids: number[]): void {
   }
 }
 
-export function killTree(child: ChildProcess): void {
+export function killTree(child: Pick<ChildProcess, 'pid'>): void {
   killAll([child.pid!, ...descendants([child.pid!])]);
 }
 

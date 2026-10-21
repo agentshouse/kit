@@ -19,6 +19,7 @@ import { SignIns } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
 import { holdConnection, type Connection, type Notification } from './connection.ts';
 import { KitUpdate } from './update.ts';
+import { WebWizards } from './web-wizard.ts';
 import { codexLauncher } from './work.ts';
 
 function report(error: unknown): void {
@@ -158,6 +159,7 @@ export async function resident(): Promise<void> {
   });
   const signIns = new SignIns(house, agents, calls);
   const update = new KitUpdate(calls);
+  const wizards = new WebWizards(calls, (notification) => connection?.send(notification) ?? false);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
       killDescendants();
@@ -174,9 +176,11 @@ export async function resident(): Promise<void> {
       changed();
       logged(copies.connected());
     },
+    closed: () => wizards.disconnected(),
     call: (call: Call) => {
       if (call.kind === 'sign_in') signIns.start(call);
       else if (call.kind === 'update') update.start(call);
+      else if (call.kind === 'run_wizard') wizards.start(call);
       else if (CONVERSATION_METHODS.has(call.kind)) conversations.call(call as ConversationCall);
       else {
         const refused = { refused: `This Kit does not know ${(call as { kind: string }).kind}; update the Kit` };
@@ -187,6 +191,7 @@ export async function resident(): Promise<void> {
       if (notification.type === 'watching') conversations.watching(notification.watching === true);
       if (notification.type === 'authority_changed') logged(copies.changed(notification.rooms as string[]));
       if (notification.type === 'work_available' && notification.subject === 'agents') logged(agents.refresh());
+      wizards.notified(notification);
     },
   });
 }
