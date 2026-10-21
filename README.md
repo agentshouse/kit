@@ -49,8 +49,7 @@ In a container you do not control, such as ChatGPT's, `npm i -g @agentshouse/kit
 Git repository in the workspace's `local-copies`, and keeps a Room's copy as it is, no longer refreshing it, once the
 Room may no longer be copied here. `house fetch` does the same and records House's changes on each copy's
 `refs/house/received`; rebase onto it, commit and run `house push --owner` in the copy, through the install command in
-the container. An Agent runs both, without `--owner`. `house upload` and `house download` move a Room's other files, each of up to 10 GiB, straight
-to and from House's store, reading and writing them from disk in parts; a broken upload resumes on its own.
+the container. An Agent runs both, without `--owner`. `house upload` and `house download` move a Room's other files, each of up to 10 GiB, in parts straight between disk and House's store; a broken upload resumes on its own.
 
 Kit turns each audio file of your message to an Agent into text on this
 computer before the Agent reads it. While transcription is on, the speech
