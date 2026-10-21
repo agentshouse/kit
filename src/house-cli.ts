@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { request, setGlobalProxyFromEnv, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { basename, extname, join, resolve } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ToolResult } from './bridge.ts';
@@ -19,15 +18,6 @@ interface Tool {
   name: string;
   description?: string;
   inputSchema: unknown;
-}
-
-interface Grant {
-  url: string;
-  operation: string;
-}
-
-interface Staged {
-  upload?: Array<Grant & { sha256: string }>;
 }
 
 interface Description {
@@ -147,15 +137,7 @@ function unreadable(path: string, error: unknown): Error {
   );
 }
 
-async function localFile(path: string): Promise<Buffer> {
-  try {
-    return await readFile(path);
-  } catch (error) {
-    throw unreadable(path, error);
-  }
-}
-
-function opened(url: string, method: string, headers: Record<string, string>, body?: Buffer | Readable): Promise<IncomingMessage> {
+function opened(url: string, method: string, headers: Record<string, string>, body?: Readable): Promise<IncomingMessage> {
   return new Promise((answered, failed) => {
     const local = socketPath !== undefined;
     const target = local ? null : relayed(url);
@@ -167,21 +149,9 @@ function opened(url: string, method: string, headers: Record<string, string>, bo
     sent.on('error', (error: NodeJS.ErrnoException) =>
       failed(new Error(!local ? UNREACHABLE : error.code === 'EPERM' || error.code === 'EACCES' ? SANDBOXED : CLOSED)),
     );
-    if (body instanceof Readable) pipeline(body, sent).catch(() => undefined);
-    else sent.end(body);
+    if (body === undefined) sent.end();
+    else pipeline(body, sent).catch(() => undefined);
   });
-}
-
-async function textOf(answer: IncomingMessage): Promise<string> {
-  return Buffer.concat(await answer.toArray()).toString('utf8');
-}
-
-async function sent(url: string, bytes: Buffer, operation: string): Promise<string> {
-  const headers = { 'content-type': 'application/octet-stream', 'x-house-byte-operation': operation };
-  const answer = await opened(url, 'POST', headers, bytes);
-  const text = await textOf(answer);
-  if (answer.statusCode === 200) return text;
-  throw new Error(refusalOf(text)?.text ?? storeRefusal('upload', answer.statusCode!).message);
 }
 
 async function sentPart(url: string, file: string, start: number, end: number): Promise<void> {
@@ -252,27 +222,6 @@ async function upload({ file, ...destination }: Record<string, unknown>): Promis
   return accepted.text;
 }
 
-async function appendRecord(args: Record<string, unknown>): Promise<string> {
-  const held = new Map<string, string>();
-  const attachments = Array.isArray(args.attachments)
-    ? await Promise.all(
-        args.attachments.map(async (attachment: unknown) => {
-          if (typeof attachment !== 'string') return attachment;
-          const description = await described(attachment);
-          held.set(description.sha256, attachment);
-          return { name: basename(attachment), ...description };
-        }),
-      )
-    : args.attachments;
-  const record = { ...args, attachments };
-  for (;;) {
-    const answer = await called('append_record', record);
-    const { upload } = parse(answer) as Staged;
-    if (upload === undefined) return answer;
-    for (const grant of upload) await sent(grant.url, await localFile(held.get(grant.sha256)!), grant.operation);
-  }
-}
-
 function unexpected(argument: string, usage: string): Error {
   return new Error(`unexpected argument ${argument}; ${usage}`);
 }
@@ -335,7 +284,7 @@ async function house(args: string[]): Promise<string> {
     return [...(tool.description === undefined ? [] : [tool.description]), JSON.stringify(tool.inputSchema)].join('\n');
   }
   const parsed = argumentsOf(argument);
-  return verb === 'upload' ? upload(parsed) : verb === 'append_record' ? appendRecord(parsed) : called(verb, parsed);
+  return verb === 'upload' ? upload(parsed) : called(verb, parsed);
 }
 
 async function called(name: string, args: Record<string, unknown>): Promise<string> {

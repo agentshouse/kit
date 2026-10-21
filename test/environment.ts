@@ -78,7 +78,7 @@ export const LISTING: Listed[] = [
   {
     name: 'append_record',
     description: 'Add a record to a Room, stored as given.',
-    inputSchema: { type: 'object', properties: { room_ref: { type: 'string' }, attachments: { type: 'array' } } },
+    inputSchema: { type: 'object', properties: { room_ref: { type: 'string' }, body: { type: 'string' } } },
   },
   {
     name: 'upload',
