@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { agentInstructions } from '@agentshouse/skills';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
 import { conversationCredential, hostKit, type Hosted } from './environment.ts';
@@ -146,10 +147,7 @@ it("names each Local copy, house fetch before work and house push after in a con
     (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
   );
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block.slice(5)).toEqual([
-    'House Local copies; before work run `house fetch` and rebase onto `refs/house/received`; after it commit, then `house push`:',
-    `/rooms/notes: ${room.repository}`,
-  ]);
+  expect(block).toEqual(agentInstructions('refs/house/received', [`/rooms/notes: ${room.repository}`]));
 });
 
 it("leaves a Room an authority change drops out of a conversation's first prompt, which then names no Local copy", async () => {
@@ -166,8 +164,7 @@ it("leaves a Room an authority change drops out of a conversation's first prompt
     (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
   );
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block).toHaveLength(5);
-  expect(block.join('\n')).not.toContain(room.repository);
+  expect(block).toEqual(agentInstructions('refs/house/received', []));
 });
 
 it(

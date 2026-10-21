@@ -1,9 +1,9 @@
-name: Follow the upstream skills
+name: Follow the Skills package
 
 on:
   schedule:
-    # Upstream changes its skills a few times a week, so a daily sync keeps the installed set at most a day behind.
-    - cron: '23 5 * * *'
+    # The Skills package changes at most daily, so a daily move keeps the Kit's Skill set at most a day behind it.
+    - cron: '53 5 * * *'
   workflow_dispatch:
 
 permissions:
@@ -11,11 +11,11 @@ permissions:
   actions: write
 
 concurrency:
-  group: sync-skills
+  group: follow-skills
   cancel-in-progress: false
 
 jobs:
-  sync:
+  follow:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,19 +25,19 @@ jobs:
         with:
           node-version: 24.21.0
       - run: npm install --global --ignore-scripts npm@11.19.0
-      - run: npm run sync-skills
-      - name: Land the changed set and publish it
+      - run: node scripts/follow-skills.mjs
+      - name: Land the moved version and publish it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git add --all skills skills-upstream.json
+          git add package.json package-lock.json
           if git diff --cached --quiet; then
-            echo "The skills already follow upstream"
+            echo "The Kit already installs the Skills package's latest"
             exit 0
           fi
-          commit=$(node -p "require('./skills-upstream.json').commit")
+          version=$(node -p "require('./package.json').dependencies['@agentshouse/skills']")
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            commit --quiet --message "The skills follow mattpocock/skills at $commit"
+            commit --quiet --message "The Kit installs @agentshouse/skills $version"
           git push origin HEAD:main
           gh workflow run publish.yml --ref main

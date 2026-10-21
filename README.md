@@ -26,8 +26,8 @@ Kit runs the agent CLIs your login shell finds and installs a missing one
 through that CLI's own installer. Running the command again offers to update
 each CLI older than Kit needs; add `--update-clis` to update every one to
 its latest release without asking. Kit also gives every Agent on the
-Environment a set of agent skills. Add `--no-skills` to the command to leave
-them out; running it again without the flag brings them back.
+Environment the agent skills of `@agentshouse/skills`, at the version each Kit
+release installs. Add `--no-skills` to the command to leave them out; running it again without the flag brings them back.
 
 ## Commands
 
@@ -57,4 +57,4 @@ engine and model use about 425 MB beside the Environment's credential; turning i
 
 ## License
 
-MIT. The skills come from [mattpocock/skills](https://github.com/mattpocock/skills); thank you, Matt Pocock.
+MIT.
