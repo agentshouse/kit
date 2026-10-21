@@ -18,6 +18,7 @@ interface Run {
   size: Size | null;
   typed: string[];
   ended: Result | null;
+  sized: PromiseWithResolvers<void>;
 }
 
 const TERMINAL = 'xterm-256color';
@@ -72,7 +73,7 @@ export class WebWizards {
   }
 
   private async run(call: WizardCall): Promise<{ result: Result }> {
-    const run: Run = { terminal: null, size: null, typed: [], ended: null };
+    const run: Run = { terminal: null, size: null, typed: [], ended: null, sized: Promise.withResolvers() };
     this.runs.set(call.input_id, run);
     try {
       return { result: await this.ran(call.input_id, call.script, run) };
@@ -88,10 +89,11 @@ export class WebWizards {
       const path = await loginPath();
       const shell = bash(path);
       if (shell === null) return failed(NO_BASH);
+      await run.sized.promise;
       if (run.ended !== null) return run.ended;
       terminal = spawn(shell, ['-c', script], {
         name: TERMINAL,
-        ...run.size,
+        ...run.size!,
         cwd: process.cwd(),
         env: { ...withoutProxy(), PATH: path },
       });
@@ -112,6 +114,7 @@ export class WebWizards {
 
   private resized(run: Run, size: Size): void {
     run.size = size;
+    run.sized.resolve();
     try {
       run.terminal?.resize(size.cols, size.rows);
     } catch {}
@@ -120,6 +123,7 @@ export class WebWizards {
   private end(run: Run, result: Result): void {
     if (run.ended !== null) return;
     run.ended = result;
+    run.sized.resolve();
     if (run.terminal !== null) killTree(run.terminal);
   }
 }

@@ -1,19 +1,25 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { until } from './double.ts';
+import { settle, until } from './double.ts';
 import { hostKit, lastCall, type Hosted } from './environment.ts';
 import { alive, filesUnder } from './kit.ts';
 
 const TREE = 'sleep 300 & echo "child $!"; echo "script $$"; wait';
 
-function run(hosted: Hosted, script: string): string {
+function send(hosted: Hosted, frame: Record<string, unknown>): void {
+  hosted.house.connections.at(-1)!.send(frame);
+}
+
+function called(hosted: Hosted, script: string): string {
   hosted.call({ kind: 'run_wizard', conversation_id: null, agent_id: null, script });
   return lastCall();
 }
 
-function send(hosted: Hosted, frame: Record<string, unknown>): void {
-  hosted.house.connections.at(-1)!.send(frame);
+function run(hosted: Hosted, script: string): string {
+  const wizard = called(hosted, script);
+  send(hosted, { type: 'wizard_size', wizard, cols: 80, rows: 24 });
+  return wizard;
 }
 
 function output(hosted: Hosted, wizard: string): string {
@@ -59,9 +65,12 @@ it('runs a script in a terminal in the Kit home and working directory, forwards 
   }
 });
 
-it('opens the terminal at the size the page sent first and applies each later size', async () => {
+it('starts the script only once the page sends its first size, at that size, and applies each later size', async () => {
   const hosted = await hostKit([]);
-  const wizard = run(hosted, 'stty size; read -p "ready " line; stty size');
+  const wizard = called(hosted, 'echo started; stty size; read -p "ready " line; stty size');
+  await settle();
+  expect(output(hosted, wizard)).toBe('');
+
   send(hosted, { type: 'wizard_size', wizard, cols: 100, rows: 30 });
 
   await shown(hosted, wizard, 'ready ');
@@ -98,7 +107,7 @@ it("reports a script that cannot start with the Kit's reason", async () => {
   const hosted = await hostKit([], {
     prepare: (home) => writeFile(join(home, '.profile'), 'PATH="$HOME/bin"\n'),
   });
-  const wizard = run(hosted, 'echo never');
+  const wizard = called(hosted, 'echo never');
 
   const reason = "the script could not start: bash is not on the login shell's PATH";
   expect(await hosted.result(wizard)).toEqual({ refused: reason });
