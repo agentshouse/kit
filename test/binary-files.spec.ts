@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { until, type Received } from './double.ts';
-import { conversationCredential, hostKit, lastCall, opened, uploadDouble, type Hosted, type McpCall } from './environment.ts';
+import { conversationCredential, hostKit, lastCall, opened, type Hosted, type McpCall } from './environment.ts';
+import { MISMATCH, uploadTool } from './store.ts';
 import { commitAll, git, house, serveRooms, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
@@ -56,19 +57,22 @@ function batches(hosted: Hosted): unknown[] {
   return hosted.house.requests.filter((request) => request.path === '/kit/door/batch').map((request) => request.body);
 }
 
-it("uploads a local file in one call naming the Room and destination, and answers House's refusal with the current revision for an occupied Path it names no base for", async () => {
+function storeCalls(hosted: Hosted): unknown[][] {
+  return hosted.store.requests.map((request) => [request.method, request.part, request.bytes, request.status]);
+}
+
+it("uploads a local file in the parts House answers, finishes it with its room_ref, and passes House's refusal of an occupied Path it names no base for through", async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.workingDirectory, 'photo.jpg'), JPEG);
-  const transfers = uploadDouble(hosted);
-  const placed = hosted.tools.upload!;
+  const uploads = uploadTool(hosted.store, 5);
   const refusal = [
     'edit_conflict: nothing was written; fix each conflict listed, then send the edit again',
     stringify({ conflicts: [{ path: '/rooms/notes/cover.jpg', code: 'base_required', state: 'current', revision: 'fr_9' }] }).trimEnd(),
   ].join('\n');
-  hosted.tools.upload = (args, request) =>
+  hosted.tools.upload = (args) =>
     args.path === 'cover.jpg' && args.base === undefined
       ? { isError: true, content: [{ type: 'text', text: `${refusal}\n` }] }
-      : placed(args, request);
+      : uploads.answer(args);
   await opened(hosted);
 
   const first = await ran(hosted, '@house upload {"file":"photo.jpg","room_ref":"r_notes","path":"photo.jpg"}');
@@ -78,12 +82,53 @@ it("uploads a local file in one call naming the Room and destination, and answer
   expect(first).toMatchObject({ status: 0, stdout: 'path: photo.jpg\nrevision: fr_1\n', stderr: '' });
   expect(occupied).toMatchObject({ status: 1, stdout: '', stderr: `house: ${refusal}\n` });
   expect(based).toMatchObject({ status: 0, stdout: 'path: cover.jpg\nrevision: fr_2\n' });
-  expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
-    [`Bearer ${conversationCredential('conversation-1')}`, 'upload', { room_ref: 'r_notes', path: 'photo.jpg', bytes: JPEG.length, sha256: digest(JPEG), media_type: 'image/jpeg' }],
-    [`Bearer ${conversationCredential('conversation-1')}`, 'upload', { room_ref: 'r_notes', path: 'cover.jpg', bytes: JPEG.length, sha256: digest(JPEG), media_type: 'image/jpeg' }],
-    [`Bearer ${conversationCredential('conversation-1')}`, 'upload', { room_ref: 'r_notes', path: 'cover.jpg', base: 'fr_9', bytes: JPEG.length, sha256: digest(JPEG), media_type: 'image/jpeg' }],
+  const declared = { room_ref: 'r_notes', bytes: JPEG.length, sha256: digest(JPEG), media_type: 'image/jpeg' };
+  const finishing = { upload: expect.any(String), room_ref: 'r_notes' };
+  expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual(
+    [
+      { ...declared, path: 'photo.jpg' },
+      finishing,
+      { ...declared, path: 'cover.jpg' },
+      { ...declared, path: 'cover.jpg', base: 'fr_9' },
+      finishing,
+    ].map((args) => [`Bearer ${conversationCredential('conversation-1')}`, 'upload', args]),
+  );
+  expect(storeCalls(hosted)).toEqual([1, 2, 3, 1, 2, 3].map((part) => ['PUT', part, part === 3 ? 2 : 5, 200]));
+});
+
+it('resumes a transfer cut after some parts by sending only the parts the store does not hold, and finishes it accepted', async () => {
+  const hosted = await hostKit();
+  const content = Buffer.from('a file sent in four parts');
+  await writeFile(join(hosted.workingDirectory, 'notes.bin'), content);
+  const uploads = uploadTool(hosted.store, 7);
+  hosted.tools.upload = (args) => uploads.answer(args);
+  hosted.store.cut(2);
+  await opened(hosted);
+
+  const sent = await ran(hosted, '@house upload {"file":"notes.bin","room_ref":"r_notes","path":"notes.bin"}');
+
+  expect(sent).toMatchObject({ status: 0, stdout: 'path: notes.bin\nrevision: fr_1\n', stderr: '' });
+  expect(storeCalls(hosted)).toEqual([
+    ['PUT', 1, 7, 200],
+    ['PUT', 2, 0, 0],
+    ['PUT', 2, 7, 200],
+    ['PUT', 3, 7, 200],
+    ['PUT', 4, 4, 200],
   ]);
-  expect(transfers.map((transfer) => transfer.bytes)).toEqual([JPEG, JPEG]);
+  expect(uploads.calls.finished).toHaveLength(2);
+});
+
+it("refuses an upload whose stored bytes House finds differ from the declared SHA-256 in House's words, and writes no revision", async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.workingDirectory, 'photo.jpg'), JPEG);
+  const uploads = uploadTool(hosted.store, 64);
+  hosted.tools.upload = (args) => uploads.answer(args.upload === undefined ? { ...args, sha256: digest(REDRAWN) } : args);
+  await opened(hosted);
+
+  const refused = await ran(hosted, '@house upload {"file":"photo.jpg","room_ref":"r_notes","path":"photo.jpg"}');
+
+  expect(refused).toMatchObject({ status: 1, stdout: '', stderr: `house: ${MISMATCH}\n` });
+  expect(storeCalls(hosted)).toEqual([['PUT', 1, JPEG.length, 200]]);
 });
 
 it('downloads the head or a named revision of a binary Path to the file the caller names, checking its SHA-256, and changes no Local copy', async () => {
@@ -106,8 +151,31 @@ it('downloads the head or a named revision of a binary Path to the file the call
     [`Bearer ${conversationCredential('conversation-1')}`, 'inspect', { path: '/rooms/notes/photo.jpg' }],
     [`Bearer ${conversationCredential('conversation-1')}`, 'inspect', { path: '/rooms/notes/photo.jpg', ref: first }],
   ]);
-  expect(rooms.byteReads.map((read) => read.headers.authorization)).toEqual([undefined, undefined]);
+  expect(storeCalls(hosted)).toEqual([
+    ['GET', null, REDRAWN.length, 200],
+    ['GET', null, JPEG.length, 200],
+  ]);
   expect(await copyState(hosted, room)).toEqual(before);
+});
+
+it('replaces a download address the store refuses as expired by asking House again, and writes the file from the new one', async () => {
+  const { hosted, rooms } = await copied();
+  rooms.expiring = 1;
+  await opened(hosted);
+  const target = join(hosted.workingDirectory, 'photo.jpg');
+
+  const fetched = await ran(hosted, `@house download {"path":"/rooms/notes/photo.jpg","file":"${target}"}`);
+
+  expect(fetched).toMatchObject({ status: 0, stdout: `${target}\n`, stderr: '' });
+  expect(await readFile(target)).toEqual(JPEG);
+  expect(hosted.mcp.map((received) => [called(received).name, called(received).arguments])).toEqual([
+    ['inspect', { path: '/rooms/notes/photo.jpg' }],
+    ['inspect', { path: '/rooms/notes/photo.jpg' }],
+  ]);
+  expect(storeCalls(hosted)).toEqual([
+    ['GET', null, 0, 403],
+    ['GET', null, JPEG.length, 200],
+  ]);
 });
 
 it("refuses a download whose bytes do not match House's SHA-256 and one of a text file, and writes nothing", async () => {
@@ -122,6 +190,7 @@ it("refuses a download whose bytes do not match House's SHA-256 and one of a tex
   expect(damaged).toEqual({ status: 1, stdout: '', stderr: 'house: /rooms/notes/photo.jpg did not arrive whole; download it again\n' });
   expect(text).toEqual({ status: 1, stdout: '', stderr: 'house: /rooms/notes/plan.md holds no binary file; shell reads its text\n' });
   expect(existsSync(target)).toBe(false);
+  expect((await readdir(hosted.workingDirectory)).filter((name) => name.includes('photo'))).toEqual([]);
   expect(hosted.mcp.map((received) => received.headers.authorization)).toEqual(['Bearer ahp_own', 'Bearer ahp_own']);
 });
 
@@ -155,7 +224,7 @@ it('copies and fetches a Room holding binary files with no binary entry or byte 
     const manifest = await readFile(join(hosted.home, 'local-copies/rooms', `${copy.ref}.json`), 'utf8');
     expect(manifest).not.toMatch(/\.(jpg|pdf)/);
   }
-  expect(rooms.byteReads).toEqual([]);
+  expect(hosted.store.requests).toEqual([]);
   expect(hosted.mcp).toEqual([]);
 });
 

@@ -14,17 +14,18 @@ import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
 import { startAdapter, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
-import { finalRefusal, type House } from './api.ts';
+import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
 import { answeredFailure, readerFor, type Event, type Message, type Reader } from './events.ts';
-import { placeFiles, uploadBytes, type MessageFile, type SavedFile } from './files.ts';
+import { placeFiles, storeRefusal, uploaded, type Finished, type MessageFile, type UploadParts } from './files.ts';
 import { agentBase } from './home.ts';
 import type { Call, Calls, Result } from './calls.ts';
 import { instructions } from './instructions.ts';
 import { Parts, type Context, type Operation, type Part } from './parts.ts';
 import { refusalOf } from './refusals.ts';
+import { relayed } from './relay.ts';
 import { killMarked, Scope } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 import { createHowWeWork } from './skills.ts';
@@ -131,6 +132,16 @@ function exitedWith(running: Running, cause: string): Failed {
 
 function answerMessage(request: unknown, response: unknown): string {
   return `The User answered a question you asked earlier.\nQuestion: ${JSON.stringify(request)}\nAnswer: ${JSON.stringify(response)}`;
+}
+
+interface SavedImage {
+  path: string;
+}
+
+async function sentPart(url: string, bytes: Buffer): Promise<void> {
+  const answer = await fetch(relayed(url), { method: 'PUT', body: bytes });
+  await answer.arrayBuffer();
+  if (!answer.ok) throw storeRefusal('upload', answer.status);
 }
 
 function logged(error: unknown): void {
@@ -992,12 +1003,16 @@ export class Conversations {
         media_type: mediaType,
         bytes: bytes.length,
         sha256: createHash('sha256').update(bytes).digest('hex'),
-      })) as SavedFile;
-      const saved = declared.upload === undefined ? declared : await uploadBytes(declared.upload, bytes);
-      if (saved.save.status !== 'saved') throw new Error(saved.save.failure ?? saved.save.status);
-      turn.parts.arrive({ type: 'image', file: saved.version, name, media_type: mediaType }, reserved);
+      })) as { upload: UploadParts };
+      const saved = await uploaded(declared.upload, {
+        bytes: bytes.length,
+        send: (url, start, end) => sentPart(url, bytes.subarray(start, end)),
+        finish: (upload) => this.kit.house.deliver<Finished<SavedImage>>('/kit/uploads/finish', { upload }),
+      });
+      turn.parts.arrive({ type: 'image', file: saved.path, name, media_type: mediaType }, reserved);
     } catch (error) {
-      turn.parts.arrive({ type: 'marker', marker: 'retry', text: `${name} was not saved: ${causeOf(error)}` }, reserved);
+      const cause = error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error);
+      turn.parts.arrive({ type: 'marker', marker: 'retry', text: `${name} was not saved: ${cause}` }, reserved);
     }
   }
 }

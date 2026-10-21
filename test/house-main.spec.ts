@@ -1,29 +1,35 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { access, chmod, writeFile } from 'node:fs/promises';
-import { createServer as createHttpServer } from 'node:http';
+import { access, chmod, open, readFile, writeFile } from 'node:fs/promises';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { ownerSocket } from '../src/home.ts';
 import { startHouse, type House } from './double.ts';
-import { declaredUpload, helpLine, LISTING, shelled, type McpCall, type Transfer } from './environment.ts';
+import { helpLine, LISTING, shelled, type McpCall } from './environment.ts';
 import { runKit, temporaryHome } from './kit.ts';
+import { RELAYED, startStore, uploadTool, type Store } from './store.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
+const MEMORY = fileURLToPath(new URL('./memory.ts', import.meta.url));
+const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
 
 function runHouse(
   home: string,
   argv: string[],
   bridge?: string,
+  node: string[] = [],
+  ambient: Record<string, string> = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const environment: NodeJS.ProcessEnv = { ...process.env, HOUSE_KIT_HOME: home };
+    const environment: NodeJS.ProcessEnv = { ...process.env, HOUSE_KIT_HOME: home, ...ambient };
     delete environment.HOUSE_BRIDGE;
     if (bridge !== undefined) environment.HOUSE_BRIDGE = bridge;
-    const child = spawn(process.execPath, [HOUSE, ...argv], { env: environment });
+    const child = spawn(process.execPath, [...node, HOUSE, ...argv], { env: environment });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
@@ -56,40 +62,209 @@ it("sends a Tool call outside a conversation to House's root under the User's ow
   expect((call!.body as McpCall).params).toMatchObject({ name: 'search', arguments: { query: 'invoice' } });
 });
 
-it("uploads a local file outside a conversation to its path in the Room through the upload Tool and posts its bytes to the answered grant", async () => {
+function zeros(size: number): string {
+  const digest = createHash('sha256');
+  const mebibyte = Buffer.alloc(1024 * 1024);
+  for (let held = 0; held < size; held += mebibyte.length) digest.update(mebibyte);
+  return digest.digest('hex');
+}
+
+function servedUploads(house: House, store: Store, partBytes: number, checks = 0) {
+  const uploads = uploadTool(store, partBytes, { checks });
+  house.route('POST', '/', async ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    return { body: { jsonrpc: '2.0', id: message.id, result: await uploads.answer(message.params.arguments!) } };
+  });
+  return uploads;
+}
+
+async function relay(): Promise<{ origin: string; forwarded: string[] }> {
+  const forwarded: string[] = [];
+  const server = createHttpServer((request, response) => {
+    const [, host, path] = /^\/([^/]+)(\/.*)$/.exec(request.url ?? '')!;
+    forwarded.push(`${request.method} ${host}`);
+    const outbound = httpRequest(`http://${host}${path}`, { method: request.method, headers: { ...request.headers, host, [RELAYED]: 'true' } }, (answer) => {
+      response.writeHead(answer.statusCode!, answer.headers);
+      answer.pipe(response);
+    });
+    outbound.on('error', () => response.destroy());
+    request.pipe(outbound);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  onTestFinished(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, forwarded };
+}
+
+it("uploads a file larger than the house CLI's memory budget from disk in parts outside a conversation, its peak memory under half the file's size, and prints House's answer once House accepts it", async () => {
   const house = await startHouse();
   const home = await connected(house, true);
+  const store = await startStore();
+  const uploads = servedUploads(house, store, 32 * 1024 * 1024);
+  const file = join(home, 'recording.webm');
+  const size = 512 * 1024 * 1024;
+  const held = await open(file, 'w');
+  await held.truncate(size);
+  await held.close();
+  const peak = join(home, 'peak-memory');
+
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'recordings/recording.webm' })], undefined, [
+    '--import',
+    MEMORY,
+  ], { KIT_TEST_PEAK_MEMORY: peak });
+
+  expect(ran).toEqual({ status: 0, stdout: 'path: recordings/recording.webm\nrevision: fr_1\n', stderr: '' });
+  expect(uploads.calls.declared).toEqual([
+    {
+      room_ref: 'r_room',
+      path: 'recordings/recording.webm',
+      bytes: size,
+      sha256: zeros(size),
+      media_type: 'video/webm',
+    },
+  ]);
+  expect(store.requests.map((request) => [request.part, request.bytes, request.status])).toEqual(
+    Array.from({ length: 16 }, (_part, index) => [index + 1, 32 * 1024 * 1024, 200]),
+  );
+  expect(Number(await readFile(peak, 'utf8'))).toBeLessThan(size / 2);
+});
+
+it('finishes the upload again while House answers that it is still checking the stored bytes, and prints the accepted file', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const store = await startStore();
+  const uploads = servedUploads(house, store, 64, 2);
+  const file = join(home, 'cover.bin');
+  await writeFile(file, Buffer.from([0, 1, 2, 255]));
+
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.bin' })], undefined, [
+    '--import',
+    FAST_TIMEOUTS,
+  ]);
+
+  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: fr_1\n', stderr: '' });
+  expect(uploads.calls.finished).toEqual(Array(3).fill({ upload: expect.any(String), room_ref: 'r_room' }));
+});
+
+it('gives up an upload whose store keeps refusing every part, saying so without the address, once eight rounds sent nothing', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const store = await startStore();
+  const uploads = servedUploads(house, store, 64);
+  house.route('POST', '/', async ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    const answered = await uploads.answer(message.params.arguments!);
+    const text = answered.content[0]!.text.replace(/signature=[0-9a-f]+/g, 'signature=altered');
+    return { body: { jsonrpc: '2.0', id: message.id, result: { ...answered, content: [{ type: 'text', text }] } } };
+  });
+  const file = join(home, 'cover.bin');
+  await writeFile(file, Buffer.from([0, 1, 2, 255]));
+
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.bin' })], undefined, [
+    '--import',
+    FAST_TIMEOUTS,
+  ]);
+
+  expect(ran).toEqual({ status: 1, stdout: '', stderr: 'house: the upload answered 403; upload the file again\n' });
+  expect(store.requests.map((request) => request.status)).toEqual(Array(8).fill(403));
+  expect(uploads.calls.finished).toHaveLength(7);
+});
+
+it("resumes an upload outside a conversation after its connection drops, finishing again until House answers and sending only the part the store lost", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const store = await startStore();
+  const uploads = uploadTool(store, 3);
+  let finishing = 0;
+  house.route('POST', '/', async ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    if (message.params.arguments!.upload !== undefined && ++finishing <= 2) return { drop: true };
+    return { body: { jsonrpc: '2.0', id: message.id, result: await uploads.answer(message.params.arguments!) } };
+  });
+  store.cut(2);
+  const file = join(home, 'cover.bin');
+  await writeFile(file, Buffer.from([0, 1, 2, 255]));
+
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.bin' })], undefined, [
+    '--import',
+    FAST_TIMEOUTS,
+  ]);
+
+  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: fr_1\n', stderr: '' });
+  expect(store.requests.map((request) => [request.part, request.status])).toEqual([
+    [1, 200],
+    [2, 0],
+    [2, 200],
+  ]);
+  expect(finishing).toBe(4);
+});
+
+it('finishes an upload outside a conversation again while House answers it with a 503, as a conversation resends an unsettled call', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const store = await startStore();
+  const uploads = uploadTool(store, 3);
+  let finishing = 0;
+  house.route('POST', '/', async ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    if (message.params.arguments!.upload !== undefined && ++finishing <= 2) return { status: 503, body: {} };
+    return { body: { jsonrpc: '2.0', id: message.id, result: await uploads.answer(message.params.arguments!) } };
+  });
+  const file = join(home, 'cover.bin');
+  await writeFile(file, Buffer.from([0, 1, 2, 255]));
+
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.bin' })], undefined, [
+    '--import',
+    FAST_TIMEOUTS,
+  ]);
+
+  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: fr_1\n', stderr: '' });
+  expect(store.requests.map((request) => [request.part, request.status])).toEqual([
+    [1, 200],
+    [2, 200],
+  ]);
+  expect(finishing).toBe(3);
+});
+
+it('sends each part and reads each download at its store address through the Kit relay its User named, as it sends House its calls', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const store = await startStore();
+  const uploads = servedUploads(house, store, 3);
   const content = Buffer.from([0, 1, 2, 255]);
   const file = join(home, 'cover.bin');
   await writeFile(file, content);
-  const posted: Transfer[] = [];
+  const { origin, forwarded } = await relay();
+  const relayed = { HOUSE_KIT_RELAY: origin };
+
+  const sent = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.bin' })], undefined, [], relayed);
+  store.objects.set('binary/cover', content);
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
-    const result = declaredUpload(message.params.arguments!, `${house.origin}/bytes/grant-1`, 'operation-1');
-    return { body: { jsonrpc: '2.0', id: message.id, result } };
+    const inspected = `sha256: ${createHash('sha256').update(content).digest('hex')}\ndownload: ${store.address('GET', 'binary/cover')}`;
+    return { body: { jsonrpc: '2.0', id: message.id, result: shelled(inspected) } };
   });
-  house.route('POST', '/bytes/:grant', (received) => {
-    posted.push({
-      operation: received.headers['x-house-byte-operation'],
-      authorization: received.headers.authorization,
-      bytes: received.body as Buffer,
-    });
-    return { body: { path: 'covers/cover.bin', revision: 'fr_1' } };
-  });
+  const fetched = await runHouse(home, ['download', JSON.stringify({ path: '/rooms/room/covers/cover.bin', file: join(home, 'back.bin') })], undefined, [], relayed);
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.bin' })]);
-
-  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: fr_1\n', stderr: '' });
-  const [call] = house.requests;
-  expect(call).toMatchObject({ path: '/', headers: { authorization: 'Bearer ahp_own' } });
-  expect((call!.body as McpCall).params).toMatchObject({ name: 'upload' });
-  expect((call!.body as McpCall).params.arguments).toEqual({
-    room_ref: 'r_room',
-    path: 'covers/cover.bin',
-    bytes: 4,
-    sha256: createHash('sha256').update(content).digest('hex'),
-  });
-  expect(posted).toEqual([{ operation: 'operation-1', authorization: undefined, bytes: content }]);
+  expect([sent.status, fetched.status]).toEqual([0, 0]);
+  expect(await readFile(join(home, 'back.bin'))).toEqual(content);
+  expect(uploads.calls.finished).toHaveLength(1);
+  const [houseHost, storeHost] = [new URL(house.origin).host, new URL(store.origin).host];
+  expect(forwarded).toEqual([
+    `POST ${houseHost}`,
+    `PUT ${storeHost}`,
+    `PUT ${storeHost}`,
+    `POST ${houseHost}`,
+    `POST ${houseHost}`,
+    `GET ${storeHost}`,
+  ]);
+  expect(store.requests.map((request) => [request.method, request.relayed])).toEqual([
+    ['PUT', true],
+    ['PUT', true],
+    ['GET', true],
+  ]);
 });
 
 it('prints the revision House answers and posts no bytes when the path already holds the same file', async () => {

@@ -46,7 +46,7 @@ export interface Certificate {
 export interface Proxy {
   origin: string;
   tunnels: string[];
-  carried(received: Received): boolean;
+  carried(received: { port: number }): boolean;
 }
 
 export interface House {

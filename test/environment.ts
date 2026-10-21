@@ -3,12 +3,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
-import { stringify } from 'yaml';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
 import { certificate, startHouse, until, type House, type KitConnection, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './npm.ts';
+import { MISMATCH, startStore, type Store } from './store.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   peerDependencies: Record<string, string>;
@@ -35,7 +35,7 @@ export interface ToolResult {
   isError?: boolean;
 }
 
-export type ToolAnswer = (args: Record<string, unknown>, request: Received) => ToolResult | null;
+export type ToolAnswer = (args: Record<string, unknown>, request: Received) => ToolResult | null | Promise<ToolResult | null>;
 
 export function shelled(stdout: string, exit = 0, stderr: string[] = []): ToolResult {
   const text = [
@@ -151,7 +151,8 @@ export interface Hosted {
   turns: Received[];
   interactions: Received[];
   images: Received[];
-  uploads: Received[];
+  finishes: Received[];
+  store: Store;
   idles: Received[];
   mcp: Received[];
   tools: Record<string, ToolAnswer>;
@@ -163,6 +164,8 @@ export interface Hosted {
   result(callId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
 }
+
+const IMAGE_PART_BYTES = 32;
 
 export const GIT_IDENTITY = {
   GIT_AUTHOR_NAME: 'Agent',
@@ -212,18 +215,19 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const turns: Received[] = [];
   const interactions: Received[] = [];
   const images: Received[] = [];
-  const uploads: Received[] = [];
+  const finishes: Received[] = [];
+  const store = await startStore(hosting.tls ? certificate() : undefined);
   const idles: Received[] = [];
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
     shell: () => shelled('', 1, ['cat: path_not_found /rooms/private/how-we-work.md']),
   };
-  house.route('POST', '/', (request) => {
+  house.route('POST', '/', async (request) => {
     mcp.push(request);
     const message = request.body as { id: number } & McpCall;
     const name = message.params.name!;
     const answer = tools[name] ?? (() => ({ content: [{ type: 'text', text: `${name} answered` }] }));
-    const result = message.method === 'tools/list' ? { tools: LISTING } : answer(message.params.arguments ?? {}, request);
+    const result = message.method === 'tools/list' ? { tools: LISTING } : await answer(message.params.arguments ?? {}, request);
     return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });
   house.route('POST', '/kit/conversations/:conversation/credential', (request) => ({
@@ -254,22 +258,14 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   });
   house.route('POST', '/kit/conversations/:conversation/turns/:turn/images', (request) => {
     images.push(request);
-    return {
-      body: {
-        version: `version-${images.length}`,
-        save: { status: 'pending', failure: null },
-        upload: {
-          method: 'POST',
-          operation: `operation-${images.length}`,
-          url: `${house.origin}/bytes/image-${images.length}`,
-          expires_at: '2026-10-10T12:00:00Z',
-        },
-      },
-    };
+    const { bytes, sha256 } = request.body as { bytes: number; sha256: string };
+    return { body: store.declare({ bytes, sha256, path: `version-${images.length}` }, IMAGE_PART_BYTES) };
   });
-  house.route('POST', '/bytes/:grant', (request) => {
-    uploads.push(request);
-    return { body: { version: `version-${request.params.grant!.slice('image-'.length)}`, save: { status: 'saved', failure: null } } };
+  house.route('POST', '/kit/uploads/finish', async (request) => {
+    finishes.push(request);
+    const finished = await store.finish((request.body as { upload: string }).upload);
+    if ('mismatch' in finished) return { status: 409, body: { error: { code: 'upload_mismatch', message: MISMATCH, retryable: false } } };
+    return { body: finished };
   });
   house.route('POST', '/kit/idle', (request) => {
     idles.push(request);
@@ -296,7 +292,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     turns,
     interactions,
     images,
-    uploads,
+    finishes,
+    store,
     idles,
     mcp,
     tools,
@@ -457,64 +454,4 @@ export function appRemote(house: House, commit: string): string[] {
     };
   });
   return credentials;
-}
-
-export interface Transfer {
-  operation: unknown;
-  authorization: unknown;
-  bytes: Buffer;
-}
-
-const named = (value: unknown) => typeof value === 'string' && value !== '';
-
-const UPLOAD_ARGUMENTS: Record<string, (value: unknown) => boolean> = {
-  file: named,
-  room_ref: named,
-  path: named,
-  base: named,
-  bytes: (value) => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 32 * 1024 * 1024,
-  sha256: (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value),
-  media_type: (value) => typeof value === 'string' && value.length >= 1 && value.length <= 255,
-};
-const UPLOAD_REQUIRED = ['room_ref', 'path', 'bytes', 'sha256'];
-
-export function declaredUpload(args: Record<string, unknown>, url: string, operation: string): ToolResult {
-  const unknown = Object.keys(args).filter((name) => !Object.hasOwn(UPLOAD_ARGUMENTS, name));
-  const issues = [
-    ...UPLOAD_REQUIRED.filter((name) => args[name] === undefined).map((name) => `${name} is required`),
-    ...Object.entries(UPLOAD_ARGUMENTS)
-      .filter(([name, valid]) => args[name] !== undefined && !valid(args[name]))
-      .map(([name]) => `${name} is not valid`),
-    ...(unknown.length === 0
-      ? []
-      : [`${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not an argument here; it takes ${Object.keys(UPLOAD_ARGUMENTS).join(', ')}`]),
-  ];
-  if (issues.length > 0) return { isError: true, content: [{ type: 'text', text: `invalid_arguments: ${issues.join('\n')}\n` }] };
-  return {
-    content: [{ type: 'text', text: stringify({ upload: { method: 'POST', operation, url, expires_at: '2026-10-03T12:00:00Z' } }) }],
-  };
-}
-
-export function uploadDouble(hosted: Hosted): Transfer[] {
-  const transfers: Transfer[] = [];
-  const paths: string[] = [];
-  hosted.tools.upload = (args) => {
-    const declared = declaredUpload(
-      args,
-      `${hosted.house.origin}/bytes/upload-${paths.length + 1}`,
-      `operation-${paths.length + 1}`,
-    );
-    if (declared.isError !== true) paths.push(args.path as string);
-    return declared;
-  };
-  hosted.house.route('POST', '/bytes/:grant', (received) => {
-    transfers.push({
-      operation: received.headers['x-house-byte-operation'],
-      authorization: received.headers.authorization,
-      bytes: received.body as Buffer,
-    });
-    const grant = Number(received.params.grant!.slice('upload-'.length));
-    return { body: { path: paths[grant - 1], revision: `fr_${grant}` } };
-  });
-  return transfers;
 }

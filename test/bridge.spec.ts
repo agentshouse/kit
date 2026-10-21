@@ -16,10 +16,9 @@ import {
   LISTING,
   opened,
   runs,
-  uploadDouble,
   type McpCall,
 } from './environment.ts';
-import { OVERLOADED } from './rooms.ts';
+import { uploadTool } from './store.ts';
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const OPERATION = 'agents.house/agent-operation';
@@ -148,7 +147,8 @@ it("uploads the local file named by file to its path in the Room, filling its si
   const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46]);
   await mkdir(join(hosted.workingDirectory, 'messenger-evidence'));
   await writeFile(join(hosted.workingDirectory, 'messenger-evidence', 'messenger-light.jpg'), content);
-  const transfers = uploadDouble(hosted);
+  const uploads = uploadTool(hosted.store, 64);
+  hosted.tools.upload = (args) => uploads.answer(args);
   await opened(hosted);
 
   directed(
@@ -162,7 +162,7 @@ it("uploads the local file named by file to its path in the Room, filling its si
     stderr: '',
   });
   const [declared] = hosted.mcp;
-  expect(hosted.mcp).toHaveLength(1);
+  expect(hosted.mcp).toHaveLength(2);
   expect(declared!.headers.authorization).toBe(`Bearer ${conversationCredential('conversation-1')}`);
   expect(called(declared!).params.name).toBe('upload');
   expect(called(declared!).params.arguments).toEqual({
@@ -172,7 +172,7 @@ it("uploads the local file named by file to its path in the Room, filling its si
     sha256: createHash('sha256').update(content).digest('hex'),
     media_type: 'image/jpeg',
   });
-  expect(transfers).toEqual([{ operation: 'operation-1', authorization: undefined, bytes: content }]);
+  expect(hosted.store.requests.map((received) => [received.method, received.bytes, received.status])).toEqual([['PUT', content.length, 200]]);
 });
 
 it("prints House's own line for a refused call, and no route, status or body", async () => {
@@ -210,33 +210,21 @@ it("prints House's own line for a refused call, and no route, status or body", a
   ]);
 });
 
-it("prints the byte origin's refusal of an upload as House words it, with its delay", async () => {
+it("prints House's refusal of an upload's finishing call as House words it", async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
-  uploadDouble(hosted);
-  hosted.house.route('POST', '/bytes/:grant', () => ({ status: 503, body: OVERLOADED }));
+  const uploads = uploadTool(hosted.store, 64);
+  hosted.tools.upload = (args) =>
+    args.upload === undefined
+      ? uploads.answer(args)
+      : { isError: true, content: [{ type: 'text', text: 'upload_expired: this upload is gone; run the same command again to start a new one\n' }] };
   await opened(hosted);
 
   directed(hosted, '@house upload {"file":"report.txt","room_ref":"r_room","path":"report.txt"}');
 
   expect((await runs(hosted, 1))[0]).toMatchObject({
     status: 1,
-    stderr: 'house: house_overloaded: House is busy; call again in 5 s\n',
-  });
-});
-
-it('says a refused upload transfer failed without its capability address', async () => {
-  const hosted = await hostKit();
-  await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
-  uploadDouble(hosted);
-  hosted.house.route('POST', '/bytes/:grant', () => ({ status: 404 }));
-  await opened(hosted);
-
-  directed(hosted, '@house upload {"file":"report.txt","room_ref":"r_room","path":"report.txt"}');
-
-  expect((await runs(hosted, 1))[0]).toMatchObject({
-    status: 1,
-    stderr: 'house: the upload answered 404; upload the file again\n',
+    stderr: 'house: upload_expired: this upload is gone; run the same command again to start a new one\n',
   });
 });
 
