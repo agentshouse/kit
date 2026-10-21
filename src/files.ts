@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { retrying, retryDelay, type House } from './api.ts';
+import { Unreached } from './mcp.ts';
 import { relayed } from './relay.ts';
 
 export interface MessageFile {
@@ -73,14 +74,26 @@ export async function uploaded<T extends object>(declared: UploadParts, uploadin
       // A round that sent no part, its store unreachable or not yet started, is followed by the next finishing call on the jittered curve.
       await paused(retryDelay(idle++));
     }
-    let answer = await uploading.finish(upload.id);
+    let answer = await finishing(uploading, upload.id);
     while ('checking' in answer) {
       // A finishing call that finds House still checking the stored bytes is sent again after five seconds, the cadence at which House takes up a check it handed over.
       await paused(5_000);
-      answer = await uploading.finish(upload.id);
+      answer = await finishing(uploading, upload.id);
     }
     if (!('upload' in answer)) return answer;
     upload = answer.upload;
+  }
+}
+
+async function finishing<T extends object>(uploading: Uploading<T>, upload: string): Promise<Finished<T>> {
+  for (let unreached = 1; ; unreached++) {
+    try {
+      return await uploading.finish(upload);
+    } catch (error) {
+      if (!(error instanceof Unreached) || unreached === STALLED_ROUNDS) throw error;
+    }
+    // A finishing call that did not reach House is sent again on the jittered curve, so a dropped connection resumes the upload instead of ending it.
+    await paused(retryDelay(unreached - 1));
   }
 }
 

@@ -10,7 +10,7 @@ import type { ToolResult } from './bridge.ts';
 import { downloaded, storeRefusal, uploaded, type UploadParts } from './files.ts';
 import { HOUSE_REF } from './git.ts';
 import { ownerSocket, readOwnAgent } from './home.ts';
-import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
+import { callHouse, rpc, UNREACHABLE, Unreached, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed, selectRelay } from './relay.ts';
 import { parse } from 'yaml';
@@ -117,7 +117,7 @@ async function direct(message: Message): Promise<string> {
   selectRelay(process.env.HOUSE_KIT_RELAY || ownAgent.relay);
   setGlobalProxyFromEnv();
   const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
-    throw new Error(UNREACHABLE);
+    throw new Unreached();
   });
   if (answer.status === 200) return answer.text;
   throw new Error(answer.status === 401 ? DISCONNECTED : (refusalOf(answer.text)?.text ?? unconfirmed(answer.status)));

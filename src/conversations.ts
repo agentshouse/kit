@@ -19,7 +19,7 @@ import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
 import { answeredFailure, readerFor, type Event, type Message, type Reader } from './events.ts';
-import { placeFiles, storeRefusal, uploaded, type Finished, type MessageFile } from './files.ts';
+import { placeFiles, storeRefusal, uploaded, type Finished, type MessageFile, type UploadParts } from './files.ts';
 import { agentBase } from './home.ts';
 import type { Call, Calls, Result } from './calls.ts';
 import { instructions } from './instructions.ts';
@@ -1003,15 +1003,12 @@ export class Conversations {
         media_type: mediaType,
         bytes: bytes.length,
         sha256: createHash('sha256').update(bytes).digest('hex'),
-      })) as Finished<SavedImage>;
-      const saved =
-        'upload' in declared
-          ? await uploaded(declared.upload, {
-              bytes: bytes.length,
-              send: (url, start, end) => sentPart(url, bytes.subarray(start, end)),
-              finish: (upload) => this.kit.house.deliver<Finished<SavedImage>>('/kit/uploads/finish', { upload }),
-            })
-          : (declared as SavedImage);
+      })) as { upload: UploadParts };
+      const saved = await uploaded(declared.upload, {
+        bytes: bytes.length,
+        send: (url, start, end) => sentPart(url, bytes.subarray(start, end)),
+        finish: (upload) => this.kit.house.deliver<Finished<SavedImage>>('/kit/uploads/finish', { upload }),
+      });
       turn.parts.arrive({ type: 'image', file: saved.path, name, media_type: mediaType }, reserved);
     } catch (error) {
       const cause = error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error);
