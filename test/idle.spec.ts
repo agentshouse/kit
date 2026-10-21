@@ -23,7 +23,7 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
   await until(() => hosted.idles[1]);
 
   // The turn holds a second and a half, outlasting the half second the spec watches for an idle report.
-  hosted.call({ kind: 'message', text: '@hold 1500\n@say done', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@hold 1500\n@say done', first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   await settle();
   expect(hosted.idles).toHaveLength(2);
@@ -47,7 +47,7 @@ it("reports idle while an exited process of the Kit's user waits to be reaped be
   };
   await until(() => children().some((child) => /\) Z /.test(readFileSync(`/proc/${child}/stat`, 'utf8'))));
 
-  hosted.call({ kind: 'message', text: '@say done', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say done', first: true });
 
   await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);
@@ -88,7 +88,7 @@ it('restarts with a failure at its first idle moment after a CLI update asks it 
   });
 
   // The turn holds four seconds, outlasting the two seconds after which the Kit looks at its work again.
-  hosted.call({ kind: 'message', text: '@hold 4000\n@say done', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@hold 4000\n@say done', first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   await writeFile(join(hosted.home, 'restart'), '');
   // Two and a half seconds outlast the Kit's next look at its work while the turn still runs.
@@ -108,7 +108,7 @@ it('restarts for a CLI update not while a turn it reports idle waits on a questi
   void hosted.kit.exited.then((exited) => {
     code = exited;
   });
-  hosted.call({ kind: 'message', text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@ask', first: true });
   const question = await until(() => hosted.interactions[0]);
   await until(() => hosted.idles[2]);
 
@@ -155,7 +155,7 @@ it('counts a turn waiting on a non-secret question as idle', async () => {
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.call({ kind: 'message', text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@ask', first: true });
   await until(() => hosted.interactions[0]);
 
   await until(() => hosted.idles[2]);
@@ -166,7 +166,7 @@ it('does not count a turn waiting on a question as idle while a process the conv
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.call({ kind: 'message', text: '@spawn\n@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@spawn\n@ask', first: true });
   await until(() => hosted.interactions[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
@@ -187,7 +187,7 @@ it('does not count a turn waiting on a secret question as idle', async () => {
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.call({ kind: 'message', text: `@secret ${createHash('sha256').update('x').digest('hex')}`, files: [], first: true });
+  hosted.call({ kind: 'message', text: `@secret ${createHash('sha256').update('x').digest('hex')}`, first: true });
   await until(() => hosted.interactions[0]);
   await settle();
 
@@ -204,12 +204,12 @@ it.each(['codex-acp', 'claude-agent-acp'])('does not report idle while %s report
   expect(clientCapabilities.session).toEqual({ compaction: {}, notices: {} });
   expect(clientCapabilities._meta.jetbrains.air.capabilities).toContain('asyncTasks');
 
-  hosted.call({ kind: 'message', text: '@job job-1\n@say started', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@job job-1\n@say started', first: true });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
 
-  hosted.call({ kind: 'message', text: '@jobdone job-1', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@jobdone job-1', first: false });
   await until(() => ended(hosted)[1]);
   await until(() => hosted.idles[2]);
 });
@@ -227,11 +227,11 @@ it('drops an idle report House did not take once the CLI reports a running backg
   await opened(hosted);
   await until(() => endedAtReport.length > 0);
 
-  hosted.call({ kind: 'message', text: '@job job-1\n@say started', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@job job-1\n@say started', first: true });
   await until(() => ended(hosted)[0]);
   // A second outlasts the first retry of the refused idle report, which the running job must drop.
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  hosted.call({ kind: 'message', text: '@jobdone job-1', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@jobdone job-1', first: false });
   await until(() => ended(hosted)[1]);
   await until(() => hosted.idles[1]);
 
@@ -303,12 +303,12 @@ it.each(FORMS)('does not report idle while %s reports %s, from its start until i
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.call({ kind: 'message', text: `${start}\n@say started`, files: [], first: true });
+  hosted.call({ kind: 'message', text: `${start}\n@say started`, first: true });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
 
-  hosted.call({ kind: 'message', text: `${end}\n@say done`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${end}\n@say done`, first: false });
   await until(() => ended(hosted)[1]);
   await until(() => hosted.idles[2]);
 });
@@ -317,7 +317,7 @@ it('keeps a background form whose end never arrives busy until the Conversation 
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   await opened(hosted);
   await until(() => hosted.idles[1]);
-  hosted.call({ kind: 'message', text: `${tasks('local_bash')[0]}\n@say started`, files: [], first: true });
+  hosted.call({ kind: 'message', text: `${tasks('local_bash')[0]}\n@say started`, first: true });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);

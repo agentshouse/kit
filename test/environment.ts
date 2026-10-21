@@ -152,6 +152,7 @@ export interface Hosted {
   interactions: Received[];
   images: Received[];
   finishes: Received[];
+  transcripts: Received[];
   store: Store;
   idles: Received[];
   mcp: Received[];
@@ -216,6 +217,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const interactions: Received[] = [];
   const images: Received[] = [];
   const finishes: Received[] = [];
+  const transcripts: Received[] = [];
   const store = await startStore(hosting.tls ? certificate() : undefined);
   const idles: Received[] = [];
   const mcp: Received[] = [];
@@ -267,6 +269,10 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     if ('mismatch' in finished) return { status: 409, body: { error: { code: 'upload_mismatch', message: MISMATCH, retryable: false } } };
     return { body: finished };
   });
+  house.route('POST', '/kit/conversations/:conversation/messages/:message/transcripts', (request) => {
+    transcripts.push(request);
+    return { body: {} };
+  });
   house.route('POST', '/kit/idle', (request) => {
     idles.push(request);
     return { body: {} };
@@ -293,6 +299,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     interactions,
     images,
     finishes,
+    transcripts,
     store,
     idles,
     mcp,
@@ -320,6 +327,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
         conversation_id: 'conversation-1',
         agent_id: 'agent-1',
         provider_session_id: null,
+        ...(fields.kind === 'message' ? { message_id: `message-${calls}` } : {}),
         ...fields,
       });
     },
@@ -375,6 +383,10 @@ export function lastCall(): string {
   return `call-${calls}`;
 }
 
+export function lastMessage(): string {
+  return `message-${calls}`;
+}
+
 export async function installHeld(hosted: Hosted): Promise<string> {
   const hold = join(hosted.home, 'npm-hold');
   await writeFile(hold, '');
@@ -413,7 +425,7 @@ export async function opened(hosted: Hosted, conversation = 'conversation-1', ag
 }
 
 export function directed(hosted: Hosted, text: string, conversation = 'conversation-1', agent = 'agent-1'): void {
-  hosted.call({ kind: 'message', conversation_id: conversation, agent_id: agent, text, files: [], first: false });
+  hosted.call({ kind: 'message', conversation_id: conversation, agent_id: agent, text, first: false });
 }
 
 export async function runs(hosted: Hosted, count: number): Promise<Ran[]> {

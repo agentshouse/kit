@@ -42,7 +42,7 @@ async function opened(kind: string, hosting: Hosting = {}): Promise<Hosted> {
 async function stays(hosted: Hosted, text: string, idle: boolean): Promise<void> {
   const idles = hosted.idles.length;
   const turns = ended(hosted).length;
-  hosted.call({ kind: 'message', text: `${text}\n@say ok`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${text}\n@say ok`, first: false });
   await until(() => ended(hosted)[turns]);
   if (idle) {
     await until(() => hosted.idles[idles]);
@@ -161,7 +161,7 @@ it('stays busy while the working directory holds a durable schedule when a sessi
   const tasks = join(hosted.workingDirectory, '.claude', 'scheduled_tasks.json');
   await writeFile(tasks, JSON.stringify({ tasks: [{ id: '7b99af94', cron: '0 3 1 1 *', prompt: 'say hi', createdAt: 1791648534000, recurring: true }] }));
 
-  hosted.call({ kind: 'message', text: '@say resumed', files: [], first: false, provider_session_id: 'session-earlier' });
+  hosted.call({ kind: 'message', text: '@say resumed', first: false, provider_session_id: 'session-earlier' });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(1);
@@ -308,7 +308,7 @@ it('names a new Claude Code session itself and passes the CLI’s background rep
 it('names a new Codex session itself before its first prompt and outside any turn', async () => {
   const hosted = await opened('codex-acp');
 
-  hosted.call({ kind: 'message', text: '@say first', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say first', first: false });
   await until(() => ended(hosted)[0]);
 
   const log = await hosted.adapterLog();

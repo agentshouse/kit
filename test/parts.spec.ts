@@ -40,7 +40,7 @@ async function replayed(fixture: string, count = 1, recording: Recording = {}): 
     await hosted.result(lastCall());
   }
   hosted.watch(true);
-  hosted.call({ kind: 'message', text: `@gate admitted\n@replay ${fixture}`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `@gate admitted\n@replay ${fixture}`, first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   await writeFile(join(hosted.home, 'admitted'), '');
   for (let index = 0; index < (recording.questions ?? 0); index++) {
@@ -339,7 +339,7 @@ it("marks an image House did not save with House's refusal in place of its image
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
 
-  hosted.call({ kind: 'message', text: emittedImage(), files: [], first: false });
+  hosted.call({ kind: 'message', text: emittedImage(), first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([
@@ -366,7 +366,7 @@ it('streams the text after an image and declares the next image while the first 
   await hosted.result(lastCall());
   hosted.watch(true);
 
-  hosted.call({ kind: 'message', text: `${emittedImage()}\n${emittedImage()}\n@say Done.\n@gate streamed`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${emittedImage()}\n${emittedImage()}\n@say Done.\n@gate streamed`, first: false });
   await until(() => streamed(hosted, 'image'));
   await writeFile(join(hosted.home, 'streamed'), '');
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
@@ -388,7 +388,7 @@ it('keeps writing the text an image was saved in the middle of, and saves the im
   await hosted.result(lastCall());
   hosted.watch(true);
 
-  hosted.call({ kind: 'message', text: `${emittedImage()}\n@say All nine\n@gate saved\n@say  steps completed.`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${emittedImage()}\n@say All nine\n@gate saved\n@say  steps completed.`, first: false });
   await until(() => streamed(hosted, 'image'));
   await writeFile(join(hosted.home, 'saved'), '');
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
@@ -419,7 +419,7 @@ it('marks every model switch Claude Code makes after the Kit asked for a model, 
   hosted.call({ kind: 'option', option: 'model', value: 'sonnet' });
   await hosted.result(lastCall());
 
-  hosted.call({ kind: 'message', text: `${switched('haiku')}\n${switched('sonnet')}`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `${switched('haiku')}\n${switched('sonnet')}`, first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([
@@ -436,7 +436,7 @@ it('marks a model switch Claude Code makes to a model the Kit asked for and the 
   hosted.call({ kind: 'option', option: 'model', value: 'opus' });
   await hosted.result(lastCall());
 
-  hosted.call({ kind: 'message', text: switched('opus'), files: [], first: false });
+  hosted.call({ kind: 'message', text: switched('opus'), first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([{ type: 'marker', marker: 'model', text: 'opus' }]);
@@ -472,7 +472,7 @@ it('counts a recorded Codex MCP call when it starts', async () => {
   const own = events.find((event) => event.params.sessionId !== undefined)!.params.sessionId;
   const started = events.find((event) => event.params.update?.sessionUpdate === 'tool_call' && event.params.update.rawInput?.server === 'echo')!;
 
-  hosted.call({ kind: 'message', text: `@emit ${JSON.stringify(started).split(own).join('$SESSION')}\n@say after`, files: [], first: false });
+  hosted.call({ kind: 'message', text: `@emit ${JSON.stringify(started).split(own).join('$SESSION')}\n@say after`, first: false });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([
@@ -483,7 +483,7 @@ it('counts a recorded Codex MCP call when it starts', async () => {
 
 it("marks a recorded Codex background terminal's start in its turn and its end, which came after that turn, first in the next", async () => {
   const { hosted, turns } = await replayed('codex-terminal');
-  hosted.call({ kind: 'message', text: '@say ok', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say ok', first: false });
   const next = await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/ended'))[1]);
 
   expect(turns[0]!.parts.filter((part) => part.type === 'marker')).toEqual([
@@ -539,7 +539,7 @@ it.each(['claude', 'codex'])(
       [ROUTINE_CANCELLED, ANSWERED],
     ]);
 
-    hosted.call({ kind: 'message', text: `${searched}\n${mailed}`, files: [], first: false });
+    hosted.call({ kind: 'message', text: `${searched}\n${mailed}`, first: false });
     const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
     const parts = (ended.body as Ended).parts;

@@ -20,7 +20,7 @@ interface Shelled {
 
 async function ran(hosted: Hosted, line: string): Promise<Shelled> {
   const before = (await hosted.adapterLog()).filter((entry) => 'house' in entry || 'sh' in entry).length;
-  hosted.call({ kind: 'message', text: line, files: [], first: false });
+  hosted.call({ kind: 'message', text: line, first: false });
   return until(
     async () => (await hosted.adapterLog()).filter((entry) => 'house' in entry || 'sh' in entry)[before] as unknown as Shelled | undefined,
   );
@@ -194,6 +194,23 @@ it("refuses a download whose bytes do not match House's SHA-256 and one of a tex
   expect(hosted.mcp.map((received) => received.headers.authorization)).toEqual(['Bearer ahp_own', 'Bearer ahp_own']);
 });
 
+it('refuses a download of a document whose inspect answer House cut as one of a text file, and writes nothing', async () => {
+  const { hosted } = await copied();
+  await writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' }));
+  const read = hosted.tools.inspect!;
+  hosted.tools.inspect = async (args, request) => {
+    const result = (await read(args, request))!;
+    const cut = `inspect: output_cut 1 newest revisions; continue with: inspect ref=rev-1 path=${String(args.path)} view=history`;
+    return { content: [{ type: 'text', text: `${result.content[0]!.text}${cut}` }] };
+  };
+  const target = join(hosted.workingDirectory, 'plan.copy');
+
+  const text = await house(hosted, hosted.workingDirectory, 'download', JSON.stringify({ path: '/rooms/notes/plan.md', file: target }));
+
+  expect(text).toEqual({ status: 1, stdout: '', stderr: 'house: /rooms/notes/plan.md holds no binary file; shell reads its text\n' });
+  expect(existsSync(target)).toBe(false);
+});
+
 it('copies and fetches a Room holding binary files with no binary entry or byte and no byte read, and so does a second Local copy', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
@@ -308,37 +325,6 @@ it("still pushes a text-only commit, and passes House's kind refusal of text at 
   ]);
   expect(room.binaries.get('photo.jpg')!.bytes).toEqual(JPEG);
   expect(room.files.has('photo.jpg')).toBe(false);
-});
-
-it("downloads an incoming message's direct file into the conversation's fixed folder through that message, and adds nothing to the Private Room or its Local copy", async () => {
-  const hosted = await hostKit();
-  const rooms = serveRooms(hosted);
-  const own = rooms.room('private');
-  own.put('diary.md', 'Private\n');
-  await rooms.fetch([own]);
-  const before = await copyState(hosted, own);
-  hosted.house.route('POST', '/kit/conversation/originals/get', () => ({
-    body: { message: 'message-1', download: { method: 'GET', url: `${hosted.house.origin}/message-files/file-1`, expires_at: '2026-10-13T12:00:00Z' } },
-  }));
-  hosted.house.route('GET', '/message-files/:file', () => ({ bytes: { type: 'application/octet-stream', content: JPEG } }));
-  await opened(hosted);
-
-  hosted.call({
-    kind: 'message',
-    text: 'look',
-    files: [{ version: 'file-1', name: 'photo.jpg', media_type: 'image/jpeg', bytes: JPEG.length, sha256: digest(JPEG) }],
-    first: false,
-  });
-
-  expect(await hosted.result(lastCall())).toEqual({});
-  expect(await readFile(join(hosted.workingDirectory, '.house', 'files', 'message-1', 'file-1', 'photo.jpg'))).toEqual(JPEG);
-  expect(
-    hosted.house.requests.filter((request) => request.path === '/kit/conversation/originals/get').map((request) => request.body),
-  ).toEqual([{ version: 'file-1', download: true }]);
-  expect(hosted.mcp).toEqual([]);
-  expect(batches(hosted)).toEqual([]);
-  expect(own.files.size).toBe(1);
-  expect(await copyState(hosted, own)).toEqual(before);
 });
 
 it("attaches local files to a record: describes each to House, sends the bytes of every file House asks for, and appends again", async () => {

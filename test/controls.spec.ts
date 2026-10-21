@@ -17,7 +17,7 @@ async function opened(hosted: Hosted): Promise<string> {
 it('cancels the running turn on interrupt and keeps the process and session', async () => {
   const hosted = await hostKit();
   const session = await opened(hosted);
-  hosted.call({ kind: 'message', text: '@wait', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@wait', first: true });
   const turn = (await until(() => started(hosted)[0])).params.turn!;
 
   hosted.call({ kind: 'interrupt', turn_id: turn });
@@ -27,7 +27,7 @@ it('cancels the running turn on interrupt and keeps the process and session', as
   expect(outcome(interrupted.body)).toEqual({ text: '' });
   hosted.call({ kind: 'interrupt', turn_id: turn });
   await hosted.result(lastCall());
-  hosted.call({ kind: 'message', text: '@say again', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say again', first: false });
   await until(() => ended(hosted)[1]);
   const log = await hosted.adapterLog();
   expect(log.filter((entry) => entry.method === 'session/cancel')).toHaveLength(1);
@@ -44,7 +44,7 @@ it('cancels the running turn on interrupt and keeps the process and session', as
 it('kills the process and every process it started, and the next message resumes the session', async () => {
   const hosted = await hostKit();
   const session = await opened(hosted);
-  hosted.call({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@spawn\n@wait', first: true });
   const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
   const adapter = spawned.pid as number;
   expect(alive(spawned.spawned as number)).toBe(true);
@@ -57,7 +57,7 @@ it('kills the process and every process it started, and the next message resumes
   expect(await until(() => ended(hosted)[0])).toMatchObject({ body: { failed: 'killed' } });
   await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
 
-  hosted.call({ kind: 'message', provider_session_id: session, text: 'after', files: [], first: false });
+  hosted.call({ kind: 'message', provider_session_id: session, text: 'after', first: false });
   await hosted.result(lastCall());
   const resumed = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/resume'));
   expect(resumed.params).toMatchObject({ sessionId: session });
@@ -77,16 +77,16 @@ it('kills a process still opening its session and refuses the open, and the next
   expect(alive(spawned.pid as number)).toBe(false);
   await until(() => !alive(spawned.spawned as number));
   await rm(join(hosted.home, 'hold-open'));
-  hosted.call({ kind: 'message', text: '@say again', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say again', first: false });
   expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
 });
 
 it.each([
-  ['its tool call', '/', {}, []],
-  ['the file it attaches', '/kit/conversation/originals/get', {}, [{ version: 'version-1', name: 'file.txt' }]],
+  ['its tool call', '@say hello'],
+  ['the read of a file it links', '@say [file.txt](/rooms/private/file.txt)'],
 ])(
   'kills a running process the moment the kill arrives while House holds %s for its first message, and refuses that message',
-  async (_held, path, body, files) => {
+  async (_held, text) => {
     const hosted = await hostKit();
     await opened(hosted);
     const adapter = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.pid as number;
@@ -94,11 +94,11 @@ it.each([
     const held = new Promise<Answer>((resolve) => {
       release = resolve;
     });
-    onTestFinished(() => release({ body }));
-    hosted.house.route('POST', path, () => held);
-    hosted.call({ kind: 'message', text: '@say hello', files, first: true });
+    onTestFinished(() => release({ body: {} }));
+    hosted.house.route('POST', '/', () => held);
+    hosted.call({ kind: 'message', text, first: true });
     const message = lastCall();
-    await until(() => hosted.house.requests.find((request) => request.path === path));
+    await until(() => hosted.house.requests.find((request) => request.path === '/'));
 
     hosted.call({ kind: 'kill' });
 
@@ -143,7 +143,7 @@ it.each(['SIGTERM', 'SIGINT'] as const)(
   async (signal) => {
     const hosted = await hostKit();
     await opened(hosted);
-    hosted.call({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
+    hosted.call({ kind: 'message', text: '@spawn\n@wait', first: true });
     await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
     await writeFile(join(hosted.home, 'hold-open'), '');
     hosted.call({ kind: 'open', conversation_id: 'conversation-2' });
@@ -163,7 +163,7 @@ it.each(['SIGTERM', 'SIGINT'] as const)(
 
 it('kills a background job its crashed process left behind when SIGTERM stops it', async () => {
   const hosted = await hostKit();
-  hosted.call({ kind: 'message', text: '@spawn\n@exit 1', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@spawn\n@exit 1', first: false });
   const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
   await until(() => ended(hosted)[0]);
   expect(alive(spawned.pid as number)).toBe(false);
@@ -184,7 +184,7 @@ it('sets an option on the running process and relays the commands and options th
 
   hosted.call({ kind: 'option', option: 'model', value: 'other-model' });
   await hosted.result(lastCall());
-  hosted.call({ kind: 'message', text: '@commands\n@config', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@commands\n@config', first: true });
   await until(() => ended(hosted)[0]);
 
   const log = await hosted.adapterLog();
@@ -211,7 +211,7 @@ it('sets an option on the running process and relays the commands and options th
 it('reports a question with the CLI request unchanged and passes the answer back unchanged', async () => {
   const hosted = await hostKit();
   await opened(hosted);
-  hosted.call({ kind: 'message', text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@ask', first: true });
 
   const question = await until(() => hosted.interactions[0]);
   const turn = started(hosted)[0]!.params.turn;
@@ -285,7 +285,7 @@ it.each([0, 2500])(
     await opened(hosted);
     await until(() => hosted.idles[1]);
     // The CLI stops waiting 300 ms in and ends its turn 1.5 s later, before a late report lands.
-    hosted.call({ kind: 'message', text: '@abandon 300\n@hold 1500\n@say after', files: [], first: true });
+    hosted.call({ kind: 'message', text: '@abandon 300\n@hold 1500\n@say after', first: true });
     await until(() => hosted.idles[2]);
 
     const abandoned = async () => (await hosted.adapterLog()).filter((entry) => 'abandoned' in entry);
@@ -322,7 +322,6 @@ it('passes a secret from the held secret-input request to the CLI and keeps it n
   hosted.call({
     kind: 'message',
     text: `@secret ${createHash('sha256').update(secret).digest('hex')}`,
-    files: [],
     first: true,
   });
 

@@ -51,8 +51,8 @@ Room may no longer be copied here. `house fetch` does the same and records House
 `refs/house/received`; rebase onto it, commit and run `house push --owner` in the copy, through the install command in
 the container. An Agent runs both, without `--owner`. `house upload` and `house download` move a Room's other files straight between disk and House's store, and a broken upload resumes on its own.
 
-Kit turns each audio file of your message to an Agent into text on this
-computer before the Agent reads it. While transcription is on, the speech
+Kit turns each audio file your message to an Agent links into text on this
+computer before the Agent reads it, and keeps a message whose audio it cannot turn into text from starting. While transcription is on, the speech
 engine and model use about 425 MB beside the Environment's credential; turning it off deletes them.
 
 ## License

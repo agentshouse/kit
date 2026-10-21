@@ -29,7 +29,7 @@ it('stays busy while a process the conversation started runs, double-forked into
   const servers = (await hosted.adapterLog()).filter((entry) => entry.server !== undefined);
   expect(servers.map((entry) => alive(entry.server as number))).toEqual([true]);
 
-  hosted.call({ kind: 'message', text: '@spawn\n@say started', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@spawn\n@say started', first: true });
   await until(() => ended(hosted)[0]);
   const job = await spawned(hosted);
   await settle();
@@ -43,13 +43,13 @@ it('stays busy while a process the conversation started runs, double-forked into
 
 it("stays busy while a process started after the session started runs, while a helper the CLI ships beside its executable does not", async () => {
   const hosted = await serving();
-  hosted.call({ kind: 'message', text: '@host\n@say hosted', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@host\n@say hosted', first: true });
   await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);
   const host = (await hosted.adapterLog()).find((entry) => entry.host !== undefined)!.host as number;
   expect(alive(host)).toBe(true);
 
-  hosted.call({ kind: 'message', text: '@server\n@say started', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@server\n@say started', first: false });
   await until(() => ended(hosted)[1]);
   const later = (await hosted.adapterLog()).filter((entry) => entry.server !== undefined).at(-1)!.server as number;
   await settle();
@@ -62,7 +62,7 @@ it("stays busy while a process started after the session started runs, while a h
 
 it('stays busy while a process a server started after the session started runs', async () => {
   const hosted = await serving();
-  hosted.call({ kind: 'message', text: '@serve\n@say served', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@serve\n@say served', first: true });
   await until(() => ended(hosted)[0]);
   const child = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.served))).served as number;
   await settle();
@@ -85,7 +85,7 @@ it('stays busy while the processes of a conversation cannot be read', async () =
   await until(() => hosted.idles[1]);
 
   await writeFile(unreadable, '');
-  hosted.call({ kind: 'message', text: '@say read', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say read', first: true });
   await until(() => ended(hosted)[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
@@ -98,7 +98,7 @@ it('stays busy while the processes of a conversation cannot be read', async () =
 it('stays busy while a process its crashed Conversation process left behind runs', async () => {
   const hosted = await hostKit();
   await until(() => hosted.idles[0]);
-  hosted.call({ kind: 'message', text: '@spawn\n@exit 1', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@spawn\n@exit 1', first: true });
   const job = await spawned(hosted);
   await until(() => ended(hosted)[0]);
   await settle();
@@ -113,7 +113,7 @@ it('stays busy while a process its crashed Conversation process left behind runs
 it('kill stops what a crashed Conversation process left behind', async () => {
   const hosted = await hostKit();
   await until(() => hosted.idles[0]);
-  hosted.call({ kind: 'message', text: '@spawn\n@exit 1', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@spawn\n@exit 1', first: true });
   const job = await spawned(hosted);
   await until(() => ended(hosted)[0]);
 

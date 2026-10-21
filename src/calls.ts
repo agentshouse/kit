@@ -5,19 +5,11 @@ import { kitHome } from './home.ts';
 
 export type Result = { provider_session_id: string } | { refused: string } | Record<string, never>;
 
-interface MessageFile {
-  version: string;
-  name: string;
-  media_type: string | null;
-  bytes: number;
-  sha256: string;
-}
-
 export interface KitMethods {
   readonly open: { readonly params: Record<never, never>; readonly result: Result };
   readonly kill: { readonly params: Record<never, never>; readonly result: Result };
   readonly message: {
-    readonly params: { text: string; files: MessageFile[]; first: boolean };
+    readonly params: { message_id: string; text: string; first: boolean };
     readonly result: Result;
   };
   readonly interrupt: { readonly params: { turn_id: string }; readonly result: Result };

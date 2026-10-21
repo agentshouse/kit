@@ -29,7 +29,7 @@ async function open(hosted: Hosted, conversation: string, agent = 'agent-1'): Pr
 
 async function answer(hosted: Hosted, conversation: string, text: string): Promise<unknown> {
   const before = hosted.turns.length;
-  hosted.call({ kind: 'message', conversation_id: conversation, text, files: [], first: false });
+  hosted.call({ kind: 'message', conversation_id: conversation, text, first: false });
   const ended = await until(() =>
     hosted.turns
       .slice(before)
@@ -86,7 +86,7 @@ it('opens and resumes Claude sessions under the adapter entrypoint instead of an
   hosted.call({ kind: 'kill' });
   await hosted.result(lastCall());
 
-  hosted.call({ kind: 'message', provider_session_id: opened.provider_session_id, text: '@say resumed', files: [], first: false });
+  hosted.call({ kind: 'message', provider_session_id: opened.provider_session_id, text: '@say resumed', first: false });
   await hosted.result(lastCall());
 
   const entries = await initialized(hosted);

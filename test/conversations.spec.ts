@@ -1,8 +1,9 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
+import { attached, bridgeSockets, inspected } from './attachments.ts';
 import { settle, until } from './double.ts';
 import { conversationCredential, hostKit, installHeld, lastCall, outcome, userBin, type Hosted } from './environment.ts';
 import { alive, placeHostKey, temporaryHome } from './kit.ts';
@@ -230,7 +231,7 @@ it('writes a message to a running process while the Kit is still reporting its C
   await hosted.result(lastCall());
   await reportHeld(hosted);
 
-  hosted.call({ kind: 'message', text: '@say reached', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say reached', first: false });
 
   expect(await hosted.result(lastCall())).toEqual({});
   const sent = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
@@ -301,7 +302,7 @@ it('creates an absent default launch directory beneath the native workspace root
 it('resumes the stored provider session for a message with no process and prompts it', async () => {
   const hosted = await hostKit();
 
-  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', files: [], first: false });
+  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', first: false });
 
   expect(await hosted.result(lastCall())).toEqual({});
   const log = await until(async () => {
@@ -322,7 +323,7 @@ it("reports a refused resume in the Kit's words, never the CLI's, and logs the C
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'refuse-resume'), '');
 
-  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', files: [], first: false });
+  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', first: false });
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ did not start: the Agent's CLI could not resume this conversation: .*the session cannot be resumed/m);
@@ -335,7 +336,7 @@ it.each([
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'signed-out'), '');
 
-  hosted.call({ kind: 'message', provider_session_id: stored, text: 'hello', files: [], first: stored === null });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: 'hello', first: stored === null });
 
   expect(await hosted.result(lastCall())).toEqual({
     refused: "the Agent's CLI is not signed in; sign it in on the Agent's machine",
@@ -347,7 +348,7 @@ it('reports the start-up step of a message whose session takes over a second to 
   await writeFile(join(hosted.home, 'hold-new'), '');
   const starting = () => hosted.connection.notifications.filter((notification) => notification.type === 'starting');
 
-  hosted.call({ kind: 'message', text: '@say Hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say Hello', first: true });
 
   await until(() => starting().length > 0);
   expect(starting()).toEqual([{ type: 'starting', conversation_id: 'conversation-1', step: 'session' }]);
@@ -398,41 +399,26 @@ it('writes the start-up step it is still in on a Kit connection that reopens', a
   expect(starting(reopened)).toEqual(['session', null]);
 });
 
-it("prepares a new conversation's first message, its file and House's instructions included, while its CLI opens the session", async () => {
+it("prepares a new conversation's first message, reading what it links and House's instructions through the one House connection its CLI opens the session with", async () => {
   const hosted = await hostKit();
-  const content = Buffer.from('first file\n');
-  hosted.house.route('POST', '/kit/conversation/originals/get', () => ({
-    body: {
-      version: 'version-1',
-      message: 'message-1',
-      name: 'notes.txt',
-      download: { method: 'GET', url: `${hosted.house.origin}/bytes/version-1`, expires_at: '2026-10-03T12:00:00Z' },
-    },
-  }));
-  hosted.house.route('GET', '/bytes/:version', () => ({ bytes: { type: 'application/octet-stream', content } }));
+  const [photo] = attached(hosted, [{ name: 'photo.jpg', media_type: 'image/jpeg', content: Buffer.from([0xff, 0xd8, 0xff, 0xe0]) }]);
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const file = {
-    version: 'version-1',
-    name: 'notes.txt',
-    media_type: 'text/plain',
-    bytes: content.length,
-    sha256: createHash('sha256').update(content).digest('hex'),
-  };
+  const text = `@say hello ${photo!.link}`;
 
   hosted.call({ kind: 'open' });
-  hosted.call({ kind: 'message', text: '@say hello', files: [file], first: true });
+  hosted.call({ kind: 'message', text, first: true });
 
   await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/new'));
-  await until(() => hosted.house.requests.find((received) => received.path === '/kit/conversation/originals/get'));
+  await until(() => inspected(hosted).length > 0);
   await until(() => hosted.mcp.find((received) => (received.body as { params?: { name?: string } }).params?.name === 'shell'));
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
   await rm(join(hosted.home, 'hold-new'));
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
     expect.stringMatching(/^From House:\n[^]*\n\nBe useful\.$/),
-    '@say hello',
-    join(hosted.workingDirectory, '.house', 'files', 'message-1', 'version-1', 'notes.txt'),
+    text,
   ]);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/conversation-1/credential')).toHaveLength(1);
 });
 
 it("prompts a first message with House's instructions through the CLI it starts itself when its open's start failed while it read them", async () => {
@@ -457,7 +443,7 @@ it("prompts a first message with House's instructions through the CLI it starts 
 
   hosted.call({ kind: 'open' });
   const open = lastCall();
-  hosted.call({ kind: 'message', text: '@say hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say hello', first: true });
   const message = lastCall();
 
   expect(await hosted.result(open)).toEqual({ refused: "the Agent's CLI did not open a session" });
@@ -475,7 +461,7 @@ it("writes a running process's facts, its latest commands and options included, 
   const hosted = await hostKit();
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-  hosted.call({ kind: 'message', text: '@commands\n@config', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@commands\n@config', first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   const facts = (connection: (typeof hosted.house.connections)[number]) =>
     connection.notifications.filter((notification) => ['process', 'commands', 'options'].includes(String(notification.type)));
@@ -500,7 +486,7 @@ it('writes the exit of a process a closed Kit connection did not take once the c
   const hosted = await hostKit();
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-  hosted.call({ kind: 'message', text: '@gate exit-now\n@exit 1', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@gate exit-now\n@exit 1', first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
   const processes = (connection: (typeof hosted.house.connections)[number]) =>
     connection.notifications.filter((notification) => notification.type === 'process');
@@ -520,10 +506,10 @@ it('keeps the start-up step of the message being started while a later one arriv
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
   const starting = () => hosted.connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
-  hosted.call({ kind: 'message', text: '@say first', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say first', first: true });
   await until(() => starting().length > 0);
 
-  hosted.call({ kind: 'message', text: '@say second', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say second', first: true });
   await settle();
   expect(starting()).toEqual(['session']);
 
@@ -535,7 +521,7 @@ it('keeps the start-up step of the message being started while a later one arriv
 it('returns the result of a message it prompted before a restart lost its result once House sends it again, and prompts it no second time', async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
-  hosted.call({ kind: 'message', text: '@say once', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say once', first: true });
   const sent = lastCall();
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   await hosted.restart();
@@ -544,7 +530,7 @@ it('returns the result of a message it prompted before a restart lost its result
     return { body: {} };
   });
 
-  hosted.call({ kind: 'message', input_id: sent, text: '@say once', files: [], first: true });
+  hosted.call({ kind: 'message', input_id: sent, text: '@say once', first: true });
 
   expect(await hosted.result(sent)).toEqual({ provider_session_id: expect.any(String) });
   await settle();
@@ -554,7 +540,7 @@ it('returns the result of a message it prompted before a restart lost its result
 it('prompts no second time a message whose CLI asked a question about it before a restart lost its result', async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
-  hosted.call({ kind: 'message', text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@ask', first: true });
   const sent = lastCall();
   await until(() => hosted.interactions[0]);
   await hosted.restart();
@@ -563,7 +549,7 @@ it('prompts no second time a message whose CLI asked a question about it before 
     return { body: {} };
   });
 
-  hosted.call({ kind: 'message', input_id: sent, text: '@ask', files: [], first: true });
+  hosted.call({ kind: 'message', input_id: sent, text: '@ask', first: true });
 
   expect(await hosted.result(sent)).toEqual({ provider_session_id: expect.any(String) });
   await settle();
@@ -573,7 +559,7 @@ it('prompts no second time a message whose CLI asked a question about it before 
 it('prompts again a message House sends again after a restart when its CLI showed nothing of it before the restart', async () => {
   const hosted = await hostKit();
   hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
-  hosted.call({ kind: 'message', text: '@gate never-opened', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@gate never-opened', first: true });
   const sent = lastCall();
   await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   await hosted.restart();
@@ -582,7 +568,7 @@ it('prompts again a message House sends again after a restart when its CLI showe
     return { body: {} };
   });
 
-  hosted.call({ kind: 'message', input_id: sent, text: '@say again', files: [], first: true });
+  hosted.call({ kind: 'message', input_id: sent, text: '@say again', first: true });
 
   expect(await hosted.result(sent)).toEqual({ provider_session_id: expect.any(String) });
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
@@ -603,7 +589,7 @@ it.each(['a Kit restart', 'a kill'])(
       await hosted.restart();
     }
 
-    hosted.call({ kind: 'message', provider_session_id: stored, text: '@say started', files: [], first: true });
+    hosted.call({ kind: 'message', provider_session_id: stored, text: '@say started', first: true });
 
     const { provider_session_id: opened } = (await hosted.result(lastCall())) as { provider_session_id: string };
     expect(opened).not.toBe(stored);
@@ -620,7 +606,7 @@ it.each(['codex-acp', 'grok-build'])('resumes the session %s wrote when the conv
   const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   await hosted.restart();
 
-  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say resumed', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say resumed', first: true });
 
   expect(await hosted.result(lastCall())).toEqual({});
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
@@ -636,9 +622,9 @@ it('names the new session in the result of every first message House sent before
   const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   await hosted.restart();
 
-  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say one', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say one', first: true });
   const one = lastCall();
-  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say two', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say two', first: true });
 
   const opened = ((await hosted.result(one)) as { provider_session_id: string }).provider_session_id;
   expect(opened).not.toBe(stored);
@@ -649,13 +635,13 @@ it('refuses a first message whose session this Kit already prompted when the CLI
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   hosted.call({ kind: 'open' });
   const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
-  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say one', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say one', first: true });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   hosted.call({ kind: 'kill' });
   await hosted.result(lastCall());
   await writeFile(join(hosted.home, 'refuse-resume'), '');
 
-  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say two', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say two', first: true });
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
@@ -668,7 +654,7 @@ it('refuses a first message whose resume the CLI refuses for another reason than
   await hosted.restart();
   await writeFile(join(hosted.home, 'refuse-resume'), '');
 
-  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say lost', files: [], first: true });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say lost', first: true });
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
@@ -680,7 +666,7 @@ it('refuses a later message of a Claude Code conversation whose session the CLI 
   const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   await hosted.restart();
 
-  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say lost', files: [], first: false });
+  hosted.call({ kind: 'message', provider_session_id: stored, text: '@say lost', first: false });
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
@@ -699,6 +685,22 @@ it("refuses a conversation whose CLI does not install in the Kit's words, never 
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
   expect(hosted.kit.stderr()).toContain('claude-agent-acp did not install: Claude installer private diagnostic\nChecksum verification failed');
+});
+
+it('closes the connection a message opened to read its links when its CLI does not install', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
+    prepare: async (home) => {
+      await rm(join(userBin(home), 'claude'));
+      await writeFile(join(home, 'install-fail'), 'claude-agent-acp\n');
+    },
+  });
+  attached(hosted, [], ['/rooms/notes/plan.md']);
+
+  hosted.call({ kind: 'message', text: 'read [plan.md](/rooms/notes/plan.md)', first: false });
+
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
+  expect(inspected(hosted)).toEqual([{ path: '/rooms/notes/plan.md' }]);
+  await until(async () => (await bridgeSockets(hosted)).length === 0);
 });
 
 it("refuses a conversation whose connection cannot open in the Kit's words, and logs why", async () => {
@@ -762,7 +764,7 @@ async function opened(kind = 'codex-acp'): Promise<Hosted> {
 it('relays Grok plan approval with its recorded request and the owner response', async () => {
   const hosted = await opened('grok-build');
 
-  hosted.call({ kind: 'message', text: '@replay grok-plan', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@replay grok-plan', first: false });
 
   const question = await until(() => hosted.interactions[0]);
   expect(question.body).toMatchObject({
@@ -807,10 +809,10 @@ it.each(KINDS)("holds a message that reaches %s mid-turn until that turn ends, t
   const hosted = await opened(kind);
   const release = gated(hosted, 'first');
 
-  hosted.call({ kind: 'message', text: '@gate first\n@say first', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
   const first = lastCall();
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.call({ kind: 'message', text: '@say second', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say second', first: false });
   const second = lastCall();
   await hosted.result(first);
   await settle();
@@ -828,11 +830,11 @@ it.each(KINDS)("holds a message that reaches %s mid-turn until that turn ends, t
 it('sends two messages that arrived mid-turn as two turns in the order they arrived', async () => {
   const hosted = await opened();
   const release = gated(hosted, 'first');
-  hosted.call({ kind: 'message', text: '@gate first\n@say first', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
 
-  hosted.call({ kind: 'message', text: '@say second', files: [], first: false });
-  hosted.call({ kind: 'message', text: '@say third', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say second', first: false });
+  hosted.call({ kind: 'message', text: '@say third', first: false });
   await settle();
   await release();
 
@@ -845,9 +847,9 @@ it('resumes the provider session for a message that waited while the process cra
   const hosted = await opened();
   const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
   const release = gated(hosted, 'crash');
-  hosted.call({ kind: 'message', text: '@gate crash\n@exit 3', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@gate crash\n@exit 3', first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.call({ kind: 'message', text: '@say after', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say after', first: false });
   await settle();
 
   await release();
@@ -862,10 +864,10 @@ it('keeps output a crashed Conversation process leaves behind out of the process
   const hosted = await opened();
   const late = gated(hosted, 'late');
   const release = gated(hosted, 'replaced');
-  hosted.call({ kind: 'message', text: '@linger late stale\n@exit 3', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@linger late stale\n@exit 3', first: false });
   const lingering = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.lingering !== undefined))).lingering as number;
   await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
-  hosted.call({ kind: 'message', text: '@gate replaced\n@say fresh', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@gate replaced\n@say fresh', first: false });
   await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started'))[1]);
 
   await late();
@@ -881,9 +883,9 @@ it('keeps output a crashed Conversation process leaves behind out of the process
 it("does not return a result for a waiting message, so a restarted Kit process receives it again when its connection opens and sends it as the next turn", async () => {
   const hosted = await opened();
   const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
-  hosted.call({ kind: 'message', text: '@wait', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@wait', first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.call({ kind: 'message', text: '@say again', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say again', first: false });
   const waiting = lastCall();
   await settle();
   expect(hosted.results.map((result) => result.params.input)).not.toContain(waiting);
@@ -893,11 +895,11 @@ it("does not return a result for a waiting message, so a restarted Kit process r
     type: 'input',
     input_id: waiting,
     kind: 'message',
+    message_id: 'message-again',
     conversation_id: 'conversation-1',
     agent_id: 'agent-1',
     provider_session_id: session,
     text: '@say again',
-    files: [],
     first: false,
   });
 
@@ -912,7 +914,7 @@ it("does not return a result for a waiting message, so a restarted Kit process r
 it('reports a turn start and end once each under the turn id Kit gave it', async () => {
   const hosted = await opened();
 
-  hosted.call({ kind: 'message', text: '@say Hello', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say Hello', first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   const started = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
@@ -925,7 +927,7 @@ it('reports a turn start and end once each under the turn id Kit gave it', async
 it('ends a turn failed as exited when its process exits during it, with the parts it had, and logs the exit only on its computer', async () => {
   const hosted = await opened();
 
-  hosted.call({ kind: 'message', text: '@say partial\n@exit 3', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say partial\n@exit 3', first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'exited' });
@@ -939,11 +941,11 @@ it.each(['codex-acp', 'claude-agent-acp'])(
     const hosted = await opened(kind);
     const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
 
-    hosted.call({ kind: 'message', text: '@fail The agent process exited unexpectedly', files: [], first: true });
+    hosted.call({ kind: 'message', text: '@fail The agent process exited unexpectedly', first: true });
 
     expect(await ends(hosted, 1)).toEqual([{ failed: 'error' }]);
     await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
-    hosted.call({ kind: 'message', text: '@say back', files: [], first: false, provider_session_id: session });
+    hosted.call({ kind: 'message', text: '@say back', first: false, provider_session_id: session });
     expect(await ends(hosted, 2)).toEqual([{ failed: 'error' }, { text: 'back' }]);
     const log = await hosted.adapterLog();
     expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: session });
@@ -954,9 +956,9 @@ it.each(['codex-acp', 'claude-agent-acp'])(
 it('sends a message that waited on a prompt the CLI failed to a fresh process that resumes the session', async () => {
   const hosted = await opened();
   const release = gated(hosted, 'failing');
-  hosted.call({ kind: 'message', text: '@gate failing\n@fail provider request failed', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@gate failing\n@fail provider request failed', first: false });
   await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  hosted.call({ kind: 'message', text: '@say next', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say next', first: false });
   await settle();
 
   await release();
@@ -970,7 +972,7 @@ it.each(KINDS)('ends a turn failed as an error when %s fails the prompt after it
   const hosted = await opened(kind);
 
   // The prompt fails a tenth of a second after the CLI ends its turn, so the failure arrives after the end.
-  hosted.call({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(outcome(ended.body)).toEqual({ failed: 'error' });
@@ -984,11 +986,11 @@ it('ends a turn failed as a limit when Claude answers its prompt with an exhaust
   const hosted = await opened('claude-agent-acp');
   const limit = "You've hit your weekly limit · resets 11am (UTC)";
 
-  hosted.call({ kind: 'message', text: `@sessionfailure ${limit}`, files: [], first: true });
+  hosted.call({ kind: 'message', text: `@sessionfailure ${limit}`, first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(ended.body).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: 'limit' });
-  hosted.call({ kind: 'message', text: '@say back', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@say back', first: false });
   expect(await ends(hosted, 2)).toEqual([{ failed: 'limit' }, { text: 'back' }]);
   const log = await hosted.adapterLog();
   expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(1);
@@ -997,8 +999,8 @@ it('ends a turn failed as a limit when Claude answers its prompt with an exhaust
 it.each(KINDS)('ends a turn failed when %s refuses its prompt, with the explanation it gave or none', async (kind) => {
   const hosted = await opened(kind);
 
-  hosted.call({ kind: 'message', text: '@refusal', files: [], first: true });
-  hosted.call({ kind: 'message', text: '@say I cannot help with that.\n@refusal', files: [], first: false });
+  hosted.call({ kind: 'message', text: '@refusal', first: true });
+  hosted.call({ kind: 'message', text: '@say I cannot help with that.\n@refusal', first: false });
 
   await ends(hosted, 2);
   expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended')).map((turn) => turn.body)).toEqual([
@@ -1010,7 +1012,7 @@ it.each(KINDS)('ends a turn failed when %s refuses its prompt, with the explanat
 it.each(KINDS)('ends a turn failed as signed out when %s answers its prompt that it needs a sign-in, its answer only in the Kit log', async (kind) => {
   const hosted = await opened(kind);
 
-  hosted.call({ kind: 'message', text: '@say partial\n@signedout', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say partial\n@signedout', first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
   expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'signed_out' });
@@ -1020,7 +1022,7 @@ it.each(KINDS)('ends a turn failed as signed out when %s answers its prompt that
 it('ends a turn when Claude answers its prompt without an end notice, as it does for a local command', async () => {
   const hosted = await opened('claude-agent-acp');
 
-  hosted.call({ kind: 'message', text: '@say local output\n@answer', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say local output\n@answer', first: true });
 
   expect(await ends(hosted, 1)).toEqual([{ text: 'local output' }]);
 });
@@ -1029,7 +1031,7 @@ it.each(KINDS)('reports a turn the CLI starts by itself like any other and ends 
   const hosted = await opened(kind);
 
   // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
-  hosted.call({ kind: 'message', text: '@later 500 by itself', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@later 500 by itself', first: true });
 
   expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: 'by itself' }]);
   const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
@@ -1041,7 +1043,7 @@ it.each(KINDS)('reports a turn %s starts by itself when it starts it, before it 
   const hosted = await opened(kind);
 
   // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
-  hosted.call({ kind: 'message', text: '@later 500', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@later 500', first: true });
 
   expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: '' }]);
 });
@@ -1049,7 +1051,7 @@ it.each(KINDS)('reports a turn %s starts by itself when it starts it, before it 
 it('writes no part operation while nobody watches, and still reports the turn start, its question and its finished parts', async () => {
   const hosted = await opened();
 
-  hosted.call({ kind: 'message', text: '@say Hello\n@tool Read the file\n@ask', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say Hello\n@tool Read the file\n@ask', first: true });
   const question = await until(() => hosted.interactions[0]);
   hosted.call({
     kind: 'answer',
@@ -1071,7 +1073,7 @@ it('writes the operations so far once when the owner becomes watched mid-turn, t
   const hosted = await opened();
   const release = gated(hosted, 'second');
   const stopAgain = gated(hosted, 'third');
-  hosted.call({ kind: 'message', text: '@say one\n@tool Read it\n@gate second\n@say two\n@gate third\n@say three', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say one\n@tool Read it\n@gate second\n@say two\n@gate third\n@say three', first: true });
   const turn = (await until(() => hosted.turns.find((report) => report.path.endsWith('/started')))).params.turn;
   await settle();
   expect(operations(hosted)).toEqual([]);
@@ -1096,7 +1098,7 @@ it("writes the running turn's operations so far once on a Kit connection that re
   const hosted = await opened();
   hosted.watch(true);
   const release = gated(hosted, 'later');
-  hosted.call({ kind: 'message', text: '@say one\n@gate later\n@say  two', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say one\n@gate later\n@say  two', first: true });
   const turn = (await until(() => operations(hosted)[0])).turn_id;
 
   hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
@@ -1130,7 +1132,7 @@ it("writes each operation of a turn as it happens, before House answers the turn
     return { body: {} };
   });
 
-  hosted.call({ kind: 'message', text: '@say one\n@plan read|fix\n@say  two', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@say one\n@plan read|fix\n@say  two', first: true });
   await until(() => operations(hosted).length === 3);
   expect(hosted.turns).toEqual([]);
   admit();

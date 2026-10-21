@@ -15,11 +15,11 @@ import { unlessAborted } from './abort.ts';
 import { startAdapter, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
-import { openBridge, type Bridge } from './bridge.ts';
+import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
 import { answeredFailure, readerFor, type Event, type Message, type Reader } from './events.ts';
-import { placeFiles, storeRefusal, uploaded, type Finished, type MessageFile, type UploadParts } from './files.ts';
+import { inspectedFile, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { agentBase } from './home.ts';
 import type { Call, Calls, Result } from './calls.ts';
 import { instructions } from './instructions.ts';
@@ -56,6 +56,8 @@ interface Failed {
 const SIGNED_OUT = RequestError.authRequired().code;
 
 const KILLED = 'the conversation was killed';
+
+const INTERRUPTED = 'the conversation was interrupted';
 
 const REFUSED = 'the CLI refused the prompt';
 
@@ -98,7 +100,7 @@ function unopened(reason: string): (error: unknown) => string {
   return (error) => (signedOut(error) ? NOT_SIGNED_IN : reason);
 }
 
-type Starting = 'files' | 'transcription' | 'session';
+type Starting = 'transcription' | 'session';
 
 // A start-up step is shown only once it has lasted a second, so a quick start shows none of them.
 const STARTING_SHOWN_AFTER_MS = 1_000;
@@ -150,9 +152,15 @@ function logged(error: unknown): void {
 
 function refusal(conversation: Conversation, error: unknown): string {
   if (conversation.kills > 0) return KILLED;
-  const cause = error instanceof NotStarted ? `${error.message}: ${causeOf(error.cause)}` : causeOf(error);
+  const cause = error instanceof Error && error.cause !== undefined ? `${error.message}: ${causeOf(error.cause)}` : causeOf(error);
   logged(new Error(`conversation ${conversation.id} did not start: ${cause}`));
   return causeOf(error);
+}
+
+function audioOf(result: ToolResult): Address | null {
+  if (result.isError === true) return null;
+  const file = inspectedFile(result.content.map((content) => content.text).join('\n'));
+  return file?.media_type?.startsWith('audio/') === true ? file : null;
 }
 
 function marker(bridge: Bridge): string {
@@ -177,6 +185,7 @@ class Turn {
 
 interface Running {
   adapter: Adapter;
+  bridging: Promise<Bridge>;
   bridge: Bridge;
   sessionId: string;
   killed: boolean;
@@ -218,6 +227,7 @@ class Conversation {
   readonly subagents = new Map<string, { description: string; turn: Turn; index: number }>();
   readonly held: Part[] = [];
   opening: Bridge | null = null;
+  bridge: Promise<Bridge> | null = null;
   launch: Launch | null = null;
   prompted: string | null = null;
   kills = 0;
@@ -364,7 +374,7 @@ export class Conversations {
       const question = this.questions.get(String(call.interaction_id));
       if (question === undefined) {
         const text = answerMessage(call.request, call.response);
-        return this.message(conversation, { ...call, text, files: [], first: false });
+        return this.message(conversation, { ...call, text, first: false, message_id: null });
       }
       question.answer(call.response);
     }
@@ -397,6 +407,7 @@ export class Conversations {
       .then(() => {
         if (conversation.launch !== launch) return;
         conversation.launch = null;
+        this.closeIdleBridge(conversation);
         this.next(conversation);
       });
     this.next(conversation);
@@ -424,13 +435,10 @@ export class Conversations {
     try {
       route = await this.route(conversation, call.agent_id);
       if (call.first === true) instructing = this.instructed(conversation, route);
-      const files = call.files as MessageFile[];
-      if (files.length > 0) this.prepares(conversation, 'files');
-      const paths = await placeFiles(this.kit.house, route.working_directory, files, conversation.killed.signal);
-      const lines = await this.transcribed(conversation, files, paths);
-      if (lines.length > 0) content.push({ type: 'text', text: lines.join('\n') });
+      if (call.message_id !== null) content.push(...(await this.transcribed(conversation, String(call.message_id), String(call.text))));
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
+      this.closeIdleBridge(conversation);
       this.prepares(conversation, null);
       return { result: Promise.resolve({ refused: refusal(conversation, error) }) };
     }
@@ -526,21 +534,63 @@ export class Conversations {
     conversation.untold = !this.kit.send({ type: 'starting', conversation_id: conversation.id, step: conversation.told });
   }
 
-  private async transcribed(conversation: Conversation, files: MessageFile[], paths: string[]): Promise<string[]> {
-    const lines: string[] = [];
-    for (const [index, path] of paths.entries()) {
-      lines.push(path);
-      if (files[index]!.media_type?.startsWith('audio/') !== true) continue;
-      this.prepares(conversation, 'transcription');
-      try {
-        const text = await transcribe(path, AbortSignal.any([conversation.killed.signal, conversation.interrupted.signal]));
-        if (text !== null && text !== '') lines.push(`Transcript: ${text}`);
-      } catch (error) {
-        if (conversation.kills > 0) throw error;
-        logged(new Error(`${files[index]!.name} was not transcribed: ${causeOf(error)}`));
+  private async transcribed(conversation: Conversation, messageId: string, text: string): Promise<ContentBlock[]> {
+    const paths = linkedPaths(text);
+    if (paths.length === 0) return [];
+    const killed = conversation.killed.signal;
+    const interrupted = conversation.interrupted.signal;
+    const transcribing = AbortSignal.any([killed, interrupted]);
+    let signal = killed;
+    const blocks: ContentBlock[] = [];
+    try {
+      const bridge = await step(unbridged, unlessAborted(this.bridged(conversation), killed));
+      const read = async (path: string) => audioOf(await step(unbridged, unlessAborted(bridge.tool('inspect', { path }), signal)));
+      for (const path of paths) {
+        let answered = await read(path);
+        if (answered === null) continue;
+        signal = transcribing;
+        this.prepares(conversation, 'transcription');
+        const said = await transcribe(async () => {
+          const address = answered ?? (await read(path));
+          answered = null;
+          if (address === null) throw new Error(`${path} is no longer an audio file`);
+          return address;
+        }, signal);
+        const transcript = `/kit/conversations/${conversation.id}/messages/${messageId}/transcripts`;
+        await step(unbridged, unlessAborted(this.kit.house.deliver(transcript, { path, text: said }, () => !signal.aborted), signal));
+        blocks.push({ type: 'text', text: `${path}\nTranscript: ${said}` });
       }
+    } catch (error) {
+      if (signal === transcribing && interrupted.aborted && conversation.kills === 0) throw new NotStarted(INTERRUPTED, { cause: error });
+      throw error;
     }
-    return lines;
+    return blocks;
+  }
+
+  private bridged(conversation: Conversation): Promise<Bridge> {
+    if (conversation.bridge === null) {
+      const bridging = openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal);
+      conversation.bridge = bridging;
+      bridging.catch(() => {
+        if (conversation.bridge === bridging) conversation.bridge = null;
+      });
+    }
+    return conversation.bridge;
+  }
+
+  private closeBridge(conversation: Conversation, bridging: Promise<Bridge>, bridge: Bridge): void {
+    bridge.close();
+    if (conversation.bridge === bridging) conversation.bridge = null;
+  }
+
+  private closeIdleBridge(conversation: Conversation): void {
+    const bridging = conversation.bridge;
+    if (bridging === null || conversation.running !== null || conversation.launch !== null) return;
+    conversation.bridge = null;
+    void bridging.then(
+      (bridge) => bridge.close(),
+      () => undefined,
+    );
   }
 
   private async interrupt(conversation: Conversation, turnId: string): Promise<void> {
@@ -614,9 +664,10 @@ export class Conversations {
         this.ask(conversation, '_x.ai/exit_plan_mode', params, false, signal),
       );
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
-    const bridge = await step(unbridged, openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal));
+    const bridging = this.bridged(conversation);
+    const bridge = await step(unbridged, bridging);
     if (conversation.kills > 0) {
-      bridge.close();
+      this.closeBridge(conversation, bridging, bridge);
       throw new Error(KILLED);
     }
     conversation.opening = bridge;
@@ -644,7 +695,7 @@ export class Conversations {
           scope,
         ),
       );
-      void adapter.exited.then(() => bridge.close());
+      void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
       const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, conversation.id);
@@ -656,7 +707,7 @@ export class Conversations {
         const prompt: ContentBlock[] = [{ type: 'text', text: `/rename ${conversation.id}` }];
         await step(unopened(NO_SESSION), agent.request('session/prompt', { sessionId: opened.sessionId, prompt }));
       }
-      const running: Running = { adapter, bridge, sessionId: opened.sessionId, killed: false, reader, work, scope };
+      const running: Running = { adapter, bridging, bridge, sessionId: opened.sessionId, killed: false, reader, work, scope };
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
       void work.settled().then(() => scope.record());
       conversation.running = running;
@@ -669,7 +720,7 @@ export class Conversations {
       adapter?.retire();
       work.close();
       conversation.leftovers.add(scope);
-      bridge.close();
+      this.closeBridge(conversation, bridging, bridge);
       throw conversation.kills > 0 ? new Error(KILLED) : error;
     } finally {
       conversation.opening = null;
@@ -729,6 +780,7 @@ export class Conversations {
   }
 
   private detach(conversation: Conversation, running: Running): void {
+    if (conversation.bridge === running.bridging) conversation.bridge = null;
     running.work.close();
     conversation.leftovers.add(running.scope);
     conversation.running = null;

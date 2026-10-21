@@ -4,16 +4,10 @@ import { mkdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { retrying, retryDelay, type House } from './api.ts';
+import { parseDocument } from 'yaml';
+import { retryDelay } from './api.ts';
 import { Unsettled } from './mcp.ts';
 import { relayed } from './relay.ts';
-
-export interface MessageFile {
-  version: string;
-  name: string;
-  media_type: string | null;
-  sha256: string;
-}
 
 export interface UploadParts {
   id: string;
@@ -34,12 +28,34 @@ export interface Address {
   sha256: string;
 }
 
+export interface InspectedFile extends Address {
+  media_type: string | null;
+}
+
 export interface Answered {
   status: number;
   body: AsyncIterable<Uint8Array>;
 }
 
 const STALLED_ROUNDS = 8;
+
+const LINK = /\]\((\/rooms\/[^/)\s]+\/[^)\s]+)\)/gu;
+
+export function linkedPaths(text: string): string[] {
+  return [...new Set(Array.from(text.matchAll(LINK), (link) => link[1]!))];
+}
+
+export function inspectedFile(answer: string): InspectedFile | null {
+  const document = parseDocument(answer);
+  if (document.errors.length > 0) return null;
+  const inspected = document.toJS() as { download?: unknown; sha256?: unknown; media_type?: unknown } | null;
+  if (typeof inspected?.download !== 'string') return null;
+  return {
+    download: inspected.download,
+    sha256: String(inspected.sha256),
+    media_type: typeof inspected.media_type === 'string' ? inspected.media_type : null,
+  };
+}
 
 function paused(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -139,47 +155,7 @@ export async function downloaded(
   }
 }
 
-interface Original {
-  message: string;
-  download: { url: string };
-}
-
-async function fetched(url: string, signal: AbortSignal): Promise<Answered> {
+export async function fetched(url: string, signal: AbortSignal): Promise<Answered> {
   const answer = await fetch(relayed(url), { signal });
   return { status: answer.status, body: answer.body ?? Readable.from([]) };
-}
-
-export async function placeFiles(
-  house: House,
-  directory: string,
-  files: MessageFile[],
-  signal: AbortSignal,
-): Promise<string[]> {
-  const paths: string[] = [];
-  for (const file of files) {
-    const original = () =>
-      retrying(
-        () => house.post<Original>('/kit/conversation/originals/get', { version: file.version, download: true }, signal),
-        signal,
-      );
-    let first: Original | null = await original();
-    const folder = join(directory, '.house', 'files', first.message, file.version);
-    await mkdir(join(directory, '.house')).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'EEXIST') throw error;
-    });
-    await mkdir(folder, { recursive: true });
-    const path = join(folder, file.name);
-    await downloaded(
-      async () => {
-        const answered = first ?? (await original());
-        first = null;
-        return { download: answered.download.url, sha256: file.sha256 };
-      },
-      (url) => fetched(url, signal),
-      path,
-      file.name,
-    );
-    paths.push(path);
-  }
-  return paths;
 }

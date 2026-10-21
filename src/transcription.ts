@@ -6,6 +6,7 @@ import { basename, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { unlessAborted } from './abort.ts';
 import { failureOf, run } from './clis.ts';
+import { downloaded, fetched, type Address } from './files.ts';
 import { kitHome } from './home.ts';
 
 export interface Artifact {
@@ -43,6 +44,16 @@ export const ENGINES: Record<string, Engine> = {
 };
 
 const CHUNK_SECONDS = 20;
+
+const OFF = "transcription is off on the Agent's Environment, so this message's audio has no text; turn it on or write instead";
+
+const NOT_INSTALLED = "the speech engine is not installed on the Agent's Environment, so this message's audio has no text";
+
+const NOT_DOWNLOADED = 'an audio file this message links could not be downloaded; send the message again';
+
+const UNDECODABLE = 'an audio file this message links could not be decoded';
+
+const UNTRANSCRIBED = 'an audio file this message links could not be transcribed';
 
 export interface TranscriptionReport {
   installed: boolean;
@@ -91,6 +102,19 @@ async function sha256(path: string): Promise<string> {
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function failing<T>(reason: string, work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    throw new Error(reason, { cause: error });
+  }
+}
+
+function ready(): void {
+  if (setting !== true) throw new Error(OFF);
+  if (!readiness.installed) throw new Error(NOT_INSTALLED);
 }
 
 function pinnedHere(): Engine {
@@ -159,34 +183,33 @@ export function transcriptionReport(): TranscriptionReport {
   return readiness;
 }
 
-async function transcribed(path: string, signal: AbortSignal): Promise<string> {
+async function transcribed(audio: string, parts: string, signal: AbortSignal): Promise<string> {
   const pinned = pinnedHere();
-  const work = await mkdtemp(join(tmpdir(), 'kit-transcription-'));
-  try {
-    await executed(
+  await mkdir(parts);
+  await failing(
+    UNDECODABLE,
+    executed(
       installed(pinned.decoder),
-      ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', path, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
-        '-f', 'segment', '-segment_time', String(CHUNK_SECONDS), join(work, '%05d.wav')],
+      ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', audio, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
+        '-f', 'segment', '-segment_time', String(CHUNK_SECONDS), join(parts, '%05d.wav')],
       signal,
-    );
-    const parts = (await readdir(work)).sort().flatMap((part) => ['-f', join(work, part)]);
-    const text = await executed(
-      installed(pinned.engine),
-      ['-t', String(await threads()), '-np', '-m', installed(MODEL), ...parts],
-      signal,
-    );
-    return text
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line !== '')
-      .join(' ');
-  } finally {
-    await rm(work, { recursive: true, force: true });
-  }
+    ),
+  );
+  const segments = (await readdir(parts)).sort().flatMap((part) => ['-f', join(parts, part)]);
+  const said = await failing(
+    UNTRANSCRIBED,
+    executed(installed(pinned.engine), ['-t', String(await threads()), '-np', '-m', installed(MODEL), ...segments], signal),
+  );
+  const text = said
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .join(' ');
+  if (text === '') throw new Error(UNTRANSCRIBED);
+  return text;
 }
 
-export async function transcribe(path: string, signal: AbortSignal): Promise<string | null> {
-  if (!readiness.installed) return null;
+async function alone<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
   const before = held;
   let release!: () => void;
   const mine = new Promise<void>((resolve) => {
@@ -195,8 +218,23 @@ export async function transcribe(path: string, signal: AbortSignal): Promise<str
   held = Promise.all([before, mine]);
   try {
     await unlessAborted(before, signal);
-    return readiness.installed ? await transcribed(path, signal) : null;
+    return await work();
   } finally {
     release();
+  }
+}
+
+export async function transcribe(address: () => Promise<Address>, signal: AbortSignal): Promise<string> {
+  ready();
+  const work = await mkdtemp(join(tmpdir(), 'kit-transcription-'));
+  try {
+    const audio = join(work, 'audio');
+    await failing(NOT_DOWNLOADED, downloaded(address, (url) => fetched(url, signal), audio, 'audio'));
+    return await alone(() => {
+      ready();
+      return transcribed(audio, join(work, 'parts'), signal);
+    }, signal);
+  } finally {
+    await rm(work, { recursive: true, force: true });
   }
 }

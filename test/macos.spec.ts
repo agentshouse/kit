@@ -15,7 +15,7 @@ it('kills the process and every process it started on a Mac', async () => {
   const hosted = await hostMac();
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-  hosted.call({ kind: 'message', text: '@spawn\n@wait', files: [], first: true });
+  hosted.call({ kind: 'message', text: '@spawn\n@wait', first: true });
   const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
   expect(alive(spawned.spawned as number)).toBe(true);
 
