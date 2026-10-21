@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { agentInstructions } from '@agentshouse/skills';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
 import { attached, bridgeSockets, inspected } from './attachments.ts';
@@ -425,7 +426,7 @@ it("prepares a new conversation's first message, reading what it links and House
   await rm(join(hosted.home, 'hold-new'));
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
-    expect.stringMatching(/^From House:\n[^]*\n\nBe useful\.$/),
+    [...agentInstructions('refs/house/received', []), '', 'Be useful.'].join('\n'),
     text,
   ]);
   expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/conversation-1/credential')).toHaveLength(1);
@@ -462,7 +463,7 @@ it("prompts a first message with House's instructions through the CLI it starts 
   expect(await hosted.result(message)).toHaveProperty('provider_session_id');
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
-    expect.stringMatching(/^From House:\n[^]*\n\nBe useful\.$/),
+    [...agentInstructions('refs/house/received', []), '', 'Be useful.'].join('\n'),
     '@say hello',
   ]);
 });

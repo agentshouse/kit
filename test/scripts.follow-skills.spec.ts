@@ -12,6 +12,7 @@ import { temporaryHome } from './kit.ts';
 const run = promisify(execFile);
 const FOLLOW = fileURLToPath(new URL('../scripts/follow-skills.mjs', import.meta.url));
 const WORKFLOW = new URL('../.github/workflows/follow-skills.yml', import.meta.url);
+const MANIFEST = new URL('../package.json', import.meta.url);
 const PACKAGE = '@agentshouse/skills';
 const EARLIER = '0.1.0-c000000000001';
 const LATEST = '0.1.0-c000000000002';
@@ -95,7 +96,9 @@ it('runs daily and lands the moved manifest and lock on main only when they chan
 
   expect(workflow.on.schedule).toEqual([{ cron: expect.stringMatching(/^\S+ \S+ \* \* \*$/) }]);
   expect(steps[0]!.with?.ref).toBe('main');
-  expect(runs.indexOf('node scripts/follow-skills.mjs')).toBeLessThan(runs.indexOf(land));
+  expect(JSON.parse(await readFile(MANIFEST, 'utf8')).scripts['follow-skills']).toBe('node scripts/follow-skills.mjs');
+  expect(runs.indexOf('npm run follow-skills')).toBeGreaterThan(-1);
+  expect(runs.indexOf('npm run follow-skills')).toBeLessThan(runs.indexOf(land));
   expect(land.split('\n').map((line) => line.trim())).toEqual(
     expect.arrayContaining([
       'git add package.json package-lock.json',
