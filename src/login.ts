@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
 import { HouseRefusal, post, retrying } from './api.ts';
 import { placeAppGit } from './app-git.ts';
@@ -111,14 +110,13 @@ export async function login(argv: string[]): Promise<void> {
   let named = environment;
   let exchanged: Exchanged;
   if (values.code !== undefined) {
-    exchanged = await post<Exchanged>(house, '/kit/token', { code: values.code, label: hostname() });
+    exchanged = await post<Exchanged>(house, '/kit/token', { code: values.code });
   } else {
     held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
     const verifier = randomBytes(32).toString('base64url');
     const start = () =>
       retrying(() =>
         post<Started>(house, '/kit', {
-          label: hostname(),
           ...(named === undefined
             ? { act: 'new_environment', ...(replaces === undefined ? {} : { replaces }) }
             : { act: 'existing_environment', environment_id: named }),

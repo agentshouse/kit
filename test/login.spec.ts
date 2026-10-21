@@ -15,14 +15,15 @@ it('prints the link, opens it with the host opener, waits for the confirmation a
 
   const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home, PATH: path });
   await until(() => house.requests.some((request) => request.path === '/kit/token'));
-  served.confirm();
+  served.confirm('Studio Mac');
 
   expect(await login.exited).toBe(0);
   expect(login.stdout()).toContain(`Open this link and confirm: ${loginLink(house)}\n`);
   expect(await until(opened)).toBe(`${loginLink(house)}\n`);
+  expect(served.settled).toEqual([{ act: 'new_environment', environment: 'environment-one', name: 'Studio Mac' }]);
   const started = house.requests.find((request) => request.path === '/kit')!.body;
   expect(started).toMatchObject({ act: 'new_environment', code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
-  expect(typeof (started as { label: unknown }).label).toBe('string');
+  expect(started).not.toHaveProperty('label');
   expect(started).not.toHaveProperty('environment_id');
   expect(started).not.toHaveProperty('presentation');
   expect(started).not.toHaveProperty('loopback_uri');
@@ -84,7 +85,7 @@ it('ends with the cause and no credential when House refuses the exchange', asyn
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
 });
 
-it('redeems a login code once with the machine label, stores both credentials and prints no link', async () => {
+it('redeems a login code once with nothing but the code, stores both credentials and prints no link', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   house.route('POST', '/kit/token', () => ({
@@ -102,7 +103,7 @@ it('redeems a login code once with the machine label, stores both credentials an
 
   expect(await login.exited).toBe(0);
   expect(login.stdout()).toBe(`Environment environment-one is connected to ${house.origin}.\n`);
-  expect(house.requests.map((request) => [request.path, request.body])).toEqual([['/kit/token', { code: 'ahk_code_one', label: expect.any(String) }]]);
+  expect(house.requests.map((request) => [request.path, request.body])).toEqual([['/kit/token', { code: 'ahk_code_one' }]]);
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,
     environment: 'environment-one',
@@ -493,7 +494,7 @@ it('reconnects the same Environment on a second login', async () => {
   expect(exit).toBe(0);
   expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
   expect(login.stdout()).toContain(`Environment environment-one is reconnected to ${house.origin}.\n`);
-  expect(typeof started.label).toBe('string');
+  expect(started).not.toHaveProperty('label');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,
     environment: 'environment-one',
@@ -511,7 +512,8 @@ it('enrols a new Environment naming the stored one it replaces, and keeps only t
   const { started, exit } = await logIn(house, home, { HOUSE_KIT_REPLACES: 'environment-one' });
 
   expect(exit).toBe(0);
-  expect(started).toMatchObject({ act: 'new_environment', replaces: 'environment-one', label: expect.any(String) });
+  expect(started).toMatchObject({ act: 'new_environment', replaces: 'environment-one' });
+  expect(started).not.toHaveProperty('label');
   expect(started).not.toHaveProperty('environment_id');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,

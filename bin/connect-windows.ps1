@@ -389,7 +389,7 @@ function Connect-Kit {
   if ($House.StartsWith('https://')) { $Network = @() }
   $Relay = @()
   if ($env:HOUSE_KIT_RELAY) { $Relay = @('--env', "HOUSE_KIT_RELAY=$($env:HOUSE_KIT_RELAY)") }
-  $Common = @('--hostname', [Net.Dns]::GetHostName()) + $Relay + @('--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
+  $Common = $Relay + @('--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
 
   if (Test-Container) {
     $installed = Read-Inspect '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}'

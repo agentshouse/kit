@@ -84,6 +84,8 @@ const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
 
 class NotStarted extends Error {}
 
+class ResumeRefused extends NotStarted {}
+
 async function step<T>(reason: string | ((error: unknown) => string), work: Promise<T>): Promise<T> {
   try {
     return await work;
@@ -497,7 +499,9 @@ export class Conversations {
         conversation.session = null;
         await this.kill(conversation);
       }
-      waiting.settle({ refused: refusal(conversation, error) });
+      const refused = refusal(conversation, error);
+      const resumeRefused = call.kind === 'message' && conversation.kills === 0 && error instanceof ResumeRefused;
+      waiting.settle(resumeRefused ? { refused, resume_refused: true } : { refused });
       return;
     }
     this.starts(conversation, null);
@@ -738,7 +742,7 @@ export class Conversations {
       return { ...(await adapter.connection.agent.request('session/resume', request)), sessionId: request.sessionId };
     } catch (error) {
       if (!empty || conversation.kills > 0 || !CLIS[kind]!.unknownSession(error)) {
-        throw new NotStarted(unopened(NO_RESUME)(error), { cause: error });
+        throw signedOut(error) ? new NotStarted(NOT_SIGNED_IN, { cause: error }) : new ResumeRefused(NO_RESUME, { cause: error });
       }
       logged(new Error(`conversation ${conversation.id} opens a new session: ${NO_RESUME}: ${causeOf(error)}`));
       return null;
