@@ -28,7 +28,6 @@ import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { killMarked, Scope } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
-import { createHowWeWork } from './skills.ts';
 import type { Notification } from './connection.ts';
 import { transcribe } from './transcription.ts';
 import { workFor, type Work } from './work.ts';
@@ -679,7 +678,6 @@ export class Conversations {
     const scope = new Scope(marker(bridge), randomUUID(), cli);
     let adapter: Adapter | null = null;
     try {
-      await unlessAborted(createHowWeWork(bridge), conversation.killed.signal);
       bridged(bridge);
       await CLIS[route.kind]!.allowHouse(bridge.env.PATH!);
       const streamed = await step(NO_CONNECTION, work.open(cli));

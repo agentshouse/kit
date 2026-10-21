@@ -1,3 +1,4 @@
+import { agentInstructions } from '@agentshouse/skills';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { conversationCredential, hostKit, lastCall, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
@@ -19,11 +20,7 @@ function refused(code: string): ToolResult {
   return { isError: true, content: [{ type: 'text', text: `${code}: you read no Room there\n` }] };
 }
 
-const SOURCE_LINE = "From House:";
-const HOUSE_LINE = "Work with House through the `house` CLI: run `house --help`, and `house find_command` for House's guides and formats.";
-const FILE_LINE = 'To give the User a file, upload it with `house upload` and link it; for an App, a Site or a website, follow `house find_command \'{"query":"app"}\'`. Never start a server.';
-const READ_LINE = "Optional per-Room instructions: `/rooms/private/rooms/<handle>/AGENTS.md`.";
-const REQUEST_LINE = "For another Agent's help, `send_routine_request`; its mail comes back into this conversation. If an Agent of your User has no Routine to call, write one in the Private Room and `create_routine_access` with your User as its only caller.";
+const LINES = agentInstructions('refs/house/received', []);
 
 function blockOf(prompt: Prompt): string[] {
   expect(prompt).toHaveLength(2);
@@ -31,9 +28,9 @@ function blockOf(prompt: Prompt): string[] {
   return prompt[0]!.text.split('\n');
 }
 
-it('begins a first message with the source line, the house line, the file line, the Room instructions line, the Routine Request line, the base instructions and the How-we-work text, the same for every CLI, and names no Trigger', async () => {
+it("begins a first message with the package's Agent instructions, the base instructions and the How-we-work text read over the conversation's bridge, the same for every CLI, writing no How-we-work document with the Skill set installed and naming no Trigger", async () => {
   const kinds = ['codex-acp', 'claude-agent-acp', 'grok-build'];
-  const hosted = await hostKit(kinds.map((kind) => ({ kind })));
+  const hosted = await hostKit(kinds.map((kind) => ({ kind })), { skills: true });
   hosted.tools.shell = () => shelled(DOCUMENT);
 
   for (const [index] of kinds.entries()) {
@@ -47,7 +44,8 @@ it('begins a first message with the source line, the house line, the file line, 
   }
 
   const sent = await prompts(hosted, kinds.length);
-  expect(blockOf(sent[0]!)).toEqual([SOURCE_LINE, HOUSE_LINE, FILE_LINE, READ_LINE, REQUEST_LINE, '', 'Be useful.', '', ...DOCUMENT.split('\n')]);
+  expect(LINES.length).toBeGreaterThan(1);
+  expect(blockOf(sent[0]!)).toEqual([...LINES, '', 'Be useful.', '', ...DOCUMENT.split('\n')]);
   expect(sent[0]![0]!.text).not.toMatch(/trigger|`conversation` action/i);
   for (const prompt of sent) expect(prompt).toEqual(sent[0]);
   expect(
@@ -71,7 +69,7 @@ it.each([
   hosted.call({ kind: 'message', text: 'hello', first: true });
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
-  expect(blockOf((await prompts(hosted, 1))[0]!)).toEqual([SOURCE_LINE, HOUSE_LINE, FILE_LINE, READ_LINE, REQUEST_LINE, '', 'Be useful.']);
+  expect(blockOf((await prompts(hosted, 1))[0]!)).toEqual([...LINES, '', 'Be useful.']);
 });
 
 it('refuses a first message with the cause when House cannot answer the document read', async () => {
@@ -109,7 +107,7 @@ it('reads a document longer than one House reply whole by following its continua
 
   hosted.call({ kind: 'message', text: 'hello', first: true });
 
-  expect(blockOf((await prompts(hosted, 1))[0]!).slice(5).join('\n')).toBe(`\nBe useful.\n\n${document.replace(/\n$/, '')}`);
+  expect(blockOf((await prompts(hosted, 1))[0]!).slice(LINES.length).join('\n')).toBe(`\nBe useful.\n\n${document.replace(/\n$/, '')}`);
   expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
 });
 
@@ -125,7 +123,7 @@ it('keeps document lines that read like House diagnostics, in one reply and afte
 
   hosted.call({ kind: 'message', text: 'hello', first: true });
 
-  expect(blockOf((await prompts(hosted, 1))[0]!).slice(5).join('\n')).toBe(`\nBe useful.\n\n${first}${rest}`);
+  expect(blockOf((await prompts(hosted, 1))[0]!).slice(LINES.length).join('\n')).toBe(`\nBe useful.\n\n${first}${rest}`);
   expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
 });
 
