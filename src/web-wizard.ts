@@ -1,8 +1,6 @@
-import { accessSync, constants } from 'node:fs';
-import { delimiter, join } from 'node:path';
 import type { IPty } from '@lydell/node-pty';
 import type { Call, Calls, Result } from './calls.ts';
-import { loginPath, withoutProxy } from './clis.ts';
+import { loginPath, onLoginPath, withoutProxy } from './clis.ts';
 import type { Notification } from './connection.ts';
 import { killTree } from './scope.ts';
 
@@ -28,17 +26,6 @@ const LOST: Result = { refused: 'the Kit lost its connection to House' };
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function bash(path: string): string | null {
-  for (const directory of path.split(delimiter)) {
-    const found = join(directory, 'bash');
-    try {
-      accessSync(found, constants.X_OK);
-      return found;
-    } catch {}
-  }
-  return null;
 }
 
 function failed(cause: string): Result {
@@ -86,9 +73,9 @@ export class WebWizards {
     let terminal: IPty;
     try {
       const { spawn } = await import('@lydell/node-pty');
-      const path = await loginPath();
-      const shell = bash(path);
+      const shell = await onLoginPath('bash');
       if (shell === null) return failed(NO_BASH);
+      const path = await loginPath();
       await run.sized.promise;
       if (run.ended !== null) return run.ended;
       terminal = spawn(shell, ['-c', script], {
