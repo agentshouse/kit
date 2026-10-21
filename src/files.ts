@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { retrying, retryDelay, type House } from './api.ts';
-import { Unreached } from './mcp.ts';
+import { Unsettled } from './mcp.ts';
 import { relayed } from './relay.ts';
 
 export interface MessageFile {
@@ -86,14 +86,14 @@ export async function uploaded<T extends object>(declared: UploadParts, uploadin
 }
 
 async function finishing<T extends object>(uploading: Uploading<T>, upload: string): Promise<Finished<T>> {
-  for (let unreached = 1; ; unreached++) {
+  for (let unsettled = 1; ; unsettled++) {
     try {
       return await uploading.finish(upload);
     } catch (error) {
-      if (!(error instanceof Unreached) || unreached === STALLED_ROUNDS) throw error;
+      if (!(error instanceof Unsettled) || unsettled === STALLED_ROUNDS) throw error;
     }
-    // A finishing call that did not reach House is sent again on the jittered curve, so a dropped connection resumes the upload instead of ending it.
-    await paused(retryDelay(unreached - 1));
+    // A finishing call House did not settle, unreached or refused short of final, is sent again on the jittered curve as a conversation resends it, so a dropped connection or a House restart resumes the upload instead of ending it.
+    await paused(retryDelay(unsettled - 1));
   }
 }
 

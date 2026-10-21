@@ -10,8 +10,8 @@ import type { ToolResult } from './bridge.ts';
 import { downloaded, storeRefusal, uploaded, type UploadParts } from './files.ts';
 import { HOUSE_REF } from './git.ts';
 import { ownerSocket, readOwnAgent } from './home.ts';
-import { callHouse, rpc, UNREACHABLE, Unreached, type Message } from './mcp.ts';
-import { refusalOf } from './refusals.ts';
+import { callHouse, rpc, UNREACHABLE, Unsettled, type Message } from './mcp.ts';
+import { refusalOf, retryable } from './refusals.ts';
 import { relayed, selectRelay } from './relay.ts';
 import { parse } from 'yaml';
 
@@ -117,10 +117,12 @@ async function direct(message: Message): Promise<string> {
   selectRelay(process.env.HOUSE_KIT_RELAY || ownAgent.relay);
   setGlobalProxyFromEnv();
   const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
-    throw new Unreached();
+    throw new Unsettled(UNREACHABLE);
   });
   if (answer.status === 200) return answer.text;
-  throw new Error(answer.status === 401 ? DISCONNECTED : (refusalOf(answer.text)?.text ?? unconfirmed(answer.status)));
+  if (answer.status === 401) throw new Error(DISCONNECTED);
+  const refusal = refusalOf(answer.text)?.text ?? unconfirmed(answer.status);
+  throw retryable(answer.text) === false ? new Error(refusal) : new Unsettled(refusal);
 }
 
 async function mcp<T>(method: string, params: Record<string, unknown>): Promise<T> {

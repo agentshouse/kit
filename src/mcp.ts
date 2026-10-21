@@ -18,11 +18,7 @@ const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 export const UNREACHABLE = 'House is unreachable; call again in a minute';
 
-export class Unreached extends Error {
-  constructor() {
-    super(UNREACHABLE);
-  }
-}
+export class Unsettled extends Error {}
 
 export function rpc(method: string, params: Record<string, unknown>): Message {
   return { jsonrpc: '2.0', id: randomUUID(), method, params };

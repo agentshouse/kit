@@ -201,6 +201,33 @@ it("resumes an upload outside a conversation after its connection drops, finishi
   expect(finishing).toBe(4);
 });
 
+it('finishes an upload outside a conversation again while House answers it with a 503, as a conversation resends an unsettled call', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const store = await startStore();
+  const uploads = uploadTool(store, 3);
+  let finishing = 0;
+  house.route('POST', '/', async ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    if (message.params.arguments!.upload !== undefined && ++finishing <= 2) return { status: 503, body: {} };
+    return { body: { jsonrpc: '2.0', id: message.id, result: await uploads.answer(message.params.arguments!) } };
+  });
+  const file = join(home, 'cover.bin');
+  await writeFile(file, Buffer.from([0, 1, 2, 255]));
+
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.bin' })], undefined, [
+    '--import',
+    FAST_TIMEOUTS,
+  ]);
+
+  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: fr_1\n', stderr: '' });
+  expect(store.requests.map((request) => [request.part, request.status])).toEqual([
+    [1, 200],
+    [2, 200],
+  ]);
+  expect(finishing).toBe(3);
+});
+
 it('sends each part and reads each download at its store address through the Kit relay its User named, as it sends House its calls', async () => {
   const house = await startHouse();
   const home = await connected(house, true);
