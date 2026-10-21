@@ -285,8 +285,8 @@ export interface Rooms {
   pass: number;
   prepared: unknown[];
   uploaded: Buffer[];
-  byteReads: Received[];
   damages: boolean;
+  expiring: number;
   authoredFileBytes: number;
   maxPrefixes: number;
   edits(): Received[];
@@ -319,8 +319,8 @@ export function serveRooms(hosted: Hosted): Rooms {
     pass: Infinity,
     prepared: [],
     uploaded: [],
-    byteReads: [],
     damages: false,
+    expiring: 0,
     authoredFileBytes: 1_000_000,
     maxPrefixes: 256,
     room: (handle) => {
@@ -425,6 +425,10 @@ export function serveRooms(hosted: Hosted): Rooms {
     const ref = args.ref as string | undefined;
     const binary = ref === undefined ? room.binaries.get(relative) : room.binaryHistory.get(ref);
     if (binary !== undefined) {
+      const key = `binary/${room.ref}/${binary.revision}`;
+      hosted.store.objects.set(key, state.damages ? Buffer.concat([binary.bytes, Buffer.from([0])]) : binary.bytes);
+      const expired = state.expiring > 0;
+      if (expired) state.expiring--;
       const text = stringify({
         path,
         revision: binary.revision,
@@ -432,7 +436,7 @@ export function serveRooms(hosted: Hosted): Rooms {
         bytes: binary.bytes.length,
         media_type: 'image/jpeg',
         sha256: createHash('sha256').update(binary.bytes).digest('hex'),
-        download: `${hosted.house.origin}/files/${room.ref}/${binary.revision}`,
+        download: hosted.store.address('GET', key, {}, expired),
       });
       return { content: [{ type: 'text', text }] };
     }
@@ -440,12 +444,6 @@ export function serveRooms(hosted: Hosted): Rooms {
     if (file === undefined) return { isError: true, content: [{ type: 'text', text: `path_not_found: ${path} does not exist\n` }] };
     return { content: [{ type: 'text', text: stringify({ path, revision: file.revision }) }] };
   };
-  hosted.house.route('GET', '/files/:room/:revision', (request) => {
-    state.byteReads.push(request);
-    const room = rooms.find((candidate) => candidate.ref === request.params.room)!;
-    const { bytes } = room.binaryHistory.get(request.params.revision!)!;
-    return { bytes: { type: 'application/octet-stream', content: state.damages ? Buffer.concat([bytes, Buffer.from([0])]) : bytes } };
-  });
   const grants = new Map<string, { operation: string; staged?: string }>();
   const staged = new Map<string, Buffer>();
   hosted.tools.run_command = (args) => {

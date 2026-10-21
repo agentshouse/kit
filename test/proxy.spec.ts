@@ -2,7 +2,8 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startProxy, until, type Proxy } from './double.ts';
-import { appRemote, directed, hostKit, installHeld, opened, runs, uploadDouble } from './environment.ts';
+import { appRemote, directed, hostKit, installHeld, opened, runs } from './environment.ts';
+import { uploadTool } from './store.ts';
 import type { Started } from './started.ts';
 
 function variables(proxy: Proxy): Record<string, string> {
@@ -17,7 +18,8 @@ it.each([
   const hosted = await hostKit([{}], { tls: true, environment: proxied ? variables(proxy) : {} });
   const commit = 'a'.repeat(40);
   const credentials = appRemote(hosted.house, commit);
-  const transfers = uploadDouble(hosted);
+  const uploads = uploadTool(hosted.store, 64);
+  hosted.tools.upload = (args) => uploads.answer(args);
   await writeFile(join(hosted.workingDirectory, 'report.txt'), 'quarterly numbers\n');
   await opened(hosted);
 
@@ -32,17 +34,17 @@ it.each([
   expect(git).toMatchObject({ status: 0, stdout: `${commit}\tHEAD\n${commit}\trefs/heads/main\n` });
   expect(credentials).toHaveLength(1);
   expect(upload).toMatchObject({ status: 0 });
-  expect(transfers).toHaveLength(1);
+  expect(hosted.store.requests.map((request) => [request.method, request.status])).toEqual([['PUT', 200]]);
   const reached = (path: string) =>
     hosted.house.requests.filter((received) => received.path === path).map((received) => proxy.carried(received));
   expect({
     stream: reached('/kit/stream'),
     credential: reached('/kit/conversations/conversation-1/credential'),
-    transfer: reached('/bytes/upload-1'),
+    transfer: hosted.store.requests.map((request) => proxy.carried(request)),
     git: reached('/app/a_app.git/info/refs'),
   }).toEqual({ stream: [proxied, proxied], credential: [proxied], transfer: [proxied], git: [proxied] });
   expect(hosted.house.requests.filter((received) => proxy.carried(received) !== proxied)).toEqual([]);
-  expect(new Set(proxy.tunnels)).toEqual(new Set(proxied ? [new URL(hosted.house.origin).host] : []));
+  expect(new Set(proxy.tunnels)).toEqual(new Set(proxied ? [new URL(hosted.house.origin).host, new URL(hosted.store.origin).host] : []));
 });
 
 it('starts every process, a CLI install, a sign-in and a Conversation process, without the proxy variables', async () => {

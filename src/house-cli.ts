@@ -1,15 +1,19 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { request, setGlobalProxyFromEnv } from 'node:http';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { request, setGlobalProxyFromEnv, type IncomingMessage } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { basename, extname, join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import type { ToolResult } from './bridge.ts';
-import { verified } from './files.ts';
+import { downloaded, storeRefusal, uploaded, type UploadParts } from './files.ts';
 import { HOUSE_REF } from './git.ts';
 import { ownerSocket, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, type Message } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed, selectRelay } from './relay.ts';
-import { parse, stringify } from 'yaml';
+import { parse } from 'yaml';
 
 interface Tool {
   name: string;
@@ -22,18 +26,17 @@ interface Grant {
   operation: string;
 }
 
-interface Declared {
-  upload?: Grant;
-}
-
 interface Staged {
   upload?: Array<Grant & { sha256: string }>;
 }
 
-interface Described {
-  bytes: Buffer;
-  description: { bytes: number; sha256: string; media_type?: string };
+interface Description {
+  bytes: number;
+  sha256: string;
+  media_type?: string;
 }
+
+type Finishing = { upload: UploadParts } | { checking: true } | { text: string };
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
 const PUSH_USAGE = 'usage: house push [commit] [--owner]';
@@ -78,12 +81,10 @@ const MEDIA_TYPES = new Map([
   ['zip', 'application/zip'],
 ]);
 
-function refused(path: string, method: string, status: number, text: string, local: boolean): string {
+function refused(path: string, status: number, text: string, local: boolean): string {
   const refusal = refusalOf(text);
   if (refusal !== null) return refusal.text;
   if (status === 401) return REVOKED;
-  const act = method === 'GET' ? 'download' : 'upload';
-  if (URL.canParse(path)) return `the ${act} answered ${status}; ${act} the file again`;
   if (status === 502 && local) return text;
   return path === '/' ? unconfirmed(status) : `${path} answered ${status}`;
 }
@@ -92,48 +93,22 @@ function unconfirmed(status: number): string {
   return `House answered ${status} ${UNCONFIRMED}`;
 }
 
-function exchanged(
-  path: string,
-  method: string,
-  body?: unknown,
-  headers: Record<string, string> = { 'content-type': 'application/json' },
-  to = socketPath,
-): Promise<Buffer> {
+function bridged(path: string, body: unknown, to = socketPath): Promise<string> {
   return new Promise((resolve, reject) => {
-    const sent = request({ socketPath: to, path, method, headers }, (answer) => {
+    const sent = request({ socketPath: to, path, method: 'POST', headers: { 'content-type': 'application/json' } }, (answer) => {
       const chunks: Buffer[] = [];
       answer.on('data', (chunk: Buffer) => chunks.push(chunk));
       answer.on('end', () => {
-        const bytes = Buffer.concat(chunks);
-        if (answer.statusCode === 200) resolve(bytes);
-        else
-          reject(
-            new Error(
-              refused(
-                path,
-                method,
-                answer.statusCode!,
-                bytes.toString('utf8'),
-                answer.headers['content-type'] === undefined,
-              ),
-            ),
-          );
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (answer.statusCode === 200) resolve(text);
+        else reject(new Error(refused(path, answer.statusCode!, text, answer.headers['content-type'] === undefined)));
       });
     });
     sent.on('error', (error: NodeJS.ErrnoException) =>
       reject(new Error(error.code === 'EPERM' || error.code === 'EACCES' ? SANDBOXED : CLOSED)),
     );
-    sent.end(body === undefined ? undefined : body instanceof Buffer ? body : JSON.stringify(body));
+    sent.end(JSON.stringify(body));
   });
-}
-
-async function bridged(
-  path: string,
-  body: unknown,
-  headers?: Record<string, string>,
-  to = socketPath,
-): Promise<string> {
-  return (await exchanged(path, 'POST', body, headers, to)).toString('utf8');
 }
 
 async function direct(message: Message): Promise<string> {
@@ -162,32 +137,60 @@ async function tools(): Promise<Tool[]> {
   return (await mcp<{ tools: Tool[] }>('tools/list', {})).tools;
 }
 
+function unreadable(path: string, error: unknown): Error {
+  return new Error(
+    (error as NodeJS.ErrnoException).code === 'EISDIR'
+      ? `${path} is a folder; upload one file at a time`
+      : `${path} is not a readable file`,
+  );
+}
+
 async function localFile(path: string): Promise<Buffer> {
   try {
     return await readFile(path);
   } catch (error) {
-    throw new Error(
-      (error as NodeJS.ErrnoException).code === 'EISDIR'
-        ? `${path} is a folder; upload one file at a time`
-        : `${path} is not a readable file`,
-    );
+    throw unreadable(path, error);
   }
 }
 
-async function transferred(url: string, method: string, bytes?: Buffer, headers?: Record<string, string>): Promise<Buffer> {
-  if (socketPath !== undefined) return exchanged(url, method, bytes, headers);
-  setGlobalProxyFromEnv();
-  const answer = await fetch(relayed(url), { method, ...(headers === undefined ? {} : { headers }), ...(bytes === undefined ? {} : { body: bytes }) }).catch(() => {
-    throw new Error(UNREACHABLE);
+function opened(url: string, method: string, headers: Record<string, string>, body?: Buffer | Readable): Promise<IncomingMessage> {
+  return new Promise((answered, failed) => {
+    const local = socketPath !== undefined;
+    const target = local ? null : relayed(url);
+    if (!local) setGlobalProxyFromEnv();
+    const sent =
+      target === null
+        ? request({ socketPath, path: url, method, headers }, answered)
+        : (target.protocol === 'https:' ? httpsRequest : request)(target, { method, headers }, answered);
+    sent.on('error', (error: NodeJS.ErrnoException) =>
+      failed(new Error(!local ? UNREACHABLE : error.code === 'EPERM' || error.code === 'EACCES' ? SANDBOXED : CLOSED)),
+    );
+    if (body instanceof Readable) pipeline(body, sent).catch(() => undefined);
+    else sent.end(body);
   });
-  const received = Buffer.from(await answer.arrayBuffer());
-  if (answer.status === 200) return received;
-  throw new Error(refused(url, method, answer.status, received.toString('utf8'), false));
+}
+
+async function textOf(answer: IncomingMessage): Promise<string> {
+  return Buffer.concat(await answer.toArray()).toString('utf8');
 }
 
 async function sent(url: string, bytes: Buffer, operation: string): Promise<string> {
   const headers = { 'content-type': 'application/octet-stream', 'x-house-byte-operation': operation };
-  return (await transferred(url, 'POST', bytes, headers)).toString('utf8');
+  const answer = await opened(url, 'POST', headers, bytes);
+  const text = await textOf(answer);
+  if (answer.statusCode === 200) return text;
+  throw new Error(refusalOf(text)?.text ?? storeRefusal('upload', answer.statusCode!).message);
+}
+
+async function sentPart(url: string, file: string, start: number, end: number): Promise<void> {
+  const answer = await opened(
+    url,
+    'PUT',
+    { 'content-length': String(end - start) },
+    end === start ? undefined : createReadStream(file, { start, end: end - 1 }),
+  );
+  await answer.toArray();
+  if (answer.statusCode !== 200) throw storeRefusal('upload', answer.statusCode!);
 }
 
 async function download(args: string[]): Promise<string> {
@@ -195,46 +198,66 @@ async function download(args: string[]): Promise<string> {
   if (flags.has('--help')) return DOWNLOAD_USAGE;
   const { file, ...selected } = argumentsOf(argument);
   if (typeof file !== 'string' || file === '') throw new Error('download needs "file", the local file to write');
-  const inspected = parse(await called('inspect', selected)) as { download?: unknown; sha256?: unknown } | null;
-  if (typeof inspected?.download !== 'string') throw new Error(`${String(selected.path)} holds no binary file; shell reads its text`);
-  const bytes = verified(await transferred(inspected.download, 'GET'), String(inspected.sha256), String(selected.path));
   const written = resolve(file);
-  await mkdir(dirname(written), { recursive: true });
-  await writeFile(written, bytes);
+  await downloaded(
+    async () => {
+      const inspected = parse(await called('inspect', selected)) as { download?: unknown; sha256?: unknown } | null;
+      if (typeof inspected?.download !== 'string') throw new Error(`${String(selected.path)} holds no binary file; shell reads its text`);
+      return { download: inspected.download, sha256: String(inspected.sha256) };
+    },
+    async (url) => {
+      const answer = await opened(url, 'GET', {});
+      return { status: answer.statusCode!, body: answer };
+    },
+    written,
+    String(selected.path),
+  );
   return written;
 }
 
-async function described(file: string): Promise<Described> {
-  const bytes = await localFile(file);
+async function described(file: string): Promise<Description> {
+  const digest = createHash('sha256');
+  let bytes = 0;
+  try {
+    for await (const chunk of createReadStream(file) as AsyncIterable<Buffer>) {
+      digest.update(chunk);
+      bytes += chunk.length;
+    }
+  } catch (error) {
+    throw unreadable(file, error);
+  }
   const mediaType = MEDIA_TYPES.get(extname(file).slice(1).toLowerCase());
-  return {
-    bytes,
-    description: {
-      bytes: bytes.length,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-      ...(mediaType === undefined ? {} : { media_type: mediaType }),
-    },
-  };
+  return { bytes, sha256: digest.digest('hex'), ...(mediaType === undefined ? {} : { media_type: mediaType }) };
+}
+
+async function finished(upload: string, room: unknown): Promise<Finishing> {
+  const text = await called('upload', { upload, room_ref: room });
+  const answer = parse(text) as object | null;
+  return answer !== null && ('upload' in answer || 'checking' in answer) ? (answer as Finishing) : { text };
 }
 
 async function upload({ file, ...destination }: Record<string, unknown>): Promise<string> {
   if (typeof file !== 'string' || file === '') throw new Error('upload needs "file", a local file');
-  const { bytes, description } = await described(file);
+  const description = await described(file);
   const answer = await called('upload', { ...destination, ...description });
-  const declared = parse(answer) as Declared;
-  if (declared.upload === undefined) return answer;
-  const written: unknown = JSON.parse(await sent(declared.upload.url, bytes, declared.upload.operation));
-  return stringify(written, { lineWidth: 0 }).trimEnd();
+  const declared = parse(answer) as { upload?: UploadParts } | null;
+  if (declared?.upload === undefined) return answer;
+  const accepted = await uploaded(declared.upload, {
+    bytes: description.bytes,
+    send: (url, start, end) => sentPart(url, file, start, end),
+    finish: (id) => finished(id, destination.room_ref),
+  });
+  return accepted.text;
 }
 
 async function appendRecord(args: Record<string, unknown>): Promise<string> {
-  const held = new Map<string, Buffer>();
+  const held = new Map<string, string>();
   const attachments = Array.isArray(args.attachments)
     ? await Promise.all(
         args.attachments.map(async (attachment: unknown) => {
           if (typeof attachment !== 'string') return attachment;
-          const { bytes, description } = await described(attachment);
-          held.set(description.sha256, bytes);
+          const description = await described(attachment);
+          held.set(description.sha256, attachment);
           return { name: basename(attachment), ...description };
         }),
       )
@@ -244,7 +267,7 @@ async function appendRecord(args: Record<string, unknown>): Promise<string> {
     const answer = await called('append_record', record);
     const { upload } = parse(answer) as Staged;
     if (upload === undefined) return answer;
-    for (const grant of upload) await sent(grant.url, held.get(grant.sha256)!, grant.operation);
+    for (const grant of upload) await sent(grant.url, await localFile(held.get(grant.sha256)!), grant.operation);
   }
 }
 
@@ -269,7 +292,7 @@ async function push(args: string[]): Promise<string> {
   if (owner && socketPath !== undefined) throw new Error('--owner is not for Agent conversations; run house push without it');
   if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house push needs --owner');
   const pushed = JSON.parse(
-    await bridged('/git/push', { cwd: process.cwd(), commit }, undefined, owner ? ownerSocket() : socketPath),
+    await bridged('/git/push', { cwd: process.cwd(), commit }, owner ? ownerSocket() : socketPath),
   ) as { refused: boolean; text: string };
   if (pushed.refused) throw new Error(pushed.text);
   return pushed.text;
@@ -277,7 +300,7 @@ async function push(args: string[]): Promise<string> {
 
 async function fetched(args: string[]): Promise<string> {
   if (accepted(args, ['--help'], 0, FETCH_USAGE).flags.has('--help')) return FETCH_USAGE;
-  const answer = JSON.parse(await bridged('/git/fetch', {}, undefined, socketPath ?? ownerSocket())) as {
+  const answer = JSON.parse(await bridged('/git/fetch', {}, socketPath ?? ownerSocket())) as {
     refused: boolean;
     text: string;
   };

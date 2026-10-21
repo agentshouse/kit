@@ -158,9 +158,12 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
   expect(hosted.images.map((image) => image.body)).toEqual([
     { name: 'image-1.png', media_type: 'image/png', bytes: 69, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
   ]);
-  expect(hosted.uploads.map((upload) => [upload.headers['x-house-byte-operation'], (upload.body as Buffer).length])).toEqual([
-    ['operation-1', 69],
+  expect(hosted.store.requests.map((request) => [request.method, request.part, request.bytes, request.status])).toEqual([
+    ['PUT', 1, 32, 200],
+    ['PUT', 2, 32, 200],
+    ['PUT', 3, 5, 200],
   ]);
+  expect(hosted.finishes.map((finish) => finish.body)).toEqual([{ upload: expect.any(String) }]);
   expect(turns[0]!.context).toEqual({ used: 42323, window: 258400 });
 });
 
@@ -324,13 +327,14 @@ it("keeps a Claude Code image block and drops its notice and another session's t
     ],
     context: { used: 1200, window: 200000 },
   });
-  expect(hosted.uploads).toHaveLength(1);
+  expect(hosted.finishes).toHaveLength(1);
 });
 
-it("marks an image House did not save with the Kit's cause in place of its image part", async () => {
+it("marks an image House did not save with House's refusal in place of its image part", async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.house.route('POST', '/bytes/:grant', () => ({
-    body: { version: 'version-1', save: { status: 'failed', failure: 'storage unavailable' } },
+  hosted.house.route('POST', '/kit/uploads/finish', () => ({
+    status: 410,
+    body: { error: { code: 'upload_expired', message: 'upload_expired: this upload is gone; run the same command again to start a new one', retryable: false } },
   }));
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
@@ -339,15 +343,24 @@ it("marks an image House did not save with the Kit's cause in place of its image
   const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
 
   expect((ended.body as Ended).parts).toEqual([
-    { type: 'marker', marker: 'retry', text: 'image-1.png was not saved: storage unavailable' },
+    { type: 'marker', marker: 'retry', text: 'image-1.png was not saved: upload_expired: this upload is gone; run the same command again to start a new one' },
   ]);
 });
 
 it('streams the text after an image and declares the next image while the first one uploads, and saves every image where its CLI produced it', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.house.route('POST', '/bytes/:grant', async (request) => {
-    if (request.params.grant === 'image-1') await until(() => hosted.images[1] && streamed(hosted, 'text'));
-    return { body: { version: `version-${request.params.grant!.slice('image-'.length)}`, save: { status: 'saved', failure: null } } };
+  const declared = new Map<string, string>();
+  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/images', (request) => {
+    hosted.images.push(request);
+    const { bytes, sha256 } = request.body as { bytes: number; sha256: string };
+    const answer = hosted.store.declare({ bytes, sha256, path: `version-${hosted.images.length}` }, 1024);
+    declared.set(answer.upload.id, `version-${hosted.images.length}`);
+    return { body: answer };
+  });
+  hosted.house.route('POST', '/kit/uploads/finish', async (request) => {
+    const { upload } = request.body as { upload: string };
+    if (declared.get(upload) === 'version-1') await until(() => hosted.images[1] && streamed(hosted, 'text'));
+    return { body: await hosted.store.finish(upload) };
   });
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
@@ -367,9 +380,9 @@ it('streams the text after an image and declares the next image while the first 
 
 it('keeps writing the text an image was saved in the middle of, and saves the image where its CLI produced it', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.house.route('POST', '/bytes/:grant', async () => {
+  hosted.house.route('POST', '/kit/uploads/finish', async (request) => {
     await until(() => streamed(hosted, 'text'));
-    return { body: { version: 'version-1', save: { status: 'saved', failure: null } } };
+    return { body: await hosted.store.finish((request.body as { upload: string }).upload) };
   });
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
