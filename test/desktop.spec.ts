@@ -1,5 +1,4 @@
 import { access, readFile, stat, writeFile } from 'node:fs/promises';
-import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, type Host, type Platform } from './host.ts';
@@ -529,7 +528,7 @@ it('installs the container on macOS through Docker Desktop, publishing no port, 
 
   expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nKit connected for Environment environment-one.\n`, stderr: '' });
   expect(host.calls('docker').filter((call) => call.endsWith(' login'))).toEqual([
-    `run --rm --hostname ${hostname()} --user ${uid} ${mounts} ${image} login`,
+    `run --rm --user ${uid} ${mounts} ${image} login`,
   ]);
   expect(host.calls('docker').join('\n')).not.toMatch(/--publish|HOUSE_KIT_LOGIN_PORT/);
   expect(host.calls('open')).toEqual([LOGIN_LINK]);

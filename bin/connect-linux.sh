@@ -39,7 +39,6 @@ DESKTOP_WAIT_SECONDS=300
 RUNTIME='Docker Engine'
 OPENER=xdg-open
 NETWORK=(--network host)
-NAMED=()
 NATIVE=0
 CONTAINER=0
 MACOS=0
@@ -1007,11 +1006,10 @@ bind_house remove_container
 if ((OTHER_HOME)); then remove_container; fi
 if ((FORWARDING == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
 
-if [[ "$RUNTIME" == 'Docker Desktop' ]]; then NAMED=(--hostname "$(hostname)"); fi
 if [[ "$RUNTIME" == 'Docker Desktop' && "$HOUSE" == https://* ]]; then NETWORK=(); fi
 RELAY=()
 if [[ -n "${HOUSE_KIT_RELAY:-}" ]]; then RELAY=(--env "HOUSE_KIT_RELAY=$HOUSE_KIT_RELAY"); fi
-DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${NAMED[@]+"${NAMED[@]}"} ${RELAY[@]+"${RELAY[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
+DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${RELAY[@]+"${RELAY[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
 LOGIN_KIT=("${DOCKER_RUN[@]:0:2}" ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
 AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/authority-main.js")
 CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/configure-main.js")

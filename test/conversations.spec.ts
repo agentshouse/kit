@@ -319,14 +319,24 @@ it('resumes the stored provider session for a message with no process and prompt
   });
 });
 
-it("reports a refused resume in the Kit's words, never the CLI's, and logs the CLI's cause", async () => {
+it("reports a refused resume in the Kit's words, never the CLI's, marked as a refused resume, and logs the CLI's cause", async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'refuse-resume'), '');
 
   hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', first: false });
 
-  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation", resume_refused: true });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ did not start: the Agent's CLI could not resume this conversation: .*the session cannot be resumed/m);
+});
+
+it('refuses a message whose CLI does not start before resuming its session with that reason and no mark of a refused resume', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'refuse-initialize'), '');
+
+  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', first: false });
+
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI did not start" });
+  expect((await hosted.adapterLog()).some((entry) => entry.method === 'session/resume')).toBe(false);
 });
 
 it.each([
@@ -643,7 +653,7 @@ it('refuses a first message whose session this Kit already prompted when the CLI
 
   hosted.call({ kind: 'message', provider_session_id: stored, text: '@say two', first: true });
 
-  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation", resume_refused: true });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
 });
 
@@ -656,7 +666,7 @@ it('refuses a first message whose resume the CLI refuses for another reason than
 
   hosted.call({ kind: 'message', provider_session_id: stored, text: '@say lost', first: true });
 
-  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation", resume_refused: true });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
 });
 
@@ -668,7 +678,7 @@ it('refuses a later message of a Claude Code conversation whose session the CLI 
 
   hosted.call({ kind: 'message', provider_session_id: stored, text: '@say lost', first: false });
 
-  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI could not resume this conversation", resume_refused: true });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/new')).toHaveLength(1);
 });
 

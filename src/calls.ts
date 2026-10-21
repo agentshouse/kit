@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { House } from './api.ts';
 import { kitHome } from './home.ts';
 
-export type Result = { provider_session_id: string } | { refused: string } | Record<string, never>;
+export type Result = { provider_session_id: string } | { refused: string; resume_refused?: true } | Record<string, never>;
 
 export interface KitMethods {
   readonly open: { readonly params: Record<never, never>; readonly result: Result };

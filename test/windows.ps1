@@ -40,7 +40,7 @@ function Read-Host([string] $Prompt) {
 }
 $ClisMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js'
 $Network = @('--network', 'host')
-$Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
+$Common = @('--mount', 'home', '--mount', 'workspace', 'image')
 $KitHomeMount = 'home'
 $Image = 'image'
 function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected, [string[]] $Failures = @()) {
@@ -55,24 +55,24 @@ function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $
   $succeeded = @($Expected | Where-Object { -not $script:FailingCli -or -not $_.Contains("--entrypoint $script:FailingCli ") })
   if ($restarts.Count -ne $succeeded.Count) { "Update-Clis asked the Kit to restart $($restarts.Count) times after $($succeeded.Count) updates that succeeded" }
   if (($failed -join '|') -cne ($Failures -join '|')) { "Update-Clis reported the failures: $($failed -join '|')" }
-  if ($script:Ran[0] -ne "run --rm --network host --entrypoint node --hostname pc --mount home --mount workspace image $ClisMain") { "Update-Clis read the CLIs with: $($script:Ran[0])" }
+  if ($script:Ran[0] -ne "run --rm --network host --entrypoint node --mount home --mount workspace image $ClisMain") { "Update-Clis read the CLIs with: $($script:Ran[0])" }
   if ($script:Prompts.Count -ne $Asked) { "Update-Clis asked $($script:Prompts.Count) times, not $Asked" }
   if (($updates -join '|') -ne ($Expected -join '|')) { "Update-Clis ran: $($updates -join '|')" }
 }
 $UpdateClis = $false
 $Interactive = $false
-$findings += @(Test-Updates $false $true @('', 'n') 2 @('run -i -t --rm --network host --entrypoint /kit-home/.local/bin/codex --hostname pc --mount home --mount workspace image update'))
+$findings += @(Test-Updates $false $true @('', 'n') 2 @('run -i -t --rm --network host --entrypoint /kit-home/.local/bin/codex --mount home --mount workspace image update'))
 $findings += @(Test-Updates $true $false @() 0 @(
-  'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --hostname pc --mount home --mount workspace image update',
-  'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --hostname pc --mount home --mount workspace image update',
-  'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --hostname pc --mount home --mount workspace image update'
+  'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --mount home --mount workspace image update',
+  'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --mount home --mount workspace image update',
+  'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --mount home --mount workspace image update'
 ))
 $findings += @(Test-Updates $false $false @('') 0 @())
 $script:FailingCli = '/kit-home/.local/bin/claude'
 $findings += @(Test-Updates $true $false @() 0 @(
-  'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --hostname pc --mount home --mount workspace image update',
-  'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --hostname pc --mount home --mount workspace image update',
-  'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --hostname pc --mount home --mount workspace image update'
+  'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --mount home --mount workspace image update',
+  'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --mount home --mount workspace image update',
+  'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --mount home --mount workspace image update'
 ) @('claude could not be updated; it stays at 2.1.200'))
 $script:FailingCli = ''
 $script:ListStatus = 7
@@ -124,7 +124,7 @@ $invokeLogin = $ast.Find({ param($node) $node -is [System.Management.Automation.
 . ([scriptblock]::Create($invokeLogin.Extent.Text))
 $Link = 'Open this link and confirm: '
 $Network = @()
-$Common = @('--hostname', 'pc', '--mount', 'home', '--mount', 'workspace', 'image')
+$Common = @('--mount', 'home', '--mount', 'workspace', 'image')
 $printed = @('Open this link and confirm: https://agents.house/kit/ahk_login_one', 'Environment environment-one is connected to https://agents.house.')
 function docker {
   $script:Ran += , ($args -join ' ')
@@ -145,7 +145,7 @@ foreach ($fails in @($false, $true)) {
   } catch {
     $findings += "Invoke-Login refused with: $($_.Exception.Message)"
   }
-  if (($script:Ran -join '|') -cne 'run --rm --hostname pc --mount home --mount workspace image login --house https://agents.house') { $findings += "Invoke-Login ran: $($script:Ran -join '|')" }
+  if (($script:Ran -join '|') -cne 'run --rm --mount home --mount workspace image login --house https://agents.house') { $findings += "Invoke-Login ran: $($script:Ran -join '|')" }
   if (($script:Opened -join '|') -cne 'https://agents.house/kit/ahk_login_one') { $findings += "Invoke-Login opened: $($script:Opened -join '|')" }
 }
 foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Clear-KitHome', 'Connect-Kit')) {

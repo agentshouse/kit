@@ -8,6 +8,18 @@ export const LOGIN = '0199d0a1-6b2c-7e3f-8a4b-5c6d7e8f9a0b';
 
 const REJECTED = { status: 400, body: { error: { code: 'kit_login_rejected', retryable: false } } };
 
+const UNDECLARED = { status: 422, body: { error: { code: 'kit_declaration_invalid', retryable: false } } };
+
+const START_FIELDS = ['act', 'environment_id', 'replaces', 'headless', 'rooms', 'code_challenge'];
+
+const POLL_FIELDS = ['login', 'code_verifier'];
+
+const ENTERED_NAME = 'Work laptop';
+
+function undeclared(body: unknown, fields: string[]): boolean {
+  return Object.keys(body as object).some((field) => !fields.includes(field));
+}
+
 export function loginLink(house: House): string {
   return `${house.origin}/kit/ahk_login_one`;
 }
@@ -28,29 +40,36 @@ export function serveLogin(
 ) {
   let refusals = busy;
   let challenge = '';
-  let confirmed = !waiting;
+  let act = '';
+  let entered: string | null = waiting ? null : ENTERED_NAME;
   let ended = false;
+  const settled: { act: string; environment: string; name?: string }[] = [];
   house.route('POST', '/kit', ({ body }) => {
+    if (undeclared(body, START_FIELDS)) return UNDECLARED;
     if (refusals-- > 0) return { status: 503, body: { error: { code: 'kit_environment_unavailable', retryable: true } } };
     if (gone !== undefined && (body as { environment_id?: string }).environment_id === gone) {
       return { status: 404, body: { error: { code: 'kit_environment_not_found', retryable: false } } };
     }
+    act = (body as { act: string }).act;
     challenge = (body as { code_challenge: string }).code_challenge;
     return { body: { start_url: loginLink(house), login: LOGIN } };
   });
   house.route('POST', '/kit/token', ({ body }) => {
+    if (undeclared(body, POLL_FIELDS)) return UNDECLARED;
     const { login, code_verifier } = body as { login: string; code_verifier: string };
     const proved = createHash('sha256').update(code_verifier).digest('base64url') === challenge;
     if (login !== LOGIN || !proved || ended) return REJECTED;
-    if (!confirmed) return { status: 400, body: { error: { code: 'kit_login_pending', retryable: true } } };
+    if (entered === null) return { status: 400, body: { error: { code: 'kit_login_pending', retryable: true } } };
     ended = true;
+    settled.push(act === 'new_environment' ? { act, environment, name: entered } : { act, environment });
     return {
       body: { credential, environment, user, ...(own === undefined ? {} : { headless_credential: own }) },
     };
   });
   return {
-    confirm: () => {
-      confirmed = true;
+    settled,
+    confirm: (name = ENTERED_NAME) => {
+      entered = name;
     },
     end: () => {
       ended = true;
