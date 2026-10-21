@@ -28,6 +28,7 @@
     "@agentclientprotocol/sdk": "1.7.0",
     "@agentshouse/mdmodel": "0.1.0-cabd61587647f",
     "@agentshouse/skills": "0.1.0-c6411c39c6d0f",
+    "@lydell/node-pty": "1.2.0-beta.15",
     "yaml": "2.9.1"
   },
   "peerDependencies": {

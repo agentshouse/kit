@@ -10,6 +10,7 @@ export type Notification = { type: string } & Record<string, unknown>;
 
 export interface ConnectionHandlers {
   opened(): void;
+  closed(): void;
   call(call: Call): void;
   notification(notification: Notification): void;
 }
@@ -108,6 +109,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       silence?.stop();
       silence = null;
       if (connection === opening) connection = null;
+      handlers.closed();
       process.stderr.write(`kit: connection closed ${event.code} ${event.reason}\n`);
       if (event.reason === 'replaced') end(REPLACED);
       if (event.reason === 'credential_rejected' || refused?.status === 401) {
