@@ -41,7 +41,16 @@ function listed(name: string, artifact: Artifact): boolean {
   return existsSync(list) && readFileSync(list, 'utf8').includes(artifact.url);
 }
 
-function serve(artifact: Artifact, output: string): void {
+function serve(artifact: Artifact, output: string, most: number): void {
+  if (listed('curl-oversize', artifact)) {
+    const bytes = Buffer.concat([readFileSync(join(CACHE, artifact.sha256)), Buffer.from('one byte more')]);
+    if (bytes.length > most) {
+      process.stderr.write('curl: (63) Maximum file size exceeded\n');
+      process.exit(63);
+    }
+    writeFileSync(output, bytes);
+    return;
+  }
   if (listed('curl-corrupt', artifact)) {
     writeFileSync(output, 'not the pinned artifact');
     return;
@@ -59,7 +68,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   appendFileSync(join(process.env.HOUSE_KIT_HOME!, 'curl.log'), `${url}\n`);
   const artifact = pinnedArtifacts().find((candidate) => candidate.url === url);
   if (artifact !== undefined) {
-    serve(artifact, process.argv[process.argv.indexOf('-o') + 1]!);
+    const most = process.argv.indexOf('--max-filesize');
+    serve(artifact, process.argv[process.argv.indexOf('-o') + 1]!, most < 0 ? Infinity : Number(process.argv[most + 1]));
   } else {
     const kind = Object.keys(CLIS).find((candidate) => CLIS[candidate]!.install.includes(` ${url} `))!;
     if (existsSync(join(process.env.HOUSE_KIT_HOME!, `install-stall-${kind}`))) {

@@ -124,6 +124,30 @@ it('refuses a bootstrap that does not match its sha256 and runs nothing', async 
   expect(await ran(hosted)).toBeUndefined();
 });
 
+it('refuses a bootstrap larger than a million bytes and runs nothing, and runs one of exactly a million bytes', async () => {
+  const hosted = await hostKit();
+  const writes = 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n#';
+  const sized = (bytes: number) => `${writes}${'x'.repeat(bytes - writes.length - 1)}\n`;
+  const larger = await serve(hosted, sized(1_000_001));
+
+  update(hosted, 'update-large', larger);
+
+  expect(await hosted.result('update-large')).toEqual({ refused: 'the Kit bootstrap is larger than 1000000 bytes' });
+  expect(await ran(hosted)).toBeUndefined();
+
+  const largest = sized(1_000_000);
+  hosted.house.route('GET', '/releases/largest/connect-linux.sh', () => ({
+    bytes: { type: 'text/x-shellscript', content: largest },
+  }));
+  update(hosted, 'update-largest', {
+    bootstrap: `${hosted.house.origin}/releases/largest/connect-linux.sh`,
+    sha256: createHash('sha256').update(largest).digest('hex'),
+  });
+
+  expect(await hosted.result('update-largest')).toEqual({});
+  expect(await ran(hosted)).toBe('--linux\n');
+});
+
 it('carries two updates one after the other, each with its own bootstrap and status', async () => {
   const hosted = await hostKit();
   // The failing bootstrap runs half a second, so the second update arrives while it runs.

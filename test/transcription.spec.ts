@@ -347,6 +347,17 @@ it('refuses an artifact that does not match its hash, installs nothing, reports 
   expect(await prompted(hosted, 0)).toEqual([block(linked('second', [voice!])), transcribed(voice!.path, RUSSIAN)]);
 });
 
+it('stops a download larger than its pinned size, installs nothing and reports why', async () => {
+  const [decoder] = pinnedArtifacts();
+  const hosted = await hostKit([{}], {
+    transcribe: true,
+    prepare: (home) => writeFile(join(home, 'curl-oversize'), decoder!.url),
+  });
+
+  await settled(hosted, { installed: false, failure: 'curl: (63) Maximum file size exceeded' });
+  expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
+});
+
 it('refuses a message linking an audio file it cannot decode, posting no transcript and writing no prompt', async () => {
   const hosted = await transcribing();
   const [broken] = attached(hosted, [{ name: 'broken.ogg', media_type: 'audio/ogg', content: Buffer.from('not audio at all') }]);
