@@ -131,7 +131,7 @@ installed_packages() { :; }
 ${/^DIRECT=.*$/m.exec(linux)![0]}
 NATIVE_PACKAGES=(ca-certificates curl git)
 VERSION=0.2.1-alpha.1
-NODE_VERSION=24.21.0
+NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
 CHECKSUM=(sha256sum)

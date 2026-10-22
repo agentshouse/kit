@@ -50,20 +50,20 @@
     "vitest": "5.0.1",
     "ws": "8.22.0"
   },
-  "packageManager": "npm@11.19.0",
+  "packageManager": "npm@11.19.1",
   "engines": {
-    "node": "24.21.0",
-    "npm": "11.19.0"
+    "node": "24.22.1",
+    "npm": "11.19.1"
   },
   "devEngines": {
     "runtime": {
       "name": "node",
-      "version": "24.21.0",
+      "version": "24.22.1",
       "onFail": "error"
     },
     "packageManager": {
       "name": "npm",
-      "version": "11.19.0",
+      "version": "11.19.1",
       "onFail": "error"
     }
   }

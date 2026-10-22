@@ -27,8 +27,8 @@ jobs:
           docker compose run --rm -T windows
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.21.0
-      - run: npm install --global --ignore-scripts npm@11.19.0
+          node-version: 24.22.1
+      - run: npm install --global --ignore-scripts npm@11.19.1
       - name: Derive the version from the content
         id: version
         run: |
