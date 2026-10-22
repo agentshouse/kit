@@ -77,7 +77,7 @@ function installed(artifact: Artifact): string {
 }
 
 async function executed(command: string, args: string[], signal?: AbortSignal): Promise<string> {
-  // A download or a transcription runs as long as its size needs; the setting turning off or the turn's interrupt or end aborts it instead.
+  // A download or a transcription runs as long as its size needs; a download's deadline, the setting turning off or the turn's interrupt or end aborts it instead.
   const ran = await run(command, args, 0, false, signal);
   if (ran.status !== 0) throw new Error(failureOf(ran, basename(command)));
   return ran.stdout;
@@ -134,11 +134,15 @@ async function install(artifacts: Artifact[], signal: AbortSignal): Promise<void
   try {
     for (const artifact of missing) {
       const part = `${installed(artifact)}.part`;
+      const seconds = Math.ceil(artifact.bytes / 100_000);
+      // An artifact arrives at a hundred kilobytes a second or its download ends, so a stalled host cannot hold the install open.
+      const deadline = AbortSignal.timeout(seconds * 1000);
       // Three retries carry a large download past a dropped connection before the download fails.
       try {
-        await executed('bash', ['-c', 'trap "" XFSZ && ulimit -f "$1" && exec curl -fsSL --retry 3 -o "$2" "$3"', 'bash', String(Math.ceil(artifact.bytes / 1024)), part, artifact.url], signal);
+        await executed('bash', ['-c', 'trap "" XFSZ && ulimit -f "$1" && exec curl -fsSL --retry 3 -o "$2" "$3"', 'bash', String(Math.ceil(artifact.bytes / 1024)), part, artifact.url], AbortSignal.any([signal, deadline]));
       } catch (error) {
         if (((await stat(part).catch(() => null))?.size ?? 0) >= artifact.bytes) throw new Error(`${artifact.url} is larger than its pinned ${artifact.bytes} bytes`);
+        if (deadline.aborted && !signal.aborted) throw new Error(`${artifact.url} did not arrive within ${seconds} seconds`);
         throw error;
       }
       if ((await sha256(part)) !== artifact.sha256) throw new Error(`${artifact.url} does not match its sha256`);

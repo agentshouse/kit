@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
 import { beforeAll, expect, it, onTestFinished } from 'vitest';
 import { attached, bridgeSockets, inspected, posted } from './attachments.ts';
@@ -11,6 +12,8 @@ import { until, type Answer } from './double.ts';
 import { ENGINES, type TranscriptionReport } from '../src/transcription.ts';
 import { hostKit, hostMac, lastCall, lastMessage, opened, type Hosted, type Hosting } from './environment.ts';
 import { alive, stop } from './kit.ts';
+
+const FAST_DEADLINES = fileURLToPath(new URL('./fast-deadlines.ts', import.meta.url));
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/audio/${name}`, import.meta.url));
 const ENGLISH = /\bdollar\b.*\bcents\b/i;
@@ -357,6 +360,21 @@ it('stops a download larger than its pinned size, installs nothing and reports w
   expect(await settled(hosted, (report) => report.failure !== null)).toEqual({
     installed: false,
     failure: `${decoder!.url} is larger than its pinned 5175832 bytes`,
+  });
+  expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
+});
+
+it('ends a download that has not arrived within its deadline, installs nothing and reports why', async () => {
+  const [decoder] = pinnedArtifacts();
+  const hosted = await hostKit([{}], {
+    transcribe: true,
+    environment: { NODE_OPTIONS: `--import=${FAST_DEADLINES}` },
+    prepare: (home) => writeFile(join(home, 'curl-stall'), decoder!.url),
+  });
+
+  expect(await settled(hosted, (report) => report.failure !== null)).toEqual({
+    installed: false,
+    failure: `${decoder!.url} did not arrive within 52 seconds`,
   });
   expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
 });

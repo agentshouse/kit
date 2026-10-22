@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { closeSync, existsSync, openSync, realpathSync } from 'node:fs';
 import { access, chmod, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { placeUserCli } from './cli.ts';
 import { startHouse } from './double.ts';
 import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
@@ -186,10 +187,56 @@ RELEASE=release
 ${/^stage_native_kit\(\) \{\n[\s\S]*?\n\}\n/m.exec(linux)![0]}
 stage_native_kit`,
     ],
-    { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, TMPDIR: home } },
+    // An install step still running after twenty seconds has hung, so the spec ends it rather than waiting on it.
+    { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, TMPDIR: home }, timeout: 20_000 },
   );
 
   expect(ran).toMatchObject({ status: 1, stderr: 'refused: the Node.js download is larger than its pinned 4096 bytes\n' });
+  expect(existsSync(join(home, 'npm.ran'))).toBe(false);
+});
+
+it('ends a Node.js download that has not arrived within its deadline and installs nothing', async () => {
+  const held = new Set<Socket>();
+  const stalled = createServer((socket) => held.add(socket));
+  await new Promise<void>((listening) => stalled.listen(0, '127.0.0.1', listening));
+  onTestFinished(() => {
+    for (const socket of held) socket.destroy();
+    return new Promise<void>((closed) => stalled.close(() => closed()));
+  });
+  const { port } = stalled.address() as AddressInfo;
+  const home = await temporaryHome();
+  const linux = await readFile(LINUX, 'utf8');
+  const bin = join(home, 'bin');
+  await mkdir(bin);
+  await writeFile(
+    join(bin, 'curl'),
+    `#!/bin/sh\nfor arg; do shift; case $arg in https://nodejs.org/*) set -- "$@" http://127.0.0.1:${port}/ ;; *) set -- "$@" "$arg" ;; esac; done\nexec /usr/bin/curl "$@"\n`,
+    { mode: 0o755 },
+  );
+  await writeFile(join(bin, 'npm'), '#!/bin/sh\ntouch "$TMPDIR/npm.ran"\n', { mode: 0o755 });
+
+  const ran = spawnSync(
+    'bash',
+    [
+      '-c',
+      `set -u
+refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
+${/^DIRECT=.*$/m.exec(linux)![0]}
+VERSION=0.2.1-alpha.1
+NODE_VERSION=24.21.0
+NODE_PLATFORM=linux-x64
+NODE_SHA256=${'0'.repeat(64)}
+NODE_BYTES=250000
+CHECKSUM=(sha256sum)
+RELEASE=release
+${/^stage_native_kit\(\) \{\n[\s\S]*?\n\}\n/m.exec(linux)![0]}
+stage_native_kit`,
+    ],
+    // An install step still running after twenty seconds has hung, so the spec ends it rather than waiting on it.
+    { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, TMPDIR: home }, timeout: 20_000 },
+  );
+
+  expect(ran).toMatchObject({ status: 1, stderr: expect.stringMatching(/\nrefused: the Node\.js download did not arrive within 3 seconds\n$/) });
   expect(existsSync(join(home, 'npm.ran'))).toBe(false);
 });
 

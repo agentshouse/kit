@@ -312,8 +312,12 @@ stage_native_kit() {
   NATIVE_STAGE=$(mktemp -d) || refuse 'no temporary directory for the Kit package'
   trap 'rm -rf "$NATIVE_STAGE"' EXIT
   printf 'Downloading Node.js %s from nodejs.org and Kit %s from npm.\n' "$NODE_VERSION" "$VERSION"
-  (trap '' XFSZ && ulimit -f $(((NODE_BYTES + 1023) / 1024)) && exec "${DIRECT[@]}" curl -fsSL -o "$NATIVE_STAGE/node.tar.gz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz") || {
+  local seconds=$(((NODE_BYTES + 99999) / 100000))
+  # The Node.js archive arrives at a hundred kilobytes a second or its download ends, so a stalled nodejs.org cannot hold the install open.
+  (trap '' XFSZ && ulimit -f $(((NODE_BYTES + 1023) / 1024)) && exec "${DIRECT[@]}" curl -fsSL --max-time "$seconds" -o "$NATIVE_STAGE/node.tar.gz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz") || {
+    local failed=$?
     (($(wc -c 2>/dev/null < "$NATIVE_STAGE/node.tar.gz" || echo 0) < NODE_BYTES)) || refuse "the Node.js download is larger than its pinned $NODE_BYTES bytes"
+    ((failed != 28)) || refuse "the Node.js download did not arrive within $seconds seconds"
     refuse 'Node.js could not be downloaded'
   }
   printf '%s  %s\n' "$NODE_SHA256" "$NATIVE_STAGE/node.tar.gz" | "${CHECKSUM[@]}" --check >/dev/null 2>&1 || refuse 'the Node.js download does not match its pinned checksum'
