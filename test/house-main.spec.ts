@@ -69,8 +69,8 @@ function zeros(size: number): string {
   return digest.digest('hex');
 }
 
-function servedUploads(house: House, store: Store, partBytes: number, checks = 0) {
-  const uploads = uploadTool(store, partBytes, { checks });
+function servedUploads(house: House, store: Store, partBytes: number) {
+  const uploads = uploadTool(store, partBytes);
   house.route('POST', '/', async ({ body }) => {
     const message = body as { id: string } & McpCall;
     return { body: { jsonrpc: '2.0', id: message.id, result: await uploads.answer(message.params.arguments!) } };
@@ -131,21 +131,30 @@ it("uploads a file larger than the house CLI's memory budget from disk in parts 
   expect(Number(await readFile(peak, 'utf8'))).toBeLessThan(size / 2);
 });
 
-it('finishes the upload again while House answers that it is still checking the stored bytes, and prints the accepted file', async () => {
+it("names every part's SHA-256 in each finishing call and sends each part with its checksum header, and prints the accepted file", async () => {
   const house = await startHouse();
   const home = await connected(house, true);
   const store = await startStore();
-  const uploads = servedUploads(house, store, 64, 2);
-  const file = join(home, 'cover.bin');
-  await writeFile(file, Buffer.from([0, 1, 2, 255]));
+  const uploads = servedUploads(house, store, 10);
+  const content = Buffer.from('a file sent in three parts');
+  const digests = [content.subarray(0, 10), content.subarray(10, 20), content.subarray(20)].map((part) => createHash('sha256').update(part).digest());
+  const [one, two, three] = digests.map((digest) => digest.toString('base64'));
+  store.cut(2);
+  const file = join(home, 'notes.bin');
+  await writeFile(file, content);
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.bin' })], undefined, [
-    '--import',
-    FAST_TIMEOUTS,
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'notes/notes.bin' })]);
+
+  expect(ran).toEqual({ status: 0, stdout: 'path: notes/notes.bin\nrevision: fr_1\n', stderr: '' });
+  expect(uploads.calls.finished).toEqual(
+    Array(3).fill({ upload: expect.any(String), room_ref: 'r_room', part_sha256: digests.map((digest) => digest.toString('hex')) }),
+  );
+  expect(store.requests.map((request) => [request.part, request.checksum, request.bytes, request.status])).toEqual([
+    [1, one, 10, 200],
+    [2, two, 0, 0],
+    [2, two, 10, 200],
+    [3, three, 6, 200],
   ]);
-
-  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: fr_1\n', stderr: '' });
-  expect(uploads.calls.finished).toEqual(Array(3).fill({ upload: expect.any(String), room_ref: 'r_room' }));
 });
 
 it('gives up an upload whose store keeps refusing every part, saying so without the address, once eight rounds sent nothing', async () => {
@@ -169,7 +178,7 @@ it('gives up an upload whose store keeps refusing every part, saying so without 
 
   expect(ran).toEqual({ status: 1, stdout: '', stderr: 'house: the upload answered 403; upload the file again\n' });
   expect(store.requests.map((request) => request.status)).toEqual(Array(8).fill(403));
-  expect(uploads.calls.finished).toHaveLength(7);
+  expect(uploads.calls.finished).toHaveLength(8);
 });
 
 it("resumes an upload outside a conversation after its connection drops, finishing again until House answers and sending only the part the store lost", async () => {
@@ -198,7 +207,7 @@ it("resumes an upload outside a conversation after its connection drops, finishi
     [2, 0],
     [2, 200],
   ]);
-  expect(finishing).toBe(4);
+  expect(finishing).toBe(5);
 });
 
 it('finishes an upload outside a conversation again while House answers it with a 503, as a conversation resends an unsettled call', async () => {
@@ -225,7 +234,7 @@ it('finishes an upload outside a conversation again while House answers it with 
     [1, 200],
     [2, 200],
   ]);
-  expect(finishing).toBe(3);
+  expect(finishing).toBe(4);
 });
 
 it('sends each part and reads each download at its store address through the Kit relay its User named, as it sends House its calls', async () => {
@@ -250,9 +259,10 @@ it('sends each part and reads each download at its store address through the Kit
 
   expect([sent.status, fetched.status]).toEqual([0, 0]);
   expect(await readFile(join(home, 'back.bin'))).toEqual(content);
-  expect(uploads.calls.finished).toHaveLength(1);
+  expect(uploads.calls.finished).toHaveLength(2);
   const [houseHost, storeHost] = [new URL(house.origin).host, new URL(store.origin).host];
   expect(forwarded).toEqual([
+    `POST ${houseHost}`,
     `POST ${houseHost}`,
     `PUT ${storeHost}`,
     `PUT ${storeHost}`,

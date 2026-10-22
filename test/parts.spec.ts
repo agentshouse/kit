@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -163,7 +164,9 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
     ['PUT', 2, 32, 200],
     ['PUT', 3, 5, 200],
   ]);
-  expect(hosted.finishes.map((finish) => finish.body)).toEqual([{ upload: expect.any(String) }]);
+  const image = Buffer.from(/"type":"image","data":"([^"]+)"/.exec(JSON.stringify(recorded('codex-tools')))![1]!, 'base64');
+  const partSha256 = [image.subarray(0, 32), image.subarray(32, 64), image.subarray(64)].map((part) => createHash('sha256').update(part).digest('hex'));
+  expect(hosted.finishes.map((finish) => finish.body)).toEqual(Array(2).fill({ upload: expect.any(String), part_sha256: partSha256 }));
   expect(turns[0]!.context).toEqual({ used: 42323, window: 258400 });
 });
 
@@ -327,7 +330,7 @@ it("keeps a Claude Code image block and drops its notice and another session's t
     ],
     context: { used: 1200, window: 200000 },
   });
-  expect(hosted.finishes).toHaveLength(1);
+  expect(hosted.finishes).toHaveLength(2);
 });
 
 it("marks an image House did not save with House's refusal in place of its image part", async () => {
@@ -358,9 +361,9 @@ it('streams the text after an image and declares the next image while the first 
     return { body: answer };
   });
   hosted.house.route('POST', '/kit/uploads/finish', async (request) => {
-    const { upload } = request.body as { upload: string };
+    const { upload, part_sha256 } = request.body as { upload: string; part_sha256: unknown };
     if (declared.get(upload) === 'version-1') await until(() => hosted.images[1] && streamed(hosted, 'text'));
-    return { body: await hosted.store.finish(upload) };
+    return { body: await hosted.store.finish(upload, part_sha256) };
   });
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
@@ -382,7 +385,8 @@ it('keeps writing the text an image was saved in the middle of, and saves the im
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   hosted.house.route('POST', '/kit/uploads/finish', async (request) => {
     await until(() => streamed(hosted, 'text'));
-    return { body: await hosted.store.finish((request.body as { upload: string }).upload) };
+    const { upload, part_sha256 } = request.body as { upload: string; part_sha256: unknown };
+    return { body: await hosted.store.finish(upload, part_sha256) };
   });
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());

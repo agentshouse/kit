@@ -6,7 +6,7 @@ import { expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { until, type Received } from './double.ts';
 import { conversationCredential, hostKit, lastCall, opened, type Hosted, type McpCall } from './environment.ts';
-import { MISMATCH, uploadTool } from './store.ts';
+import { uploadTool } from './store.ts';
 import { commitAll, git, house, serveRooms, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
@@ -83,13 +83,16 @@ it("uploads a local file in the parts House answers, finishes it with its room_r
   expect(occupied).toMatchObject({ status: 1, stdout: '', stderr: `house: ${refusal}\n` });
   expect(based).toMatchObject({ status: 0, stdout: 'path: cover.jpg\nrevision: fr_2\n' });
   const declared = { room_ref: 'r_notes', bytes: JPEG.length, sha256: digest(JPEG), media_type: 'image/jpeg' };
-  const finishing = { upload: expect.any(String), room_ref: 'r_notes' };
+  const partSha256 = [JPEG.subarray(0, 5), JPEG.subarray(5, 10), JPEG.subarray(10)].map(digest);
+  const finishing = { upload: expect.any(String), room_ref: 'r_notes', part_sha256: partSha256 };
   expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual(
     [
       { ...declared, path: 'photo.jpg' },
       finishing,
+      finishing,
       { ...declared, path: 'cover.jpg' },
       { ...declared, path: 'cover.jpg', base: 'fr_9' },
+      finishing,
       finishing,
     ].map((args) => [`Bearer ${conversationCredential('conversation-1')}`, 'upload', args]),
   );
@@ -115,20 +118,25 @@ it('resumes a transfer cut after some parts by sending only the parts the store 
     ['PUT', 3, 7, 200],
     ['PUT', 4, 4, 200],
   ]);
-  expect(uploads.calls.finished).toHaveLength(2);
+  expect(uploads.calls.finished).toHaveLength(3);
 });
 
-it("refuses an upload whose stored bytes House finds differ from the declared SHA-256 in House's words, and writes no revision", async () => {
+it('refuses an upload whose file changed after House took its declaration, finishing nothing and sending the store no byte', async () => {
   const hosted = await hostKit();
-  await writeFile(join(hosted.workingDirectory, 'photo.jpg'), JPEG);
+  const file = join(hosted.workingDirectory, 'photo.jpg');
+  await writeFile(file, JPEG);
   const uploads = uploadTool(hosted.store, 64);
-  hosted.tools.upload = (args) => uploads.answer(args.upload === undefined ? { ...args, sha256: digest(REDRAWN) } : args);
+  hosted.tools.upload = async (args) => {
+    if (args.upload === undefined) await writeFile(file, REDRAWN);
+    return uploads.answer(args);
+  };
   await opened(hosted);
 
   const refused = await ran(hosted, '@house upload {"file":"photo.jpg","room_ref":"r_notes","path":"photo.jpg"}');
 
-  expect(refused).toMatchObject({ status: 1, stdout: '', stderr: `house: ${MISMATCH}\n` });
-  expect(storeCalls(hosted)).toEqual([['PUT', 1, JPEG.length, 200]]);
+  expect(refused).toMatchObject({ status: 1, stdout: '', stderr: 'house: photo.jpg changed while it was uploaded; upload it again\n' });
+  expect(uploads.calls.finished).toEqual([]);
+  expect(storeCalls(hosted)).toEqual([]);
 });
 
 it('downloads the head or a named revision of a binary Path to the file the caller names, checking its SHA-256, and changes no Local copy', async () => {

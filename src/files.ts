@@ -12,15 +12,18 @@ import { relayed } from './relay.ts';
 export interface UploadParts {
   id: string;
   part_bytes: number;
-  parts: { part: number; url: string }[];
+  parts?: { part: number; url: string }[];
 }
 
-export type Finished<T> = { upload: UploadParts } | { checking: true } | T;
+export type Finished<T> = { upload: UploadParts } | T;
 
 export interface Uploading<T> {
+  name: string;
   bytes: number;
-  send(url: string, start: number, end: number): Promise<void>;
-  finish(upload: string): Promise<Finished<T>>;
+  sha256: string;
+  read(start: number, end: number): Iterable<Uint8Array> | AsyncIterable<Uint8Array>;
+  send(url: string, start: number, end: number, headers: Record<string, string>): Promise<void>;
+  finish(upload: string, partSha256: string[]): Promise<Finished<T>>;
 }
 
 export interface Address {
@@ -38,6 +41,8 @@ export interface Answered {
 }
 
 const STALLED_ROUNDS = 8;
+
+const PART_CHECKSUM = 'x-amz-checksum-sha256';
 
 const LINK = /\]\((\/rooms\/[^/)\s]+\/[^)\s]+)\)/gu;
 
@@ -65,17 +70,39 @@ export function storeRefusal(act: 'upload' | 'download', status: number): Error 
   return new Error(`the ${act} answered ${status}; ${act} the file again`);
 }
 
+async function partDigests<T extends object>(uploading: Uploading<T>, partBytes: number): Promise<Buffer[]> {
+  const whole = createHash('sha256');
+  const digests: Buffer[] = [];
+  for (let start = 0; digests.length === 0 || start < uploading.bytes; start += partBytes) {
+    const end = Math.min(start + partBytes, uploading.bytes);
+    const digest = createHash('sha256');
+    for await (const chunk of uploading.read(start, end)) {
+      digest.update(chunk);
+      whole.update(chunk);
+    }
+    digests.push(digest.digest());
+  }
+  if (whole.digest('hex') !== uploading.sha256) throw new Error(`${uploading.name} changed while it was uploaded; upload it again`);
+  return digests;
+}
+
 export async function uploaded<T extends object>(declared: UploadParts, uploading: Uploading<T>): Promise<T> {
-  let upload = declared;
+  const partBytes = declared.part_bytes;
+  const digests = await partDigests(uploading, partBytes);
+  const partSha256 = digests.map((digest) => digest.toString('hex'));
+  let answer = await finishing(uploading, declared.id, partSha256);
   let idle = 0;
   let stalled = 0;
-  for (;;) {
+  while ('upload' in answer) {
+    const { id, parts } = answer.upload;
     let sent = 0;
     let failure: unknown = null;
-    for (const { part, url } of upload.parts) {
-      const start = (part - 1) * upload.part_bytes;
+    for (const { part, url } of parts ?? []) {
+      const start = (part - 1) * partBytes;
       try {
-        await uploading.send(url, start, Math.min(start + upload.part_bytes, uploading.bytes));
+        await uploading.send(url, start, Math.min(start + partBytes, uploading.bytes), {
+          [PART_CHECKSUM]: digests[part - 1]!.toString('base64'),
+        });
         sent++;
       } catch (error) {
         failure = error;
@@ -87,24 +114,18 @@ export async function uploaded<T extends object>(declared: UploadParts, uploadin
       stalled = 0;
     } else {
       if (failure !== null && ++stalled >= STALLED_ROUNDS) throw failure;
-      // A round that sent no part, its store unreachable or not yet started, is followed by the next finishing call on the jittered curve.
+      // A round that sent no part, its store unreachable, is followed by the next finishing call on the jittered curve.
       await paused(retryDelay(idle++));
     }
-    let answer = await finishing(uploading, upload.id);
-    while ('checking' in answer) {
-      // A finishing call that finds House still checking the stored bytes is sent again after five seconds, the cadence at which House takes up a check it handed over.
-      await paused(5_000);
-      answer = await finishing(uploading, upload.id);
-    }
-    if (!('upload' in answer)) return answer;
-    upload = answer.upload;
+    answer = await finishing(uploading, id, partSha256);
   }
+  return answer;
 }
 
-async function finishing<T extends object>(uploading: Uploading<T>, upload: string): Promise<Finished<T>> {
+async function finishing<T extends object>(uploading: Uploading<T>, upload: string, partSha256: string[]): Promise<Finished<T>> {
   for (let unsettled = 1; ; unsettled++) {
     try {
-      return await uploading.finish(upload);
+      return await uploading.finish(upload, partSha256);
     } catch (error) {
       if (!(error instanceof Unsettled) || unsettled === STALLED_ROUNDS) throw error;
     }

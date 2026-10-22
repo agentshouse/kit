@@ -162,7 +162,7 @@ it("uploads the local file named by file to its path in the Room, filling its si
     stderr: '',
   });
   const [declared] = hosted.mcp;
-  expect(hosted.mcp).toHaveLength(2);
+  expect(hosted.mcp).toHaveLength(3);
   expect(declared!.headers.authorization).toBe(`Bearer ${conversationCredential('conversation-1')}`);
   expect(called(declared!).params.name).toBe('upload');
   expect(called(declared!).params.arguments).toEqual({
