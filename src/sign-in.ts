@@ -2,8 +2,9 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { Agents } from './agents.ts';
 import type { House } from './api.ts';
-import { CLIS, withoutProxy } from './clis.ts';
+import { CLIS } from './clis.ts';
 import type { Call, Calls, Carried } from './calls.ts';
+import { childEnvironment } from './relay.ts';
 import { killTree } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
 
@@ -65,7 +66,7 @@ export class SignIns {
     const child = spawn(cli, login.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
-      env: withoutProxy(),
+      env: childEnvironment(),
     });
     const running = () => child.exitCode === null && child.signalCode === null;
     const stop = () => killTree(child);

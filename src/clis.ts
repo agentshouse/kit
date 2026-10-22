@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants, readFileSync } from 'node:fs';
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { downloadServed, servedDigest } from './building.ts';
 import { kitHome } from './home.ts';
+import { childEnvironment } from './relay.ts';
 
 export interface Cli {
   bin: string;
@@ -172,7 +174,6 @@ const KIT_PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.me
 
 export const KIT_RELEASE = KIT_PACKAGE.version;
 
-const PROXY = /^https?_proxy$/i;
 const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/;
 // An install still running after fifteen minutes is ended and reported as failed, so a hung download cannot hold its CLI's report.
 const INSTALL_MS = 15 * 60_000;
@@ -203,10 +204,6 @@ export interface Ran {
   output: string;
 }
 
-export function withoutProxy(): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !PROXY.test(name)));
-}
-
 export function run(
   command: string,
   args: string[],
@@ -218,7 +215,7 @@ export function run(
     const child = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: timeoutMs,
-      env: withoutProxy(),
+      env: childEnvironment(),
       detached,
       signal: detached ? undefined : signal,
     });
@@ -251,19 +248,29 @@ export function failureOf(ran: Ran, program: string): string {
   return ran.output.trim().slice(-CAUSE_CHARACTERS) || `${program} exited with ${ran.status ?? 'a signal'}`;
 }
 
+export function adapterArchive(kind: string): string {
+  return `${kind}-${KIT_PACKAGE.peerDependencies[CLIS[kind]!.adapter!.package]!}.tar.gz`;
+}
+
 export async function installAdapter(kind: string, signal?: AbortSignal): Promise<string | null> {
   const adapter = CLIS[kind]!.adapter;
   if (adapter === null) return null;
-  const release = KIT_PACKAGE.peerDependencies[adapter.package]!;
-  if ((await installedAdapter(kind)) === release) return null;
-  const ran = await run(
-    'npm',
-    ['install', '--prefix', prefix(kind), '--cache', join(kitHome(), 'npm-cache'), '--no-save', '--no-audit', '--no-fund', '--omit=optional', `${adapter.package}@${release}`],
-    INSTALL_MS,
-    true,
-    signal,
-  );
-  return ran.status === 0 ? null : failureOf(ran, 'npm');
+  if ((await installedAdapter(kind)) === KIT_PACKAGE.peerDependencies[adapter.package]) return null;
+  const name = adapterArchive(kind);
+  const archive = `${prefix(kind)}.tar.gz`;
+  try {
+    const sha256 = await servedDigest(name, signal);
+    if (sha256 === null) return `House serves no ${name}`;
+    await rm(prefix(kind), { recursive: true, force: true });
+    await mkdir(prefix(kind), { recursive: true });
+    await downloadServed(name, sha256, archive, signal);
+    const ran = await run('tar', ['-xzf', archive, '-C', prefix(kind)], INSTALL_MS, true, signal);
+    return ran.status === 0 ? null : failureOf(ran, 'tar');
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  } finally {
+    await rm(archive, { force: true });
+  }
 }
 
 export async function installCli(kind: string, signal?: AbortSignal): Promise<string | null> {

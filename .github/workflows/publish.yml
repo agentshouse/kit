@@ -52,7 +52,6 @@ jobs:
         run: |
           set -euo pipefail
           npm version --no-git-tag-version "${{ steps.version.outputs.version }}"
-          node scripts/bootstrap-manifest.mjs
           mkdir -p tmp
           npm pack --pack-destination tmp
           mv tmp/agentshouse-kit-*.tgz tmp/kit.tgz
@@ -89,10 +88,11 @@ jobs:
               exit 1
             fi
           done
-          mkdir -p tmp/release
-          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_RELEASE__/$VERSION/" bin/connect-linux.sh > tmp/release/connect-linux.sh
+          npm run release-files -- tmp/kit.tgz tmp/release
+          kit=$(sha256sum "tmp/release/kit-$VERSION.tar.gz" | cut -d ' ' -f 1)
+          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_RELEASE__/$VERSION/" -e "s/__KIT_SHA256__/$kit/" bin/connect-linux.sh > tmp/release/connect-linux.sh
           sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" bin/connect-windows.ps1 > tmp/release/connect-windows.ps1
-          cp dist/bootstrap.json tmp/release/bootstrap.json
+          npm run bootstrap-manifest -- tmp/release "$digest"
           gh release create "v$VERSION" tmp/release/* --target "$GITHUB_SHA" --title "Kit v$VERSION" --notes "Image: ghcr.io/agentshouse/kit@$digest"
           gh release download "v$VERSION" --dir tmp/release-readback
           diff -r tmp/release tmp/release-readback

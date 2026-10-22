@@ -7,7 +7,8 @@ import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
 import { certificate, startHouse, until, type House, type KitConnection, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
-import { placeAdapter } from './npm.ts';
+import { placeAdapter } from './adapters.ts';
+import { KIT_FILE_HOLD, serveKitFiles } from './building.ts';
 import { MISMATCH, startStore, type Store } from './store.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -232,6 +233,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     const result = message.method === 'tools/list' ? { tools: LISTING } : await answer(message.params.arguments ?? {}, request);
     return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });
+  serveKitFiles(house, home);
   house.route('POST', '/kit/conversations/:conversation/credential', (request) => ({
     body: { credential: conversationCredential(request.params.conversation!) },
   }));
@@ -389,7 +391,7 @@ export function lastMessage(): string {
 }
 
 export async function installHeld(hosted: Hosted): Promise<string> {
-  const hold = join(hosted.home, 'npm-hold');
+  const hold = join(hosted.home, KIT_FILE_HOLD);
   await writeFile(hold, '');
   onTestFinished(() => rm(hold, { force: true }));
   const added = {
@@ -404,11 +406,7 @@ export async function installHeld(hosted: Hosted): Promise<string> {
     body: { agents: ['codex-acp', 'claude-agent-acp'], routes: [added] },
   }));
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
-  await until(async () =>
-    (await readFile(join(hosted.home, 'npm.log'), 'utf8').catch(() => '')).includes(
-      CLIS['claude-agent-acp']!.adapter!.package,
-    ),
-  );
+  await until(() => hosted.house.requests.some((request) => request.path === '/kit-installer/bootstrap.json'));
   return hold;
 }
 

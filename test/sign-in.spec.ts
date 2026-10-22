@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
+import { KIT_FILE_HOLD } from './building.ts';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { settle, until } from './double.ts';
 import { CLIS } from '../src/clis.ts';
@@ -309,7 +310,7 @@ it('keeps reporting a CLI installing when a sign-in queued behind its install ru
 
 it('ends the install a sign-in started when the time House gave the sign-in runs out, and returns its result', async () => {
   const hosted = await hostKit([{ kind: 'codex-acp' }]);
-  const hold = join(hosted.home, 'npm-hold');
+  const hold = join(hosted.home, KIT_FILE_HOLD);
   await writeFile(hold, '');
   onTestFinished(() => rm(hold, { force: true }));
 
@@ -317,8 +318,6 @@ it('ends the install a sign-in started when the time House gave the sign-in runs
 
   expect(await hosted.result(lastCall())).toEqual({});
   await until(() => hosted.kit.stderr().includes('the claude-agent-acp sign-in reached the end House set for it'));
-  const child = Number(await readFile(join(hosted.home, 'npm-child'), 'utf8'));
-  await until(() => !alive(child));
   await rm(hold);
   await settle();
   const adapter = CLIS['claude-agent-acp']!.adapter!.package;

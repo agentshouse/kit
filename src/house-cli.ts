@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { request, setGlobalProxyFromEnv, type IncomingMessage } from 'node:http';
+import { request, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { extname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
@@ -11,7 +11,7 @@ import { HOUSE_REF } from './git.ts';
 import { ownerSocket, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, Unsettled, type Message } from './mcp.ts';
 import { refusalOf, retryable } from './refusals.ts';
-import { relayed, selectRelay } from './relay.ts';
+import { proxyUnlessRelayed, relayed, selectRelay } from './relay.ts';
 import { parse } from 'yaml';
 
 interface Tool {
@@ -105,7 +105,6 @@ async function direct(message: Message): Promise<string> {
   const ownAgent = await readOwnAgent();
   if (ownAgent === null) throw new Error(UNCONNECTED);
   selectRelay(process.env.HOUSE_KIT_RELAY || ownAgent.relay);
-  setGlobalProxyFromEnv();
   const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
     throw new Unsettled(UNREACHABLE);
   });
@@ -141,7 +140,7 @@ function opened(url: string, method: string, headers: Record<string, string>, bo
   return new Promise((answered, failed) => {
     const local = socketPath !== undefined;
     const target = local ? null : relayed(url);
-    if (!local) setGlobalProxyFromEnv();
+    if (!local) proxyUnlessRelayed();
     const sent =
       target === null
         ? request({ socketPath, path: url, method, headers }, answered)

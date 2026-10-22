@@ -1,7 +1,8 @@
 import type { IPty } from '@lydell/node-pty';
 import type { Call, Calls, Result } from './calls.ts';
-import { loginPath, onLoginPath, withoutProxy } from './clis.ts';
+import { loginPath, onLoginPath } from './clis.ts';
 import type { Notification } from './connection.ts';
+import { childEnvironment } from './relay.ts';
 import { killTree } from './scope.ts';
 
 export type WizardCall = Call<'run_wizard'>;
@@ -82,7 +83,7 @@ export class WebWizards {
         name: TERMINAL,
         ...run.size!,
         cwd: process.cwd(),
-        env: { ...withoutProxy(), PATH: path },
+        env: { ...childEnvironment(), PATH: path },
       });
     } catch (error) {
       return failed(causeOf(error));

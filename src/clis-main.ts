@@ -1,9 +1,9 @@
-import { setGlobalProxyFromEnv } from 'node:http';
 import { post } from './api.ts';
 import { CLIS, below, locate, versionOf } from './clis.ts';
 import { readEnrolment } from './home.ts';
+import { proxyUnlessRelayed } from './relay.ts';
 
-setGlobalProxyFromEnv();
+proxyUnlessRelayed();
 try {
   const { house, credential } = (await readEnrolment())!;
   const { agents } = await post<{ agents: string[] }>(house, '/kit/agents/desired', {}, credential);

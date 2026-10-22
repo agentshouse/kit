@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it } from 'vitest';
 import { RELEASES, placeUserCli } from './cli.ts';
+import { KIT_FILE_CORRUPT, KIT_FILE_MISSING, kitFileRequests, serveKitFiles } from './building.ts';
 import { startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL, macOS, placeUserClis, userBin } from './environment.ts';
 import { HOST_KEY, fakeBin, placeHostKey, readOnlyHome, runKit, temporaryHome, type KitRun } from './kit.ts';
@@ -32,6 +33,7 @@ beforeEach(async () => {
     JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }),
   );
   reports.length = 0;
+  serveKitFiles(house, home);
   house.route('POST', '/kit/agents/desired', () => ({ body: { agents: desired, routes: [] } }));
   house.route('POST', '/kit/agents/report', ({ body }) => {
     reports.push(body as Record<string, unknown>);
@@ -61,8 +63,8 @@ async function logged(name: string): Promise<string[]> {
   return log.split('\n').filter((line) => line !== '');
 }
 
-async function adapterInstalls(): Promise<string[]> {
-  return (await logged('npm.log')).map((line) => (JSON.parse(line) as string[]).at(-1)!);
+function adapterInstalls(): string[] {
+  return kitFileRequests(house);
 }
 
 async function start(prepare?: () => Promise<void>, node: string[] = [], environment: Record<string, string> = {}) {
@@ -122,7 +124,7 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
   await start();
 
   await until(() => completeReports()[0]);
-  expect(await adapterInstalls()).toEqual([`@agentclientprotocol/codex-acp@${PINNED['@agentclientprotocol/codex-acp']}`]);
+  expect(adapterInstalls()).toEqual([`codex-acp-${PINNED['@agentclientprotocol/codex-acp']}.tar.gz`]);
 
   reports.length = 0;
   desired = ['codex-acp', 'claude-agent-acp'];
@@ -130,22 +132,22 @@ it('installs the pinned adapter of each named CLI that has one, and of one a lat
   connection.send({ type: 'work_available', subject: 'agents' });
 
   await until(() => completeReports()[0]);
-  expect((await adapterInstalls()).slice(1)).toEqual([
-    `@agentclientprotocol/claude-agent-acp@${PINNED['@agentclientprotocol/claude-agent-acp']}`,
-  ]);
+  expect(adapterInstalls().slice(1)).toEqual([`claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`]);
   expect(await logged('curl.log')).toEqual([]);
 });
 
-it("installs a pinned adapter from a read-only home, keeping npm's cache in Kit home", async () => {
+it('installs a pinned adapter into Kit home from a read-only home', async () => {
   desired = ['codex-acp'];
   const readOnly = await temporaryHome();
   await writeFile(join(readOnly, '.profile'), `PATH="${userBin(home)}:$PATH"\n`);
   await readOnlyHome(readOnly);
-  await start(undefined, [], { HOME: readOnly, npm_config_cache: '' });
+  await start(undefined, [], { HOME: readOnly });
 
   expect(await until(() => completeReports()[0])).toMatchObject({ agents: [{ kind: 'codex-acp', failure: null }] });
-  expect(await adapterInstalls()).toEqual([`@agentclientprotocol/codex-acp@${PINNED['@agentclientprotocol/codex-acp']}`]);
-  expect((await stat(join(home, 'npm-cache'))).isDirectory()).toBe(true);
+  expect(adapterInstalls()).toEqual([`codex-acp-${PINNED['@agentclientprotocol/codex-acp']}.tar.gz`]);
+  expect(JSON.parse(await readFile(join(home, 'agents', 'codex-acp', 'node_modules', '@agentclientprotocol', 'codex-acp', 'package.json'), 'utf8'))).toMatchObject({
+    version: PINNED['@agentclientprotocol/codex-acp'],
+  });
 });
 
 it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit release, its wire, whether it updates itself and its transcription engine', async () => {
@@ -295,9 +297,10 @@ it("keeps the end of a long installer output as the cause, so it stays within wh
   expect(grok!.failure.endsWith('Downloading Grok Build\nChecksum verification failed')).toBe(true);
 });
 
-it("reports a CLI whose adapter failed to install with no release and npm's cause", async () => {
+it('reports a CLI whose adapter archive its House does not serve with no release and that cause', async () => {
+  const archive = `claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`;
   desired = ['claude-agent-acp'];
-  await start(() => writeFile(join(home, 'npm-fail'), '@agentclientprotocol/claude-agent-acp'));
+  await start(() => writeFile(join(home, KIT_FILE_MISSING), archive));
 
   const report = await until(() => completeReports()[0]);
 
@@ -305,25 +308,27 @@ it("reports a CLI whose adapter failed to install with no release and npm's caus
     {
       kind: 'claude-agent-acp',
       release: null,
-      failure: 'npm error 404 Not Found - @agentclientprotocol/claude-agent-acp',
+      failure: `House serves no ${archive}`,
       signed_in: false,
       models: [],
       modes: [],
       full_access: 'bypassPermissions',
     },
   ]);
-  expect(kit!.stderr()).toContain('claude-agent-acp did not install: npm error 404 Not Found - @agentclientprotocol/claude-agent-acp');
+  expect(kit!.stderr()).toContain(`claude-agent-acp did not install: House serves no ${archive}`);
 });
 
-it("names npm's exit status as the cause of an adapter install that failed without output", async () => {
+it('reports a CLI whose adapter archive does not match the sha256 its House names, installing nothing of it', async () => {
+  const archive = `claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`;
   desired = ['claude-agent-acp'];
-  await start(() => writeFile(join(home, 'npm-mute'), '@agentclientprotocol/claude-agent-acp'));
+  await start(() => writeFile(join(home, KIT_FILE_CORRUPT), archive));
 
   const report = await until(() => completeReports()[0]);
 
   expect(report.agents).toEqual([
-    { kind: 'claude-agent-acp', release: null, failure: 'npm exited with 1', signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
+    { kind: 'claude-agent-acp', release: null, failure: `${archive} does not match its sha256`, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
   ]);
+  await expect(stat(join(home, 'agents', 'claude-agent-acp', 'node_modules'))).rejects.toThrow();
 });
 
 it('reports a CLI below its minimum with the version found and the minimum, and reads no models from it', async () => {

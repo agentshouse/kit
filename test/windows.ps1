@@ -148,11 +148,33 @@ foreach ($fails in @($false, $true)) {
   if (($script:Ran -join '|') -cne 'run --rm --mount home --mount workspace image login --house https://agents.house') { $findings += "Invoke-Login ran: $($script:Ran -join '|')" }
   if (($script:Opened -join '|') -cne 'https://agents.house/kit/ahk_login_one') { $findings += "Invoke-Login opened: $($script:Opened -join '|')" }
 }
-foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Clear-KitHome', 'Connect-Kit')) {
+foreach ($name in @('Read-Certificates', 'Write-Certificates')) {
   $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
   . ([scriptblock]::Create($found.Extent.Text))
 }
-$Image = 'ghcr.io/agentshouse/kit@sha256:' + ('a' * 64)
+function Get-ChildItem([string] $LiteralPath) {
+  if ($LiteralPath -ceq 'Cert:\LocalMachine\Root') { [pscustomobject]@{ RawData = [byte[]](1..60) } }
+  if ($LiteralPath -ceq 'Cert:\CurrentUser\Root') { [pscustomobject]@{ RawData = [byte[]](7, 8, 9) } }
+}
+$expectedPem = "-----BEGIN CERTIFICATE-----`n$([Convert]::ToBase64String([byte[]](1..60), [Base64FormattingOptions]::InsertLineBreaks).Replace("`r`n", "`n"))`n-----END CERTIFICATE-----`n-----BEGIN CERTIFICATE-----`nBwgJ`n-----END CERTIFICATE-----"
+$Certificates = '/kit-home/certificates.pem'
+function docker {
+  $script:Ran += , ($args -join ' ')
+  $script:Piped = @($input) -join '|'
+  $global:LASTEXITCODE = 0
+}
+$script:Ran = @()
+Write-Certificates
+if (($script:Ran -join '|') -cne 'run -i --rm --network none --mount home --entrypoint sh image -c cat > /kit-home/certificates.pem') { $findings += "Write-Certificates ran: $($script:Ran -join '|')" }
+if ($script:Piped -cne $expectedPem) { $findings += "Write-Certificates wrote: $($script:Piped)" }
+Remove-Item Function:Get-ChildItem
+foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Get-KitImage', 'Connect-Kit')) {
+  $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+  . ([scriptblock]::Create($found.Extent.Text))
+}
+$ImageDigest = 'sha256:' + ('a' * 64)
+$Image = "agents.house/kit@$ImageDigest"
+function Write-Certificates { $script:Ran += , 'certificates' }
 $Name = 'house-kit'
 $KitHome = 'house-kit-home'
 $KitHomeMount = 'home'
@@ -165,7 +187,8 @@ function Get-CimInstance([string] $ClassName) {
 }
 function Initialize-DockerDesktop { [pscustomobject]@{ Platform = 'linux/x86_64'; System = 'Docker Desktop'; Kernel = '6.6.87.2-microsoft-standard-WSL2' } }
 function Protect-Directory([string] $Path) { $Path }
-function Read-Enrolment { $script:Enrolment }
+$script:SecondEnrolment = @{}
+function Read-Enrolment { if ($KitHome -ceq 'house-kit-home') { $script:Enrolment } else { $script:SecondEnrolment } }
 function Test-Container { $script:Installed }
 function Test-Path { $true }
 function Set-Configuration { $false }
@@ -191,7 +214,10 @@ function docker {
   $global:LASTEXITCODE = 0
   if ($args[0] -ceq 'rm') { $script:Installed = $false }
   if ($args -contains 'login') {
-    if ($args -contains '--code' -and $script:Enrolment.ContainsKey('environment')) {
+    $second = ($args -join ' ').Contains('house-kit-home-agents.house')
+    $held = $script:Enrolment
+    if ($second) { $held = $script:SecondEnrolment }
+    if ($args -contains '--code' -and $held.ContainsKey('environment')) {
       $global:LASTEXITCODE = 1
       return
     }
@@ -199,7 +225,7 @@ function docker {
       $global:LASTEXITCODE = $script:LoginStatus
       return
     }
-    $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+    if ($second) { $script:SecondEnrolment = @{ environment = 'environment-two'; house = 'https://agents.house' } } else { $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' } }
     $printed
   }
 }
@@ -277,12 +303,37 @@ foreach ($case in @(
 $script:LoginStatus = 0
 $script:Running = 'true'
 
+$script:Installed = $false
+$script:Enrolment = @{}
+$BootstrapArguments = @('--house', 'https://agents.house', '--code', 'ahk_code_one')
+$script:Ran = @()
+try { Connect-Kit } catch { $findings += "a first bootstrap refused with: $($_.Exception.Message)" }
+$residentRun = @($script:Ran | Where-Object { $_ -match '^run .* resident( |$)' })
+if ($residentRun.Count -ne 1 -or -not $residentRun[0].StartsWith('run -d --name house-kit --restart on-failure --env NODE_EXTRA_CA_CERTS=/kit-home/certificates.pem --mount home ') -or -not $residentRun[0].EndsWith(" agents.house/kit@$ImageDigest resident")) {
+  $findings += "the first bootstrap ran resident as: $($residentRun -join '|')"
+}
+if (@($script:Ran | Where-Object { $_ -ceq 'certificates' }).Count -ne 1) { $findings += "the first bootstrap wrote the certificate authorities: $($script:Ran -join '|')" }
+$script:Installed = $false
+$script:Enrolment = @{ environment = 'environment-one'; house = 'https://dev.agents.house' }
+$script:SecondEnrolment = @{}
+$BootstrapArguments = @('--house', 'https://agents.house', '--code', 'ahk_code_one')
+$script:Ran = @()
+try { Connect-Kit } catch { $findings += "a second Building's bootstrap refused with: $($_.Exception.Message)" }
+$residentRun = @($script:Ran | Where-Object { $_ -match '^run .* resident( |$)' })
+if ($residentRun.Count -ne 1 -or -not $residentRun[0].StartsWith('run -d --name house-kit-agents.house --restart on-failure --env NODE_EXTRA_CA_CERTS=/kit-home/certificates.pem --mount type=volume,src=house-kit-home-agents.house,dst=/kit-home --mount type=bind,src=/tmp/AgentsHouse-agents.house,dst=/agents/house ')) {
+  $findings += "the second Building's bootstrap ran resident as: $($residentRun -join '|')"
+}
+if (@($script:Ran | Where-Object { $_ -match '^(rm|volume rm) ' }).Count -ne 0 -or $script:Enrolment['house'] -cne 'https://dev.agents.house' -or $script:SecondEnrolment['environment'] -cne 'environment-two') {
+  $findings += "the second Building's bootstrap touched the first Building's Kit: $($script:Ran -join '|')"
+}
+
 $env:HOUSE_KIT_RELAY = 'https://kit-relay.example'
 $script:Installed = $false
 $script:Enrolment = @{}
 $BootstrapArguments = @('--code', 'ahk_code_one')
 $script:Ran = @()
 try { Connect-Kit } catch { $findings += "a relayed bootstrap refused with: $($_.Exception.Message)" }
+if (@($script:Ran | Where-Object { $_.EndsWith(" kit-relay.example/agents.house/kit@$ImageDigest resident") }).Count -ne 1) { $findings += "the relayed bootstrap took its image from: $($script:Ran -join '|')" }
 $loginRun = @($script:Ran | Where-Object { $_ -match '^run .* login( |$)' })
 $residentRun = @($script:Ran | Where-Object { $_ -match '^run .* resident( |$)' })
 if ($loginRun.Count -ne 1 -or -not $loginRun[0].Contains('--env HOUSE_KIT_RELAY=https://kit-relay.example')) {

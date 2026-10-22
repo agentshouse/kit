@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export NODE_USE_SYSTEM_CA=1
 
-IMAGE='ghcr.io/agentshouse/kit@sha256:__IMAGE_DIGEST__'
+IMAGE_DIGEST='sha256:__IMAGE_DIGEST__'
 VERSION='__KIT_RELEASE__'
+KIT_SHA256='__KIT_SHA256__'
 NAME='house-kit'
 HOUSE='https://agents.house'
 WORKSPACE="$HOME/AgentsHouse"
@@ -57,7 +59,8 @@ DESKTOP_BIN="$HOME/.local/bin"
 NATIVE_PREFIX="$SERVER_PREFIX"
 NATIVE_PACKAGE="$SERVER_PREFIX/lib/node_modules/@agentshouse/kit/dist"
 IMAGE_PACKAGE=/usr/local/lib/node_modules/@agentshouse/kit/dist
-DIRECT=(env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy)
+DIRECT=(env)
+[[ -z "${HOUSE_KIT_RELAY:-}" ]] || DIRECT=(env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy)
 PLACING=(elevated)
 PLACING_OWNER=root:root
 PLACING_NOTE='; sudo may ask for your password'
@@ -71,11 +74,52 @@ USER_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE.service"
 REDEFINED=0
 REPLACES=''
 OTHER_HOME=0
+SECOND=0
+OTHER_HOUSE=''
+CERTIFICATES=/kit-home/certificates.pem
 RELEASE="@agentshouse/kit@$VERSION node@$NODE_VERSION"
 
 refuse() {
   printf 'kit_bootstrap_refused: %s\n' "$1" >&2
   exit 1
+}
+
+host_of() {
+  local host=${1#*://}
+  printf '%s' "${host%%/*}"
+}
+
+served_from() {
+  if [[ -n "${HOUSE_KIT_RELAY:-}" ]]; then
+    printf '%s/%s' "$HOUSE_KIT_RELAY" "$(host_of "$HOUSE")"
+  else
+    printf '%s' "$HOUSE"
+  fi
+}
+
+registry() {
+  if [[ -n "${HOUSE_KIT_RELAY:-}" ]]; then
+    printf '%s/%s' "$(host_of "$HOUSE_KIT_RELAY")" "$(host_of "$HOUSE")"
+  else
+    host_of "$HOUSE"
+  fi
+}
+
+download() {
+  local most=${5:-} seconds
+  if [[ -z "$most" ]]; then
+    "${DIRECT[@]}" curl -fsSL -o "$4" "$(served_from)/kit-installer/$2" || refuse "$1 could not be downloaded from $HOUSE"
+  else
+    seconds=$(((most + 99999) / 100000))
+    # A download with a pinned size arrives at a hundred kilobytes a second or ends, so a stalled Building cannot hold the install open.
+    (trap '' XFSZ && ulimit -f $(((most + 1023) / 1024)) && exec "${DIRECT[@]}" curl -fsSL --max-time "$seconds" -o "$4" "$(served_from)/kit-installer/$2") || {
+      local failed=$?
+      (($(wc -c 2>/dev/null < "$4" || echo 0) < most)) || refuse "the $1 download is larger than its pinned $most bytes"
+      ((failed != 28)) || refuse "the $1 download did not arrive within $seconds seconds"
+      refuse "$1 could not be downloaded from $HOUSE"
+    }
+  fi
+  printf '%s  %s\n' "$3" "$4" | "${CHECKSUM[@]}" --check >/dev/null 2>&1 || refuse "the $1 download does not match its pinned checksum"
 }
 
 bind_mount() {
@@ -311,20 +355,12 @@ stage_native_kit() {
   umask 022
   NATIVE_STAGE=$(mktemp -d) || refuse 'no temporary directory for the Kit package'
   trap 'rm -rf "$NATIVE_STAGE"' EXIT
-  printf 'Downloading Node.js %s from nodejs.org and Kit %s from npm.\n' "$NODE_VERSION" "$VERSION"
-  local seconds=$(((NODE_BYTES + 99999) / 100000))
-  # The Node.js archive arrives at a hundred kilobytes a second or its download ends, so a stalled nodejs.org cannot hold the install open.
-  (trap '' XFSZ && ulimit -f $(((NODE_BYTES + 1023) / 1024)) && exec "${DIRECT[@]}" curl -fsSL --max-time "$seconds" -o "$NATIVE_STAGE/node.tar.gz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz") || {
-    local failed=$?
-    (($(wc -c 2>/dev/null < "$NATIVE_STAGE/node.tar.gz" || echo 0) < NODE_BYTES)) || refuse "the Node.js download is larger than its pinned $NODE_BYTES bytes"
-    ((failed != 28)) || refuse "the Node.js download did not arrive within $seconds seconds"
-    refuse 'Node.js could not be downloaded'
-  }
-  printf '%s  %s\n' "$NODE_SHA256" "$NATIVE_STAGE/node.tar.gz" | "${CHECKSUM[@]}" --check >/dev/null 2>&1 || refuse 'the Node.js download does not match its pinned checksum'
+  printf 'Downloading Node.js %s and Kit %s from %s.\n' "$NODE_VERSION" "$VERSION" "$HOUSE"
+  download Node.js "node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz" "$NODE_SHA256" "$NATIVE_STAGE/node.tar.gz" "$NODE_BYTES"
+  download Kit "kit-$VERSION.tar.gz" "$KIT_SHA256" "$NATIVE_STAGE/kit.tar.gz"
   mkdir "$NATIVE_STAGE/kit"
   tar -xzf "$NATIVE_STAGE/node.tar.gz" -C "$NATIVE_STAGE/kit" --strip-components=1 --no-same-owner || refuse 'Node.js could not be unpacked'
-  "${DIRECT[@]}" PATH="$NATIVE_STAGE/kit/bin:$PATH" npm install --global --prefix "$NATIVE_STAGE/kit" --cache "$NATIVE_STAGE/cache" \
-    --ignore-scripts --no-audit --no-fund --no-update-notifier --loglevel=error "@agentshouse/kit@$VERSION" >/dev/null || refuse "Kit $VERSION could not be installed from npm"
+  tar -xzf "$NATIVE_STAGE/kit.tar.gz" -C "$NATIVE_STAGE/kit" --no-same-owner || refuse "Kit $VERSION could not be unpacked"
   printf '%s\n' "$RELEASE" > "$NATIVE_STAGE/kit/release"
   chmod 0755 "$NATIVE_STAGE/kit"
 }
@@ -344,7 +380,7 @@ place_native_kit() {
   fi
   "${PLACING[@]}" rm -rf "$NATIVE_PREFIX.old"
   for command in kit house; do
-    printf '#!/bin/sh\nPATH="%s/bin:$PATH" exec "%s/bin/%s" "$@"\n' "$NATIVE_PREFIX" "$NATIVE_PREFIX" "$command" |
+    printf '#!/bin/sh\nexport NODE_USE_SYSTEM_CA=1\nPATH="%s/bin:$PATH" exec "%s/bin/%s" "$@"\n' "$NATIVE_PREFIX" "$NATIVE_PREFIX" "$command" |
       "${PLACING[@]}" tee "$NATIVE_BIN/$command" >/dev/null && "${PLACING[@]}" chmod 0755 "$NATIVE_BIN/$command" ||
       refuse "$NATIVE_BIN/$command could not be written"
   done
@@ -542,7 +578,7 @@ installed_homes() {
     unit_variable HOUSE_KIT_HOME "$NATIVE_UNIT"
     return 0
   fi
-  installed_variable HOUSE_KIT_HOME
+  ((SECOND)) || installed_variable HOUSE_KIT_HOME
   if containerized; then
     docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Source}}{{end}}{{end}}' "$NAME" || true
   fi
@@ -698,7 +734,6 @@ connect_desktop() {
   PLACING=(env)
   PLACING_OWNER="$(id -u):$(id -g)"
   PLACING_NOTE=''
-  DIRECT=(env)
   RECONNECT="run $NATIVE_BIN/kit login"
   take_placement native
   keep_other_home
@@ -812,7 +847,36 @@ container_cli_update() {
 start_resident() {
   local network=()
   [[ "$HOUSE" == https://* ]] || network=(--network host)
-  docker run -d --name "$NAME" --restart on-failure ${network[@]+"${network[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" --label "agentshouse.house=$HOUSE" "$IMAGE" resident >/dev/null
+  docker run -d --name "$NAME" --restart on-failure ${network[@]+"${network[@]}"} --env "NODE_EXTRA_CA_CERTS=$CERTIFICATES" --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" --label "agentshouse.house=$HOUSE" "$IMAGE" resident >/dev/null
+}
+
+write_certificates() {
+  local bundle
+  if ((MACOS)); then
+    security find-certificate -a -p /Library/Keychains/System.keychain > "$KIT_HOME/certificates.pem" 2>/dev/null || : > "$KIT_HOME/certificates.pem"
+    return 0
+  fi
+  for bundle in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
+    if [[ -f "$bundle" ]]; then
+      cp "$bundle" "$KIT_HOME/certificates.pem" || refuse "$KIT_HOME/certificates.pem could not be written"
+      return 0
+    fi
+  done
+  : > "$KIT_HOME/certificates.pem" || refuse "$KIT_HOME/certificates.pem could not be written"
+}
+
+second_building() {
+  local key
+  [[ -z "${HOUSE_KIT_HOME:-}" ]] && ((HOUSE_SELECTED)) && [[ -f "$KIT_HOME/credential.json" ]] || return 0
+  OTHER_HOUSE=$(enrolled house) || return 0
+  [[ -n "$OTHER_HOUSE" && "$OTHER_HOUSE" != "$HOUSE" ]] || return 0
+  ((CONTAINER)) || refuse "Kit on this computer serves $OTHER_HOUSE, and a computer runs one native Kit; install Kit for $HOUSE in a container: add --container"
+  key=$(host_of "$HOUSE")
+  key=${key//:/-}
+  SECOND=1
+  NAME="house-kit-$key"
+  KIT_HOME="$HOME/.house-kit-$key"
+  ((WORKSPACE_SELECTED)) || WORKSPACE="$HOME/AgentsHouse-$key"
 }
 
 update_kit() {
@@ -918,17 +982,18 @@ done
 ((ENROLL_SELECTED == 0 || NATIVE)) || refuse '--enroll enrolls a server; add --linux'
 ((FORWARDING == 0 || NATIVE == 0)) || refuse "--linux puts kit and house on this host's PATH; run $FORWARDED there directly"
 ((FORWARDING == 0 || CONTAINER)) || refuse "this bootstrap forwards $FORWARDED only into the container; add --container, or run $FORWARDED directly"
+second_building
 if ((NATIVE)); then
   ((WORKSPACE_SELECTED == 0)) || refuse "--linux keeps its workspace at $NATIVE_WORKSPACE; --workspace is for a computer"
-elif [[ -e "$SERVER_PREFIX" ]]; then
+elif ((SECOND == 0)) && [[ -e "$SERVER_PREFIX" ]]; then
   ((FORWARDING == 0)) || refuse "a Kit process runs natively on this host; run $FORWARDED there directly"
   refuse 'a Kit process runs natively on this host; rerun this bootstrap with --linux'
-elif ((CONTAINER && FORWARDING)) && [[ -e "$DESKTOP_PREFIX" ]]; then
+elif ((CONTAINER && FORWARDING && SECOND == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then
   refuse "a Kit process runs natively on this computer; run $FORWARDED there directly"
 fi
 [[ "$WORKSPACE" == /* ]] || refuse 'workspace root must be an absolute path'
 
-[[ "$IMAGE" =~ ^ghcr\.io/agentshouse/kit@sha256:[0-9a-f]{64}$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
+[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$KIT_SHA256" =~ ^[0-9a-f]{64}$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
   refuse 'this bootstrap has not been published with an immutable release'
 case "$(uname -s)" in
   Linux)
@@ -1016,13 +1081,15 @@ prepare_roots
 KIT_HOME_MOUNT=$(bind_mount "$KIT_HOME" /kit-home)
 WORKSPACE_MOUNT=$(bind_mount "$WORKSPACE" /agents/house)
 bind_house remove_container
+IMAGE="$(registry)/kit@$IMAGE_DIGEST"
+write_certificates
 if ((OTHER_HOME)); then remove_container; fi
-if ((FORWARDING == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
+if ((FORWARDING == 0 && SECOND == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
 
 if [[ "$RUNTIME" == 'Docker Desktop' && "$HOUSE" == https://* ]]; then NETWORK=(); fi
 RELAY=()
 if [[ -n "${HOUSE_KIT_RELAY:-}" ]]; then RELAY=(--env "HOUSE_KIT_RELAY=$HOUSE_KIT_RELAY"); fi
-DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${RELAY[@]+"${RELAY[@]}"} --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
+DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${RELAY[@]+"${RELAY[@]}"} --env "NODE_EXTRA_CA_CERTS=$CERTIFICATES" --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
 LOGIN_KIT=("${DOCKER_RUN[@]:0:2}" ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
 AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/authority-main.js")
 CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/configure-main.js")

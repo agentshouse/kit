@@ -1,10 +1,11 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Image = 'ghcr.io/agentshouse/kit@sha256:__IMAGE_DIGEST__'
+$ImageDigest = 'sha256:__IMAGE_DIGEST__'
 $Name = 'house-kit'
 $KitHome = 'house-kit-home'
 $KitHomeMount = "type=volume,src=$KitHome,dst=/kit-home"
+$Certificates = '/kit-home/certificates.pem'
 $Link = 'Open this link and confirm: '
 $AuthorityMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/authority-main.js'
 $ConfigureMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js'
@@ -229,10 +230,26 @@ function Test-Authority {
   if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
 }
 
-function Clear-KitHome {
-  if (Test-Container) { Invoke-Docker rm -f $Name | Out-Null }
-  Invoke-Docker volume rm $KitHome | Out-Null
-  Invoke-Docker volume create $KitHome | Out-Null
+function Get-KitImage([string] $Origin) {
+  $registry = ([uri]$Origin).Authority
+  if ($env:HOUSE_KIT_RELAY) { $registry = ([uri]$env:HOUSE_KIT_RELAY).Authority + '/' + $registry }
+  "$registry/kit@$ImageDigest"
+}
+
+function Read-Certificates {
+  foreach ($store in @('Cert:\LocalMachine\Root', 'Cert:\CurrentUser\Root')) {
+    foreach ($certificate in @(Get-ChildItem -LiteralPath $store -ErrorAction SilentlyContinue)) {
+      '-----BEGIN CERTIFICATE-----'
+      [Convert]::ToBase64String($certificate.RawData, [Base64FormattingOptions]::InsertLineBreaks).Replace("`r`n", "`n")
+      '-----END CERTIFICATE-----'
+    }
+  }
+}
+
+function Write-Certificates {
+  $ErrorActionPreference = 'Continue'
+  (@(Read-Certificates) -join "`n") | & docker run -i --rm --network none --mount $KitHomeMount --entrypoint sh $Image -c "cat > $Certificates"
+  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "the computer's certificate authorities could not be written to Kit home: docker run ended with status $LASTEXITCODE" }
 }
 
 function Set-Configuration {
@@ -278,7 +295,7 @@ function Get-HouseWorkdir([string] $Here, [string] $Root) {
 function Start-Resident {
   $resident = @()
   if (-not $House.StartsWith('https://')) { $resident = @('--network', 'host') }
-  Invoke-Docker run -d --name $Name --restart on-failure @resident --mount $KitHomeMount --mount $WorkspaceMount --label "agentshouse.house=$House" $Image resident | Out-Null
+  Invoke-Docker run -d --name $Name --restart on-failure @resident --env "NODE_EXTRA_CA_CERTS=$Certificates" --mount $KitHomeMount --mount $WorkspaceMount --label "agentshouse.house=$House" $Image resident | Out-Null
 }
 
 function Connect-Kit {
@@ -336,7 +353,7 @@ function Connect-Kit {
     }
   }
 
-  if ($Image -notmatch '^ghcr\.io/agentshouse/kit@sha256:[0-9a-f]{64}$') { Stop-Bootstrap 'this bootstrap has not been published with an immutable image digest' }
+  if ($ImageDigest -notmatch '^sha256:[0-9a-f]{64}$') { Stop-Bootstrap 'this bootstrap has not been published with an immutable image digest' }
   if ($env:OS -ne 'Windows_NT') { Stop-Bootstrap 'this bootstrap is for Windows 11; run connect-linux.sh on Linux and macOS' }
   if (-not [Environment]::Is64BitProcess) { Stop-Bootstrap 'this is a 32-bit PowerShell; run this bootstrap from the 64-bit Windows PowerShell' }
   $system = Get-CimInstance -ClassName Win32_OperatingSystem
@@ -356,6 +373,18 @@ function Connect-Kit {
   if ($docker.System -ne 'Docker Desktop') { Stop-Bootstrap "Docker answers from $($docker.System), not Docker Desktop; stop that engine or switch Docker to Docker Desktop, then rerun this bootstrap" }
   if ($docker.Kernel -notlike '*WSL2*') { Stop-Bootstrap "Docker Desktop does not use its WSL 2 engine; turn on Use the WSL 2 based engine in its settings, then rerun this bootstrap" }
   if ($docker.Platform -ne 'linux/x86_64' -and $docker.Platform -ne 'linux/amd64') { Stop-Bootstrap "host linux/amd64 does not match Docker Desktop $($docker.Platform)" }
+  $Image = Get-KitImage $House
+  if ($HouseSelected -and (Invoke-Native docker @('volume', 'inspect', $KitHome)).Status -eq 0) {
+    if ((Invoke-Native docker @('image', 'inspect', '--format', '{{.Id}}', $Image)).Status -ne 0) { Invoke-Docker pull --quiet --platform linux/amd64 $Image | Out-Null }
+    $held = Read-Enrolment
+    if ($held.ContainsKey('house') -and $held['house'] -cne $House) {
+      $key = ([uri]$House).Authority.Replace(':', '-')
+      $Name = "house-kit-$key"
+      $KitHome = "house-kit-home-$key"
+      $KitHomeMount = "type=volume,src=$KitHome,dst=/kit-home"
+      if (-not $WorkspaceSelected) { $Workspace = Join-Path $env:USERPROFILE "AgentsHouse-$key" }
+    }
+  }
   if ($Forwarding) {
     if (-not (Test-Container)) { Stop-Bootstrap 'Kit is not installed; run this bootstrap without arguments first' }
     if ((Read-Inspect '{{.Config.Image}}') -cne $Image) { Stop-Bootstrap 'an installed Kit uses a different image; rerun this bootstrap without arguments to update it' }
@@ -374,22 +403,16 @@ function Connect-Kit {
   $enrolment = Read-Enrolment
   if ($enrolment.ContainsKey('environment')) {
     if (-not $enrolment.ContainsKey('house')) { Stop-Bootstrap 'the stored credential names no House origin' }
-    if ($HouseSelected -and $House -cne $enrolment['house']) {
-      if ($Forwarding -or -not $Interactive) { Stop-Bootstrap 'this Environment is bound to another House origin' }
-      $answer = Read-Host 'Kit is already installed for another account. Replace it? [y/N]'
-      if ($answer -notmatch '^(y|yes)$') { Stop-Bootstrap "Environment $($enrolment['environment']) was kept; nothing changed" }
-      Clear-KitHome
-      $enrolment = @{}
-    } else {
-      $House = $enrolment['house']
-    }
+    $House = $enrolment['house']
+    $Image = Get-KitImage $House
   }
   if ($House -notmatch '^(https://|http://127\.0\.0\.1:|http://localhost:)') { Stop-Bootstrap 'House origin must use HTTPS or local loopback HTTP' }
   $Network = @('--network', 'host')
   if ($House.StartsWith('https://')) { $Network = @() }
   $Relay = @()
   if ($env:HOUSE_KIT_RELAY) { $Relay = @('--env', "HOUSE_KIT_RELAY=$($env:HOUSE_KIT_RELAY)") }
-  $Common = $Relay + @('--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
+  $Common = $Relay + @('--env', "NODE_EXTRA_CA_CERTS=$Certificates", '--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
+  if (-not $Forwarding) { Write-Certificates }
 
   if (Test-Container) {
     $installed = Read-Inspect '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}'

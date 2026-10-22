@@ -1,14 +1,10 @@
-import { setGlobalProxyFromEnv } from 'node:http';
 import { parseArgs } from 'node:util';
 import { answerGitCredential } from './app-git.ts';
 import { chatgpt } from './chatgpt.ts';
 import { login } from './login.ts';
 import { logout } from './logout.ts';
+import { proxyUnlessRelayed } from './relay.ts';
 import { resident } from './resident.ts';
-
-declare module 'node:http' {
-  function setGlobalProxyFromEnv(proxyEnv?: NodeJS.ProcessEnv): () => void;
-}
 
 interface Command {
   usage: string;
@@ -49,7 +45,7 @@ const COMMANDS = new Map<string, Command>([
 ]);
 
 const [command, ...argv] = process.argv.slice(2);
-setGlobalProxyFromEnv();
+proxyUnlessRelayed();
 
 async function run(): Promise<void> {
   if (command === 'login') return login(argv);

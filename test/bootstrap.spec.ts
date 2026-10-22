@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { closeSync, existsSync, openSync, realpathSync } from 'node:fs';
 import { access, chmod, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
@@ -10,6 +11,7 @@ import { startHouse } from './double.ts';
 import { LOGIN_SHELL, placeUserClis, userBin } from './environment.ts';
 import { fakeHost, published } from './host.ts';
 import { readOnlyHome, runKit, temporaryHome } from './kit.ts';
+import { ENGINES, MODEL } from '../src/transcription.ts';
 
 const LINUX = fileURLToPath(new URL('../bin/connect-linux.sh', import.meta.url));
 const WINDOWS = fileURLToPath(new URL('../bin/connect-windows.ps1', import.meta.url));
@@ -21,13 +23,14 @@ function bootstrap(script: string, argv: string[]) {
   return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
 }
 
-it('leaves the release exactly one image digest and one Kit release to fill', async () => {
+it('leaves the release exactly one image digest, one Kit release and one Kit archive digest to fill', async () => {
   const linux = await readFile(LINUX, 'utf8');
   const windows = await readFile(WINDOWS, 'utf8');
 
   expect(spawnSync('bash', ['-n', LINUX]).status).toBe(0);
   expect(linux.split('__IMAGE_DIGEST__')).toHaveLength(2);
   expect(linux.split('__KIT_RELEASE__')).toHaveLength(2);
+  expect(linux.split('__KIT_SHA256__')).toHaveLength(2);
   expect(windows.split('__IMAGE_DIGEST__')).toHaveLength(2);
   expect(windows).toMatch(/^[\x09\x0a\x20-\x7e]*$/);
 });
@@ -106,18 +109,32 @@ place_native_kit`,
   expect(await readFile(join(home, 'opt', 'house-kit', 'release'), 'utf8')).toBe('old');
 });
 
-it('downloads its packages, Node.js and the Kit without the proxy variables a Sandbox sets for House traffic', async () => {
+const PROXIES = {
+  HTTP_PROXY: 'http://forwarder:3128',
+  HTTPS_PROXY: 'http://forwarder:3128',
+  http_proxy: 'http://forwarder:3128',
+  https_proxy: 'http://forwarder:3128',
+};
+
+function direct(linux: string): string {
+  return /^DIRECT=.*\n.*DIRECT=.*$/m.exec(linux)![0];
+}
+
+it.each([
+  ['with the proxy variables and from House itself when no Kit relay is set', {}, 'http://forwarder:3128', 'https://agents.house'],
+  ['without the proxy variables and through the Kit relay a Sandbox sets', { HOUSE_KIT_RELAY: 'https://kit-relay.example' }, '', 'https://kit-relay.example/agents.house'],
+] as const)('downloads its packages, Node.js and the Kit %s', async (_case, relay, proxy, served) => {
   const home = await temporaryHome();
   const linux = await readFile(LINUX, 'utf8');
-  const steps = ['establish_native_packages', 'stage_native_kit'].map(
+  const steps = ['host_of', 'served_from', 'download', 'establish_native_packages', 'stage_native_kit'].map(
     (step) => new RegExp(`^${step}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0],
   );
   const bin = join(home, 'bin');
   await mkdir(bin);
-  for (const tool of ['apt-get', 'curl', 'npm', 'sha256sum', 'tar']) {
+  for (const tool of ['apt-get', 'curl', 'sha256sum', 'tar']) {
     const logged = ['sha256sum', 'tar'].includes(tool)
       ? ''
-      : `printf '%s %s\\n' ${tool} "\${HTTP_PROXY-}\${HTTPS_PROXY-}\${http_proxy-}\${https_proxy-}" >> "$LOG"\n`;
+      : `printf '%s %s %s\\n' ${tool} "\${HTTP_PROXY-}\${HTTPS_PROXY-}\${http_proxy-}\${https_proxy-}" "\$(eval printf %s "\\\${\$#}")" >> "$LOG"\n`;
     await writeFile(join(bin, tool), `#!/bin/sh\n${logged}`);
     await chmod(join(bin, tool), 0o755);
   }
@@ -129,9 +146,11 @@ it('downloads its packages, Node.js and the Kit without the proxy variables a Sa
 elevated() { "$@"; }
 refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
 installed_packages() { :; }
-${/^DIRECT=.*$/m.exec(linux)![0]}
+${direct(linux)}
+HOUSE=https://agents.house
 NATIVE_PACKAGES=(ca-certificates curl git)
 VERSION=0.2.1-alpha.1
+KIT_SHA256=${'1'.repeat(64)}
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
@@ -144,58 +163,62 @@ stage_native_kit`,
     ],
     {
       encoding: 'utf8',
-      env: {
-        PATH: `${bin}:${process.env.PATH}`,
-        LOG: join(home, 'downloads.log'),
-        TMPDIR: home,
-        HTTP_PROXY: 'http://forwarder:3128',
-        HTTPS_PROXY: 'http://forwarder:3128',
-        http_proxy: 'http://forwarder:3128',
-        https_proxy: 'http://forwarder:3128',
-      },
+      env: { PATH: `${bin}:${process.env.PATH}`, LOG: join(home, 'downloads.log'), TMPDIR: home, ...PROXIES, ...relay },
     },
   );
 
   expect(ran.stderr).toBe('');
-  expect((await readFile(join(home, 'downloads.log'), 'utf8')).split('\n').filter(Boolean).sort()).toEqual(
-    ['apt-get ', 'apt-get ', 'curl ', 'npm '],
-  );
+  const repeated = proxy.repeat(4);
+  expect((await readFile(join(home, 'downloads.log'), 'utf8')).split('\n').filter(Boolean)).toEqual([
+    `apt-get ${repeated} -qq`,
+    `apt-get ${repeated} git`,
+    `curl ${repeated} ${served}/kit-installer/node-v24.22.1-linux-x64.tar.gz`,
+    `curl ${repeated} ${served}/kit-installer/kit-0.2.1-alpha.1.tar.gz`,
+  ]);
 });
 
-it('stops a Node.js download larger than its pinned size and installs nothing', async () => {
-  const home = await temporaryHome();
-  const linux = await readFile(LINUX, 'utf8');
-  const bin = join(home, 'bin');
-  await mkdir(bin);
-  await writeFile(join(bin, 'curl'), '#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\nhead -c 1048576 /dev/zero 2>/dev/null > "$2"\n', { mode: 0o755 });
-  await writeFile(join(bin, 'npm'), '#!/bin/sh\ntouch "$TMPDIR/npm.ran"\n', { mode: 0o755 });
-
-  const ran = spawnSync(
-    'bash',
-    [
-      '-c',
-      `set -u
+function staging(linux: string, house: string, bytes: number): string {
+  const defined = ['host_of', 'served_from', 'download', 'stage_native_kit'].map(
+    (step) => new RegExp(`^${step}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0],
+  );
+  return `set -u
 refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
-${/^DIRECT=.*$/m.exec(linux)![0]}
+${direct(linux)}
+HOUSE=${house}
 VERSION=0.2.1-alpha.1
+KIT_SHA256=${'1'.repeat(64)}
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
-NODE_BYTES=4096
+NODE_BYTES=${bytes}
 CHECKSUM=(sha256sum)
 RELEASE=release
-${/^stage_native_kit\(\) \{\n[\s\S]*?\n\}\n/m.exec(linux)![0]}
-stage_native_kit`,
-    ],
+${defined.join('')}
+stage_native_kit`;
+}
+
+it('stops a Node.js download larger than its pinned size and downloads nothing more', async () => {
+  const home = await temporaryHome();
+  const bin = join(home, 'bin');
+  await mkdir(bin);
+  await writeFile(
+    join(bin, 'curl'),
+    '#!/bin/sh\nfor last; do :; done\nprintf "%s\\n" "$last" >> "$TMPDIR/curl.log"\nwhile [ "$1" != -o ]; do shift; done\nhead -c 1048576 /dev/zero 2>/dev/null > "$2"\n',
+    { mode: 0o755 },
+  );
+
+  const ran = spawnSync(
+    'bash',
+    ['-c', staging(await readFile(LINUX, 'utf8'), 'https://agents.house', 4096)],
     // An install step still running after twenty seconds has hung, so the spec ends it rather than waiting on it.
     { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, TMPDIR: home }, timeout: 20_000 },
   );
 
   expect(ran).toMatchObject({ status: 1, stderr: 'refused: the Node.js download is larger than its pinned 4096 bytes\n' });
-  expect(existsSync(join(home, 'npm.ran'))).toBe(false);
+  expect(await readFile(join(home, 'curl.log'), 'utf8')).toBe('https://agents.house/kit-installer/node-v24.22.1-linux-x64.tar.gz\n');
 });
 
-it('ends a Node.js download that has not arrived within its deadline and installs nothing', async () => {
+it('ends a Node.js download that has not arrived within its deadline and downloads nothing more', async () => {
   const held = new Set<Socket>();
   const stalled = createServer((socket) => held.add(socket));
   await new Promise<void>((listening) => stalled.listen(0, '127.0.0.1', listening));
@@ -205,39 +228,19 @@ it('ends a Node.js download that has not arrived within its deadline and install
   });
   const { port } = stalled.address() as AddressInfo;
   const home = await temporaryHome();
-  const linux = await readFile(LINUX, 'utf8');
   const bin = join(home, 'bin');
   await mkdir(bin);
-  await writeFile(
-    join(bin, 'curl'),
-    `#!/bin/sh\nfor arg; do shift; case $arg in https://nodejs.org/*) set -- "$@" http://127.0.0.1:${port}/ ;; *) set -- "$@" "$arg" ;; esac; done\nexec /usr/bin/curl "$@"\n`,
-    { mode: 0o755 },
-  );
-  await writeFile(join(bin, 'npm'), '#!/bin/sh\ntouch "$TMPDIR/npm.ran"\n', { mode: 0o755 });
+  await writeFile(join(bin, 'curl'), '#!/bin/sh\nfor last; do :; done\nprintf "%s\\n" "$last" >> "$TMPDIR/curl.log"\nexec /usr/bin/curl "$@"\n', { mode: 0o755 });
 
   const ran = spawnSync(
     'bash',
-    [
-      '-c',
-      `set -u
-refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
-${/^DIRECT=.*$/m.exec(linux)![0]}
-VERSION=0.2.1-alpha.1
-NODE_VERSION=24.22.1
-NODE_PLATFORM=linux-x64
-NODE_SHA256=${'0'.repeat(64)}
-NODE_BYTES=250000
-CHECKSUM=(sha256sum)
-RELEASE=release
-${/^stage_native_kit\(\) \{\n[\s\S]*?\n\}\n/m.exec(linux)![0]}
-stage_native_kit`,
-    ],
+    ['-c', staging(await readFile(LINUX, 'utf8'), `http://127.0.0.1:${port}`, 250000)],
     // An install step still running after twenty seconds has hung, so the spec ends it rather than waiting on it.
     { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, TMPDIR: home }, timeout: 20_000 },
   );
 
   expect(ran).toMatchObject({ status: 1, stderr: expect.stringMatching(/\nrefused: the Node\.js download did not arrive within 3 seconds\n$/) });
-  expect(existsSync(join(home, 'npm.ran'))).toBe(false);
+  expect(await readFile(join(home, 'curl.log'), 'utf8')).toBe(`http://127.0.0.1:${port}/kit-installer/node-v24.22.1-linux-x64.tar.gz\n`);
 });
 
 async function steps(...names: string[]): Promise<string> {
@@ -344,7 +347,10 @@ it('updates nothing, asks nothing and asks the Kit for no restart without a term
   expect(restartAsked).toBe(false);
 });
 
-it("runs a CLI's own update command in place natively without the proxy variables, and in a container of the installed image", async () => {
+it.each([
+  ['with the proxy variables when no Kit relay is set', {}, 'http://forwarder:3128'],
+  ['without the proxy variables when a Kit relay is set', { HOUSE_KIT_RELAY: 'https://kit-relay.example' }, ''],
+] as const)("runs a CLI's own update command in place natively %s, and in a container of the installed image", async (_case, relay, proxy) => {
   const home = await temporaryHome();
   const bin = join(home, 'bin');
   await mkdir(bin);
@@ -357,7 +363,7 @@ it("runs a CLI's own update command in place natively without the proxy variable
     [
       '-c',
       `set -u
-${/^DIRECT=.*$/m.exec(linux)![0]}
+${direct(linux)}
 ${/^IMAGE_PACKAGE=.*$/m.exec(linux)![0]}
 DOCKER_RUN=(docker run --rm --user 1:1 --mount kit-home --mount workspace image)
 ${await steps('native_cli_update', 'container_clis', 'container_cli_update')}
@@ -365,12 +371,12 @@ native_cli_update ${bin}/codex
 container_clis
 container_cli_update /kit-home/.local/bin/codex </dev/null`,
     ],
-    { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HTTPS_PROXY: 'http://forwarder:3128' } },
+    { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HTTPS_PROXY: 'http://forwarder:3128', ...relay } },
   );
 
   expect(ran.stderr).toBe('');
   expect(ran.stdout.split('\n').filter(Boolean)).toEqual([
-    'codex update ',
+    `codex update ${proxy}`,
     'docker run --entrypoint node --rm --user 1:1 --mount kit-home --mount workspace image /usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js',
     'docker run -i --entrypoint /kit-home/.local/bin/codex --rm --user 1:1 --mount kit-home --mount workspace image update',
   ]);
@@ -501,25 +507,53 @@ it('names each chosen CLI the login shell finds, even through a relative PATH en
   ]);
 });
 
-it('lists macOS with the Linux script beside Linux and Windows', async () => {
-  const root = await temporaryHome();
-  await mkdir(join(root, 'scripts'));
-  await mkdir(join(root, 'dist'));
-  await writeFile(join(root, 'package.json'), JSON.stringify({ version: '0.2.1-alpha.1' }));
-  await writeFile(join(root, 'scripts', 'bootstrap-manifest.mjs'), await readFile(MANIFEST, 'utf8'));
+it('writes the release manifest naming every file Kit installs by name and sha256, the image by digest and where a deploy takes each file the release does not carry', async () => {
+  const release = await temporaryHome();
+  const own: Record<string, string> = {
+    'connect-linux.sh': '#!/usr/bin/env bash\n',
+    'connect-windows.ps1': "$ErrorActionPreference = 'Stop'\n",
+    'kit-0.2.1.tar.gz': 'the Kit archive',
+    'codex-acp-2.1.1.tar.gz': 'the Codex adapter archive',
+    'claude-agent-acp-0.85.1.tar.gz': 'the Claude Code adapter archive',
+  };
+  for (const [name, content] of Object.entries(own)) await writeFile(join(release, name), content);
+  const image = `sha256:${'c'.repeat(64)}`;
+  const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  if (version !== '0.2.1') await writeFile(join(release, `kit-${version}.tar.gz`), 'the Kit archive');
 
-  expect(spawnSync(process.execPath, [join(root, 'scripts', 'bootstrap-manifest.mjs')]).status).toBe(0);
+  expect(spawnSync(process.execPath, [MANIFEST, release, image], { encoding: 'utf8' })).toMatchObject({ status: 0, stderr: '' });
 
-  const release = 'https://github.com/agentshouse/kit/releases/download/v0.2.1-alpha.1';
-  expect(JSON.parse(await readFile(join(root, 'dist', 'bootstrap.json'), 'utf8'))).toEqual({
-    schemaVersion: 2,
-    version: '0.2.1-alpha.1',
-    hosts: {
-      macos: { asset: { name: 'connect-linux.sh', url: `${release}/connect-linux.sh` } },
-      linux: { asset: { name: 'connect-linux.sh', url: `${release}/connect-linux.sh` } },
-      windows: { asset: { name: 'connect-windows.ps1', url: `${release}/connect-windows.ps1` } },
-    },
+  const written = JSON.parse(await readFile(join(release, 'bootstrap.json'), 'utf8')) as { files: Record<string, { sha256: string; from?: string }> };
+  const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
+  expect(written).toMatchObject({
+    schemaVersion: 3,
+    version,
+    hosts: { linux: 'connect-linux.sh', macos: 'connect-linux.sh', windows: 'connect-windows.ps1' },
+    image,
   });
+  for (const [name, content] of Object.entries(own)) expect(written.files[name]).toEqual({ sha256: sha256(content) });
+  expect(written.files['node-v24.22.1-linux-x64.tar.gz']).toEqual({
+    sha256: 'eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c',
+    from: 'https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz',
+  });
+  expect(Object.keys(written.files).filter((name) => name.startsWith('node-')).sort()).toEqual(
+    ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-ppc64le', 'linux-s390x', 'linux-x64'].map((platform) => `node-v24.22.1-${platform}.tar.gz`),
+  );
+  for (const artifact of [...Object.values(ENGINES).flatMap(({ decoder, engine }) => [decoder, engine]), MODEL]) {
+    expect(written.files[artifact.name]).toEqual({ sha256: artifact.sha256, from: artifact.from });
+  }
+  expect(Object.values(written.files).filter((file) => file.from?.includes('github.com/agentshouse/kit/releases/download/v'))).toEqual([]);
+});
+
+it('refuses to write a release manifest for a release directory without its Kit archive', async () => {
+  const release = await temporaryHome();
+  await writeFile(join(release, 'connect-linux.sh'), '#!/usr/bin/env bash\n');
+  await writeFile(join(release, 'connect-windows.ps1'), "$ErrorActionPreference = 'Stop'\n");
+
+  const ran = spawnSync(process.execPath, [MANIFEST, release, `sha256:${'c'.repeat(64)}`], { encoding: 'utf8' });
+
+  expect(ran.status).not.toBe(0);
+  expect(ran.stderr).toContain(`${release} holds no kit-`);
 });
 
 it.each([
