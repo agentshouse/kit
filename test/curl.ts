@@ -42,6 +42,10 @@ function listed(name: string, artifact: Artifact): boolean {
 }
 
 function serve(artifact: Artifact, output: string): void {
+  if (listed('curl-oversize', artifact)) {
+    writeFileSync(output, Buffer.concat([readFileSync(join(CACHE, artifact.sha256)), Buffer.alloc(1_048_576)]));
+    return;
+  }
   if (listed('curl-corrupt', artifact)) {
     writeFileSync(output, 'not the pinned artifact');
     return;

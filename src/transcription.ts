@@ -12,6 +12,7 @@ import { kitHome } from './home.ts';
 export interface Artifact {
   url: string;
   sha256: string;
+  bytes: number;
   executable: boolean;
 }
 
@@ -25,21 +26,22 @@ const RELEASE = 'https://github.com/agentshouse/kit/releases/download/engine-2';
 export const MODEL: Artifact = {
   url: 'https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/ggml-parakeet-tdt-0.6b-v3-q4_k.bin',
   sha256: '8b205b8b39c6535e153de6fb11c51db46125d45c4f16ba496fe41a0fe71b885e',
+  bytes: 415_611_879,
   executable: false,
 };
 
 export const ENGINES: Record<string, Engine> = {
   'linux-x64': {
-    decoder: { url: `${RELEASE}/ffmpeg-linux-x86_64`, sha256: '1f8235d206428305afb89c6e8ab99d100425a0ba61e22bb4c7aff017db8c8de5', executable: true },
-    engine: { url: `${RELEASE}/parakeet-cli-linux-x86_64`, sha256: 'bb2585695992fe1927a33960002cdf51b8a90a96ad65593c3d0a9f1fbc0865c2', executable: true },
+    decoder: { url: `${RELEASE}/ffmpeg-linux-x86_64`, sha256: '1f8235d206428305afb89c6e8ab99d100425a0ba61e22bb4c7aff017db8c8de5', bytes: 5_175_832, executable: true },
+    engine: { url: `${RELEASE}/parakeet-cli-linux-x86_64`, sha256: 'bb2585695992fe1927a33960002cdf51b8a90a96ad65593c3d0a9f1fbc0865c2', bytes: 3_801_616, executable: true },
   },
   'linux-arm64': {
-    decoder: { url: `${RELEASE}/ffmpeg-linux-aarch64`, sha256: 'a7e08a0fae0179d1078312f6bb13d2a9aa4d4c71a1d82a022953f25dee452f5e', executable: true },
-    engine: { url: `${RELEASE}/parakeet-cli-linux-aarch64`, sha256: 'cbc0bedc8daae97f1ef9dcee4200c06226218e300e0fd62ead1306d22742b7ed', executable: true },
+    decoder: { url: `${RELEASE}/ffmpeg-linux-aarch64`, sha256: 'a7e08a0fae0179d1078312f6bb13d2a9aa4d4c71a1d82a022953f25dee452f5e', bytes: 4_590_208, executable: true },
+    engine: { url: `${RELEASE}/parakeet-cli-linux-aarch64`, sha256: 'cbc0bedc8daae97f1ef9dcee4200c06226218e300e0fd62ead1306d22742b7ed', bytes: 3_477_624, executable: true },
   },
   'darwin-arm64': {
-    decoder: { url: `${RELEASE}/ffmpeg-darwin-arm64`, sha256: '7abe154aaed3d6b49f5167ca7221bb66bed51388925d99a7e4261a41fe52fba6', executable: true },
-    engine: { url: `${RELEASE}/parakeet-cli-darwin-arm64`, sha256: '9a2aafc0922ad7c0b6db6eff1641e96572ba32ac40bf995a1df242ed2febf297', executable: true },
+    decoder: { url: `${RELEASE}/ffmpeg-darwin-arm64`, sha256: '7abe154aaed3d6b49f5167ca7221bb66bed51388925d99a7e4261a41fe52fba6', bytes: 3_696_768, executable: true },
+    engine: { url: `${RELEASE}/parakeet-cli-darwin-arm64`, sha256: '9a2aafc0922ad7c0b6db6eff1641e96572ba32ac40bf995a1df242ed2febf297', bytes: 1_939_728, executable: true },
   },
 };
 
@@ -75,7 +77,7 @@ function installed(artifact: Artifact): string {
 }
 
 async function executed(command: string, args: string[], signal?: AbortSignal): Promise<string> {
-  // A download or a transcription runs as long as its size needs; the setting turning off or the turn's interrupt or end aborts it instead.
+  // A download or a transcription runs as long as its size needs; a download's deadline, the setting turning off or the turn's interrupt or end aborts it instead.
   const ran = await run(command, args, 0, false, signal);
   if (ran.status !== 0) throw new Error(failureOf(ran, basename(command)));
   return ran.stdout;
@@ -132,8 +134,17 @@ async function install(artifacts: Artifact[], signal: AbortSignal): Promise<void
   try {
     for (const artifact of missing) {
       const part = `${installed(artifact)}.part`;
+      // An artifact arrives at a hundred kilobytes a second or its download ends, so a stalled host cannot hold the install open.
+      const deadlineMs = Math.ceil(artifact.bytes / 100);
+      const deadline = AbortSignal.timeout(deadlineMs);
       // Three retries carry a large download past a dropped connection before the download fails.
-      await executed('curl', ['-fsSL', '--retry', '3', '-o', part, artifact.url], signal);
+      try {
+        await executed('bash', ['-c', 'trap "" XFSZ && ulimit -f "$1" && exec curl -fsSL --retry 3 -o "$2" "$3"', 'bash', String(Math.ceil(artifact.bytes / 1024)), part, artifact.url], AbortSignal.any([signal, deadline]));
+      } catch (error) {
+        if (((await stat(part).catch(() => null))?.size ?? 0) >= artifact.bytes) throw new Error(`${artifact.url} is larger than its pinned ${artifact.bytes} bytes`);
+        if (deadline.aborted && !signal.aborted) throw new Error(`${artifact.url} did not arrive within ${Math.ceil(deadlineMs / 1000)} seconds`);
+        throw error;
+      }
       if ((await sha256(part)) !== artifact.sha256) throw new Error(`${artifact.url} does not match its sha256`);
     }
     for (const artifact of missing) {

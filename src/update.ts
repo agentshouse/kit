@@ -10,6 +10,11 @@ import { service, throughSudo } from './placement.ts';
 
 export type UpdateCall = Call<'update'>;
 
+const BOOTSTRAP_BYTES = 1_000_000;
+
+// A bootstrap is at most a million bytes, so two minutes carry it over ten kilobytes a second and no stalled host holds the update queue.
+const BOOTSTRAP_MS = 120_000;
+
 function directory(): string {
   return join(kitHome(), 'update');
 }
@@ -79,6 +84,17 @@ async function finished(callId: string): Promise<Result> {
   }
 }
 
+async function bounded(body: ReadableStream<Uint8Array> | null, most: number): Promise<Buffer | null> {
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  for await (const chunk of body ?? []) {
+    bytes += chunk.length;
+    if (bytes > most) return null;
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, bytes);
+}
+
 function rerun(script: string, callId: string, flags: string[]): Promise<Result | null> {
   return new Promise((resolve) => {
     const [command, ...args] = [
@@ -136,9 +152,17 @@ export class KitUpdate {
 
   private async carry(call: UpdateCall): Promise<Result> {
     if ((await pendingCall()) === call.input_id) return finished(call.input_id);
-    const answer = await fetch(call.bootstrap);
-    if (!answer.ok) return { refused: `the Kit bootstrap could not be downloaded: ${answer.status}` };
-    const script = Buffer.from(await answer.arrayBuffer());
+    const deadline = AbortSignal.timeout(BOOTSTRAP_MS);
+    let script: Buffer | null;
+    try {
+      const answer = await fetch(call.bootstrap, { signal: deadline });
+      if (!answer.ok) return { refused: `the Kit bootstrap could not be downloaded: ${answer.status}` };
+      script = await bounded(answer.body, BOOTSTRAP_BYTES);
+    } catch (error) {
+      if (!deadline.aborted) throw error;
+      return { refused: `the Kit bootstrap did not arrive within ${BOOTSTRAP_MS / 1000} seconds` };
+    }
+    if (script === null) return { refused: `the Kit bootstrap is larger than ${BOOTSTRAP_BYTES} bytes` };
     if (createHash('sha256').update(script).digest('hex') !== call.sha256) {
       return { refused: 'the Kit bootstrap does not match its sha256' };
     }

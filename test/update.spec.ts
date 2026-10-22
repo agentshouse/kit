@@ -48,6 +48,8 @@ const HELD = 'until [ -e "$HOUSE_KIT_HOME/go" ]; do sleep 0.1; done\nprintf "%s\
 
 const FAST_INTERVALS = fileURLToPath(new URL('./fast-intervals.ts', import.meta.url));
 
+const FAST_DEADLINES = fileURLToPath(new URL('./fast-deadlines.ts', import.meta.url));
+
 const downloaded = (hosted: Hosted) => hosted.house.requests.find((request) => request.path === '/releases/connect-linux.sh');
 
 const checkpoint = (hosted: Hosted) => readFile(join(hosted.home, 'update', 'pending.json'), 'utf8').catch(() => undefined);
@@ -121,6 +123,45 @@ it('refuses a bootstrap that does not match its sha256 and runs nothing', async 
   update(hosted, 'update-2', { ...pin, sha256: '0'.repeat(64) });
 
   expect(await hosted.result('update-2')).toEqual({ refused: 'the Kit bootstrap does not match its sha256' });
+  expect(await ran(hosted)).toBeUndefined();
+});
+
+it('refuses a bootstrap larger than a million bytes and runs nothing, and runs one of exactly a million bytes', async () => {
+  const hosted = await hostKit();
+  const writes = 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n#';
+  const sized = (bytes: number) => `${writes}${'x'.repeat(bytes - writes.length - 1)}\n`;
+  const larger = await serve(hosted, sized(1_000_001));
+
+  update(hosted, 'update-large', larger);
+
+  expect(await hosted.result('update-large')).toEqual({ refused: 'the Kit bootstrap is larger than 1000000 bytes' });
+  expect(await ran(hosted)).toBeUndefined();
+
+  const largest = sized(1_000_000);
+  hosted.house.route('GET', '/releases/largest/connect-linux.sh', () => ({
+    bytes: { type: 'text/x-shellscript', content: largest },
+  }));
+  update(hosted, 'update-largest', {
+    bootstrap: `${hosted.house.origin}/releases/largest/connect-linux.sh`,
+    sha256: createHash('sha256').update(largest).digest('hex'),
+  });
+
+  expect(await hosted.result('update-largest')).toEqual({});
+  expect(await ran(hosted)).toBe('--linux\n');
+});
+
+it('refuses a bootstrap that has not arrived within its deadline and runs nothing', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_DEADLINES}` } });
+  const pin = await serve(hosted, 'touch "$HOUSE_KIT_HOME/bootstrap.ran"\n');
+  let release = (): void => {};
+  hosted.house.route('GET', '/releases/connect-linux.sh', () => new Promise((settle) => {
+    release = () => settle({ body: {} });
+  }));
+  onTestFinished(() => release());
+
+  update(hosted, 'update-stalled', pin);
+
+  expect(await hosted.result('update-stalled')).toEqual({ refused: 'the Kit bootstrap did not arrive within 120 seconds' });
   expect(await ran(hosted)).toBeUndefined();
 });
 
