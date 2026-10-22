@@ -7,6 +7,7 @@ import { run } from './clis.ts';
 import { kitHome, workspaceRoot } from './home.ts';
 import type { Call, Calls, Result } from './calls.ts';
 import { service, throughSudo } from './placement.ts';
+import { relayed } from './relay.ts';
 
 export type UpdateCall = Call<'update'>;
 
@@ -155,7 +156,7 @@ export class KitUpdate {
     const deadline = AbortSignal.timeout(BOOTSTRAP_MS);
     let script: Buffer | null;
     try {
-      const answer = await fetch(call.bootstrap, { signal: deadline });
+      const answer = await fetch(relayed(call.bootstrap), { signal: deadline });
       if (!answer.ok) return { refused: `the Kit bootstrap could not be downloaded: ${answer.status}` };
       script = await bounded(answer.body, BOOTSTRAP_BYTES);
     } catch (error) {

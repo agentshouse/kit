@@ -24,8 +24,10 @@ async function installed(host: Host): Promise<void> {
   const prefix = join(host.home, '.local', 'share', 'house-kit');
   expect(await readFile(join(prefix, 'release'), 'utf8')).toBe(`@agentshouse/kit@${PUBLISHED_VERSION} node@24.22.1\n`);
   for (const command of ['kit', 'house']) {
+    const trusted = host.calls('ca').length;
     expect(host.command(command, ['--help'])).toMatchObject({ status: 0 });
     expect(host.calls(command).at(-1)).toMatch(/^--help /);
+    expect(host.calls('ca').slice(trusted)).toEqual(['1']);
   }
   expect((await stat(join(host.home, 'AgentsHouse'))).isDirectory()).toBe(true);
   expect(JSON.parse(await readFile(join(host.home, '.house-kit', 'credential.json'), 'utf8'))).toMatchObject({
@@ -93,9 +95,11 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
-  expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.22\.1\/node-v24\.22\.1-linux-x64\.tar\.gz$/)]);
-  expect(host.calls('sha256sum')).toEqual(['--check']);
-  expect(host.calls('npm')).toEqual([expect.stringMatching(/ @agentshouse\/kit@0\.2\.1-alpha\.1$/)]);
+  expect(host.calls('curl')).toEqual([
+    expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/node-v24\.22\.1-linux-x64\.tar\.gz$/),
+    expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/kit-0\.2\.1-alpha\.1\.tar\.gz$/),
+  ]);
+  expect(host.calls('sha256sum')).toEqual(['--check', '--check']);
   expect(host.calls('sudo')).toEqual([]);
   expect(host.calls('docker')).toEqual([
     'container inspect house-kit',
@@ -119,8 +123,11 @@ it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, w
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
   expect(notices(ran.stdout)).toEqual([]);
-  expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.22\.1\/node-v24\.22\.1-darwin-arm64\.tar\.gz$/)]);
-  expect(host.calls('shasum')).toEqual(['-a 256 --check']);
+  expect(host.calls('curl')).toEqual([
+    expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/node-v24\.22\.1-darwin-arm64\.tar\.gz$/),
+    expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/kit-0\.2\.1-alpha\.1\.tar\.gz$/),
+  ]);
+  expect(host.calls('shasum')).toEqual(['-a 256 --check', '-a 256 --check']);
   expect(host.calls('sudo')).toEqual([]);
   expect(ran.stdout).toContain(`${LINK_LINE}\n`);
   expect(host.calls('open')).toEqual([]);
@@ -360,7 +367,7 @@ it.each([
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(notices(ran.stdout)).toEqual([`Kit supports ${notice}; ${UNSUPPORTED}`]);
-  expect(host.calls('curl')).toEqual([expect.stringContaining(`/node-v24.22.1-${node}.tar.gz`)]);
+  expect(host.calls('curl')).toEqual([expect.stringContaining(`/kit-installer/node-v24.22.1-${node}.tar.gz`), expect.stringContaining('/kit-installer/kit-')]);
   await installed(host);
 });
 
@@ -373,7 +380,7 @@ it('warns in one line on a macOS older than the supported release and installs',
   expect(ran.stdout.split('\n').filter((line) => /macOS|guarantee/.test(line))).toEqual([
     'Warning: macOS 26.7.1 is outdated; update to macOS 27.',
   ]);
-  expect(host.calls('curl')).toEqual([expect.stringContaining('/node-v24.22.1-darwin-arm64.tar.gz')]);
+  expect(host.calls('curl')).toEqual([expect.stringContaining('/kit-installer/node-v24.22.1-darwin-arm64.tar.gz'), expect.stringContaining('/kit-installer/kit-')]);
   await installed(host);
 });
 
@@ -409,8 +416,6 @@ it('says the Kit updated when a rerun installs a newer release', async () => {
   expect(ran.stdout.split('\n').at(-2)).toBe('Kit updated.');
 });
 
-const OTHER_ACCOUNT = 'Kit is already installed for another account. Replace it? [y/N]';
-
 const HOUSE = ['--house', 'https://agents.house'];
 
 async function heldByAnotherAccount(): Promise<Host> {
@@ -426,35 +431,45 @@ async function heldByAnotherAccount(): Promise<Host> {
   return host;
 }
 
-it('asks from the terminal whether to replace another account, clears it on yes and redeems the login code', async () => {
+it('refuses a native Kit for a second Building, naming the container, and changes nothing of the Kit serving the first', async () => {
   const host = await heldByAnotherAccount();
 
-  const ran = host.terminal([...HOUSE, '--code', 'ahk_code_one'], 'y\n');
-
-  expect(ran.status).toBe(0);
-  expect(ran.stdout.match(/Replace it\?/g)).toHaveLength(1);
-  expect(ran.stdout).toContain(OTHER_ACCOUNT);
-  expect(ran.stdout).toContain('Kit connected for Environment environment-one.');
-  expect(host.calls('kit')).toEqual([`login --house https://agents.house --code ahk_code_one HOUSE_KIT_HOME=${host.home}/.house-kit`]);
-  expect(host.calls('systemctl')).toEqual(expect.arrayContaining(['--user stop house-kit.service', '--user start house-kit.service']));
-  await expect(access(join(host.home, '.house-kit', 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
-  expect(await readFile(join(host.home, 'AgentsHouse', 'notes.md'), 'utf8')).toBe('kept\n');
-});
-
-it('keeps a Kit of another House account when the User declines, and refuses without a terminal', async () => {
-  const host = await heldByAnotherAccount();
-
-  const declined = host.terminal(HOUSE, 'n\n');
-  expect(declined.status).toBe(1);
-  expect(declined.stdout).toContain(OTHER_ACCOUNT);
-  expect(declined.stdout).toContain('kit_bootstrap_refused: Environment environment-one was kept; nothing changed');
-  expect(host.run(HOUSE)).toMatchObject({
-    status: 1,
-    stderr: 'kit_bootstrap_refused: this Environment is bound to another House origin\n',
-  });
+  for (const ran of [host.terminal([...HOUSE, '--code', 'ahk_code_one'], 'y\n'), host.run(HOUSE)]) {
+    expect(ran.status).toBe(1);
+    expect(`${ran.stdout}${ran.stderr}`).toContain(
+      'kit_bootstrap_refused: Kit on this computer serves https://dev.agents.house, and a computer runs one native Kit; install Kit for https://agents.house in a container: add --container',
+    );
+    expect(`${ran.stdout}${ran.stderr}`).not.toContain('Replace it?');
+  }
 
   expect(host.calls('kit')).toEqual([]);
+  expect(host.calls('systemctl')).toEqual([]);
   expect(await readFile(join(host.home, '.house-kit', 'own-agent.json'), 'utf8')).toBe('{"user":"user-one"}\n');
+});
+
+it("runs a second Building's Kit in a container of its own beside the native Kit serving the first, with its own Kit home and workspace, and forwards kit and house into it", async () => {
+  const host = await heldByAnotherAccount();
+  const uid = `${process.getuid!()}:${process.getgid!()}`;
+  const mounts = `--mount type=bind,"src=${host.home}/.house-kit-agents.house",dst=/kit-home --mount type=bind,"src=${host.home}/AgentsHouse-agents.house",dst=/agents/house`;
+
+  const ran = host.run([...HOUSE, '--container', '--code', 'ahk_code_one']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout).not.toContain('Replace it?');
+  expect(host.calls('docker').filter((call) => /^(run -d|rm) /.test(call))).toEqual([
+    `run -d --name house-kit-agents.house --restart on-failure --env NODE_EXTRA_CA_CERTS=/kit-home/certificates.pem --user ${uid} ${mounts} --label agentshouse.house=https://agents.house agents.house/kit@sha256:${'a'.repeat(64)} resident`,
+  ]);
+  expect(JSON.parse(await readFile(join(host.home, '.house-kit-agents.house', 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one' });
+  expect(JSON.parse(await readFile(join(host.home, '.house-kit', 'credential.json'), 'utf8'))).toMatchObject({ house: 'https://dev.agents.house' });
+  expect(await readFile(join(host.home, '.house-kit', 'own-agent.json'), 'utf8')).toBe('{"user":"user-one"}\n');
+  await access(join(host.home, '.local', 'share', 'house-kit', 'release'));
+  expect(host.calls('systemctl')).toEqual([]);
+  await host.forget();
+
+  expect(host.run([...HOUSE, '--container', 'house', 'list_rooms'])).toMatchObject({ status: 0, stderr: '' });
+  expect(host.calls('docker').filter((call) => call.startsWith('exec '))).toEqual([
+    expect.stringMatching(/^exec -i --workdir \/agents\/house house-kit-agents\.house house list_rooms$/),
+  ]);
 });
 
 it('refuses a stored credential House refuses, in a terminal too, and offers no replacement', async () => {
@@ -490,9 +505,10 @@ it.each([['--container'], ['--linux']])(
   },
 );
 
-it('installs the container exactly as before only with the container choice', async () => {
+it("installs the container from the Building's registry only with the container choice, handing it the computer's certificate authorities", async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
-  const image = `ghcr.io/agentshouse/kit@sha256:${'a'.repeat(64)}`;
+  const image = `agents.house/kit@sha256:${'a'.repeat(64)}`;
+  const authorities = '--env NODE_EXTRA_CA_CERTS=/kit-home/certificates.pem';
   const uid = `${process.getuid!()}:${process.getgid!()}`;
   const mounts = `--mount type=bind,"src=${host.home}/.house-kit",dst=/kit-home --mount type=bind,"src=${host.home}/AgentsHouse",dst=/agents/house`;
 
@@ -508,11 +524,12 @@ it('installs the container exactly as before only with the container choice', as
     'container inspect house-kit',
     'container inspect house-kit',
     `pull --quiet --platform linux/amd64 ${image}`,
-    `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,
-    `run --rm --network host --user ${uid} ${mounts} ${image} login`,
-    `run --entrypoint node --rm --network host --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js`,
-    `run -d --name house-kit --restart on-failure --user ${uid} ${mounts} --label agentshouse.house=https://agents.house ${image} resident`,
+    `run --entrypoint node --rm --network host ${authorities} --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,
+    `run --rm --network host ${authorities} --user ${uid} ${mounts} ${image} login`,
+    `run --entrypoint node --rm --network host ${authorities} --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js`,
+    `run -d --name house-kit --restart on-failure ${authorities} --user ${uid} ${mounts} --label agentshouse.house=https://agents.house ${image} resident`,
   ]);
+  expect(await readFile(join(host.home, '.house-kit', 'certificates.pem'), 'utf8')).toContain("the computer's own authority");
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
   expect([...host.calls('curl'), ...host.calls('systemctl'), ...host.calls('sudo')]).toEqual([]);
   await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -520,7 +537,7 @@ it('installs the container exactly as before only with the container choice', as
 
 it('installs the container on macOS through Docker Desktop, publishing no port, and opens the printed link in the host browser', async () => {
   const host = await fakeHost({ system: 'Darwin', machine: 'x86_64', appleSilicon: false });
-  const image = `ghcr.io/agentshouse/kit@sha256:${'a'.repeat(64)}`;
+  const image = `agents.house/kit@sha256:${'a'.repeat(64)}`;
   const uid = `${process.getuid!()}:${process.getgid!()}`;
   const mounts = `--mount type=bind,"src=${host.home}/.house-kit",dst=/kit-home --mount type=bind,"src=${host.home}/AgentsHouse",dst=/agents/house`;
 
@@ -528,10 +545,14 @@ it('installs the container on macOS through Docker Desktop, publishing no port, 
 
   expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nKit connected for Environment environment-one.\n`, stderr: '' });
   expect(host.calls('docker').filter((call) => call.endsWith(' login'))).toEqual([
-    `run --rm --user ${uid} ${mounts} ${image} login`,
+    `run --rm --env NODE_EXTRA_CA_CERTS=/kit-home/certificates.pem --user ${uid} ${mounts} ${image} login`,
   ]);
   expect(host.calls('docker').join('\n')).not.toMatch(/--publish|HOUSE_KIT_LOGIN_PORT/);
   expect(host.calls('open')).toEqual([LOGIN_LINK]);
+  expect(host.calls('security')).toEqual(['find-certificate -a -p /Library/Keychains/System.keychain']);
+  expect(await readFile(join(host.home, '.house-kit', 'certificates.pem'), 'utf8')).toBe(
+    '-----BEGIN CERTIFICATE-----\nthe keychain authority\n-----END CERTIFICATE-----\n',
+  );
 });
 
 it.each([
@@ -558,7 +579,7 @@ it('opens the link of a kit login forwarded into the container in the host brows
 
   expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\n`, stderr: '' });
   expect(host.calls('docker').filter((call) => call.endsWith(' login'))).toEqual([
-    expect.stringMatching(/^run --rm --network host --user \S+ --mount .* login$/),
+    expect.stringMatching(/^run --rm --network host --env NODE_EXTRA_CA_CERTS=\/kit-home\/certificates\.pem --user \S+ --mount .* login$/),
   ]);
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
 });
@@ -734,7 +755,12 @@ it.each([
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   if (placement.length === 0) {
     expect(host.calls('relay')).toEqual([relay]);
+    expect(host.calls('curl')).toEqual([
+      expect.stringMatching(/ https:\/\/kit-relay\.example\/agents\.house\/kit-installer\/node-v24\.22\.1-\S+\.tar\.gz$/),
+      expect.stringMatching(/ https:\/\/kit-relay\.example\/agents\.house\/kit-installer\/kit-0\.2\.1-alpha\.1\.tar\.gz$/),
+    ]);
   } else {
+    expect(host.calls('docker')).toContain(`pull --quiet --platform linux/amd64 kit-relay.example/agents.house/kit@sha256:${'a'.repeat(64)}`);
     const runs = host.calls('docker').filter((call) => call.startsWith('run '));
     expect(runs.length).toBeGreaterThan(1);
     const resident = runs.find((call) => call.endsWith(' resident'))!;
@@ -766,7 +792,7 @@ it.each([[['--rooms', 'r_k2v.4']], [['--no-private']]])('forwards kit login %j i
 
   expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\n`, stderr: '' });
   expect(host.calls('docker').filter((call) => / login( |$)/.test(call))).toEqual([
-    expect.stringMatching(new RegExp(`^run --rm --network host --user \\S+ --mount .* login ${rooms.join(' ')}$`)),
+    expect.stringMatching(new RegExp(`^run --rm --network host --env NODE_EXTRA_CA_CERTS=/kit-home/certificates\\.pem --user \\S+ --mount .* login ${rooms.join(' ')}$`)),
   ]);
 });
 

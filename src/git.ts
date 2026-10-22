@@ -2,8 +2,8 @@ import { spawn } from 'node:child_process';
 import { isUtf8 } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { withoutProxy } from './clis.ts';
 import { workspaceRoot } from './home.ts';
+import { childEnvironment } from './relay.ts';
 
 export function localCopies(): string {
   return join(workspaceRoot(), 'local-copies');
@@ -29,7 +29,7 @@ export interface Imported {
 
 export function run(cwd: string, args: string[], input?: string | Buffer, env: NodeJS.ProcessEnv = {}): Promise<Ran> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd, env: { ...withoutProxy(), ...env } });
+    const child = spawn('git', args, { cwd, env: { ...childEnvironment(), ...env } });
     const stdout: Buffer[] = [];
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));

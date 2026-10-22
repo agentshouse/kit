@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
 import { beforeAll, expect, it, onTestFinished } from 'vitest';
 import { attached, bridgeSockets, inspected, posted } from './attachments.ts';
-import { cacheArtifacts, pinnedArtifacts } from './curl.ts';
+import { KIT_FILE_CORRUPT, KIT_FILE_DROPPED_ONCE, KIT_FILE_OVERSIZE, KIT_FILE_STALL, cacheArtifacts, kitFileRequests, pinnedArtifacts } from './building.ts';
 import { until, type Answer } from './double.ts';
 import { ENGINES, type TranscriptionReport } from '../src/transcription.ts';
 import { hostKit, hostMac, lastCall, lastMessage, opened, type Hosted, type Hosting } from './environment.ts';
@@ -82,7 +82,7 @@ function engines(hosted: Hosted): number[] {
 }
 
 async function downloads(hosted: Hosted): Promise<string[]> {
-  return (await readFile(join(hosted.home, 'curl.log'), 'utf8').catch(() => '')).split('\n').filter((line) => line !== '');
+  return kitFileRequests(hosted.house);
 }
 
 function reported(hosted: Hosted, after = 0): TranscriptionReport[] {
@@ -91,7 +91,7 @@ function reported(hosted: Hosted, after = 0): TranscriptionReport[] {
 
 function settled(hosted: Hosted, wanted: TranscriptionReport | ((report: TranscriptionReport) => boolean), after = 0): Promise<TranscriptionReport> {
   const met = typeof wanted === 'function' ? wanted : (report: TranscriptionReport) => JSON.stringify(report) === JSON.stringify(wanted);
-  // A minute covers checking the three pinned artifacts the curl double copies into Kit home on a loaded runner.
+  // A minute covers downloading the three pinned artifacts from the House double into Kit home on a loaded runner.
   return until(() => reported(hosted, after).find(met), 60_000);
 }
 
@@ -207,7 +207,7 @@ it("sends the transcription step while it transcribes a message's audio, then th
   expect(starting(hosted)).toEqual(['transcription', 'session', null]);
 });
 
-it('downloads the pinned engine, decoder and model into Kit home at its start, before any message, deleting any artifact the release no longer pins', async () => {
+it('downloads the pinned engine, decoder and model by name from its House into Kit home at its start, before any message, deleting any artifact the release no longer pins', async () => {
   const hosted = await transcribing({
     prepare: async (home) => {
       await mkdir(join(home, 'transcription'));
@@ -216,7 +216,7 @@ it('downloads the pinned engine, decoder and model into Kit home at its start, b
   });
   const directory = join(hosted.home, 'transcription');
 
-  expect(new Set(await downloads(hosted)).size).toBe(3);
+  expect((await downloads(hosted)).sort()).toEqual(pinnedArtifacts().map((artifact) => artifact.name).sort());
   const installed = await readdir(directory);
   expect(installed).toHaveLength(3);
   expect(installed).not.toContain('0'.repeat(64));
@@ -273,9 +273,9 @@ it('closes the connection a message opened to read its links once it refuses tha
 });
 
 it('ends a running download and deletes the artifacts when the setting turns off, reporting no failure', async () => {
-  const stalled = pinnedArtifacts()[1]!.url;
+  const stalled = pinnedArtifacts()[1]!.name;
   const hosted = await hostKit();
-  await writeFile(join(hosted.home, 'curl-stall'), stalled);
+  await writeFile(join(hosted.home, KIT_FILE_STALL), stalled);
   hosted.transcribe(true);
   const directory = join(hosted.home, 'transcription');
   await until(async () => (await downloads(hosted)).includes(stalled));
@@ -283,7 +283,7 @@ it('ends a running download and deletes the artifacts when the setting turns off
   hosted.transcribe(false);
 
   await until(() => !existsSync(directory));
-  await rm(join(hosted.home, 'curl-stall'));
+  await rm(join(hosted.home, KIT_FILE_STALL));
   const again = hosted.reports.length;
   hosted.transcribe(true);
   await settled(hosted, { installed: true, failure: null }, again);
@@ -315,11 +315,22 @@ it('installs the engine and the decoder built for Apple silicon on a Mac', async
   expect(installed.filter((content) => content.subarray(0, 8).equals(MACH_O_ARM64))).toHaveLength(2);
 });
 
-it('refuses an artifact that does not match its hash, installs nothing, reports why, refuses a message linking audio as having no engine and tries again only when the setting next turns on', async () => {
-  const corrupt = pinnedArtifacts()[2]!.url;
+it('downloads an artifact again when the Building drops its first download, and installs the engine', async () => {
+  const model = pinnedArtifacts()[2]!.name;
   const hosted = await hostKit([{}], {
     transcribe: true,
-    prepare: (home) => writeFile(join(home, 'curl-corrupt'), corrupt),
+    prepare: (home) => writeFile(join(home, KIT_FILE_DROPPED_ONCE), model),
+  });
+
+  await settled(hosted, { installed: true, failure: null });
+  expect((await downloads(hosted)).filter((name) => name === model)).toEqual([model, model]);
+});
+
+it('refuses an artifact that does not match its hash, installs nothing, reports why, refuses a message linking audio as having no engine and tries again only when the setting next turns on', async () => {
+  const corrupt = pinnedArtifacts()[2]!.name;
+  const hosted = await hostKit([{}], {
+    transcribe: true,
+    prepare: (home) => writeFile(join(home, KIT_FILE_CORRUPT), corrupt),
   });
   const [voice] = attached(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') }]);
 
@@ -338,7 +349,7 @@ it('refuses an artifact that does not match its hash, installs nothing, reports 
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(await downloads(hosted)).toHaveLength(tried);
 
-  await rm(join(hosted.home, 'curl-corrupt'));
+  await rm(join(hosted.home, KIT_FILE_CORRUPT));
   const cleared = hosted.reports.length;
   hosted.transcribe(false);
   await settled(hosted, { installed: false, failure: null }, cleared);
@@ -354,12 +365,12 @@ it('stops a download larger than its pinned size, installs nothing and reports w
   const [decoder] = pinnedArtifacts();
   const hosted = await hostKit([{}], {
     transcribe: true,
-    prepare: (home) => writeFile(join(home, 'curl-oversize'), decoder!.url),
+    prepare: (home) => writeFile(join(home, KIT_FILE_OVERSIZE), decoder!.name),
   });
 
   expect(await settled(hosted, (report) => report.failure !== null)).toEqual({
     installed: false,
-    failure: `${decoder!.url} is larger than its pinned 5175832 bytes`,
+    failure: `${decoder!.name} is larger than its pinned 5175832 bytes`,
   });
   expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
 });
@@ -369,12 +380,12 @@ it('ends a download that has not arrived within its deadline, installs nothing a
   const hosted = await hostKit([{}], {
     transcribe: true,
     environment: { NODE_OPTIONS: `--import=${FAST_DEADLINES}` },
-    prepare: (home) => writeFile(join(home, 'curl-stall'), decoder!.url),
+    prepare: (home) => writeFile(join(home, KIT_FILE_STALL), decoder!.name),
   });
 
   expect(await settled(hosted, (report) => report.failure !== null)).toEqual({
     installed: false,
-    failure: `${decoder!.url} did not arrive within 52 seconds`,
+    failure: `${decoder!.name} did not arrive within 52 seconds`,
   });
   expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
 });

@@ -2,7 +2,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startProxy, until, type Proxy } from './double.ts';
-import { appRemote, directed, hostKit, installHeld, opened, runs } from './environment.ts';
+import { appRemote, directed, hostKit, installHeld, opened, runs, userBin } from './environment.ts';
 import { uploadTool } from './store.ts';
 import type { Started } from './started.ts';
 
@@ -47,9 +47,9 @@ it.each([
   expect(new Set(proxy.tunnels)).toEqual(new Set(proxied ? [new URL(hosted.house.origin).host, new URL(hosted.store.origin).host] : []));
 });
 
-it('starts every process, a CLI install, a sign-in and a Conversation process, without the proxy variables', async () => {
+it('starts every process, a CLI install, a sign-in and a Conversation process, with the proxy variables when no Kit relay is set', async () => {
   const proxy = await startProxy();
-  const hosted = await hostKit([{}], { tls: true, environment: variables(proxy) });
+  const hosted = await hostKit([{}], { tls: true, environment: variables(proxy), prepare: (home) => rm(join(userBin(home), 'claude')) });
   await rm(await installHeld(hosted));
   hosted.call({ kind: 'sign_in', conversation_id: null, cli: 'codex-acp', ends_in: 600 });
 
@@ -61,8 +61,8 @@ it('starts every process, a CLI install, a sign-in and a Conversation process, w
       .filter((line) => line !== '')
       .map((line) => JSON.parse(line) as Started);
     const names = new Set(entries.map((entry) => entry.name));
-    return ['npm', 'device-login', 'adapter'].every((name) => names.has(name)) ? entries : undefined;
+    return ['curl', 'device-login', 'adapter'].every((name) => names.has(name)) ? entries : undefined;
   });
-  expect(started.filter((entry) => entry.proxy.length > 0)).toEqual([]);
+  expect(started.filter((entry) => entry.proxy.sort().join(' ') !== 'HTTPS_PROXY HTTP_PROXY http_proxy https_proxy')).toEqual([]);
   expect(proxy.tunnels).not.toEqual([]);
 });

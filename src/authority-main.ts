@@ -1,12 +1,12 @@
-import { setGlobalProxyFromEnv } from 'node:http';
 import { HouseRefusal, post } from './api.ts';
 import { readEnrolment } from './home.ts';
+import { proxyUnlessRelayed } from './relay.ts';
 
 function unanswered(error: unknown): boolean {
   return error instanceof HouseRefusal ? error.status >= 500 : error instanceof TypeError && error.message === 'fetch failed';
 }
 
-setGlobalProxyFromEnv();
+proxyUnlessRelayed();
 try {
   const { house, credential } = (await readEnrolment())!;
   try {

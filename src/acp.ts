@@ -7,8 +7,9 @@ import {
 } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_RELEASE, adapterCommand, withoutProxy } from './clis.ts';
+import { CLIS, KIT_RELEASE, adapterCommand } from './clis.ts';
 import type { Message } from './events.ts';
+import { childEnvironment } from './relay.ts';
 import { killTree, type Scope } from './scope.ts';
 
 export interface Adapter {
@@ -36,7 +37,7 @@ export async function startAdapter(
   const [command, args] = scope?.command(...started) ?? started;
   const child = spawn(command, args, {
     cwd,
-    env: { ...withoutProxy(), ...(adapter === null ? {} : { ...adapter.env, [adapter.executable]: cli }), ...added },
+    env: { ...childEnvironment(), ...(adapter === null ? {} : { ...adapter.env, [adapter.executable]: cli }), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });

@@ -11,7 +11,7 @@ RUN apt-get update \
 COPY tmp/kit.tgz /tmp/kit.tgz
 RUN npm install --global --ignore-scripts /tmp/kit.tgz && rm /tmp/kit.tgz
 
-ENV HOME=/kit-home HOUSE_KIT_HOME=/kit-home SHELL=/bin/bash
+ENV HOME=/kit-home HOUSE_KIT_HOME=/kit-home SHELL=/bin/bash NODE_USE_SYSTEM_CA=1
 WORKDIR /agents/house
 ENTRYPOINT ["tini", "--", "kit"]
 CMD ["resident"]

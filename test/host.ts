@@ -17,7 +17,10 @@ export async function published(): Promise<string> {
   const script = join(home, 'connect-linux.sh');
   await writeFile(
     script,
-    (await readFile(LINUX, 'utf8')).replace('__IMAGE_DIGEST__', 'a'.repeat(64)).replace('__KIT_RELEASE__', PUBLISHED_VERSION),
+    (await readFile(LINUX, 'utf8'))
+      .replace('__IMAGE_DIGEST__', 'a'.repeat(64))
+      .replace('__KIT_RELEASE__', PUBLISHED_VERSION)
+      .replace('__KIT_SHA256__', 'b'.repeat(64)),
   );
   return script;
 }
@@ -68,7 +71,7 @@ const TOOLS: Record<string, string> = {
   uname: 'case "$1" in -s) echo "$FAKE_SYSTEM" ;; -m) echo "$FAKE_MACHINE" ;; *) exec /bin/uname "$@" ;; esac\n',
   sysctl: 'echo "$FAKE_ARM64"\n',
   sw_vers: 'echo "$FAKE_MACOS"\n',
-  curl: `${LOGGED}while [ $# -gt 1 ]; do [ "$1" != -o ] || out=$2; shift; done\ncp "$FAKE/node.tar.gz" "$out"\n`,
+  curl: `${LOGGED}while [ $# -gt 1 ]; do [ "$1" != -o ] || out=$2; shift; done\ncase "$1" in */kit-installer/node-v*) cp "$FAKE/node.tar.gz" "$out" ;; */kit-installer/kit-*) cp "$FAKE/kit.tar.gz" "$out" ;; *) cp "$FAKE/node.tar.gz" "$out" ;; esac\n`,
   sha256sum: `${LOGGED}cat >/dev/null\n`,
   shasum: `${LOGGED}cat >/dev/null\n`,
   systemctl: `${LOGGED}case "$*" in
@@ -128,6 +131,7 @@ case "$1" in
     ;;
 esac\n`,
   sudo: `${LOGGED}exit 1\n`,
+  security: `${LOGGED}printf -- '-----BEGIN CERTIFICATE-----\\nthe keychain authority\\n-----END CERTIFICATE-----\\n'\n`,
   id: '[ "$*" != -un ] || { echo owner; exit 0; }\nexec /usr/bin/id "$@"\n',
   'xdg-open': `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
   open: `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
@@ -144,14 +148,9 @@ if [ "\${1##*/}" = service-main.js ]; then
 fi
 `;
 
-const NPM = `${LOGGED}while [ $# -gt 0 ]; do [ "$1" != --prefix ] || prefix=$2; shift; done
-mkdir -p "$prefix/lib/node_modules/@agentshouse/kit/dist" "$prefix/bin"
-cp "$FAKE/kit" "$prefix/bin/kit"
-cp "$FAKE/kit" "$prefix/bin/house"
-`;
-
 const KIT = `printf '%s %s HOUSE_KIT_HOME=%s%s\\n' "\${0##*/}" "$*" "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+ HOUSE_KIT_REPLACES=$HOUSE_KIT_REPLACES}" >> "$FAKE/log"
 [ -z "\${HOUSE_KIT_RELAY-}" ] || printf 'relay %s\\n' "$HOUSE_KIT_RELAY" >> "$FAKE/log"
+[ -z "\${NODE_USE_SYSTEM_CA-}" ] || printf 'ca %s\\n' "$NODE_USE_SYSTEM_CA" >> "$FAKE/log"
 if [ "$1" = login ]; then set -- "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+environment-two}"; ${LOGIN}fi
 `;
 
@@ -172,9 +171,16 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   const unpacked = `node-v24.22.1-${system}-${/arm64|aarch64/.test(platform.machine) ? 'arm64' : 'x64'}`;
   await mkdir(join(fake, unpacked, 'bin'), { recursive: true });
   await script(join(fake, unpacked, 'bin', 'node'), NODE);
-  await script(join(fake, unpacked, 'bin', 'npm'), NPM);
   spawnSync('tar', ['-czf', join(fake, 'node.tar.gz'), '-C', fake, unpacked]);
+  const packaged = join(fake, 'kit-tree');
+  await mkdir(join(packaged, 'lib', 'node_modules', '@agentshouse', 'kit', 'dist'), { recursive: true });
+  await mkdir(join(packaged, 'bin'));
+  await script(join(packaged, 'bin', 'kit'), KIT);
+  await script(join(packaged, 'bin', 'house'), KIT);
+  spawnSync('tar', ['-czf', join(fake, 'kit.tar.gz'), '-C', packaged, 'lib', 'bin']);
+  await writeFile(join(fake, 'ca-certificates.crt'), "-----BEGIN CERTIFICATE-----\nthe computer's own authority\n-----END CERTIFICATE-----\n");
   const bootstrap = await published();
+  await writeFile(bootstrap, (await readFile(bootstrap, 'utf8')).replace('/etc/ssl/certs/ca-certificates.crt', join(fake, 'ca-certificates.crt')));
   if (platform.server === true) {
     const osRelease = join(fake, 'os-release');
     const server = join(fake, 'server');

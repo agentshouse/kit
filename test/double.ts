@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { createReadStream, mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { createServer, STATUS_CODES, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
 import { connect, type AddressInfo } from 'node:net';
@@ -23,6 +23,8 @@ export interface Answer {
   body?: unknown;
   bytes?: { type: string; content: Buffer | string };
   headers?: Record<string, string>;
+  file?: string;
+  partial?: Buffer;
   drop?: boolean;
 }
 
@@ -149,6 +151,16 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
         route === undefined ? { status: 404, body: { error: { code: 'not_found', retryable: false } } } : await route.handler(received);
       if (answer.drop === true) {
         response.destroy();
+        return;
+      }
+      if (answer.file !== undefined) {
+        response.writeHead(answer.status ?? 200, { 'content-type': 'application/octet-stream', 'content-length': statSync(answer.file).size });
+        createReadStream(answer.file).pipe(response);
+        return;
+      }
+      if (answer.partial !== undefined) {
+        response.writeHead(answer.status ?? 200, { 'content-type': 'application/octet-stream', 'content-length': answer.partial.length * 2 });
+        response.write(answer.partial);
         return;
       }
       if (answer.bytes !== undefined) {
