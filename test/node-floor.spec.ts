@@ -22,14 +22,14 @@ async function run(bin: string, version: string) {
 }
 
 for (const bin of ['kit', 'house']) {
-  it.each(['22.23.3', '24.13.0'])(`${bin} refuses Node %s in one line before loading anything`, async (version) => {
+  it.each(['22.23.3', '24.21.9', '24.22.0'])(`${bin} refuses Node %s in one line before loading anything`, async (version) => {
     const ran = await run(bin, version);
     expect(ran.status).toBe(1);
     expect(ran.stdout).toBe('');
-    expect(ran.stderr).toBe(`${bin}: the Kit needs Node 24.14.0 or newer; this is ${version}\n`);
+    expect(ran.stderr).toBe(`${bin}: the Kit needs Node 24.22.1 or newer; this is ${version}\n`);
   });
 
-  it.each(['24.14.0', '25.0.0'])(`${bin} runs on Node %s`, async (version) => {
+  it.each(['24.22.1', '25.0.0'])(`${bin} runs on Node %s`, async (version) => {
     const ran = await run(bin, version);
     expect(ran.stderr).toBe('');
     expect(ran.stdout).toBe('implementation loaded\n');
