@@ -290,8 +290,8 @@ it('installs a server with its Kit home where HOUSE_KIT_HOME names, and its serv
 });
 
 const LISTED = [
-  ['codex', '/home/u/.local/bin/codex', '0.150.0', '0.159.1', 'old'],
-  ['claude', '/home/u/.local/bin/claude', '2.1.200', '2.1.286', 'old'],
+  ['codex', '/home/u/.local/bin/codex', '0.150.0', '0.160.1', 'old'],
+  ['claude', '/home/u/.local/bin/claude', '2.1.200', '2.1.303', 'old'],
   ['grok', '/home/u/.grok/bin/grok', '1.0.50', '1.0.46', 'current'],
 ];
 
@@ -324,8 +324,8 @@ it('asks once for each CLI below its minimum, updates one on Enter, leaves one i
   const { output, updated } = await updatingClis(0, true, '\nn\n');
 
   expect(output.match(/Update it\? \[Y\/n\]/g)).toHaveLength(2);
-  expect(output).toContain('codex 0.150.0 is older than 0.159.1, the oldest this Kit runs. Update it? [Y/n]');
-  expect(output).toContain('claude 2.1.200 is older than 2.1.286, the oldest this Kit runs. Update it? [Y/n]');
+  expect(output).toContain('codex 0.150.0 is older than 0.160.1, the oldest this Kit runs. Update it? [Y/n]');
+  expect(output).toContain('claude 2.1.200 is older than 2.1.303, the oldest this Kit runs. Update it? [Y/n]');
   expect(output).not.toContain('grok 1.0.50 is older');
   expect(updated).toEqual(['/home/u/.local/bin/codex']);
 });
@@ -396,7 +396,7 @@ KIT_HOME=${home}
 kit_running() { true; }
 enrolled() { printf environment-one; }
 docker() { printf 'docker %s\\n' "$*" >&2; }
-listing() { printf 'codex\\t/kit-home/.local/bin/codex\\t0.150.0\\t0.159.1\\told\\n'; }
+listing() { printf 'codex\\t/kit-home/.local/bin/codex\\t0.150.0\\t0.160.1\\told\\n'; }
 updating() { printf 'updated %s\\n' "$1" >&2; }
 ${await steps('terminal', 'update_clis', 'resume_kit')}
 update_clis listing updating
@@ -420,7 +420,7 @@ it.each([
   if (rejected) await rm(join(host.home, '.house-kit', 'credential.json'));
   const codex = join(host.home, 'codex');
   await writeFile(codex, '#!/bin/sh\nprintf \'codex %s\\n\' "$*" >> "$FAKE/log"\n', { mode: 0o755 });
-  await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.160.0\t0.159.1\tcurrent\n`);
+  await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.161.0\t0.160.1\tcurrent\n`);
   await host.forget();
 
   const ran = host.run(['--linux', '--update-clis']);
@@ -498,7 +498,7 @@ it('names each chosen CLI the login shell finds, even through a relative PATH en
   expect(listed).toEqual({
     status: 0,
     listed: [
-      ['codex', join(userBin(home), 'codex'), '0.150.0', '0.159.1', 'old'],
+      ['codex', join(userBin(home), 'codex'), '0.150.0', '0.160.1', 'old'],
       ['grok', join(userBin(home), 'grok'), '1.0.47', '1.0.46', 'current'],
     ],
   });
@@ -513,8 +513,8 @@ it('writes the release manifest naming every file Kit installs by name and sha25
     'connect-linux.sh': '#!/usr/bin/env bash\n',
     'connect-windows.ps1': "$ErrorActionPreference = 'Stop'\n",
     'kit-0.2.1.tar.gz': 'the Kit archive',
-    'codex-acp-2.1.1.tar.gz': 'the Codex adapter archive',
-    'claude-agent-acp-0.85.1.tar.gz': 'the Claude Code adapter archive',
+    'codex-acp-2.2.2.tar.gz': 'the Codex adapter archive',
+    'claude-agent-acp-0.94.0.tar.gz': 'the Claude Code adapter archive',
   };
   for (const [name, content] of Object.entries(own)) await writeFile(join(release, name), content);
   const image = `sha256:${'c'.repeat(64)}`;

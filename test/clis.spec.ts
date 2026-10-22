@@ -131,7 +131,7 @@ it.each(KINDS)('gives a %s conversation its login shell PATH with Kit shims and 
 });
 
 it.each([
-  ['codex-acp', '0.161.0'],
+  ['codex-acp', '0.162.0'],
   ['grok-build', '1.0.48'],
 ])('runs a %s replaced between two conversations at its new version in the second while the first keeps its own', async (kind, next) => {
   const hosted = await hostKit([{ kind }]);
@@ -168,7 +168,7 @@ it.each(KINDS)('runs a %s its official installer placed beneath the home when th
 });
 
 it('reports a CLI below its minimum, starts no conversation of that kind but one of another, and starts it once the login shell finds a newer one', async () => {
-  const minimum = '0.159.1';
+  const minimum = '0.160.1';
   const hosted = await hostKit([{ kind: 'codex-acp' }, { kind: 'grok-build' }], {
     prepare: async (home) => {
       placeUserCli(userBin(home), 'codex-acp', '0.150.0');
@@ -184,10 +184,10 @@ it('reports a CLI below its minimum, starts no conversation of that kind but one
     join(userBin(hosted.home), 'codex'),
   );
 
-  placeUserCli(userBin(hosted.home), 'codex-acp', '0.160.0');
+  placeUserCli(userBin(hosted.home), 'codex-acp', '0.161.0');
 
   expect(await open(hosted, 'conversation-1', 'agent-1')).toEqual({ provider_session_id: expect.any(String) });
-  const current = await report(hosted, (agents) => agents.some((agent) => agent.release === '0.160.0'));
+  const current = await report(hosted, (agents) => agents.some((agent) => agent.release === '0.161.0'));
   expect(current.find((agent) => agent.kind === 'codex-acp')).not.toHaveProperty('minimum');
 });
 
@@ -352,14 +352,14 @@ it('reports a model its CLI refuses to select, when it reads that CLI again, wit
       { id: 'sonnet', name: 'Sonnet', efforts: ['low'] },
     ]),
   );
-  placeUserCli(userBin(hosted.home), 'claude-agent-acp', '2.1.291');
+  placeUserCli(userBin(hosted.home), 'claude-agent-acp', '2.1.305');
 
   await open(hosted, 'conversation-1');
 
   await reportOf(hosted, [
     {
       kind: 'claude-agent-acp',
-      release: '2.1.291',
+      release: '2.1.305',
       failure: null,
       signed_in: true,
       models: [

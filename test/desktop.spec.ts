@@ -326,13 +326,13 @@ it.each([
     expect(host.run()).toMatchObject({ status: 0 });
     const codex = join(host.home, 'codex');
     await writeFile(codex, '#!/bin/sh\nprintf \'codex %s\\n\' "$*" >> "$FAKE/log"\n', { mode: 0o755 });
-    await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.160.0\t0.159.1\tcurrent\n`);
+    await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.161.0\t0.160.1\tcurrent\n`);
     await host.forget();
 
     const ran = host.run(['--update-clis']);
 
     expect(ran).toMatchObject({ status: 0, stderr: '' });
-    expect(ran.stdout).toContain('Updating codex 0.160.0.\n');
+    expect(ran.stdout).toContain('Updating codex 0.161.0.\n');
     expect(ran.stdout).toContain('Kit is already installed.\n');
     expect(host.calls('node')).toContain('clis-main.js');
     expect(host.calls('codex')).toEqual(['update']);
@@ -346,12 +346,12 @@ it('asks the Kit for no restart when the one CLI update it tried failed', async 
   expect(host.run()).toMatchObject({ status: 0 });
   const codex = join(host.home, 'codex');
   await writeFile(codex, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-  await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.160.0\t0.159.1\tcurrent\n`);
+  await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.161.0\t0.160.1\tcurrent\n`);
   await host.forget();
 
   const ran = host.run(['--update-clis']);
 
-  expect(ran).toMatchObject({ status: 0, stderr: 'codex could not be updated; it stays at 0.160.0.\n' });
+  expect(ran).toMatchObject({ status: 0, stderr: 'codex could not be updated; it stays at 0.161.0.\n' });
   expect(ran.stdout).toContain('Kit is already installed.\n');
   expect(acts(host)).toEqual([]);
   await expect(access(join(host.home, '.house-kit', 'restart'))).rejects.toMatchObject({ code: 'ENOENT' });

@@ -99,7 +99,7 @@ function bridgeInClaudeSandbox(bridge: string): Record<string, unknown> {
 export const CLIS: Record<string, Cli> = {
   'codex-acp': {
     bin: 'codex',
-    minimum: '0.159.1',
+    minimum: '0.160.1',
     install: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
     adapter: {
       package: '@agentclientprotocol/codex-acp',
@@ -122,7 +122,7 @@ export const CLIS: Record<string, Cli> = {
   },
   'claude-agent-acp': {
     bin: 'claude',
-    minimum: '2.1.286',
+    minimum: '2.1.303',
     install: 'curl -fsSL https://claude.ai/install.sh | bash',
     adapter: {
       package: '@agentclientprotocol/claude-agent-acp',

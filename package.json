@@ -24,15 +24,15 @@
     "test": "tsc -p tsconfig.json && vitest run"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.7.0",
-    "@agentshouse/mdmodel": "0.1.0-cabd61587647f",
-    "@agentshouse/skills": "0.1.0-c34ad2b295b4a",
+    "@agentclientprotocol/sdk": "2.0.1",
+    "@agentshouse/mdmodel": "0.1.0-c4f4d37bc9d6a",
+    "@agentshouse/skills": "0.1.0-ccce31cfa5fec",
     "@lydell/node-pty": "1.2.0-beta.15",
     "yaml": "2.9.1"
   },
   "peerDependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.85.1",
-    "@agentclientprotocol/codex-acp": "2.1.1"
+    "@agentclientprotocol/claude-agent-acp": "0.94.0",
+    "@agentclientprotocol/codex-acp": "2.2.2"
   },
   "peerDependenciesMeta": {
     "@agentclientprotocol/claude-agent-acp": {
@@ -43,7 +43,7 @@
     }
   },
   "devDependencies": {
-    "@types/node": "24.13.6",
+    "@types/node": "24.19.2",
     "@types/ws": "8.18.2",
     "typescript": "7.0.2",
     "vitest": "5.0.5",

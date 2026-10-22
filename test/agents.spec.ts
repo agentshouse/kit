@@ -358,7 +358,7 @@ it('reports a CLI below its minimum with the version found and the minimum, and 
     {
       kind: 'codex-acp',
       release: '0.150.0',
-      minimum: '0.159.1',
+      minimum: '0.160.1',
       failure: null,
       signed_in: false,
       models: [],
@@ -374,13 +374,13 @@ it('reads a CLI below its minimum again at a later work_available notification a
   await start(async () => {
     placeUserCli(userBin(home), 'codex-acp', '0.150.0');
   });
-  expect((await until(() => completeReports()[0])).agents).toEqual([expect.objectContaining({ kind: 'codex-acp', release: '0.150.0', minimum: '0.159.1' })]);
+  expect((await until(() => completeReports()[0])).agents).toEqual([expect.objectContaining({ kind: 'codex-acp', release: '0.150.0', minimum: '0.160.1' })]);
 
-  placeUserCli(userBin(home), 'codex-acp', '0.160.0');
+  placeUserCli(userBin(home), 'codex-acp', '0.161.0');
   house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
 
   const [current] = (await until(() => completeReports()[1])).agents as Record<string, unknown>[];
-  expect(current).toMatchObject({ kind: 'codex-acp', release: '0.160.0', failure: null });
+  expect(current).toMatchObject({ kind: 'codex-acp', release: '0.161.0', failure: null });
   expect(current).not.toHaveProperty('minimum');
 });
 
