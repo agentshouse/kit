@@ -13,8 +13,8 @@ export const BINS: Record<string, string> = {
 };
 
 export const RELEASES: Record<string, string> = {
-  'codex-acp': '0.160.0',
-  'claude-agent-acp': '2.1.290',
+  'codex-acp': '0.161.0',
+  'claude-agent-acp': '2.1.304',
   'grok-build': '1.0.47',
 };
 

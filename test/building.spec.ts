@@ -22,9 +22,9 @@ async function enrolled(house: string): Promise<{ home: string; building: typeof
 
 function serving(house: House, prefix = ''): void {
   house.route('GET', `${prefix}/kit-installer/bootstrap.json`, () => ({
-    body: { schemaVersion: 3, files: { 'codex-acp-2.1.1.tar.gz': { sha256: SHA256 } } },
+    body: { schemaVersion: 3, files: { 'codex-acp-2.2.2.tar.gz': { sha256: SHA256 } } },
   }));
-  house.route('GET', `${prefix}/kit-installer/codex-acp-2.1.1.tar.gz`, () => ({ bytes: { type: 'application/octet-stream', content: CONTENT } }));
+  house.route('GET', `${prefix}/kit-installer/codex-acp-2.2.2.tar.gz`, () => ({ bytes: { type: 'application/octet-stream', content: CONTENT } }));
 }
 
 it('downloads a file by name from the House its enrolment names and answers the sha256 that House names for it', async () => {
@@ -32,15 +32,15 @@ it('downloads a file by name from the House its enrolment names and answers the 
   serving(house);
   const { home, building } = await enrolled(house.origin);
 
-  expect(await building.servedDigest('codex-acp-2.1.1.tar.gz')).toBe(SHA256);
-  expect(await building.servedDigest('claude-agent-acp-0.85.1.tar.gz')).toBeNull();
-  await building.downloadServed('codex-acp-2.1.1.tar.gz', SHA256, join(home, 'file'));
+  expect(await building.servedDigest('codex-acp-2.2.2.tar.gz')).toBe(SHA256);
+  expect(await building.servedDigest('claude-agent-acp-0.94.0.tar.gz')).toBeNull();
+  await building.downloadServed('codex-acp-2.2.2.tar.gz', SHA256, join(home, 'file'));
 
   expect(await readFile(join(home, 'file'))).toEqual(CONTENT);
   expect(house.requests.map((request) => request.path)).toEqual([
     '/kit-installer/bootstrap.json',
     '/kit-installer/bootstrap.json',
-    '/kit-installer/codex-acp-2.1.1.tar.gz',
+    '/kit-installer/codex-acp-2.2.2.tar.gz',
   ]);
 });
 
@@ -51,12 +51,12 @@ it('downloads through the Kit relay, naming the House host first, and never Hous
   vi.stubEnv('HOUSE_KIT_RELAY', relay.origin);
   const { home, building } = await enrolled(house.origin);
 
-  await building.downloadServed('codex-acp-2.1.1.tar.gz', await building.servedDigest('codex-acp-2.1.1.tar.gz') ?? '', join(home, 'file'));
+  await building.downloadServed('codex-acp-2.2.2.tar.gz', await building.servedDigest('codex-acp-2.2.2.tar.gz') ?? '', join(home, 'file'));
 
   expect(await readFile(join(home, 'file'))).toEqual(CONTENT);
   expect(relay.requests.map((request) => request.path)).toEqual([
     `/${new URL(house.origin).host}/kit-installer/bootstrap.json`,
-    `/${new URL(house.origin).host}/kit-installer/codex-acp-2.1.1.tar.gz`,
+    `/${new URL(house.origin).host}/kit-installer/codex-acp-2.2.2.tar.gz`,
   ]);
   expect(house.requests).toEqual([]);
 });
@@ -66,8 +66,8 @@ it('keeps nothing of a file whose bytes do not match the sha256 it was given, na
   serving(house);
   const { home, building } = await enrolled(house.origin);
 
-  await expect(building.downloadServed('codex-acp-2.1.1.tar.gz', '0'.repeat(64), join(home, 'file'))).rejects.toThrow(
-    'codex-acp-2.1.1.tar.gz does not match its sha256',
+  await expect(building.downloadServed('codex-acp-2.2.2.tar.gz', '0'.repeat(64), join(home, 'file'))).rejects.toThrow(
+    'codex-acp-2.2.2.tar.gz does not match its sha256',
   );
   await expect(readFile(join(home, 'file'))).rejects.toThrow();
 });

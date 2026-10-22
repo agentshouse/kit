@@ -28,8 +28,8 @@ function docker {
   if ($args[-1] -ceq 'update' -and $args -contains $script:FailingCli) { $global:LASTEXITCODE = 1 }
   if ($args -contains 'node') {
     $global:LASTEXITCODE = $script:ListStatus
-    "codex`t/kit-home/.local/bin/codex`t0.150.0`t0.159.1`told"
-    "claude`t/kit-home/.local/bin/claude`t2.1.200`t2.1.286`told"
+    "codex`t/kit-home/.local/bin/codex`t0.150.0`t0.160.1`told"
+    "claude`t/kit-home/.local/bin/claude`t2.1.200`t2.1.303`told"
     "grok`t/kit-home/.grok/bin/grok`t1.0.50`t1.0.46`tcurrent"
   }
 }
