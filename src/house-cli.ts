@@ -26,7 +26,7 @@ interface Description {
   media_type?: string;
 }
 
-type Finishing = { upload: UploadParts } | { checking: true } | { text: string };
+type Finishing = { upload: UploadParts } | { text: string };
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>']";
 const PUSH_USAGE = 'usage: house push [commit] [--owner]';
@@ -154,13 +154,20 @@ function opened(url: string, method: string, headers: Record<string, string>, bo
   });
 }
 
-async function sentPart(url: string, file: string, start: number, end: number): Promise<void> {
-  const answer = await opened(
-    url,
-    'PUT',
-    { 'content-length': String(end - start) },
-    end === start ? undefined : createReadStream(file, { start, end: end - 1 }),
-  );
+function ranged(file: string, start: number, end: number): Readable | undefined {
+  return end === start ? undefined : createReadStream(file, { start, end: end - 1 });
+}
+
+async function* read(file: string, start: number, end: number): AsyncIterable<Buffer> {
+  try {
+    yield* ranged(file, start, end) ?? [];
+  } catch (error) {
+    throw unreadable(file, error);
+  }
+}
+
+async function sentPart(url: string, file: string, start: number, end: number, headers: Record<string, string>): Promise<void> {
+  const answer = await opened(url, 'PUT', { ...headers, 'content-length': String(end - start) }, ranged(file, start, end));
   await answer.toArray();
   if (answer.statusCode !== 200) throw storeRefusal('upload', answer.statusCode!);
 }
@@ -202,10 +209,10 @@ async function described(file: string): Promise<Description> {
   return { bytes, sha256: digest.digest('hex'), ...(mediaType === undefined ? {} : { media_type: mediaType }) };
 }
 
-async function finished(upload: string, room: unknown): Promise<Finishing> {
-  const text = await called('upload', { upload, room_ref: room });
+async function finished(upload: string, room: unknown, partSha256: string[]): Promise<Finishing> {
+  const text = await called('upload', { upload, room_ref: room, part_sha256: partSha256 });
   const answer = parse(text) as object | null;
-  return answer !== null && ('upload' in answer || 'checking' in answer) ? (answer as Finishing) : { text };
+  return answer !== null && 'upload' in answer ? (answer as Finishing) : { text };
 }
 
 async function upload({ file, ...destination }: Record<string, unknown>): Promise<string> {
@@ -215,9 +222,12 @@ async function upload({ file, ...destination }: Record<string, unknown>): Promis
   const declared = parse(answer) as { upload?: UploadParts } | null;
   if (declared?.upload === undefined) return answer;
   const accepted = await uploaded(declared.upload, {
+    name: file,
     bytes: description.bytes,
-    send: (url, start, end) => sentPart(url, file, start, end),
-    finish: (id) => finished(id, destination.room_ref),
+    sha256: description.sha256,
+    read: (start, end) => read(file, start, end),
+    send: (url, start, end, headers) => sentPart(url, file, start, end, headers),
+    finish: (id, partSha256) => finished(id, destination.room_ref, partSha256),
   });
   return accepted.text;
 }

@@ -141,8 +141,8 @@ interface SavedImage {
   path: string;
 }
 
-async function sentPart(url: string, bytes: Buffer): Promise<void> {
-  const answer = await fetch(relayed(url), { method: 'PUT', body: bytes });
+async function sentPart(url: string, bytes: Buffer, headers: Record<string, string>): Promise<void> {
+  const answer = await fetch(relayed(url), { method: 'PUT', headers, body: bytes });
   await answer.arrayBuffer();
   if (!answer.ok) throw storeRefusal('upload', answer.status);
 }
@@ -1051,17 +1051,22 @@ export class Conversations {
   private async image(conversation: Conversation, turn: Turn, reserved: number, data: string, mediaType: string): Promise<void> {
     const bytes = Buffer.from(data, 'base64');
     const name = `image-${++turn.images}.${mediaType.split('/')[1]}`;
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
     try {
       const declared = (await this.deliver(conversation, turn, 'images', {
         name,
         media_type: mediaType,
         bytes: bytes.length,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
+        sha256,
       })) as { upload: UploadParts };
       const saved = await uploaded(declared.upload, {
+        name,
         bytes: bytes.length,
-        send: (url, start, end) => sentPart(url, bytes.subarray(start, end)),
-        finish: (upload) => this.kit.house.deliver<Finished<SavedImage>>('/kit/uploads/finish', { upload }),
+        sha256,
+        read: (start, end) => [bytes.subarray(start, end)],
+        send: (url, start, end, headers) => sentPart(url, bytes.subarray(start, end), headers),
+        finish: (upload, partSha256) =>
+          this.kit.house.deliver<Finished<SavedImage>>('/kit/uploads/finish', { upload, part_sha256: partSha256 }),
       });
       turn.parts.arrive({ type: 'image', file: saved.path, name, media_type: mediaType }, reserved);
     } catch (error) {

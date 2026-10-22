@@ -265,7 +265,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   });
   house.route('POST', '/kit/uploads/finish', async (request) => {
     finishes.push(request);
-    const finished = await store.finish((request.body as { upload: string }).upload);
+    const { upload, part_sha256 } = request.body as { upload: string; part_sha256: unknown };
+    const finished = await store.finish(upload, part_sha256);
     if ('mismatch' in finished) return { status: 409, body: { error: { code: 'upload_mismatch', message: MISMATCH, retryable: false } } };
     return { body: finished };
   });
