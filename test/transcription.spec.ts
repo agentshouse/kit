@@ -354,7 +354,10 @@ it('stops a download larger than its pinned size, installs nothing and reports w
     prepare: (home) => writeFile(join(home, 'curl-oversize'), decoder!.url),
   });
 
-  await settled(hosted, { installed: false, failure: 'curl: (63) Maximum file size exceeded' });
+  expect(await settled(hosted, (report) => report.failure !== null)).toEqual({
+    installed: false,
+    failure: 'curl: (63) Maximum file size exceeded',
+  });
   expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
 });
 
