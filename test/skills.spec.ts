@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { chmod, lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSkills } from '@agentshouse/skills';
-import { expect, it, onTestFinished } from 'vitest';
+import { afterAll, beforeAll, expect, it, onTestFinished } from 'vitest';
 import { startHouse } from './double.ts';
 import { hostKit, lastCall, opened, userBin, type Hosted, type Hosting } from './environment.ts';
 import { readOnlyHome, temporaryHome } from './kit.ts';
@@ -17,9 +18,40 @@ const KIT_RELEASE = MANIFEST.version;
 const PACKAGE = '@agentshouse/skills';
 const PACKAGE_ROOT = fileURLToPath(new URL(`../node_modules/${PACKAGE}/`, import.meta.url));
 const SKILL_SET = join(PACKAGE_ROOT, 'set');
-const NAMES = listSkills().map((skill) => skill.name);
-const [FIRST, SECOND] = NAMES;
+const UPSTREAM = listSkills().map((skill) => skill.name);
+const [FIRST, SECOND] = UPSTREAM;
+const SKILL_PAGE = 'house-errand';
+const NAMES = [...UPSTREAM, SKILL_PAGE].sort();
 const RECORD = 'skill-set.json';
+
+function skillPage(origin: string): string {
+  return `---\nname: ${SKILL_PAGE}\ndescription: Runs a House errand.\n---\n# House errand\n\nRuns a House errand.\n\nStart at ${origin}/app/new.git and send the User ${origin}/sign-up.\n`;
+}
+
+const PAGES: Record<string, string> = {
+  'skills/errand.md': skillPage('<origin>'),
+  'routines/weekly.md': '---\ndescription: Sums up the week.\ninput: ""\n---\n# Weekly\n\nSums up the week.\n',
+};
+
+let plantedRoot: string;
+let planted: Record<string, string>;
+
+beforeAll(async () => {
+  plantedRoot = await mkdtemp(join(tmpdir(), 'kit-skills-'));
+  const copy = join(plantedRoot, 'skills');
+  await cp(PACKAGE_ROOT, copy, { recursive: true });
+  for (const [path, text] of Object.entries(PAGES)) {
+    await mkdir(dirname(join(copy, 'guide', path)), { recursive: true });
+    await writeFile(join(copy, 'guide', path), text);
+  }
+  planted = { KIT_SKILLS_PACKAGE: copy, NODE_OPTIONS: `--import=${fileURLToPath(new URL('./planted-skills.ts', import.meta.url))}` };
+});
+
+afterAll(() => rm(plantedRoot, { recursive: true, force: true }));
+
+function host(hosting: Hosting = {}): Promise<Hosted> {
+  return hostKit([{}], { ...hosting, environment: { ...planted, ...hosting.environment } });
+}
 
 async function tree(root: string): Promise<string[]> {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
@@ -40,7 +72,7 @@ async function absent(path: string): Promise<void> {
 async function restart(hosted: Hosted, hosting: Hosting): Promise<Hosted> {
   process.kill(hosted.kit.pid, 'SIGKILL');
   await hosted.kit.exited;
-  return hostKit([{}], { ...hosting, home: hosted.home });
+  return host({ ...hosting, home: hosted.home });
 }
 
 function skills(home: string, name = ''): string {
@@ -63,16 +95,18 @@ it("installs every Skill of the package at the version the Kit pins, file for fi
   const pinned = MANIFEST.dependencies[PACKAGE]!;
   expect(pinned).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   expect(JSON.parse(await readFile(join(PACKAGE_ROOT, 'package.json'), 'utf8'))).toMatchObject({ name: PACKAGE, version: pinned });
-  expect(NAMES).toEqual((await readdir(SKILL_SET)).sort());
-  expect(NAMES.length).toBeGreaterThan(1);
+  expect(UPSTREAM).toEqual((await readdir(SKILL_SET)).sort());
+  expect(UPSTREAM.length).toBeGreaterThan(1);
 
-  const hosted = await hostKit([{}], { skills: true });
+  const hosted = await host({ skills: true });
 
   expect((await readdir(skills(hosted.home))).sort()).toEqual(NAMES);
   expect((await readdir(claude(hosted.home))).sort()).toEqual(NAMES);
   for (const name of NAMES) {
     expect(await readlink(claude(hosted.home, name))).toBe(join('..', '..', '.agents', 'skills', name));
     expect(await realpath(claude(hosted.home, name))).toBe(await realpath(skills(hosted.home, name)));
+  }
+  for (const name of UPSTREAM) {
     expect(await tree(skills(hosted.home, name)), name).toEqual(await tree(join(SKILL_SET, name)));
     for (const file of await tree(join(SKILL_SET, name))) {
       expect(await readFile(join(skills(hosted.home, name), file), 'utf8'), `${name}/${file}`).toBe(await readFile(join(SKILL_SET, name, file), 'utf8'));
@@ -81,13 +115,24 @@ it("installs every Skill of the package at the version the Kit pins, file for fi
   expect(await recorded(hosted.home)).toEqual({ version: KIT_RELEASE, names: NAMES });
 });
 
+it("installs every Guide page the package labels a Skill as that Skill under its name, its SKILL.md the page with the Building's control origin filled in, and no other page", async () => {
+  const hosted = await host({ skills: true });
+
+  expect(await tree(skills(hosted.home, SKILL_PAGE))).toEqual(['SKILL.md']);
+  expect(await readFile(join(skills(hosted.home, SKILL_PAGE), 'SKILL.md'), 'utf8')).toBe(skillPage(hosted.house.origin));
+  expect(await realpath(claude(hosted.home, SKILL_PAGE))).toBe(await realpath(skills(hosted.home, SKILL_PAGE)));
+  await absent(skills(hosted.home, 'errand'));
+  await absent(skills(hosted.home, 'weekly'));
+  expect((await recorded(hosted.home))!.names).toContain(SKILL_PAGE);
+});
+
 it('links each skill so it resolves when the Claude skill directory is redirected elsewhere', async () => {
   const home = await temporaryHome();
   await mkdir(join(home, 'claude-skills'));
   await mkdir(join(home, '.claude'));
   await symlink(join(home, 'claude-skills'), claude(home));
 
-  await hostKit([{}], { home, skills: true });
+  await host({ home, skills: true });
 
   for (const name of NAMES) {
     expect(await readlink(claude(home, name))).toBe(join('..', '.agents', 'skills', name));
@@ -101,7 +146,7 @@ it('makes no per-skill link when the Claude skill directory already resolves to 
   await mkdir(join(home, '.claude'));
   await symlink(join('..', '.agents', 'skills'), claude(home));
 
-  await hostKit([{}], { home, skills: true });
+  await host({ home, skills: true });
 
   expect(await readlink(claude(home))).toBe(join('..', '.agents', 'skills'));
   for (const name of NAMES) {
@@ -110,28 +155,32 @@ it('makes no per-skill link when the Claude skill directory already resolves to 
   expect(await recorded(home)).toEqual({ version: KIT_RELEASE, names: NAMES });
 });
 
-it('leaves a skill directory or link the record does not name untouched and installs nothing under its name', async () => {
+it('leaves a skill directory or link the record does not name untouched and installs nothing under its name, a Skill page\'s name among them', async () => {
   const home = await temporaryHome();
   await mkdir(skills(home, FIRST), { recursive: true });
   await writeFile(join(skills(home, FIRST), 'SKILL.md'), "the owner's skill\n");
   await mkdir(claude(home), { recursive: true });
   await mkdir(join(home, 'elsewhere'));
   await symlink(join(home, 'elsewhere'), claude(home, SECOND));
+  await mkdir(skills(home, SKILL_PAGE), { recursive: true });
+  await writeFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), "the owner's errand\n");
 
-  await hostKit([{}], { home, skills: true });
+  await host({ home, skills: true });
 
   expect(await readFile(join(skills(home, FIRST), 'SKILL.md'), 'utf8')).toBe("the owner's skill\n");
   await absent(claude(home, FIRST));
   expect(await readlink(claude(home, SECOND))).toBe(join(home, 'elsewhere'));
   await absent(skills(home, SECOND));
+  expect(await readFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), 'utf8')).toBe("the owner's errand\n");
+  await absent(claude(home, SKILL_PAGE));
   expect(await recorded(home)).toEqual({
     version: KIT_RELEASE,
-    names: NAMES.filter((name) => name !== FIRST && name !== SECOND),
+    names: NAMES.filter((name) => name !== FIRST && name !== SECOND && name !== SKILL_PAGE),
   });
 });
 
 it('keeps an installed skill as the owner edited it while the Kit release is the same', async () => {
-  const hosted = await hostKit([{}], { skills: true });
+  const hosted = await host({ skills: true });
   await writeFile(join(skills(hosted.home, FIRST), 'SKILL.md'), "the owner's own skill\n");
 
   await restart(hosted, { skills: true });
@@ -140,10 +189,11 @@ it('keeps an installed skill as the owner edited it while the Kit release is the
 });
 
 it('replaces only the names an earlier Kit release recorded when a new version starts', async () => {
-  const hosted = await hostKit([{}], { skills: true });
+  const hosted = await host({ skills: true });
   const home = hosted.home;
   await writeFile(join(skills(home, FIRST), 'SKILL.md'), "the owner's own skill\n");
   await writeFile(join(skills(home, FIRST), 'notes.md'), 'an added file\n');
+  await writeFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), "the owner's own errand\n");
   await rm(claude(home, SECOND));
   await mkdir(skills(home, 'retired'));
   await symlink(join('..', '..', '.agents', 'skills', 'retired'), claude(home, 'retired'));
@@ -151,10 +201,11 @@ it('replaces only the names an earlier Kit release recorded when a new version s
   await writeFile(join(skills(home, 'my-tdd'), 'SKILL.md'), 'my copy\n');
   await writeFile(join(home, RECORD), JSON.stringify({ version: '0.2.1-alpha.0', names: [...NAMES, 'retired'] }));
 
-  await restart(hosted, { skills: true });
+  const restarted = await restart(hosted, { skills: true });
 
   expect(await readFile(join(skills(home, FIRST), 'SKILL.md'), 'utf8')).toBe(await readFile(join(SKILL_SET, FIRST, 'SKILL.md'), 'utf8'));
   await absent(join(skills(home, FIRST), 'notes.md'));
+  expect(await readFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), 'utf8')).toBe(skillPage(restarted.house.origin));
   expect(await readlink(claude(home, SECOND))).toBe(join('..', '..', '.agents', 'skills', SECOND));
   await absent(skills(home, 'retired'));
   await absent(claude(home, 'retired'));
@@ -162,30 +213,34 @@ it('replaces only the names an earlier Kit release recorded when a new version s
   expect(await recorded(home)).toEqual({ version: KIT_RELEASE, names: NAMES });
 });
 
-it("brings the package's set with a new Kit release: a Skill the package dropped leaves both directories and one it added arrives", async () => {
-  const hosted = await hostKit([{}], { skills: true });
+it("brings the package's set with a new Kit release: a Skill the package dropped leaves both directories and one it added arrives, a Skill page among them", async () => {
+  const hosted = await host({ skills: true });
   const home = hosted.home;
-  const added = NAMES.at(-1)!;
+  const added = UPSTREAM.at(-1)!;
   await rm(skills(home, added), { recursive: true });
   await rm(claude(home, added));
+  await rm(skills(home, SKILL_PAGE), { recursive: true });
+  await rm(claude(home, SKILL_PAGE));
   await mkdir(skills(home, 'dropped-upstream'));
   await writeFile(join(skills(home, 'dropped-upstream'), 'SKILL.md'), 'an earlier upstream skill\n');
   await symlink(join('..', '..', '.agents', 'skills', 'dropped-upstream'), claude(home, 'dropped-upstream'));
-  const earlier = [...NAMES.filter((name) => name !== added), 'dropped-upstream'].sort();
+  const earlier = [...NAMES.filter((name) => name !== added && name !== SKILL_PAGE), 'dropped-upstream'].sort();
   await writeFile(join(home, RECORD), JSON.stringify({ version: '0.2.1-c000000000000', names: earlier }));
 
-  await restart(hosted, { skills: true });
+  const restarted = await restart(hosted, { skills: true });
 
   await absent(skills(home, 'dropped-upstream'));
   await absent(claude(home, 'dropped-upstream'));
   expect(await tree(skills(home, added))).toEqual(await tree(join(SKILL_SET, added)));
   expect(await realpath(claude(home, added))).toBe(await realpath(skills(home, added)));
+  expect(await readFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), 'utf8')).toBe(skillPage(restarted.house.origin));
+  expect(await realpath(claude(home, SKILL_PAGE))).toBe(await realpath(skills(home, SKILL_PAGE)));
   expect((await readdir(skills(home))).sort()).toEqual(NAMES);
   expect(await recorded(home)).toEqual({ version: KIT_RELEASE, names: NAMES });
 });
 
 it('removes every recorded skill and the record and installs nothing when the Skill set is declined', async () => {
-  const hosted = await hostKit([{}], { skills: true });
+  const hosted = await host({ skills: true });
   await mkdir(skills(hosted.home, 'my-skill'));
   await writeFile(claude(hosted.home, 'my-note'), "the owner's\n");
 
@@ -200,7 +255,7 @@ it('keeps the bootstrap choice in Kit configuration, says when a run changed it,
   const home = await temporaryHome();
 
   expect(configure(home, [])).toEqual({ status: 0, stdout: '', stderr: '' });
-  let hosted = await hostKit([{}], { home });
+  let hosted = await host({ home });
   expect((await readdir(skills(home))).sort()).toEqual(NAMES);
 
   expect(configure(home, ['--no-skills'])).toEqual({ status: 0, stdout: 'changed\n', stderr: '' });
@@ -218,13 +273,14 @@ it('places every skill at kit login in the home of whoever runs it, with no resi
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const { exit } = await logIn(house, join(home, '.house-kit'), { HOME: home });
+  const { exit } = await logIn(house, join(home, '.house-kit'), { HOME: home, ...planted });
 
   expect(exit).toBe(0);
   expect((await readdir(skills(home))).sort()).toEqual(NAMES);
   for (const name of NAMES) {
     expect(await realpath(claude(home, name))).toBe(await realpath(skills(home, name)));
   }
+  expect(await readFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), 'utf8')).toBe(skillPage(house.origin));
   expect(await recorded(join(home, '.house-kit'))).toEqual({ version: KIT_RELEASE, names: NAMES });
 });
 
@@ -234,7 +290,7 @@ it('places no skill at kit login when the Skill set is declined', async () => {
   serveLogin(house, 'environment-one', 'ahk_first');
   expect(configure(join(home, '.house-kit'), ['--no-skills']).status).toBe(0);
 
-  const { exit } = await logIn(house, join(home, '.house-kit'), { HOME: home });
+  const { exit } = await logIn(house, join(home, '.house-kit'), { HOME: home, ...planted });
 
   expect(exit).toBe(0);
   await absent(skills(home));
@@ -248,7 +304,7 @@ it('keeps the Environment connected from a read-only home, saying the skills cou
   await writeFile(join(readOnly, '.profile'), `PATH="${userBin(home)}:${join(home, 'bin')}:$PATH"\n`);
   await readOnlyHome(readOnly);
 
-  const hosted = await hostKit([{}], { home, skills: true, environment: { HOME: readOnly, CODEX_HOME: await temporaryHome() } });
+  const hosted = await host({ home, skills: true, environment: { HOME: readOnly, CODEX_HOME: await temporaryHome() } });
   hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
@@ -256,7 +312,7 @@ it('keeps the Environment connected from a read-only home, saying the skills cou
 });
 
 it('opens a conversation when a declined Skill set leaves recorded skills it could not remove', async () => {
-  const hosted = await hostKit([{}], {
+  const hosted = await host({
     skills: false,
     prepare: async (home) => {
       await mkdir(skills(home, FIRST), { recursive: true });

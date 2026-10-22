@@ -144,7 +144,7 @@ export async function login(argv: string[]): Promise<void> {
       () => POLL_INTERVAL_MS,
     );
   }
-  await placeSkillSet();
+  await placeSkillSet(house);
   await writeCodexRule().catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
   const relayRecord = relay === undefined ? {} : { relay };
   await writeEnrolment({
