@@ -135,7 +135,12 @@ async function install(artifacts: Artifact[], signal: AbortSignal): Promise<void
     for (const artifact of missing) {
       const part = `${installed(artifact)}.part`;
       // Three retries carry a large download past a dropped connection before the download fails.
-      await executed('curl', ['-fsSL', '--retry', '3', '--max-filesize', String(artifact.bytes), '-o', part, artifact.url], signal);
+      try {
+        await executed('bash', ['-c', 'trap "" XFSZ && ulimit -f "$1" && exec curl -fsSL --retry 3 -o "$2" "$3"', 'bash', String(Math.ceil(artifact.bytes / 1024)), part, artifact.url], signal);
+      } catch (error) {
+        if (((await stat(part).catch(() => null))?.size ?? 0) >= artifact.bytes) throw new Error(`${artifact.url} is larger than its pinned ${artifact.bytes} bytes`);
+        throw error;
+      }
       if ((await sha256(part)) !== artifact.sha256) throw new Error(`${artifact.url} does not match its sha256`);
     }
     for (const artifact of missing) {

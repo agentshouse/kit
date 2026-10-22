@@ -49,6 +49,7 @@ NATIVE_PACKAGES=(ca-certificates curl git)
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c
+NODE_BYTES=58290700
 CHECKSUM=(sha256sum)
 SERVER_PREFIX=/opt/house-kit
 DESKTOP_PREFIX="$HOME/.local/share/house-kit"
@@ -311,7 +312,10 @@ stage_native_kit() {
   NATIVE_STAGE=$(mktemp -d) || refuse 'no temporary directory for the Kit package'
   trap 'rm -rf "$NATIVE_STAGE"' EXIT
   printf 'Downloading Node.js %s from nodejs.org and Kit %s from npm.\n' "$NODE_VERSION" "$VERSION"
-  "${DIRECT[@]}" curl -fsSL -o "$NATIVE_STAGE/node.tar.gz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz" || refuse 'Node.js could not be downloaded'
+  (trap '' XFSZ && ulimit -f $(((NODE_BYTES + 1023) / 1024)) && exec "${DIRECT[@]}" curl -fsSL -o "$NATIVE_STAGE/node.tar.gz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz") || {
+    (($(wc -c 2>/dev/null < "$NATIVE_STAGE/node.tar.gz" || echo 0) < NODE_BYTES)) || refuse "the Node.js download is larger than its pinned $NODE_BYTES bytes"
+    refuse 'Node.js could not be downloaded'
+  }
   printf '%s  %s\n' "$NODE_SHA256" "$NATIVE_STAGE/node.tar.gz" | "${CHECKSUM[@]}" --check >/dev/null 2>&1 || refuse 'the Node.js download does not match its pinned checksum'
   mkdir "$NATIVE_STAGE/kit"
   tar -xzf "$NATIVE_STAGE/node.tar.gz" -C "$NATIVE_STAGE/kit" --strip-components=1 --no-same-owner || refuse 'Node.js could not be unpacked'
@@ -930,16 +934,19 @@ case "$(uname -s)" in
         ARCH=arm64
         NODE_PLATFORM=linux-arm64
         NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
+        NODE_BYTES=58021129
         ;;
       ppc64le)
         ARCH=ppc64le
         NODE_PLATFORM=linux-ppc64le
         NODE_SHA256=9ce5728445016b29e49ad098f7a336061aa5f770d177d927278bc26fd626e643
+        NODE_BYTES=61137871
         ;;
       s390x)
         ARCH=s390x
         NODE_PLATFORM=linux-s390x
         NODE_SHA256=71979aeb1c385bc8ee83100d383a3b1ec0a5202e03df9f996a70403309caffb5
+        NODE_BYTES=57772206
         ;;
       *) refuse "unsupported Linux architecture $(uname -m)" ;;
     esac
@@ -957,11 +964,13 @@ case "$(uname -s)" in
       CHIP='Apple silicon'
       NODE_PLATFORM=darwin-arm64
       NODE_SHA256=89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7
+      NODE_BYTES=53062778
     else
       ARCH=amd64
       CHIP='an Intel chip'
       NODE_PLATFORM=darwin-x64
       NODE_SHA256=d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035
+      NODE_BYTES=54382566
     fi
     ;;
   *) refuse "unsupported host $(uname -s); this bootstrap is for Linux and macOS" ;;

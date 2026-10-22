@@ -356,7 +356,7 @@ it('stops a download larger than its pinned size, installs nothing and reports w
 
   expect(await settled(hosted, (report) => report.failure !== null)).toEqual({
     installed: false,
-    failure: 'curl: (63) Maximum file size exceeded',
+    failure: `${decoder!.url} is larger than its pinned 5175832 bytes`,
   });
   expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
 });

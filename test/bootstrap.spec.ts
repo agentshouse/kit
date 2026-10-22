@@ -134,6 +134,7 @@ VERSION=0.2.1-alpha.1
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
+NODE_BYTES=58088022
 CHECKSUM=(sha256sum)
 RELEASE=release
 ${steps.join('')}
@@ -158,6 +159,38 @@ stage_native_kit`,
   expect((await readFile(join(home, 'downloads.log'), 'utf8')).split('\n').filter(Boolean).sort()).toEqual(
     ['apt-get ', 'apt-get ', 'curl ', 'npm '],
   );
+});
+
+it('stops a Node.js download larger than its pinned size and installs nothing', async () => {
+  const home = await temporaryHome();
+  const linux = await readFile(LINUX, 'utf8');
+  const bin = join(home, 'bin');
+  await mkdir(bin);
+  await writeFile(join(bin, 'curl'), '#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\nhead -c 1048576 /dev/zero 2>/dev/null > "$2"\n', { mode: 0o755 });
+  await writeFile(join(bin, 'npm'), '#!/bin/sh\ntouch "$TMPDIR/npm.ran"\n', { mode: 0o755 });
+
+  const ran = spawnSync(
+    'bash',
+    [
+      '-c',
+      `set -u
+refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
+${/^DIRECT=.*$/m.exec(linux)![0]}
+VERSION=0.2.1-alpha.1
+NODE_VERSION=24.21.0
+NODE_PLATFORM=linux-x64
+NODE_SHA256=${'0'.repeat(64)}
+NODE_BYTES=4096
+CHECKSUM=(sha256sum)
+RELEASE=release
+${/^stage_native_kit\(\) \{\n[\s\S]*?\n\}\n/m.exec(linux)![0]}
+stage_native_kit`,
+    ],
+    { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, TMPDIR: home } },
+  );
+
+  expect(ran).toMatchObject({ status: 1, stderr: 'refused: the Node.js download is larger than its pinned 4096 bytes\n' });
+  expect(existsSync(join(home, 'npm.ran'))).toBe(false);
 });
 
 async function steps(...names: string[]): Promise<string> {
