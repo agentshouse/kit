@@ -169,7 +169,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     await script(join(bin, tool), platform.server === true && tool === 'sudo' ? `${LOGGED}exec "$@"\n` : body);
   await script(join(fake, 'kit'), KIT);
   const system = platform.system === 'Darwin' ? 'darwin' : 'linux';
-  const unpacked = `node-v24.21.0-${system}-${/arm64|aarch64/.test(platform.machine) ? 'arm64' : 'x64'}`;
+  const unpacked = `node-v24.22.1-${system}-${/arm64|aarch64/.test(platform.machine) ? 'arm64' : 'x64'}`;
   await mkdir(join(fake, unpacked, 'bin'), { recursive: true });
   await script(join(fake, unpacked, 'bin', 'node'), NODE);
   await script(join(fake, unpacked, 'bin', 'npm'), NPM);
@@ -228,7 +228,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     outdate: () =>
       writeFile(
         join(platform.server === true ? join(fake, 'server', 'house-kit') : join(home, '.local', 'share', 'house-kit'), 'release'),
-        '@agentshouse/kit@0.2.1-alpha.0 node@24.21.0\n',
+        '@agentshouse/kit@0.2.1-alpha.0 node@24.22.1\n',
       ),
     uninstall: (tool) => rm(join(bin, tool)),
     serverUnit: () => readFile(join(fake, 'server', 'house-kit.service'), 'utf8'),

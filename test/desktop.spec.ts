@@ -22,7 +22,7 @@ function logins(host: Host, placement: readonly string[]): string[] {
 
 async function installed(host: Host): Promise<void> {
   const prefix = join(host.home, '.local', 'share', 'house-kit');
-  expect(await readFile(join(prefix, 'release'), 'utf8')).toBe(`@agentshouse/kit@${PUBLISHED_VERSION} node@24.21.0\n`);
+  expect(await readFile(join(prefix, 'release'), 'utf8')).toBe(`@agentshouse/kit@${PUBLISHED_VERSION} node@24.22.1\n`);
   for (const command of ['kit', 'house']) {
     expect(host.command(command, ['--help'])).toMatchObject({ status: 0 });
     expect(host.calls(command).at(-1)).toMatch(/^--help /);
@@ -93,7 +93,7 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
-  expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.21\.0\/node-v24\.21\.0-linux-x64\.tar\.gz$/)]);
+  expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.22\.1\/node-v24\.22\.1-linux-x64\.tar\.gz$/)]);
   expect(host.calls('sha256sum')).toEqual(['--check']);
   expect(host.calls('npm')).toEqual([expect.stringMatching(/ @agentshouse\/kit@0\.2\.1-alpha\.1$/)]);
   expect(host.calls('sudo')).toEqual([]);
@@ -119,7 +119,7 @@ it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, w
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
   expect(notices(ran.stdout)).toEqual([]);
-  expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.21\.0\/node-v24\.21\.0-darwin-arm64\.tar\.gz$/)]);
+  expect(host.calls('curl')).toEqual([expect.stringMatching(/ https:\/\/nodejs\.org\/dist\/v24\.22\.1\/node-v24\.22\.1-darwin-arm64\.tar\.gz$/)]);
   expect(host.calls('shasum')).toEqual(['-a 256 --check']);
   expect(host.calls('sudo')).toEqual([]);
   expect(ran.stdout).toContain(`${LINK_LINE}\n`);
@@ -181,7 +181,7 @@ it('stops a running Linux service that is no longer enabled before it replaces t
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   expect(host.run()).toMatchObject({ status: 0 });
   await host.clear('enabled');
-  await writeFile(join(host.home, '.local', 'share', 'house-kit', 'release'), '@agentshouse/kit@0.2.1-alpha.0 node@24.21.0\n');
+  await writeFile(join(host.home, '.local', 'share', 'house-kit', 'release'), '@agentshouse/kit@0.2.1-alpha.0 node@24.22.1\n');
   await host.forget();
 
   const ran = host.run();
@@ -360,7 +360,7 @@ it.each([
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(notices(ran.stdout)).toEqual([`Kit supports ${notice}; ${UNSUPPORTED}`]);
-  expect(host.calls('curl')).toEqual([expect.stringContaining(`/node-v24.21.0-${node}.tar.gz`)]);
+  expect(host.calls('curl')).toEqual([expect.stringContaining(`/node-v24.22.1-${node}.tar.gz`)]);
   await installed(host);
 });
 
@@ -373,7 +373,7 @@ it('warns in one line on a macOS older than the supported release and installs',
   expect(ran.stdout.split('\n').filter((line) => /macOS|guarantee/.test(line))).toEqual([
     'Warning: macOS 26.7.1 is outdated; update to macOS 27.',
   ]);
-  expect(host.calls('curl')).toEqual([expect.stringContaining('/node-v24.21.0-darwin-arm64.tar.gz')]);
+  expect(host.calls('curl')).toEqual([expect.stringContaining('/node-v24.22.1-darwin-arm64.tar.gz')]);
   await installed(host);
 });
 
@@ -401,7 +401,7 @@ it('warns once on an Intel Mac and installs', async () => {
 it('says the Kit updated when a rerun installs a newer release', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   expect(host.run()).toMatchObject({ status: 0 });
-  await writeFile(join(host.home, '.local', 'share', 'house-kit', 'release'), '@agentshouse/kit@0.2.1-alpha.0 node@24.21.0\n');
+  await writeFile(join(host.home, '.local', 'share', 'house-kit', 'release'), '@agentshouse/kit@0.2.1-alpha.0 node@24.22.1\n');
 
   const ran = host.run();
 

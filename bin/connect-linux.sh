@@ -46,9 +46,9 @@ MACOS_RELEASE=27
 NATIVE_RELEASE=26.04
 NATIVE_ARCHITECTURE=amd64
 NATIVE_PACKAGES=(ca-certificates curl git)
-NODE_VERSION=24.21.0
+NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
-NODE_SHA256=6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff
+NODE_SHA256=eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c
 CHECKSUM=(sha256sum)
 SERVER_PREFIX=/opt/house-kit
 DESKTOP_PREFIX="$HOME/.local/share/house-kit"
@@ -929,17 +929,17 @@ case "$(uname -s)" in
       aarch64|arm64)
         ARCH=arm64
         NODE_PLATFORM=linux-arm64
-        NODE_SHA256=724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5
+        NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
         ;;
       ppc64le)
         ARCH=ppc64le
         NODE_PLATFORM=linux-ppc64le
-        NODE_SHA256=51c5d53066ee92920b61783b03b06ecb99f3661160f7b15ca77e8474115a67bc
+        NODE_SHA256=9ce5728445016b29e49ad098f7a336061aa5f770d177d927278bc26fd626e643
         ;;
       s390x)
         ARCH=s390x
         NODE_PLATFORM=linux-s390x
-        NODE_SHA256=5f2fa37422e0c75de35c1686fe51d78324f2c2a8fe2cc239a41d9c000a29d938
+        NODE_SHA256=71979aeb1c385bc8ee83100d383a3b1ec0a5202e03df9f996a70403309caffb5
         ;;
       *) refuse "unsupported Linux architecture $(uname -m)" ;;
     esac
@@ -956,12 +956,12 @@ case "$(uname -s)" in
       ARCH=arm64
       CHIP='Apple silicon'
       NODE_PLATFORM=darwin-arm64
-      NODE_SHA256=bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057
+      NODE_SHA256=89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7
     else
       ARCH=amd64
       CHIP='an Intel chip'
       NODE_PLATFORM=darwin-x64
-      NODE_SHA256=1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097
+      NODE_SHA256=d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035
     fi
     ;;
   *) refuse "unsupported host $(uname -s); this bootstrap is for Linux and macOS" ;;

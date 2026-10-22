@@ -23,8 +23,8 @@ jobs:
           ref: main
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.21.0
-      - run: npm install --global --ignore-scripts npm@11.19.0
+          node-version: 24.22.1
+      - run: npm install --global --ignore-scripts npm@11.19.1
       - run: npm run follow-skills
       - name: Land the moved version and publish it
         env:
