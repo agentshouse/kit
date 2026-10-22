@@ -34,7 +34,7 @@ export interface Bridge {
   close(): void;
 }
 
-const MCP_REQUEST_BYTES = 4 * 1024 * 1024;
+const MCP_REQUEST_BYTES = 4_000_000;
 
 export async function received(request: IncomingMessage): Promise<string> {
   let text = '';

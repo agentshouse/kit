@@ -171,7 +171,7 @@ it(
   'sends a change set above the MCP bound as one prepared upload under the push operation, and resends that edit when its answer is lost',
   async () => {
     const { hosted, rooms, room, edits } = await copied();
-    const big = '\u0001'.repeat(800_000);
+    const big = '\u0001'.repeat(680_000);
     await writeFile(join(room.repository, 'big.md'), big);
     commitAll(room.repository, 'big');
     rooms.dropsEdits = 1;
