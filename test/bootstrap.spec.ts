@@ -135,7 +135,7 @@ VERSION=0.2.1-alpha.1
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
-NODE_BYTES=58088022
+NODE_BYTES=58290700
 CHECKSUM=(sha256sum)
 RELEASE=release
 ${steps.join('')}
@@ -178,7 +178,7 @@ it('stops a Node.js download larger than its pinned size and installs nothing', 
 refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
 ${/^DIRECT=.*$/m.exec(linux)![0]}
 VERSION=0.2.1-alpha.1
-NODE_VERSION=24.21.0
+NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
 NODE_BYTES=4096
@@ -223,7 +223,7 @@ it('ends a Node.js download that has not arrived within its deadline and install
 refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
 ${/^DIRECT=.*$/m.exec(linux)![0]}
 VERSION=0.2.1-alpha.1
-NODE_VERSION=24.21.0
+NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
 NODE_BYTES=250000
