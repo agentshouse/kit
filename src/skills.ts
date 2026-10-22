@@ -39,7 +39,7 @@ async function present(path: string): Promise<boolean> {
   }
 }
 
-function labelled(text: string): string | undefined {
+function skillName(text: string): string | undefined {
   const front = FRONTMATTER.exec(text);
   const fields = (front === null ? null : parse(front[1]!)) as { name?: unknown; description?: unknown } | null;
   return typeof fields?.name === 'string' && typeof fields.description === 'string' ? fields.name : undefined;
@@ -51,7 +51,7 @@ function skillSet(origin: string): Skill[] {
     place: (destination: string) => cp(directory, destination, { recursive: true }),
   }));
   const pages = GUIDE.flatMap(({ text }) => {
-    const name = labelled(text);
+    const name = skillName(text);
     if (name === undefined) return [];
     const place = async (destination: string) => {
       await mkdir(destination);
