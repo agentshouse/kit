@@ -223,7 +223,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const idles: Received[] = [];
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
-    shell: () => shelled('', 1, ['cat: path_not_found /rooms/private/how-we-work.md']),
+    shell: () => shelled('', 1, ['cat: path_not_found /rooms/private/owner-rules.md']),
   };
   house.route('POST', '/', async (request) => {
     mcp.push(request);

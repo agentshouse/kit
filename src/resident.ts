@@ -11,7 +11,7 @@ import { received } from './bridge.ts';
 import { CONVERSATION_METHODS, Conversations, type ConversationCall } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
 import { restart } from './end.ts';
-import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, restartAsked } from './home.ts';
+import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, readEnrolment, restartAsked } from './home.ts';
 import { Calls, type Call } from './calls.ts';
 import { killDescendants } from './scope.ts';
 import { quoted } from './shell.ts';
@@ -118,7 +118,7 @@ async function started(): Promise<void> {
     killDescendants();
     process.exit(1);
   });
-  await placeSkillSet();
+  await placeSkillSet((await readEnrolment())!.house);
   await mkdir(agentBase(), { recursive: true });
   await installShim(join(kitHome(), 'shim', 'git'), 'git-main');
   await installShim(codexLauncher(), 'codex-main');

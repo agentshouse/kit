@@ -4,8 +4,8 @@ import { until } from './double.ts';
 import { conversationCredential, hostKit, lastCall, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
 import { alive } from './kit.ts';
 
-const DOCUMENT = '# How we work\n\nWork goes into the Room it belongs to.';
-const READ = 'cat /rooms/private/how-we-work.md';
+const DOCUMENT = '# Owner rules\n\nWork goes into the Room it belongs to.';
+const READ = 'cat /rooms/private/owner-rules.md';
 
 type Prompt = { type: string; text: string }[];
 
@@ -28,7 +28,7 @@ function blockOf(prompt: Prompt): string[] {
   return prompt[0]!.text.split('\n');
 }
 
-it("begins a first message with the package's Agent instructions, the base instructions and the How-we-work text read over the conversation's bridge, the same for every CLI, writing no How-we-work document with the Skill set installed and naming no Trigger", async () => {
+it("begins a first message with the package's Agent instructions, the base instructions and the Owner rules read over the conversation's bridge, the same for every CLI, writing no Owner rules with the Skill set installed and naming no Trigger", async () => {
   const kinds = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   const hosted = await hostKit(kinds.map((kind) => ({ kind })), { skills: true });
   hosted.tools.shell = () => shelled(DOCUMENT);
@@ -59,7 +59,7 @@ it("begins a first message with the package's Agent instructions, the base instr
 });
 
 it.each([
-  ['an absent document', shelled('', 1, ['cat: path_not_found /rooms/private/how-we-work.md'])],
+  ['an absent document', shelled('', 1, ['cat: path_not_found /rooms/private/owner-rules.md'])],
   ['a Private Room the Profile cannot read', refused('room_not_found')],
   ['a read the Profile does not allow', refused('operation_denied')],
 ])('adds nothing for %s and still sends the message', async (_case, answer) => {
@@ -84,7 +84,7 @@ it('refuses a first message with the cause when House cannot answer the document
 
 it.each([
   ['house_unavailable', refused('house_unavailable')],
-  ['is_a_directory', shelled('', 1, ['cat: is_a_directory /rooms/private/how-we-work.md'])],
+  ['is_a_directory', shelled('', 1, ['cat: is_a_directory /rooms/private/owner-rules.md'])],
 ])("refuses a first message with House's answer when the document read fails with %s", async (code, answer) => {
   const hosted = await hostKit();
   hosted.tools.shell = () => answer;
@@ -97,7 +97,7 @@ it.each([
 
 it('reads a document longer than one House reply whole by following its continuation', async () => {
   const hosted = await hostKit();
-  const document = `# How we work\n\n${'- Work goes into the Room it belongs to; é.\n'.repeat(900)}`;
+  const document = `# Owner rules\n\n${'- Work goes into the Room it belongs to; é.\n'.repeat(900)}`;
   const shown = Buffer.from(document).subarray(0, 32_769).toString();
   const next = `{ ${READ}; } | tail -c +32770`;
   hosted.tools.shell = (args) =>
