@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it } from 'vitest';
 import { RELEASES, placeUserCli } from './cli.ts';
-import { KIT_FILE_CORRUPT, KIT_FILE_MISSING, kitFileRequests, serveKitFiles } from './building.ts';
+import { KIT_FILE_CORRUPT, KIT_FILE_MISSING, KIT_FILE_STALL, kitFileRequests, serveKitFiles } from './building.ts';
 import { startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL, macOS, placeUserClis, userBin } from './environment.ts';
 import { HOST_KEY, fakeBin, placeHostKey, readOnlyHome, runKit, temporaryHome, type KitRun } from './kit.ts';
@@ -15,6 +15,7 @@ const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.
 };
 const PINNED = KIT_PACKAGE.peerDependencies;
 const FAST_INTERVALS = ['--import', fileURLToPath(new URL('./fast-intervals.ts', import.meta.url))];
+const FAST_DEADLINES = ['--import', fileURLToPath(new URL('./fast-deadlines.ts', import.meta.url))];
 const ROOT = ['--import', fileURLToPath(new URL('./root.ts', import.meta.url))];
 const USER_SERVICE = { INVOCATION_ID: 'invocation', MANAGERPID: '1' };
 const SYSTEM_SERVICE = { INVOCATION_ID: 'invocation' };
@@ -327,6 +328,19 @@ it('reports a CLI whose adapter archive does not match the sha256 its House name
 
   expect(report.agents).toEqual([
     { kind: 'claude-agent-acp', release: null, failure: `${archive} does not match its sha256`, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
+  ]);
+  await expect(stat(join(home, 'agents', 'claude-agent-acp', 'node_modules'))).rejects.toThrow();
+});
+
+it('reports a CLI whose adapter archive has not arrived within the install deadline, installing nothing of it', async () => {
+  const archive = `claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`;
+  desired = ['claude-agent-acp'];
+  await start(() => writeFile(join(home, KIT_FILE_STALL), archive), FAST_DEADLINES);
+
+  const report = await until(() => completeReports()[0]);
+
+  expect(report.agents).toEqual([
+    { kind: 'claude-agent-acp', release: null, failure: `${archive} did not arrive within 900 seconds`, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
   ]);
   await expect(stat(join(home, 'agents', 'claude-agent-acp', 'node_modules'))).rejects.toThrow();
 });

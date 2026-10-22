@@ -258,15 +258,18 @@ export async function installAdapter(kind: string, signal?: AbortSignal): Promis
   if ((await installedAdapter(kind)) === KIT_PACKAGE.peerDependencies[adapter.package]) return null;
   const name = adapterArchive(kind);
   const archive = `${prefix(kind)}.tar.gz`;
+  const deadline = AbortSignal.timeout(INSTALL_MS);
+  const bounded = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
   try {
-    const sha256 = await servedDigest(name, signal);
+    const sha256 = await servedDigest(name, bounded);
     if (sha256 === null) return `House serves no ${name}`;
     await rm(prefix(kind), { recursive: true, force: true });
     await mkdir(prefix(kind), { recursive: true });
-    await downloadServed(name, sha256, archive, signal);
+    await downloadServed(name, sha256, archive, bounded);
     const ran = await run('tar', ['-xzf', archive, '-C', prefix(kind)], INSTALL_MS, true, signal);
     return ran.status === 0 ? null : failureOf(ran, 'tar');
   } catch (error) {
+    if (deadline.aborted && signal?.aborted !== true) return `${name} did not arrive within ${INSTALL_MS / 1000} seconds`;
     return error instanceof Error ? error.message : String(error);
   } finally {
     await rm(archive, { force: true });
