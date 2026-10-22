@@ -8,6 +8,7 @@ import { kitHome, readConfiguration, readHome, writeHome } from './home.ts';
 
 interface Installed {
   version?: string;
+  origin?: string;
   names: string[];
 }
 
@@ -79,7 +80,7 @@ async function install(origin: string): Promise<void> {
     await place(join(skillsDirectory(), name));
     if (claude !== skills) await symlink(relative(claude, join(skills, name)), join(claudeDirectory(), name));
   }
-  await writeHome(RECORD, { version: KIT_RELEASE, names } satisfies Installed);
+  await writeHome(RECORD, { version: KIT_RELEASE, origin, names } satisfies Installed);
 }
 
 export async function placeSkillSet(origin: string): Promise<void> {
@@ -93,7 +94,7 @@ export async function placeSkillSet(origin: string): Promise<void> {
 async function replaceSkillSet(origin: string): Promise<void> {
   const accepted = (await readConfiguration()).skills;
   const installed = await readHome<Installed>(RECORD);
-  if (accepted && installed?.version === KIT_RELEASE) return;
+  if (accepted && installed?.version === KIT_RELEASE && installed.origin === origin) return;
   for (const name of installed?.names ?? []) {
     await rm(join(claudeDirectory(), name), { recursive: true, force: true });
     await rm(join(skillsDirectory(), name), { recursive: true, force: true });
