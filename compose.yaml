@@ -17,7 +17,7 @@ services:
     entrypoint:
       - sh
       - -c
-      - 'if [ ! node_modules/.package-lock.json -nt package-lock.json ]; then npm ci --no-audit --no-fund --loglevel=error || exit 1; fi; exec "$$@"'
+      - 'if [ ! node_modules/.package-lock.json -nt package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund --loglevel=error || exit 1; fi; exec "$$@"'
       - kit-test
     command: ["npm", "test"]
   windows:
