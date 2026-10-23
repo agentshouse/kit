@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { CONNECTION_SILENCE_MS, ConnectionSilence, type ConnectionClock } from '../src/connection.ts';
+import { CONNECTION_SILENCE_MS } from '../src/connection.ts';
+import { Silence, type SilenceClock } from '../src/silence.ts';
 
 interface Timer {
   delay: number;
@@ -7,7 +8,7 @@ interface Timer {
   cleared: boolean;
 }
 
-function clock(): { clock: ConnectionClock; timers: Timer[] } {
+function clock(): { clock: SilenceClock; timers: Timer[] } {
   const timers: Timer[] = [];
   return {
     clock: {
@@ -31,9 +32,13 @@ function fire(timer: Timer): void {
 it('drops the Kit connection only after two missed House beats, and each received notification restarts that deadline', () => {
   const fake = clock();
   let dropped = 0;
-  const silence = new ConnectionSilence(() => {
-    dropped += 1;
-  }, fake.clock);
+  const silence = new Silence(
+    CONNECTION_SILENCE_MS,
+    () => {
+      dropped += 1;
+    },
+    fake.clock,
+  );
 
   silence.heard();
   expect(fake.timers).toHaveLength(1);

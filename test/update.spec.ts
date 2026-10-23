@@ -81,7 +81,7 @@ it('reruns the verified bootstrap with --linux outside its own service and retur
   expect(await ran(hosted)).toBe('--linux\n');
   const launched = await readFile(join(hosted.home, 'systemd-run.log'), 'utf8');
   expect(launched).toMatch(
-    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --linux\n$/,
+    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; timeout 3600 bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --linux\n$/,
   );
 });
 
@@ -100,7 +100,7 @@ it('reruns the bootstrap of its desktop placement in its workspace through the u
   expect(await hosted.result('update-user')).toEqual({});
   expect(await ran(hosted)).toBe(`--workspace ${workspace} --update-clis\n`);
   expect(await readFile(join(hosted.home, 'systemd-run.log'), 'utf8')).toMatch(
-    /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+ --update-clis\n$/,
+    /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; timeout 3600 bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+ --update-clis\n$/,
   );
   expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('--user start house-kit.service\n');
 });
@@ -336,4 +336,39 @@ it('refuses an update whose bootstrap failed after it stopped the Kit process', 
   expect(await restartAfter(hosted, 'update-5', `${KILL_RESIDENT}exit 3\n`)).toEqual({
     refused: 'the Kit bootstrap exited with 3',
   });
+});
+
+// The test bound ends the bootstrap after one second instead of an hour, through the system's own timeout.
+const SHORT_BOUND = '#!/bin/sh\nshift\nexec /usr/bin/timeout 1 "$@"\n';
+
+async function bounded(hosted: Hosted): Promise<void> {
+  await writeFile(join(hosted.home, 'bin', 'timeout'), SHORT_BOUND, { mode: 0o755 });
+  await writeFile(join(hosted.home, 'bin', 'systemctl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOUSE_KIT_HOME/systemctl.log"\n', {
+    mode: 0o755,
+  });
+}
+
+it('ends a bootstrap still running at its bound, starts the Kit service again, refuses the update naming the bound and opens its connection again', async () => {
+  const hosted = await hostKit();
+  await bounded(hosted);
+  const pin = await serve(hosted, HELD);
+
+  await update(hosted, 'update-hung', pin);
+
+  expect(await hosted.result('update-hung')).toEqual({ refused: 'the Kit bootstrap did not finish within 3600 seconds' });
+  expect(await ran(hosted)).toBeUndefined();
+  expect(await readFile(join(hosted.home, 'systemd-run.log'), 'utf8')).toContain('; timeout 3600 bash "$0" "$@"; ');
+  expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('start house-kit.service\n');
+  await until(() => hosted.house.connections[1]);
+  await opened(hosted);
+});
+
+it('refuses an update whose bootstrap hung after it stopped the Kit process once the bound ended it', async () => {
+  const hosted = await hostKit();
+  await bounded(hosted);
+
+  expect(await restartAfter(hosted, 'update-hung-stopped', `${KILL_RESIDENT}${HELD}`)).toEqual({
+    refused: 'the Kit bootstrap did not finish within 3600 seconds',
+  });
+  expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('start house-kit.service\n');
 });

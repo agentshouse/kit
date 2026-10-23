@@ -45,7 +45,7 @@ export type ConversationMethod = 'open' | 'message' | 'interrupt' | 'kill' | 'op
 
 export type ConversationCall = Call<ConversationMethod> & { [field: string]: unknown };
 
-type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error';
+type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error' | 'silent';
 
 interface Failed {
   failure: Failure;
@@ -130,7 +130,8 @@ function answeredWith(error: unknown): Failed {
 }
 
 function exitedWith(running: Running, cause: string): Failed {
-  return running.killed ? { failure: 'killed', cause: KILLED } : { failure: 'exited', cause };
+  if (running.killed) return { failure: 'killed', cause: KILLED };
+  return { failure: running.adapter.silent() ? 'silent' : 'exited', cause };
 }
 
 function answerMessage(request: unknown, response: unknown): string {
@@ -713,6 +714,7 @@ export class Conversations {
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
       void work.settled().then(() => scope.record());
       conversation.running = running;
+      adapter.turn(conversation.open > 0);
       conversation.session = running.sessionId;
       conversation.options = options;
       this.facts(conversation);
@@ -842,6 +844,7 @@ export class Conversations {
   private begin(conversation: Conversation): Turn {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
     conversation.open++;
+    conversation.running?.adapter.turn(true);
     void this.deliver(conversation, turn, 'started', {}).catch(logged);
     conversation.turn = turn;
     if (conversation.context !== null) turn.parts.measure(conversation.context);
@@ -859,6 +862,7 @@ export class Conversations {
     if (notice !== null) turn.parts.start({ type: 'marker', marker: 'retry', text: notice });
     turn.ended = true;
     conversation.open--;
+    conversation.running?.adapter.turn(conversation.open > 0);
     if (conversation.turn === turn) conversation.turn = null;
     const body = Promise.allSettled(turn.uploads).then(() => ({
       parts: turn.parts.saved(),
