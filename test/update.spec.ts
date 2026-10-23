@@ -221,6 +221,8 @@ it('takes no Kit call while the bootstrap of its update runs and opens its conne
   await until(() => downloaded(hosted));
 
   await until(() => hosted.connection.transport.readyState === hosted.connection.transport.CLOSED);
+  // Three and a half seconds outlast the three at most after which a Kit reconnects a connection that closed.
+  await new Promise((resolve) => setTimeout(resolve, 3500));
   expect(hosted.house.connections).toHaveLength(1);
   await writeFile(join(hosted.home, 'go'), '');
 
