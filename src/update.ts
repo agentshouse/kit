@@ -125,10 +125,13 @@ function rerun(script: string, callId: string, flags: string[]): Promise<Result 
 
 export class KitUpdate {
   private readonly calls: Calls;
+  private readonly changed: () => void;
+  private readonly waiting = new Map<string, UpdateCall>();
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(calls: Calls) {
+  constructor(calls: Calls, changed: () => void) {
     this.calls = calls;
+    this.changed = changed;
   }
 
   async resumed(): Promise<void> {
@@ -137,8 +140,19 @@ export class KitUpdate {
     await this.enqueue(callId, () => finished(callId));
   }
 
-  start(call: UpdateCall): void {
-    void this.enqueue(call.input_id, () => this.carry(call));
+  hold(call: UpdateCall): void {
+    this.waiting.set(call.input_id, call);
+    this.changed();
+  }
+
+  held(): boolean {
+    return this.waiting.size > 0;
+  }
+
+  apply(resume: () => void): void {
+    const held = [...this.waiting.values()];
+    this.waiting.clear();
+    void Promise.all(held.map((call) => this.enqueue(call.input_id, () => this.carry(call)))).then(resume);
   }
 
   private enqueue(callId: string, work: () => Promise<Result>): Promise<void> {

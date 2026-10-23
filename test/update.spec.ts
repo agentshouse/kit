@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until } from './double.ts';
-import { hostKit, type Hosted } from './environment.ts';
+import { hostKit, lastCall, type Hosted } from './environment.ts';
 import { fakeBin, runKit } from './kit.ts';
 
 const SYSTEMD_RUN = `#!/bin/sh
@@ -29,8 +29,9 @@ async function serve(hosted: Hosted, script: string): Promise<{ bootstrap: strin
   };
 }
 
-function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string; update_clis?: boolean }): void {
-  hosted.house.connections.at(-1)!.send({
+async function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string; update_clis?: boolean }): Promise<void> {
+  const open = await until(() => hosted.house.connections.findLast((connection) => connection.transport.readyState === connection.transport.OPEN));
+  open.send({
     type: 'input',
     input_id: id,
     kind: 'update',
@@ -54,11 +55,27 @@ const downloaded = (hosted: Hosted) => hosted.house.requests.find((request) => r
 
 const checkpoint = (hosted: Hosted) => readFile(join(hosted.home, 'update', 'pending.json'), 'utf8').catch(() => undefined);
 
+const started = (hosted: Hosted) => hosted.turns.find((turn) => turn.path.endsWith('/started'));
+
+const requested = (hosted: Hosted) => hosted.house.requests.map((request) => request.path);
+
+function expectRunAfterTurn(hosted: Hosted): void {
+  const reached = requested(hosted);
+  const turnEnded = reached.findIndex((path) => path.endsWith('/ended'));
+  expect(turnEnded).toBeGreaterThan(-1);
+  expect(reached.indexOf('/releases/connect-linux.sh')).toBeGreaterThan(turnEnded);
+}
+
+async function opened(hosted: Hosted): Promise<void> {
+  hosted.call({ kind: 'open' });
+  await hosted.result(lastCall());
+}
+
 it('reruns the verified bootstrap with --linux outside its own service and returns the result of the update', async () => {
   const hosted = await hostKit();
   const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
 
-  update(hosted, 'update-1', pin);
+  await update(hosted, 'update-1', pin);
 
   expect(await hosted.result('update-1')).toEqual({});
   expect(await ran(hosted)).toBe('--linux\n');
@@ -78,7 +95,7 @@ it('reruns the bootstrap of its desktop placement in its workspace through the u
   await chmod(join(hosted.home, 'bin', 'systemctl'), 0o755);
   const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
 
-  update(hosted, 'update-user', { ...pin, update_clis: true });
+  await update(hosted, 'update-user', { ...pin, update_clis: true });
 
   expect(await hosted.result('update-user')).toEqual({});
   expect(await ran(hosted)).toBe(`--workspace ${workspace} --update-clis\n`);
@@ -94,7 +111,7 @@ it('reruns the bootstrap with --linux as its own account through sudo when it ru
   await writeFile(join(hosted.home, 'bin', 'systemctl'), '#!/bin/sh\n', { mode: 0o755 });
   const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
 
-  update(hosted, 'update-sudo', pin);
+  await update(hosted, 'update-sudo', pin);
 
   expect(await hosted.result('update-sudo')).toEqual({});
   expect(await ran(hosted)).toBe('--linux\n');
@@ -110,7 +127,7 @@ it.each([
   const hosted = await hostKit();
   const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
 
-  update(hosted, `update-flag-${flag}`, { ...pin, update_clis: flag });
+  await update(hosted, `update-flag-${flag}`, { ...pin, update_clis: flag });
 
   expect(await hosted.result(`update-flag-${flag}`)).toEqual({});
   expect(await ran(hosted)).toBe(argv);
@@ -120,7 +137,7 @@ it('refuses a bootstrap that does not match its sha256 and runs nothing', async 
   const hosted = await hostKit();
   const pin = await serve(hosted, 'touch "$HOUSE_KIT_HOME/bootstrap.ran"\n');
 
-  update(hosted, 'update-2', { ...pin, sha256: '0'.repeat(64) });
+  await update(hosted, 'update-2', { ...pin, sha256: '0'.repeat(64) });
 
   expect(await hosted.result('update-2')).toEqual({ refused: 'the Kit bootstrap does not match its sha256' });
   expect(await ran(hosted)).toBeUndefined();
@@ -132,7 +149,7 @@ it('refuses a bootstrap larger than a million bytes and runs nothing, and runs o
   const sized = (bytes: number) => `${writes}${'x'.repeat(bytes - writes.length - 1)}\n`;
   const larger = await serve(hosted, sized(1_000_001));
 
-  update(hosted, 'update-large', larger);
+  await update(hosted, 'update-large', larger);
 
   expect(await hosted.result('update-large')).toEqual({ refused: 'the Kit bootstrap is larger than 1000000 bytes' });
   expect(await ran(hosted)).toBeUndefined();
@@ -141,7 +158,7 @@ it('refuses a bootstrap larger than a million bytes and runs nothing, and runs o
   hosted.house.route('GET', '/releases/largest/connect-linux.sh', () => ({
     bytes: { type: 'text/x-shellscript', content: largest },
   }));
-  update(hosted, 'update-largest', {
+  await update(hosted, 'update-largest', {
     bootstrap: `${hosted.house.origin}/releases/largest/connect-linux.sh`,
     sha256: createHash('sha256').update(largest).digest('hex'),
   });
@@ -159,54 +176,112 @@ it('refuses a bootstrap that has not arrived within its deadline and runs nothin
   }));
   onTestFinished(() => release());
 
-  update(hosted, 'update-stalled', pin);
+  await update(hosted, 'update-stalled', pin);
 
   expect(await hosted.result('update-stalled')).toEqual({ refused: 'the Kit bootstrap did not arrive within 120 seconds' });
   expect(await ran(hosted)).toBeUndefined();
 });
 
-it('carries two updates one after the other, each with its own bootstrap and status', async () => {
+it('runs an update House sends while a turn runs only once that turn ended', async () => {
   const hosted = await hostKit();
-  // The failing bootstrap runs half a second, so the second update arrives while it runs.
-  const failing = await serve(hosted, 'sleep 0.5\nexit 3\n');
-  const passing = {
-    bootstrap: `${hosted.house.origin}/releases/next/connect-linux.sh`,
-    sha256: createHash('sha256').update('printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n').digest('hex'),
-  };
-  hosted.house.route('GET', '/releases/next/connect-linux.sh', () => ({
-    bytes: { type: 'text/x-shellscript', content: 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n' },
-  }));
+  await opened(hosted);
+  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
+  // The turn holds a second and a half, so the update House sends once it started arrives while it runs.
+  hosted.call({ kind: 'message', text: '@hold 1500\n@say done', first: true });
+  await until(() => started(hosted));
 
-  update(hosted, 'update-6', failing);
-  update(hosted, 'update-7', passing);
+  await update(hosted, 'update-busy', pin);
+
+  expect(await hosted.result('update-busy')).toEqual({});
+  expect(await ran(hosted)).toBe('--linux\n');
+  expectRunAfterTurn(hosted);
+});
+
+it('runs an update House sends while a turn waits on a question only once that turn ended, though it reports idle meanwhile', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  await until(() => hosted.idles[1]);
+  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
+  hosted.call({ kind: 'message', text: '@ask', first: true });
+  const question = await until(() => hosted.interactions[0]);
+  await until(() => hosted.idles[2]);
+
+  await update(hosted, 'update-asking', pin);
+  const { interaction_id } = question.body as { interaction_id: string };
+  hosted.call({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
+
+  expect(await hosted.result('update-asking')).toEqual({});
+  expectRunAfterTurn(hosted);
+});
+
+it('takes no Kit call while the bootstrap of its update runs and opens its connection again once that bootstrap returned', async () => {
+  const hosted = await hostKit();
+  const pin = await serve(hosted, HELD);
+  await update(hosted, 'update-quiet', pin);
+  await until(() => downloaded(hosted));
+
+  await until(() => hosted.connection.transport.readyState === hosted.connection.transport.CLOSED);
+  expect(hosted.house.connections).toHaveLength(1);
+  await writeFile(join(hosted.home, 'go'), '');
+
+  expect(await hosted.result('update-quiet')).toEqual({});
+  await until(() => hosted.house.connections[1]);
+  await opened(hosted);
+});
+
+it('carries two updates House sent while a turn ran one after the other once it ended, each with its own bootstrap and status, and reports idle only after both', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
+  await opened(hosted);
+  const failing = await serve(hosted, `${HELD}exit 3\n`);
+  const next = 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n';
+  hosted.house.route('GET', '/releases/next/connect-linux.sh', () => ({
+    bytes: { type: 'text/x-shellscript', content: next },
+  }));
+  // The turn holds a second and a half, so both updates House sends once it started arrive while it runs.
+  hosted.call({ kind: 'message', text: '@hold 1500\n@say done', first: true });
+  await until(() => started(hosted));
+
+  await update(hosted, 'update-6', failing);
+  await update(hosted, 'update-7', {
+    bootstrap: `${hosted.house.origin}/releases/next/connect-linux.sh`,
+    sha256: createHash('sha256').update(next).digest('hex'),
+  });
+  await until(() => downloaded(hosted));
+  await settle();
+  const turnEnded = requested(hosted).findIndex((path) => path.endsWith('/ended'));
+  expect(requested(hosted).slice(turnEnded)).not.toContain('/kit/idle');
+  await writeFile(join(hosted.home, 'go'), '');
 
   expect(await hosted.result('update-6')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
   expect(await hosted.result('update-7')).toEqual({});
   expect(await ran(hosted)).toBe('--linux\n');
-  expect(hosted.results.map((result) => result.params.input)).toEqual(['update-6', 'update-7']);
+  await until(() => requested(hosted).lastIndexOf('/kit/idle') > turnEnded);
+  expect(requested(hosted).slice(turnEnded).filter((path) => path === '/kit/idle' || path.startsWith('/kit/inputs/update-'))).toEqual([
+    '/kit/inputs/update-6/ack',
+    '/kit/inputs/update-7/ack',
+    '/kit/idle',
+  ]);
 });
 
 it('refuses the update with the exit status of a bootstrap that fails', async () => {
   const hosted = await hostKit();
   const pin = await serve(hosted, 'exit 3\n');
 
-  update(hosted, 'update-3', pin);
+  await update(hosted, 'update-3', pin);
 
   expect(await hosted.result('update-3')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
 });
 
-it('reruns no bootstrap for an update its reopened Kit connection sends after the update ended, and returns its result again', async () => {
+it('reruns no bootstrap for an update House sends again after the update ended, and returns its result again', async () => {
   const hosted = await hostKit();
   const pin = await serve(hosted, HELD);
-  update(hosted, 'update-8', pin);
+  await update(hosted, 'update-8', pin);
   await until(() => downloaded(hosted));
-  hosted.connection.close(1001, 'shutting_down');
-  await until(() => hosted.house.connections[1]);
   await writeFile(join(hosted.home, 'go'), '');
   await hosted.result('update-8');
   await until(async () => (await checkpoint(hosted)) === undefined);
 
-  update(hosted, 'update-8', pin);
+  await update(hosted, 'update-8', pin);
 
   await until(() => hosted.results[1]);
   await settle();
@@ -220,7 +295,7 @@ it('reruns no bootstrap for an update its reopened Kit connection sends after th
 it('reports no idle while an update runs and reports idle once it returned the result of the update', async () => {
   const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
   const pin = await serve(hosted, HELD);
-  update(hosted, 'update-9', pin);
+  await update(hosted, 'update-9', pin);
   await until(() => downloaded(hosted));
   await settle();
   expect(hosted.idles).toHaveLength(1);
@@ -233,35 +308,9 @@ it('reports no idle while an update runs and reports idle once it returned the r
   expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf('/kit/inputs/update-9/ack'));
 });
 
-it('reports no idle while an update waits behind another and reports idle once it returned both results', async () => {
-  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
-  const first = await serve(hosted, HELD);
-  const next = 'printf "%s\\n" "$*" >> "$HOUSE_KIT_HOME/bootstrap.ran"\n';
-  hosted.house.route('GET', '/releases/next/connect-linux.sh', () => ({
-    bytes: { type: 'text/x-shellscript', content: next },
-  }));
-  update(hosted, 'update-10', first);
-  await until(() => downloaded(hosted));
-  update(hosted, 'update-11', {
-    bootstrap: `${hosted.house.origin}/releases/next/connect-linux.sh`,
-    sha256: createHash('sha256').update(next).digest('hex'),
-  });
-  await settle();
-
-  await writeFile(join(hosted.home, 'go'), '');
-
-  await hosted.result('update-11');
-  await until(() => hosted.idles[1]);
-  await settle();
-  const reported = hosted.house.requests
-    .map((request) => request.path)
-    .filter((path) => path === '/kit/idle' || path.endsWith('/ack'));
-  expect(reported).toEqual(['/kit/idle', '/kit/inputs/update-10/ack', '/kit/inputs/update-11/ack', '/kit/idle']);
-});
-
 async function restartAfter(hosted: Hosted, id: string, script: string): Promise<unknown> {
   const pin = await serve(hosted, script);
-  update(hosted, id, pin);
+  await update(hosted, id, pin);
   await hosted.kit.exited;
   await until(() => readFile(join(hosted.home, 'update', 'outcome'), 'utf8').catch(() => undefined));
   expect(hosted.results).toHaveLength(0);
