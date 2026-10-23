@@ -1,15 +1,22 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { access, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { RELEASES } from './cli.ts';
 import { settle, until } from './double.ts';
 import { hostKit, installHeld, lastCall, type Hosted } from './environment.ts';
+import { MODELS } from './fixtures/clis/session-options.ts';
 import { alive, stop } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+
+const FAST_SILENCE = fileURLToPath(new URL('./fast-silence.ts', import.meta.url));
+
+// A model read waits two quiet seconds and its silent CLI ends five seconds later under fast-silence, so twenty seconds see the idle report on a loaded runner.
+const SILENT_READ_ENDED_MS = 20_000;
 
 async function opened(hosted: Hosted): Promise<void> {
   hosted.call({ kind: 'open' });
@@ -30,6 +37,20 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
 
   await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);
+});
+
+it('reports idle once the silence bound ends a model read whose CLI never answers', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_SILENCE}` } });
+  await mkdir(join(hosted.home, 'signed-in'), { recursive: true });
+  await writeFile(join(hosted.home, 'signed-in', 'claude-agent-acp'), '');
+  await writeFile(join(hosted.home, 'probe-hold'), MODELS['claude-agent-acp']![0]!.id);
+  await rm(await installHeld(hosted));
+  const held = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.heldProbe !== undefined))).pid as number;
+
+  await until(() => hosted.idles[1], SILENT_READ_ENDED_MS);
+
+  await until(() => !alive(held));
+  expect((await hosted.adapterLog()).some((entry) => entry.releasedProbe !== undefined)).toBe(false);
 });
 
 it("reports idle while an exited process of the Kit's user waits to be reaped beside a running conversation", async () => {

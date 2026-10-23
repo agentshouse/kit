@@ -468,8 +468,10 @@ const app = agent({ name: 'adapter-double' })
     if (unwritten().includes(params.sessionId)) throw neverWritten(params.sessionId);
     return { configOptions: options() };
   })
-  .onRequest('session/set_config_option', ({ params }) => {
+  .onRequest('session/set_config_option', async ({ params }) => {
     log({ method: 'session/set_config_option', params });
+    // Twenty milliseconds answers the held option as soon as the spec removes its file.
+    while (existsSync(join(home, 'hold-option'))) await new Promise((resolve) => setTimeout(resolve, 20));
     const option = options().find((candidate) => candidate.id === params.configId);
     if (option === undefined) throw new RequestError(-32602, `Unknown config option: ${params.configId}`);
     const refused = join(home, 'refuse-model');

@@ -4,6 +4,7 @@ import type { Call } from './calls.ts';
 import { end, REPLACED, signInAgain } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
+import { Silence } from './silence.ts';
 import { endUnserved, KIT_WIRE } from './wire.ts';
 
 export type Notification = { type: string } & Record<string, unknown>;
@@ -30,47 +31,6 @@ const SUBPROTOCOL = `house.kit.stream.${KIT_WIRE}`;
 const REFUSAL_HEADER = 'x-house-refusal';
 // House beats each Kit connection every thirty seconds, so two silent beats mean this Kit process cannot hear House.
 export const CONNECTION_SILENCE_MS = 60_000;
-
-export interface ConnectionClock {
-  later(delay: number, callback: () => void): ReturnType<typeof setTimeout>;
-  clear(timer: ReturnType<typeof setTimeout>): void;
-}
-
-const SYSTEM_CONNECTION_CLOCK: ConnectionClock = {
-  later: (delay, callback) => setTimeout(callback, delay),
-  clear: (timer) => clearTimeout(timer),
-};
-
-export class ConnectionSilence {
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private readonly silent: () => void;
-  private readonly clock: ConnectionClock;
-  private readonly interval: number;
-
-  constructor(
-    silent: () => void,
-    clock: ConnectionClock = SYSTEM_CONNECTION_CLOCK,
-    interval = CONNECTION_SILENCE_MS,
-  ) {
-    this.silent = silent;
-    this.clock = clock;
-    this.interval = interval;
-  }
-
-  heard(): void {
-    this.stop();
-    this.timer = this.clock.later(this.interval, () => {
-      this.timer = null;
-      this.silent();
-    });
-  }
-
-  stop(): void {
-    if (this.timer === null) return;
-    this.clock.clear(this.timer);
-    this.timer = null;
-  }
-}
 
 function connectionUrl(house: string): URL {
   const url = new URL(PATH, house);
@@ -109,7 +69,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
     } as unknown as string[]);
     socket = opening;
     let opened = false;
-    let silence: ConnectionSilence | null = null;
+    let silence: Silence | null = null;
     const closed = (event: CloseEvent) => {
       silence?.stop();
       silence = null;
@@ -132,7 +92,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       opened = true;
       failures = 0;
       connection = opening;
-      silence = new ConnectionSilence(() => {
+      silence = new Silence(CONNECTION_SILENCE_MS, () => {
         if (connection !== opening) return;
         connection = null;
         opening.onclose = null;

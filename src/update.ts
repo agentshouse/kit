@@ -16,6 +16,11 @@ const BOOTSTRAP_BYTES = 1_000_000;
 // A bootstrap is at most a million bytes, so two minutes carry it over ten kilobytes a second and no stalled host holds the update queue.
 const BOOTSTRAP_MS = 120_000;
 
+// A bootstrap's downloads and CLI updates take minutes, so one still running after an hour has hung and is ended before it keeps the Kit offline.
+const RERUN_MS = 60 * 60_000;
+
+const TIMED_OUT = '124';
+
 function directory(): string {
   return join(kitHome(), 'update');
 }
@@ -49,7 +54,7 @@ function placement(): string[] {
 }
 
 function record(): string {
-  return `outcome=$1; shift; bash "$0" "$@"; printf %s "$?" > "$outcome"; ${[...elevated(), 'systemctl', ...manager(), 'start', 'house-kit.service'].join(' ')}`;
+  return `outcome=$1; shift; timeout ${RERUN_MS / 1000} bash "$0" "$@"; printf %s "$?" > "$outcome"; ${[...elevated(), 'systemctl', ...manager(), 'start', 'house-kit.service'].join(' ')}`;
 }
 
 async function pendingCall(): Promise<string | null> {
@@ -63,6 +68,7 @@ async function pendingCall(): Promise<string | null> {
 async function recorded(): Promise<Result | null> {
   const status = await readFile(outcome(), 'utf8').catch(() => null);
   if (status === null) return null;
+  if (status.trim() === TIMED_OUT) return { refused: `the Kit bootstrap did not finish within ${RERUN_MS / 1000} seconds` };
   return status.trim() === '0' ? {} : { refused: `the Kit bootstrap exited with ${status.trim()}` };
 }
 
