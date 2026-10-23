@@ -17,6 +17,7 @@ export interface ConnectionHandlers {
 
 export interface Connection {
   send(notification: Notification): boolean;
+  pause(): () => void;
 }
 
 interface Answered {
@@ -94,20 +95,25 @@ subscribe('undici:request:headers', (message) => {
 
 export function holdConnection(handlers: ConnectionHandlers): Connection {
   let connection: WebSocket | null = null;
+  let socket: WebSocket | null = null;
+  let paused = false;
   let failures = 0;
 
   const connect = async () => {
     const { house, credential } = (await readEnrolment())!;
+    if (paused || socket !== null) return;
     refused = null;
     const opening = new WebSocket(relayed(connectionUrl(house)), {
       protocols: [SUBPROTOCOL],
       headers: { authorization: `Bearer ${credential}` },
     } as unknown as string[]);
+    socket = opening;
     let opened = false;
     let silence: ConnectionSilence | null = null;
     const closed = (event: CloseEvent) => {
       silence?.stop();
       silence = null;
+      if (socket === opening) socket = null;
       if (connection === opening) connection = null;
       handlers.closed();
       process.stderr.write(`kit: connection closed ${event.code} ${event.reason}\n`);
@@ -118,6 +124,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       }
       if (refused !== null) endUnserved(refused.text);
       if (!opened && refused !== null) process.stderr.write(`kit: ${refused.message}\n`);
+      if (paused) return;
       // A closed connection reopens in one to three seconds, spread so Kit processes one restart closed return apart; an opening House refused or left unanswered backs off on the jittered curve, retryable or not, since a resident outlives a House deploy.
       setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));
     };
@@ -151,6 +158,14 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       if (connection === null || connection.readyState !== WebSocket.OPEN) return false;
       connection.send(JSON.stringify(notification));
       return true;
+    },
+    pause() {
+      paused = true;
+      socket?.close();
+      return () => {
+        paused = false;
+        void connect();
+      };
     },
   };
 }

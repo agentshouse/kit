@@ -143,6 +143,8 @@ export async function resident(): Promise<void> {
       reported = false;
     } else if (restartAsked() && conversations.quiet()) {
       restart('restarting for an updated CLI');
+    } else if (update.held() && conversations.quiet()) {
+      update.apply(connection!.pause());
     } else if (!reported) {
       reported = true;
       logged(house.deliver('/kit/idle', {}, idle));
@@ -158,7 +160,7 @@ export async function resident(): Promise<void> {
     changed,
   });
   const signIns = new SignIns(house, agents, calls);
-  const update = new KitUpdate(calls);
+  const update = new KitUpdate(calls, changed);
   const wizards = new WebWizards(calls, (notification) => connection?.send(notification) ?? false);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
@@ -179,7 +181,7 @@ export async function resident(): Promise<void> {
     closed: () => wizards.disconnected(),
     call: (call: Call) => {
       if (call.kind === 'sign_in') signIns.start(call);
-      else if (call.kind === 'update') update.start(call);
+      else if (call.kind === 'update') update.hold(call);
       else if (call.kind === 'run_wizard') wizards.start(call);
       else if (CONVERSATION_METHODS.has(call.kind)) conversations.call(call as ConversationCall);
       else {
