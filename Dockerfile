@@ -5,6 +5,7 @@ LABEL org.opencontainers.image.source="https://github.com/agentshouse/kit" \
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git tini \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libbrotli1)" ge 1.1.0-2+deb13u1 \
   && rm -rf /var/lib/apt/lists/* \
   && cp /etc/skel/.profile /etc/profile.d/home.sh
 

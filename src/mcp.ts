@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { KIT_RELEASE } from './clis.ts';
 import { relayed } from './relay.ts';
+import { KIT_WIRE, KIT_WIRE_HEADER } from './wire.ts';
 
 export interface Message {
   jsonrpc: '2.0';
@@ -56,6 +57,7 @@ export async function callHouse(
       'mcp-protocol-version': MCP_PROTOCOL_VERSION,
       'mcp-method': message.method,
       ...(tool === null ? {} : { 'mcp-name': tool }),
+      [KIT_WIRE_HEADER]: String(KIT_WIRE),
     },
     body: mcpBody(message, operation),
     signal,

@@ -102,6 +102,17 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   ]);
 });
 
+it("names the Kit's wire in a header on every call a conversation's bridge relays to House's MCP door", async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+
+  directed(hosted, '@house --help\n@house search {"query":"notes"}');
+
+  await runs(hosted, 2);
+  expect(hosted.mcp.length).toBeGreaterThan(1);
+  expect(hosted.mcp.map((received) => received.headers['x-house-kit-wire'])).toEqual(hosted.mcp.map(() => '3'));
+});
+
 it('attaches a fresh operation id to every Tool call, a read included, and never asks House which Tools write', async () => {
   const hosted = await hostKit();
   await opened(hosted);
