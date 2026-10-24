@@ -40,6 +40,7 @@ beforeAll(async () => {
   plantedRoot = await mkdtemp(join(tmpdir(), 'kit-skills-'));
   const copy = join(plantedRoot, 'skills');
   await cp(PACKAGE_ROOT, copy, { recursive: true });
+  await rm(join(copy, 'guide', 'skills'), { recursive: true, force: true });
   for (const [path, text] of Object.entries(PAGES)) {
     await mkdir(dirname(join(copy, 'guide', path)), { recursive: true });
     await writeFile(join(copy, 'guide', path), text);
