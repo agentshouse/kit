@@ -18,6 +18,7 @@ import { refusalOf } from './refusals.ts';
 import { selectRelay } from './relay.ts';
 import { startService } from './service.ts';
 import { placeSkillSet } from './skills.ts';
+import { endUnserved } from './wire.ts';
 
 export const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -46,6 +47,7 @@ export async function accepted(house: string, credential: string): Promise<boole
   const checked = await callHouse(house, credential, rpc('tools/list', {}));
   if (checked.status === 200) return true;
   if (checked.status === 401) return false;
+  endUnserved(checked.text);
   throw new Error(`House answered ${checked.status} when Kit checked this computer's own agent's connection: ${checked.text}`);
 }
 

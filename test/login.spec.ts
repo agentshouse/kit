@@ -567,6 +567,30 @@ it("fails naming its version, the Building's Kit release and this computer's ins
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
 });
 
+it("ends saying it is too old for House when House's MCP door refuses the User's own agent's check as too old, and starts no login", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_live' }));
+  house.route('POST', '/', () => ({
+    status: 426,
+    body: {
+      jsonrpc: '2.0',
+      id: 1,
+      error: {
+        code: -32000,
+        message: 'kit_update_required: this Kit is too old for House; run its install command again to update it',
+        data: { code: 'kit_update_required', retryable: false },
+      },
+    },
+  }));
+
+  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toContain('kit: This Kit is too old for House; install it again.\n');
+  expect(house.requests.filter((request) => request.path === '/kit')).toHaveLength(0);
+});
+
 it("asks for the User's own agent's connection when Kit holds none and keeps it owner-only beside the Kit credential", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
