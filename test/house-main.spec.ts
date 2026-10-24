@@ -62,6 +62,15 @@ it("sends a Tool call outside a conversation to House's root under the User's ow
   expect((call!.body as McpCall).params).toMatchObject({ name: 'search', arguments: { query: 'invoice' } });
 });
 
+it("names the Kit's wire in a header on its call to House's MCP door", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+
+  await runHouse(home, ['search', '{"query":"invoice"}']);
+
+  expect(house.requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(['3']);
+});
+
 function zeros(size: number): string {
   const digest = createHash('sha256');
   const mebibyte = Buffer.alloc(1024 * 1024);
