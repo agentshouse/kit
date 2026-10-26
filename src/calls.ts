@@ -3,7 +3,13 @@ import { join } from 'node:path';
 import type { House } from './api.ts';
 import { kitHome } from './home.ts';
 
-export type Result = { provider_session_id: string } | { refused: string; resume_refused?: true } | { exit_code: number } | Record<string, never>;
+export type Result =
+  | { provider_session_id: string }
+  | { refused: string; resume_refused?: true }
+  | { exit_code: number }
+  | { exit_code: number; output: string; cut: boolean }
+  | { timed_out: true; output: string; cut: boolean }
+  | Record<string, never>;
 
 export interface KitMethods {
   readonly open: { readonly params: Record<never, never>; readonly result: Result };
@@ -30,11 +36,15 @@ export interface KitMethods {
     readonly result: Result;
   };
   readonly run_wizard: { readonly params: { script: string }; readonly result: Result };
+  readonly run_function: {
+    readonly params: { script: string; input: unknown; terminal: boolean; time_cap: number; output_cap: number };
+    readonly result: Result;
+  };
 }
 
 type KitMethod = keyof KitMethods;
 
-type EnvironmentMethod = 'sign_in' | 'update' | 'run_wizard';
+type EnvironmentMethod = 'sign_in' | 'update' | 'run_wizard' | 'run_function';
 
 interface ConversationHeader {
   input_id: string;
@@ -56,6 +66,7 @@ export type Call<Method extends KitMethod = KitMethod> = {
 export interface Carried {
   result: Result;
   returned?(): Promise<void>;
+  release?: boolean;
 }
 
 function logged(error: unknown): void {
@@ -69,6 +80,7 @@ export class Calls {
   private readonly path = join(kitHome(), 'call-results.json');
   private readonly results: Map<string, Result>;
   private readonly returned = new Set<string>();
+  private readonly released = new Set<string>();
   private open = 0;
 
   constructor(house: House, changed: () => void) {
@@ -90,6 +102,7 @@ export class Calls {
   }
 
   carry(callId: string, work: () => Promise<Carried>): Promise<void> {
+    if (this.released.has(callId)) return Promise.resolve();
     const known = this.carried.get(callId);
     const result = this.results.get(callId);
     const carried = known ?? (result === undefined ? work() : Promise.resolve<Carried>({ result }));
@@ -100,14 +113,19 @@ export class Calls {
     this.open++;
     this.changed();
     return carried
-      .then(async ({ result, returned }) => {
+      .then(async ({ result, returned, release }) => {
         try {
           await this.house.deliver(`/kit/inputs/${callId}/ack`, result);
         } finally {
           this.returned.add(callId);
           if (this.results.delete(callId)) this.save();
         }
-        if (known === undefined) await returned?.();
+        if (known !== undefined) return;
+        if (release) {
+          this.carried.delete(callId);
+          this.released.add(callId);
+        }
+        await returned?.();
       })
       .catch(logged)
       .finally(() => {
