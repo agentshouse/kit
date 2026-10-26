@@ -57,6 +57,8 @@ let mode: string | undefined;
 let collaboration: string | undefined;
 const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode, collaboration);
 const cancelled = new Map<string, () => void>();
+const prompting = new Set<string>();
+const steers = kind !== 'grok-build';
 
 // A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.
 const JOB =
@@ -95,6 +97,20 @@ function codex(params: unknown): Promise<void> {
   appServer!.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'emit', params })}\n`);
   return answered;
 }
+
+function promptText(prompt: { type: string; text?: string }[]): string {
+  return prompt.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+}
+
+function directives(text: string): string[] {
+  return text.split('\n').filter((line) => line.startsWith('@'));
+}
+
+const STEERING = {
+  parse(value: unknown): { sessionId: string; prompt: { type: string; text?: string }[] } {
+    return value as { sessionId: string; prompt: { type: string; text?: string }[] };
+  },
+};
 
 function lines(path: string, from?: string, to?: string): Record<string, any>[] {
   return readFileSync(path, 'utf8')
@@ -429,7 +445,7 @@ const app = agent({ name: 'adapter-double' })
       protocolVersion: params.protocolVersion,
       agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
       authMethods: [],
-      ...(signedIn() ? { _meta: { defaultAuthMethodId: 'device' } } : {}),
+      _meta: { ...(steers ? { steering: { supported: true } } : {}), ...(signedIn() ? { defaultAuthMethodId: 'device' } : {}) },
     };
   })
   .onRequest('session/new', async ({ params }) => {
@@ -489,26 +505,41 @@ const app = agent({ name: 'adapter-double' })
     cancelled.get(params.sessionId)?.();
     cancelled.delete(params.sessionId);
   })
+  .onRequest('_session/steering', STEERING, ({ params, client }) => {
+    const text = promptText(params.prompt);
+    log({ method: '_session/steering', params, text });
+    if (!steers) throw RequestError.methodNotFound('_session/steering');
+    if (!prompting.has(params.sessionId)) return { outcome: 'promptRequired' };
+    void (async () => {
+      for (const line of directives(text)) await directive(client, params.sessionId, line);
+    })();
+    return { outcome: 'injected' };
+  })
   .onRequest('session/prompt', async ({ params, client }) => {
-    const text = params.prompt.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+    const text = promptText(params.prompt);
     written(params.sessionId);
     if (kind === 'codex-acp' && text.startsWith('/rename ')) {
       log({ renamed: text.slice('/rename '.length), params });
       return { stopReason: 'end_turn' };
     }
     log({ method: 'session/prompt', params, text });
-    const directives = text.split('\n').filter((line) => line.startsWith('@'));
-    for (const line of directives.length === 0 ? ['@say ok'] : directives) {
-      const outcome = await directive(client, params.sessionId, line);
-      if (outcome === 'answered') return { stopReason: 'end_turn' };
-      if (outcome === 'cancelled') {
-        await turnEnded(client, params.sessionId);
-        return { stopReason: 'cancelled' };
+    prompting.add(params.sessionId);
+    try {
+      const steps = directives(text);
+      for (const line of steps.length === 0 ? ['@say ok'] : steps) {
+        const outcome = await directive(client, params.sessionId, line);
+        if (outcome === 'answered') return { stopReason: 'end_turn' };
+        if (outcome === 'cancelled') {
+          await turnEnded(client, params.sessionId);
+          return { stopReason: 'cancelled' };
+        }
+        if (outcome !== undefined) return outcome;
       }
-      if (outcome !== undefined) return outcome;
+      await turnEnded(client, params.sessionId);
+      return { stopReason: 'end_turn' };
+    } finally {
+      prompting.delete(params.sessionId);
     }
-    await turnEnded(client, params.sessionId);
-    return { stopReason: 'end_turn' };
   });
 
 app.connect(

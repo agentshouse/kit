@@ -855,6 +855,161 @@ it('sends two messages that arrived mid-turn as two turns in the order they arri
   expect(new Set(hosted.turns.map((turn) => turn.params.turn)).size).toBe(3);
 });
 
+function processes(hosted: Hosted): unknown[] {
+  return hosted.connection.notifications.filter((notification) => notification.type === 'process').map((notification) => notification.running);
+}
+
+async function sessionsOpened(hosted: Hosted): Promise<Record<string, unknown>[]> {
+  return (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new' && (entry.params as { cwd: string }).cwd === hosted.workingDirectory);
+}
+
+it.each(['codex-acp', 'claude-agent-acp'])('steers an at-once message into the turn %s runs, which goes on with it', async (kind) => {
+  const hosted = await opened(kind);
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  await release();
+  expect(await ends(hosted, 1)).toEqual([{ text: 'steeredfirst' }]);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === '_session/steering').map((entry) => entry.text)).toEqual(['@say steered']);
+  expect(log.filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first']);
+  await settle();
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+});
+
+it('steers an at-once message into a turn whose question waits, and the question waits on for its answer', async () => {
+  const hosted = await opened();
+  hosted.call({ kind: 'message', text: '@ask', first: false });
+  const question = await until(() => hosted.interactions[0]);
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
+  hosted.call({ kind: 'answer', interaction_id: (question.body as { interaction_id: string }).interaction_id, response });
+  expect(await ends(hosted, 1)).toEqual([{ text: `steered${JSON.stringify(response)}` }]);
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('interrupts the turn of a CLI that takes no message during a turn for an at-once message, which runs as the next turn before the message that waited', async () => {
+  const hosted = await opened('grok-build');
+  hosted.call({ kind: 'message', text: '@wait', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.call({ kind: 'message', text: '@say waited', first: false });
+  const waited = lastCall();
+
+  hosted.call({ kind: 'message', text: '@say now', first: false, at_once: true });
+
+  expect(await ends(hosted, 3)).toEqual([{ text: '' }, { text: 'now' }, { text: 'waited' }]);
+  expect(await prompts(hosted)).toEqual(['@wait', '@say now', '@say waited']);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === 'session/cancel')).toHaveLength(1);
+  expect(log.filter((entry) => entry.method === '_session/steering')).toEqual([]);
+  expect(await hosted.result(waited)).toEqual({});
+});
+
+it('sends an at-once message that arrives with no turn running as any message', async () => {
+  const hosted = await opened();
+
+  hosted.call({ kind: 'message', text: '@say alone', first: false, at_once: true });
+
+  expect(await ends(hosted, 1)).toEqual([{ text: 'alone' }]);
+  expect(await prompts(hosted)).toEqual(['@say alone']);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === '_session/steering' || entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('ends the running process and its bridge for an open, opens a new session in a new process, answers its id and resumes only that session after', async () => {
+  const hosted = await hostKit();
+  hosted.call({ kind: 'open' });
+  const { provider_session_id: old } = (await hosted.result(lastCall())) as { provider_session_id: string };
+  hosted.call({ kind: 'message', provider_session_id: old, text: '@say before', first: true });
+  await ends(hosted, 1);
+  const [before] = await sessionsOpened(hosted);
+
+  hosted.call({ kind: 'open', provider_session_id: old });
+
+  const { provider_session_id: fresh } = (await hosted.result(lastCall())) as { provider_session_id: string };
+  const sessions = await sessionsOpened(hosted);
+  expect(sessions.map((entry) => entry.sessionId)).toEqual([old, fresh]);
+  expect(fresh).not.toBe(old);
+  expect(alive(before!.pid as number)).toBe(false);
+  expect(alive(sessions[1]!.pid as number)).toBe(true);
+  expect(processes(hosted)).toEqual([true, false, true]);
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/conversations/conversation-1/credential')).toHaveLength(2);
+  hosted.call({ kind: 'message', provider_session_id: old, text: '@say after\n@exit 3', first: false });
+  await ends(hosted, 2);
+  hosted.call({ kind: 'message', provider_session_id: old, text: '@say again', first: false });
+  expect(await ends(hosted, 3)).toEqual([{ text: 'before' }, { failed: 'exited' }, { text: 'again' }]);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === 'session/prompt').map((entry) => (entry.params as { sessionId: string }).sessionId)).toEqual([
+    old,
+    fresh,
+    fresh,
+  ]);
+  expect(log.filter((entry) => entry.method === 'session/resume').map((entry) => (entry.params as { sessionId: string }).sessionId)).toEqual([fresh]);
+});
+
+it('ends the process for a done once the running turn has ended as it would and the message that waited behind it has run, and shows no kill', async () => {
+  const hosted = await opened();
+  const [cli] = await sessionsOpened(hosted);
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.call({ kind: 'message', text: '@say second', first: false });
+
+  hosted.call({ kind: 'done' });
+
+  const done = lastCall();
+  await settle();
+  expect(hosted.results.map((result) => result.params.input)).not.toContain(done);
+  expect(alive(cli!.pid as number)).toBe(true);
+  await release();
+  expect(await hosted.result(done)).toEqual({});
+  expect(await ends(hosted, 2)).toEqual([{ text: 'first' }, { text: 'second' }]);
+  expect(alive(cli!.pid as number)).toBe(false);
+  await until(() => processes(hosted).length === 2);
+  expect(processes(hosted)).toEqual([true, false]);
+});
+
+it('keeps a question waiting through a done until the owner answers it, then ends the process once its turn ends', async () => {
+  const hosted = await opened();
+  const [cli] = await sessionsOpened(hosted);
+  hosted.call({ kind: 'message', text: '@ask', first: false });
+  const question = await until(() => hosted.interactions[0]);
+
+  hosted.call({ kind: 'done' });
+
+  const done = lastCall();
+  await settle();
+  expect(hosted.results.map((result) => result.params.input)).not.toContain(done);
+  expect(alive(cli!.pid as number)).toBe(true);
+  const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
+  hosted.call({ kind: 'answer', interaction_id: (question.body as { interaction_id: string }).interaction_id, response });
+  expect(await hosted.result(done)).toEqual({});
+  expect(await ends(hosted, 1)).toEqual([{ text: JSON.stringify(response) }]);
+  expect(alive(cli!.pid as number)).toBe(false);
+  await until(() => processes(hosted).length === 2);
+  expect(processes(hosted)).toEqual([true, false]);
+});
+
+it('answers a done for a conversation with no process and starts nothing', async () => {
+  const hosted = await hostKit();
+
+  hosted.call({ kind: 'done' });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  await settle();
+  expect(await sessionsOpened(hosted)).toEqual([]);
+  expect(hosted.house.requests.filter((request) => request.path.endsWith('/credential'))).toEqual([]);
+  expect(processes(hosted)).toEqual([]);
+});
+
 it('resumes the provider session for a message that waited while the process crashed and sends it as the next turn', async () => {
   const hosted = await opened();
   const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
