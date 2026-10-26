@@ -915,9 +915,9 @@ it('interrupts the turn of a CLI that takes no message during a turn for at-once
 });
 
 it.each([
-  ['codex-acp', 'runs it as the turn it starts for it', [{ text: '' }, { text: 'steered' }], ['@itself 100 @gate self']],
-  ['claude-agent-acp', 'sends it as the next turn', [{ text: '' }, { text: '' }, { text: 'steered' }], ['@itself 100 @gate self', '@say steered']],
-])('lands an at-once message that meets a turn %s started by itself, steered once its own prompt has ended, as the adapter answers: %s', async (kind, _answer, turns, sent) => {
+  ['codex-acp', 'takes it into that turn', [{ text: '' }, { text: 'steered' }], ['@itself 100 @gate self']],
+  ['claude-agent-acp', 'has it sent as the next turn', [{ text: '' }, { text: '' }, { text: 'steered' }], ['@itself 100 @gate self', '@say steered']],
+])('lands an at-once message that meets a turn %s started by itself after its prompt ended as the adapter answers its steer: %s', async (kind, _answer, turns, sent) => {
   const hosted = await opened(kind);
   const release = gated(hosted, 'self');
   hosted.call({ kind: 'message', text: '@itself 100 @gate self', first: false });
@@ -931,6 +931,23 @@ it.each([
   expect(await ends(hosted, turns.length)).toEqual(turns);
   expect(await hosted.result(message)).toEqual({});
   expect(await prompts(hosted)).toEqual(sent);
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('lands an at-once message as the turn Codex starts for it when Codex has already reported idle the turn whose prompt it has not answered yet', async () => {
+  const hosted = await opened();
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@ended\n@gate first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await settle();
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(await ends(hosted, 1)).toEqual([{ text: 'steered' }]);
+  await release();
+  expect(await ends(hosted, 2)).toEqual([{ text: 'steered' }, { text: '' }]);
+  expect(await prompts(hosted)).toEqual(['@ended\n@gate first']);
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
 });
 

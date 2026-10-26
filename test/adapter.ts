@@ -58,6 +58,7 @@ let collaboration: string | undefined;
 const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode, collaboration);
 const cancelled = new Map<string, () => void>();
 const prompting = new Set<string>();
+const turning = new Set<string>();
 const steers = kind !== 'grok-build';
 
 // A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.
@@ -162,6 +163,7 @@ async function tool(client: AgentContext, sessionId: string, title: string) {
 }
 
 async function turnStarted(client: AgentContext, sessionId: string) {
+  turning.add(sessionId);
   if (kind === 'grok-build') {
     await client.notify('_x.ai/queue/changed', { sessionId, entries: [], runningPromptId: 'task-completed-1' });
   } else if (kind === 'claude-agent-acp') {
@@ -178,6 +180,7 @@ async function turnStarted(client: AgentContext, sessionId: string) {
 }
 
 async function turnEnded(client: AgentContext, sessionId: string) {
+  turning.delete(sessionId);
   if (kind === 'grok-build') {
     await client.notify('_x.ai/session_notification', {
       sessionId,
@@ -513,7 +516,7 @@ const app = agent({ name: 'adapter-double' })
     if (!steers) throw RequestError.methodNotFound('_session/steering');
     if (existsSync(join(home, 'refuse-steering'))) throw new RequestError(-32603, 'the steer was refused');
     const steps = directives(text);
-    if (prompting.has(params.sessionId)) {
+    if ((kind === 'codex-acp' ? turning : prompting).has(params.sessionId)) {
       void (async () => {
         for (const line of steps) await directive(client, params.sessionId, line);
       })();
@@ -536,6 +539,7 @@ const app = agent({ name: 'adapter-double' })
     }
     log({ method: 'session/prompt', params, text });
     prompting.add(params.sessionId);
+    turning.add(params.sessionId);
     try {
       const steps = directives(text);
       for (const line of steps.length === 0 ? ['@say ok'] : steps) {
