@@ -14,12 +14,12 @@ import { restart } from './end.ts';
 import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, readEnrolment, restartAsked } from './home.ts';
 import { Calls, type Call } from './calls.ts';
 import { killDescendants } from './scope.ts';
+import { removeInputs, Scripts } from './scripts.ts';
 import { quoted } from './shell.ts';
 import { SignIns } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
 import { holdConnection, type Connection, type Notification } from './connection.ts';
 import { KitUpdate } from './update.ts';
-import { WebWizards } from './web-wizard.ts';
 import { codexLauncher } from './work.ts';
 
 function report(error: unknown): void {
@@ -161,10 +161,12 @@ export async function resident(): Promise<void> {
   });
   const signIns = new SignIns(house, agents, calls);
   const update = new KitUpdate(calls, changed);
-  const wizards = new WebWizards(calls, (notification) => connection?.send(notification) ?? false);
+  removeInputs();
+  const scripts = new Scripts(calls, (notification) => connection?.send(notification) ?? false);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
       killDescendants();
+      removeInputs();
       process.kill(process.pid, signal);
     });
   }
@@ -178,11 +180,11 @@ export async function resident(): Promise<void> {
       changed();
       logged(copies.connected());
     },
-    closed: () => wizards.disconnected(),
+    closed: () => scripts.disconnected(),
     call: (call: Call) => {
       if (call.kind === 'sign_in') signIns.start(call);
       else if (call.kind === 'update') update.hold(call);
-      else if (call.kind === 'run_wizard') wizards.start(call);
+      else if (call.kind === 'run_wizard' || call.kind === 'run_function') scripts.start(call);
       else if (CONVERSATION_METHODS.has(call.kind)) conversations.call(call as ConversationCall);
       else {
         const refused = { refused: `This Kit does not know ${(call as { kind: string }).kind}; update the Kit` };
@@ -193,7 +195,7 @@ export async function resident(): Promise<void> {
       if (notification.type === 'watching') conversations.watching(notification.watching === true);
       if (notification.type === 'authority_changed') logged(copies.changed(notification.rooms as string[]));
       if (notification.type === 'work_available' && notification.subject === 'agents') logged(agents.refresh());
-      wizards.notified(notification);
+      scripts.notified(notification);
     },
   });
 }

@@ -3,7 +3,13 @@ import { join } from 'node:path';
 import type { House } from './api.ts';
 import { kitHome } from './home.ts';
 
-export type Result = { provider_session_id: string } | { refused: string; resume_refused?: true } | { exit_code: number } | Record<string, never>;
+export type Result =
+  | { provider_session_id: string }
+  | { refused: string; resume_refused?: true }
+  | { exit_code: number }
+  | { exit_code: number; output: string; cut: boolean }
+  | { timed_out: true; output: string; cut: boolean }
+  | Record<string, never>;
 
 export interface KitMethods {
   readonly open: { readonly params: Record<never, never>; readonly result: Result };
@@ -30,11 +36,15 @@ export interface KitMethods {
     readonly result: Result;
   };
   readonly run_wizard: { readonly params: { script: string }; readonly result: Result };
+  readonly run_function: {
+    readonly params: { script: string; input: unknown; terminal: boolean; time_cap: number; output_cap: number };
+    readonly result: Result;
+  };
 }
 
 type KitMethod = keyof KitMethods;
 
-type EnvironmentMethod = 'sign_in' | 'update' | 'run_wizard';
+type EnvironmentMethod = 'sign_in' | 'update' | 'run_wizard' | 'run_function';
 
 interface ConversationHeader {
   input_id: string;
