@@ -41,7 +41,7 @@ export interface Kit {
   changed(): void;
 }
 
-export type ConversationMethod = 'open' | 'message' | 'interrupt' | 'kill' | 'option' | 'answer';
+export type ConversationMethod = 'open' | 'message' | 'interrupt' | 'kill' | 'done' | 'option' | 'answer';
 
 export type ConversationCall = Call<ConversationMethod> & { [field: string]: unknown };
 
@@ -81,6 +81,8 @@ const NOT_SIGNED_IN = "the Agent's CLI is not signed in; sign it in on the Agent
 
 const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
 
+const UNSTEERED = "the Agent's CLI did not take the message into its running turn";
+
 class NotStarted extends Error {}
 
 class ResumeRefused extends NotStarted {}
@@ -119,7 +121,7 @@ const EXIT_PLAN_MODE = {
   },
 };
 
-export const CONVERSATION_METHODS: ReadonlySet<string> = new Set<ConversationMethod>(['open', 'message', 'interrupt', 'kill', 'option', 'answer']);
+export const CONVERSATION_METHODS: ReadonlySet<string> = new Set<ConversationMethod>(['open', 'message', 'interrupt', 'kill', 'done', 'option', 'answer']);
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -167,6 +169,10 @@ function audioOf(result: ToolResult): Address | null {
 
 function marker(bridge: Bridge): string {
   return `HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`;
+}
+
+function steers(adapter: Adapter): boolean {
+  return (adapter.initialized._meta?.steering as { supported?: unknown } | undefined)?.supported === true;
 }
 
 class Turn {
@@ -225,6 +231,7 @@ class Conversation {
   context: Context | null = null;
   readonly leftovers = new Set<Scope>();
   readonly waiting: Waiting[] = [];
+  done = false;
   sending: Promise<void> | null = null;
   readonly subagents = new Map<string, { description: string; turn: Turn; index: number }>();
   readonly held: Part[] = [];
@@ -359,8 +366,13 @@ export class Conversations {
   }
 
   private async carry(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
-    if (call.kind === 'open') return { result: this.open(conversation, call) };
+    if (call.kind === 'open') return this.open(conversation, call);
     if (call.kind === 'message') return this.message(conversation, call);
+    if (call.kind === 'done') {
+      conversation.done = true;
+      this.next(conversation);
+      return { result: Promise.resolve({}) };
+    }
     await this.launched(conversation);
     if (call.kind === 'interrupt') {
       if (--conversation.interrupts === 0) conversation.interrupted = new AbortController();
@@ -383,13 +395,21 @@ export class Conversations {
     return { result: Promise.resolve({}) };
   }
 
-  private open(conversation: Conversation, call: ConversationCall): Promise<Result> {
-    if (conversation.running !== null) return Promise.resolve({});
+  private async open(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
+    await this.stop(conversation);
     const launch = conversation.launch ?? this.launch(conversation, this.route(conversation, call.agent_id), null, true);
-    return launch.session.then(
-      (session) => ({ provider_session_id: session }),
-      (error: unknown) => ({ refused: refusal(conversation, error) }),
-    );
+    return {
+      result: launch.session.then(
+        (session) => ({ provider_session_id: session }),
+        (error: unknown) => ({ refused: refusal(conversation, error) }),
+      ),
+    };
+  }
+
+  private async stop(conversation: Conversation): Promise<void> {
+    const running = conversation.running;
+    running?.scope.kill();
+    await running?.adapter.exited;
   }
 
   private launch(conversation: Conversation, route: Promise<Route>, sessionId: string | null, empty: boolean): Launch {
@@ -431,7 +451,10 @@ export class Conversations {
   }
 
   private async message(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
-    const content: ContentBlock[] = [{ type: 'text', text: String(call.text) }];
+    const content: ContentBlock[] = [
+      ...(typeof call.recent === 'string' ? [{ type: 'text' as const, text: call.recent }] : []),
+      { type: 'text', text: String(call.text) },
+    ];
     let route: Route;
     let instructing: Promise<string> | null = null;
     try {
@@ -445,12 +468,52 @@ export class Conversations {
       return { result: Promise.resolve({ refused: refusal(conversation, error) }) };
     }
     conversation.preparing = null;
-    return {
-      result: new Promise<Result>((settle) => {
-        conversation.waiting.push({ call, route, content, instructing, settle });
-        this.next(conversation);
-      }),
-    };
+    const { promise, resolve: settle } = Promise.withResolvers<Result>();
+    const waiting: Waiting = { call, route, content, instructing, settle };
+    if (call.at_once === true && conversation.open > 0) await this.atOnce(conversation, waiting);
+    else conversation.waiting.push(waiting);
+    this.next(conversation);
+    return { result: promise };
+  }
+
+  private async atOnce(conversation: Conversation, waiting: Waiting): Promise<void> {
+    while (conversation.sending !== null) await conversation.sending;
+    const running = conversation.running;
+    if (running !== null && conversation.open > 0 && steers(running.adapter)) {
+      conversation.sending = this.steer(conversation, running, waiting);
+      await conversation.sending;
+      conversation.sending = null;
+      return;
+    }
+    this.ahead(conversation, waiting);
+    if (conversation.turn !== null) await this.interrupt(conversation, conversation.turn.id);
+  }
+
+  private ahead(conversation: Conversation, waiting: Waiting): void {
+    const behind = conversation.waiting.findIndex((held) => held.call.at_once !== true);
+    conversation.waiting.splice(behind === -1 ? conversation.waiting.length : behind, 0, waiting);
+  }
+
+  private async steer(conversation: Conversation, running: Running, waiting: Waiting): Promise<void> {
+    let outcome: unknown;
+    try {
+      ({ outcome } = await running.adapter.connection.agent.request<{ outcome?: unknown }>('_session/steering', {
+        sessionId: running.sessionId,
+        prompt: waiting.content,
+        _meta: { steering: { idleBehavior: 'promptRequired' } },
+      }));
+    } catch (error) {
+      outcome = error;
+    }
+    if (outcome === 'promptRequired') {
+      this.ahead(conversation, waiting);
+    } else if (outcome === 'injected' || outcome === 'startedNewTurn') {
+      this.kit.calls.keepResult(String(waiting.call.input_id), {});
+      waiting.settle({});
+    } else {
+      const cause = outcome instanceof Error ? outcome : new Error(`the CLI answered ${JSON.stringify(outcome)}`);
+      waiting.settle({ refused: refusal(conversation, new NotStarted(UNSTEERED, { cause })) });
+    }
   }
 
   private next(conversation: Conversation): void {
@@ -459,6 +522,7 @@ export class Conversations {
     if (waiting === undefined) {
       const step = conversation.preparing ?? (conversation.launch === null ? null : 'session');
       if (conversation.starting !== step) this.starts(conversation, step);
+      if (conversation.done && conversation.launch === null) void this.stop(conversation).catch(logged);
       return;
     }
     conversation.sending = this.send(conversation, waiting).finally(() => {

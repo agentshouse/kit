@@ -855,6 +855,214 @@ it('sends two messages that arrived mid-turn as two turns in the order they arri
   expect(new Set(hosted.turns.map((turn) => turn.params.turn)).size).toBe(3);
 });
 
+function processes(hosted: Hosted): unknown[] {
+  return hosted.connection.notifications.filter((notification) => notification.type === 'process').map((notification) => notification.running);
+}
+
+async function sessionsOpened(hosted: Hosted): Promise<Record<string, unknown>[]> {
+  return (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new' && (entry.params as { cwd: string }).cwd === hosted.workingDirectory);
+}
+
+it.each(['codex-acp', 'claude-agent-acp'])('steers an at-once message into the turn %s runs, which goes on with it', async (kind) => {
+  const hosted = await opened(kind);
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  await release();
+  expect(await ends(hosted, 1)).toEqual([{ text: 'steeredfirst' }]);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === '_session/steering').map((entry) => entry.text)).toEqual(['@say steered']);
+  expect(log.filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first']);
+  await settle();
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+});
+
+it('steers an at-once message into a turn whose question waits, and the question waits on for its answer', async () => {
+  const hosted = await opened();
+  hosted.call({ kind: 'message', text: '@ask', first: false });
+  const question = await until(() => hosted.interactions[0]);
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
+  hosted.call({ kind: 'answer', interaction_id: (question.body as { interaction_id: string }).interaction_id, response });
+  expect(await ends(hosted, 1)).toEqual([{ text: `steered${JSON.stringify(response)}` }]);
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('interrupts the turn of a CLI that takes no message during a turn for at-once messages, which run in the order they arrived as the next turns before the message that waited', async () => {
+  const hosted = await opened('grok-build');
+  hosted.call({ kind: 'message', text: '@wait 1500', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.call({ kind: 'message', text: '@say waited', first: false });
+  const waited = lastCall();
+
+  hosted.call({ kind: 'message', text: '@say first', first: false, at_once: true });
+  hosted.call({ kind: 'message', text: '@say second', first: false, at_once: true });
+
+  expect(await ends(hosted, 4)).toEqual([{ text: '' }, { text: 'first' }, { text: 'second' }, { text: 'waited' }]);
+  expect(await prompts(hosted)).toEqual(['@wait 1500', '@say first', '@say second', '@say waited']);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === 'session/cancel').length).toBeGreaterThan(0);
+  expect(log.filter((entry) => entry.method === '_session/steering')).toEqual([]);
+  expect(await hosted.result(waited)).toEqual({});
+});
+
+it.each([
+  ['codex-acp', 'takes it into that turn', [{ text: '' }, { text: 'steered' }], ['@itself 100 @gate self']],
+  ['claude-agent-acp', 'has it sent as the next turn', [{ text: '' }, { text: '' }, { text: 'steered' }], ['@itself 100 @gate self', '@say steered']],
+])('lands an at-once message that meets a turn %s started by itself after its prompt ended as the adapter answers its steer: %s', async (kind, _answer, turns, sent) => {
+  const hosted = await opened(kind);
+  const release = gated(hosted, 'self');
+  hosted.call({ kind: 'message', text: '@itself 100 @gate self', first: false });
+  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started')).length === 2);
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+
+  const message = lastCall();
+  await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === '_session/steering'));
+  await release();
+  expect(await ends(hosted, turns.length)).toEqual(turns);
+  expect(await hosted.result(message)).toEqual({});
+  expect(await prompts(hosted)).toEqual(sent);
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('lands an at-once message as the turn Codex starts for it when Codex has already reported idle the turn whose prompt it has not answered yet', async () => {
+  const hosted = await opened();
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@ended\n@gate first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await settle();
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(await ends(hosted, 1)).toEqual([{ text: 'steered' }]);
+  await release();
+  expect(await ends(hosted, 2)).toEqual([{ text: 'steered' }, { text: '' }]);
+  expect(await prompts(hosted)).toEqual(['@ended\n@gate first']);
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+});
+
+it("refuses an at-once message in the Kit's words when the CLI refuses to take it into its running turn, which goes on", async () => {
+  const hosted = await opened();
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await writeFile(join(hosted.home, 'refuse-steering'), '');
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI did not take the message into its running turn" });
+  expect(hosted.kit.stderr()).toMatch(/did not start: the Agent's CLI did not take the message into its running turn: the steer was refused/);
+  await release();
+  expect(await ends(hosted, 1)).toEqual([{ text: 'first' }]);
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first']);
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('sends an at-once message that arrives with no turn running as any message', async () => {
+  const hosted = await opened();
+
+  hosted.call({ kind: 'message', text: '@say alone', first: false, at_once: true });
+
+  expect(await ends(hosted, 1)).toEqual([{ text: 'alone' }]);
+  expect(await prompts(hosted)).toEqual(['@say alone']);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === '_session/steering' || entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('ends the running process and its bridge for an open, opens a new session in a new process, answers its id and resumes only that session after', async () => {
+  const hosted = await hostKit();
+  hosted.call({ kind: 'open' });
+  const { provider_session_id: old } = (await hosted.result(lastCall())) as { provider_session_id: string };
+  hosted.call({ kind: 'message', provider_session_id: old, text: '@say before', first: true });
+  await ends(hosted, 1);
+  const [before] = await sessionsOpened(hosted);
+
+  hosted.call({ kind: 'open', provider_session_id: old });
+
+  const { provider_session_id: fresh } = (await hosted.result(lastCall())) as { provider_session_id: string };
+  const sessions = await sessionsOpened(hosted);
+  expect(sessions.map((entry) => entry.sessionId)).toEqual([old, fresh]);
+  expect(fresh).not.toBe(old);
+  expect(alive(before!.pid as number)).toBe(false);
+  expect(alive(sessions[1]!.pid as number)).toBe(true);
+  expect(processes(hosted)).toEqual([true, false, true]);
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/conversations/conversation-1/credential')).toHaveLength(2);
+  hosted.call({ kind: 'message', provider_session_id: old, text: '@say after\n@exit 3', first: false });
+  await ends(hosted, 2);
+  hosted.call({ kind: 'message', provider_session_id: old, text: '@say again', first: false });
+  expect(await ends(hosted, 3)).toEqual([{ text: 'before' }, { failed: 'exited' }, { text: 'again' }]);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === 'session/prompt').map((entry) => (entry.params as { sessionId: string }).sessionId)).toEqual([
+    old,
+    fresh,
+    fresh,
+  ]);
+  expect(log.filter((entry) => entry.method === 'session/resume').map((entry) => (entry.params as { sessionId: string }).sessionId)).toEqual([fresh]);
+});
+
+it('answers a done at once and ends the process only once the running turn has ended as it would and the message that waited behind it has run, and shows no kill', async () => {
+  const hosted = await opened();
+  const [cli] = await sessionsOpened(hosted);
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  hosted.call({ kind: 'message', text: '@say second', first: false });
+
+  hosted.call({ kind: 'done' });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  await settle();
+  expect(alive(cli!.pid as number)).toBe(true);
+  await release();
+  expect(await ends(hosted, 2)).toEqual([{ text: 'first' }, { text: 'second' }]);
+  await until(() => !alive(cli!.pid as number));
+  await until(() => processes(hosted).length === 2);
+  expect(processes(hosted)).toEqual([true, false]);
+});
+
+it('keeps a question waiting through a done, and the Kit idle, until the owner answers it, then ends the process once its turn ends', async () => {
+  const hosted = await opened();
+  const [cli] = await sessionsOpened(hosted);
+  hosted.call({ kind: 'message', text: '@ask', first: false });
+  const question = await until(() => hosted.interactions[0]);
+  await settle();
+  const idled = hosted.idles.length;
+
+  hosted.call({ kind: 'done' });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  await until(() => hosted.idles.length > idled);
+  expect(alive(cli!.pid as number)).toBe(true);
+  const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
+  hosted.call({ kind: 'answer', interaction_id: (question.body as { interaction_id: string }).interaction_id, response });
+  expect(await ends(hosted, 1)).toEqual([{ text: JSON.stringify(response) }]);
+  await until(() => !alive(cli!.pid as number));
+  await until(() => processes(hosted).length === 2);
+  expect(processes(hosted)).toEqual([true, false]);
+});
+
+it('answers a done for a conversation with no process and starts nothing', async () => {
+  const hosted = await hostKit();
+
+  hosted.call({ kind: 'done' });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  await settle();
+  expect(await sessionsOpened(hosted)).toEqual([]);
+  expect(hosted.house.requests.filter((request) => request.path.endsWith('/credential'))).toEqual([]);
+  expect(processes(hosted)).toEqual([]);
+});
+
 it('resumes the provider session for a message that waited while the process crashed and sends it as the next turn', async () => {
   const hosted = await opened();
   const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;

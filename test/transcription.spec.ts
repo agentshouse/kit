@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
+import { agentInstructions } from '@agentshouse/skills';
 import { beforeAll, expect, it, onTestFinished } from 'vitest';
 import { attached, bridgeSockets, inspected, posted } from './attachments.ts';
 import { KIT_FILE_CORRUPT, KIT_FILE_DROPPED_ONCE, KIT_FILE_OVERSIZE, KIT_FILE_STALL, cacheArtifacts, kitFileRequests, pinnedArtifacts } from './building.ts';
@@ -162,6 +163,28 @@ it("posts the transcript of each audio file a message links in the order it link
   expect(hosted.store.requests.map((request) => request.key)).toEqual([note!.key, voice!.key]);
   expect(await readdir(hosted.workingDirectory)).toEqual([]);
   expect(await readdir(temporary)).toEqual([]);
+});
+
+it("writes a first message as House's instructions, then the primer it carries, then its text and its audio's transcripts, reading no link of the primer", async () => {
+  const hosted = await transcribing();
+  const [earlier, note] = attached(hosted, [
+    { name: 'earlier.ogg', media_type: 'audio/ogg', content: fixture('ru.ogg') },
+    { name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') },
+  ]);
+  const recent = `Earlier in this conversation, the owner sent ${earlier!.link}`;
+  const text = linked('listen', [note!]);
+
+  hosted.call({ kind: 'message', text, recent, first: true });
+
+  expect(await prompted(hosted, 0)).toEqual([
+    block([...agentInstructions('refs/house/received', []), '', 'Be useful.'].join('\n')),
+    block(recent),
+    block(text),
+    transcribed(note!.path, ENGLISH),
+  ]);
+  expect(inspected(hosted)).toEqual([{ path: note!.path }]);
+  expect(posted(hosted)).toEqual([['conversation-1', lastMessage(), { path: note!.path, text: expect.stringMatching(ENGLISH) }]]);
+  expect(hosted.store.requests.map((request) => request.key)).toEqual([note!.key]);
 });
 
 it.each([['en.ogg', 'audio/ogg'], ['en.webm', 'audio/webm'], ['en.m4a', 'audio/mp4'], ['en.mp3', 'audio/mpeg'], ['en.wav', 'audio/wav']])(
