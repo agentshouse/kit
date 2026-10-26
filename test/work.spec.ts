@@ -292,14 +292,18 @@ it('names a new Claude Code session itself and passes the CLI’s background rep
       claudeCode: {
         options: { title: 'conversation-1', includeHookEvents: true },
         emitRawSDKMessages: [
-          'background_tasks_changed',
-          'task_started',
-          'task_updated',
-          'task_notification',
-          'session_state_changed',
-          'hook_started',
-          'hook_response',
-        ].map((subtype) => ({ type: 'system', subtype })),
+          ...[
+            'background_tasks_changed',
+            'task_started',
+            'task_updated',
+            'task_notification',
+            'task_progress',
+            'session_state_changed',
+            'hook_started',
+            'hook_response',
+          ].map((subtype) => ({ type: 'system', subtype })),
+          { type: 'result' },
+        ],
       },
     },
   });

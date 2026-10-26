@@ -10,13 +10,16 @@ export interface Message {
   result?: Fields;
 }
 
+export type Stop = 'end_turn' | 'refusal';
+
 export type Event =
   | { kind: 'started' }
-  | { kind: 'ended' }
+  | { kind: 'ended'; stop: Stop | null }
   | { kind: 'text' | 'reasoning'; id: string | null; text: string }
   | { kind: 'command' }
   | { kind: 'subagent'; id: string; description: string }
   | { kind: 'subagent-done'; id: string; result: string | null }
+  | { kind: 'subagent-activity'; id: string; activity: string }
   | { kind: 'message'; command: string; target: string | null }
   | { kind: 'image'; data: string; mediaType: string }
   | { kind: 'marker'; marker: Marker; text: string }
@@ -42,6 +45,8 @@ interface Call {
   meta: Fields;
   imaged: boolean;
 }
+
+const AUTONOMOUS_ORIGINS = new Set(['task-notification', 'peer', 'coordinator', 'observer', 'observer-activity']);
 
 const COMMAND: Decision = { shown: 'command' };
 const HIDDEN: Decision = { shown: 'hidden' };
@@ -306,6 +311,7 @@ abstract class Reader {
 class ClaudeReader extends Reader {
   protected override readonly watchedOptions: Record<string, Marker> = { model: 'model' };
   private readonly tasks = new Map<string, string>();
+  private stop: Stop | null = null;
 
   protected override own(message: Message): Event[] {
     if (message.params?.update?._meta?.claudeCode?.parentToolUseId !== undefined) return [];
@@ -314,7 +320,9 @@ class ClaudeReader extends Reader {
 
   protected override update(update: Fields): Event[] {
     if (update.sessionUpdate === 'usage_update' && update._meta?.['_claude/origin'] !== undefined) {
-      return [...super.update(update), { kind: 'ended' }];
+      const stop = this.stop;
+      this.stop = null;
+      return [...super.update(update), { kind: 'ended', stop }];
     }
     if (update.sessionUpdate === 'session_info_update' && update._meta?.jetbrains?.air?.sessionFailure !== undefined) {
       return [{ kind: 'marker', marker: 'retry', text: update._meta.jetbrains.air.sessionFailure.title }];
@@ -325,12 +333,20 @@ class ClaudeReader extends Reader {
   protected override extension(message: Message): Event[] {
     if (message.method !== '_claude/sdkMessage') return [];
     const sdk = message.params!.message as Fields;
+    if (sdk.type === 'result') {
+      if (AUTONOMOUS_ORIGINS.has(sdk.origin?.kind)) this.stop = null;
+      else this.stop = sdk.stop_reason === 'refusal' ? 'refusal' : sdk.is_error === true ? null : 'end_turn';
+      return [];
+    }
     switch (sdk.subtype) {
       case 'task_started':
         if (sdk.tool_use_id !== undefined) this.tasks.set(sdk.task_id, sdk.tool_use_id);
         return [];
       case 'task_notification':
         return sdk.tool_use_id === undefined ? [] : this.finish(sdk.tool_use_id, sdk.summary ?? null);
+      case 'task_progress':
+        if (!this.subagents.has(sdk.tool_use_id) || this.done.has(sdk.tool_use_id) || typeof sdk.description !== 'string') return [];
+        return [{ kind: 'subagent-activity', id: sdk.tool_use_id, activity: sdk.description }];
       default:
         return [];
     }
@@ -390,7 +406,7 @@ class CodexReader extends Reader {
       case 'session_info_update': {
         const codex = update._meta?.codex as Fields | undefined;
         if (codex?.threadStatus?.type === 'active') return [{ kind: 'started' }];
-        if (codex?.threadStatus?.type === 'idle') return [{ kind: 'ended' }];
+        if (codex?.threadStatus?.type === 'idle') return [{ kind: 'ended', stop: null }];
         if (codex?.error !== undefined) return [{ kind: 'marker', marker: 'retry', text: codex.error.message ?? '' }];
         return [];
       }
@@ -457,7 +473,7 @@ class GrokReader extends Reader {
       return (message.params!.runningPromptId ?? null) !== null && session === this.session ? [{ kind: 'started' }] : [];
     }
     if (message.params?.update?.sessionUpdate === 'turn_completed') {
-      return session === this.session ? [{ kind: 'ended' }] : [];
+      return session === this.session ? [{ kind: 'ended', stop: null }] : [];
     }
     if (message.method === '_x.ai/models/update') {
       this.offered(message.params!);

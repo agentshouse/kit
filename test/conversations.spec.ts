@@ -979,6 +979,152 @@ it('sends an at-once message that arrives with no turn running as any message', 
   expect(log.filter((entry) => entry.method === '_session/steering' || entry.method === 'session/cancel')).toEqual([]);
 });
 
+const HELD = fileURLToPath(new URL('./fixtures/events/claude-held.jsonl', import.meta.url));
+
+const HOLDING = `@play ${HELD} 0 21\n@gate held\n@play ${HELD} 21`;
+
+function endedTurns(hosted: Hosted): Hosted['turns'] {
+  return hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+}
+
+function subagents(hosted: Hosted): unknown[] {
+  return hosted.connection.notifications.filter((notification) => notification.type === 'subagents');
+}
+
+function claudeResult(fields: Record<string, unknown>): string {
+  const message = { type: 'result', origin: { kind: 'human' }, ...fields };
+  return `@emit ${JSON.stringify({ method: '_claude/sdkMessage', params: { sessionId: '$SESSION', message } })}`;
+}
+
+it('ends a recorded Claude Code turn at its result while the sub-agent it started runs on in the background, sends a message that arrives then at once, and shows the follow-up as a turn the CLI started', async () => {
+  const hosted = await opened('claude-agent-acp');
+  const release = gated(hosted, 'held');
+  hosted.call({ kind: 'message', text: HOLDING, first: false });
+
+  expect(await ends(hosted, 1)).toEqual([{ text: 'launched' }]);
+  expect((endedTurns(hosted)[0]!.body as { parts: unknown[] }).parts).toContainEqual({ type: 'subagent', description: 'Sleep twice', status: 'running', result: null });
+  hosted.call({ kind: 'message', text: '@say next', first: false });
+  expect(await ends(hosted, 2)).toEqual([{ text: 'launched' }, { text: 'next' }]);
+  await release();
+
+  const turns = await ends(hosted, 3);
+  expect(turns[2]).toEqual({ text: 'The background agent "Sleep twice" has finished. It ran `sleep 4` twice and replied "slept".' });
+  expect((endedTurns(hosted)[2]!.body as { parts: unknown[] }).parts[0]).toEqual({ type: 'subagent', description: 'Sleep twice', status: 'done', result: 'slept' });
+  expect(await prompts(hosted)).toEqual([HOLDING, '@say next']);
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('relays what a background Claude Code sub-agent is doing while it runs, and that none runs once it ends', async () => {
+  const hosted = await opened('claude-agent-acp');
+  const release = gated(hosted, 'held');
+  hosted.call({ kind: 'message', text: HOLDING, first: false });
+  await ends(hosted, 1);
+
+  const subagent = (activity: string | null) => ({ type: 'subagents', conversation_id: 'conversation-1', subagents: [{ description: 'Sleep twice', activity }] });
+  expect(subagents(hosted)).toEqual([subagent(null), subagent('Running Sleep 4 seconds (first run)')]);
+  await release();
+
+  await ends(hosted, 2);
+  expect(subagents(hosted)).toEqual([
+    subagent(null),
+    subagent('Running Sleep 4 seconds (first run)'),
+    subagent('Running Sleep 4 seconds (second run)'),
+    { type: 'subagents', conversation_id: 'conversation-1', subagents: [] },
+  ]);
+});
+
+it('ends a Claude Code turn whose sub-agent runs on refused at its result, and a refused one with none at its answer with the explanation the adapter sent after its result', async () => {
+  const hosted = await opened('claude-agent-acp');
+  onTestFinished(gated(hosted, 'held'));
+  const refusal = claudeResult({ subtype: 'success', is_error: false, stop_reason: 'refusal' });
+  hosted.call({ kind: 'message', text: `@play ${HELD} 0 19\n${refusal}\n@play ${HELD} 20 21\n@gate held`, first: false });
+  expect(await ends(hosted, 1)).toEqual([{ failed: 'refused' }]);
+
+  const release = gated(hosted, 'refused');
+  hosted.call({ kind: 'message', text: `${refusal}\n@ended\n@say I cannot help with that\n@gate refused\n@refusal`, first: false });
+  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started')).length === 2);
+  await settle();
+  expect(endedTurns(hosted)).toHaveLength(1);
+  await release();
+
+  expect(await ends(hosted, 2)).toEqual([{ failed: 'refused' }, { failed: 'refused' }]);
+  expect((endedTurns(hosted)[1]!.body as { parts: unknown[] }).parts).toContainEqual({ type: 'text', text: 'I cannot help with that' });
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(2);
+});
+
+it.each([
+  ['whose result came after a message was steered into it', true, [claudeResult({ subtype: 'success', is_error: false, stop_reason: 'end_turn' })]],
+  ['for the result of a cycle the CLI started itself', false, [claudeResult({ subtype: 'success', is_error: false, stop_reason: 'end_turn', origin: { kind: 'task-notification' } })]],
+])('keeps a Claude Code turn whose sub-agent runs on open until its answer %s', async (_how, steering, result) => {
+  const hosted = await opened('claude-agent-acp');
+  const release = gated(hosted, 'held');
+  const steer = gated(hosted, 'steer');
+  hosted.call({ kind: 'message', text: [`@play ${HELD} 0 13`, '@gate steer', ...result, `@play ${HELD} 20 21`, '@gate held'].join('\n'), first: false });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  if (steering) {
+    hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+    expect(await hosted.result(lastCall())).toEqual({});
+  }
+  await steer();
+
+  await settle();
+  expect(endedTurns(hosted)).toEqual([]);
+  await release();
+  expect(await ends(hosted, 1)).toHaveLength(1);
+});
+
+it.each([
+  ['the answer that follows its result when no sub-agent runs on', claudeResult({ subtype: 'success', is_error: false, stop_reason: 'end_turn' }), '@say late', { text: 'late' }],
+  ['the failure the adapter answers when its result failed', claudeResult({ subtype: 'error_during_execution', is_error: true, stop_reason: null }), '@sessionfailure Usage limit reached', { failed: 'limit' }],
+])('ends a Claude Code turn at %s', async (_how, result, after, expected) => {
+  const hosted = await opened('claude-agent-acp');
+
+  hosted.call({ kind: 'message', text: [result, '@ended', after].join('\n'), first: false });
+
+  expect(await ends(hosted, 1)).toEqual([expected]);
+  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+});
+
+it('tells a Kit connection that opens which sub-agents run, none when they finished while no connection was open', async () => {
+  const hosted = await opened('claude-agent-acp');
+  const release = gated(hosted, 'held');
+  hosted.call({ kind: 'message', text: HOLDING, first: false });
+  await ends(hosted, 1);
+  const admit = hosted.house.holdConnections();
+  hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
+
+  await release();
+  await ends(hosted, 2);
+  admit();
+
+  const reopened = await until(() => hosted.house.connections[1]);
+  const told = () => reopened.notifications.filter((notification) => notification.type === 'subagents');
+  expect(await until(() => told()[0])).toEqual({ type: 'subagents', conversation_id: 'conversation-1', subagents: [] });
+});
+
+it('tells House no sub-agent runs once the process that ran one is killed', async () => {
+  const hosted = await opened('claude-agent-acp');
+  onTestFinished(gated(hosted, 'held'));
+  hosted.call({ kind: 'message', text: HOLDING, first: false });
+  await ends(hosted, 1);
+
+  hosted.call({ kind: 'kill' });
+
+  await until(() => (subagents(hosted).at(-1) as { subagents: unknown[] }).subagents.length === 0);
+});
+
+it.each(['codex-acp', 'claude-agent-acp'])('cancels a turn %s reported ended before it answered its prompt when the owner interrupts it', async (kind) => {
+  const hosted = await opened(kind);
+  hosted.call({ kind: 'message', text: '@ended\n@wait', first: false });
+  const turn = (await until(() => hosted.turns.find((reported) => reported.path.endsWith('/started')))).params.turn!;
+  await settle();
+
+  hosted.call({ kind: 'interrupt', turn_id: turn });
+
+  expect(await ends(hosted, 1)).toEqual([{ text: '' }]);
+  expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toHaveLength(1);
+});
+
 it('ends the running process and its bridge for an open, opens a new session in a new process, answers its id and resumes only that session after', async () => {
   const hosted = await hostKit();
   hosted.call({ kind: 'open' });

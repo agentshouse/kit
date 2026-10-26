@@ -18,7 +18,7 @@ import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
-import { answeredFailure, readerFor, type Event, type Message, type Reader } from './events.ts';
+import { answeredFailure, readerFor, type Event, type Message, type Reader, type Stop } from './events.ts';
 import { inspectedFile, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { agentBase } from './home.ts';
 import type { Call, Calls, Result } from './calls.ts';
@@ -181,6 +181,7 @@ class Turn {
   questions = 0;
   secrets = 0;
   prompted = false;
+  steered = false;
   taken: (() => void) | null = null;
   ended = false;
   images = 0;
@@ -233,7 +234,7 @@ class Conversation {
   readonly waiting: Waiting[] = [];
   done = false;
   sending: Promise<void> | null = null;
-  readonly subagents = new Map<string, { description: string; turn: Turn; index: number }>();
+  readonly subagents = new Map<string, { description: string; turn: Turn; index: number; activity: string | null }>();
   readonly held: Part[] = [];
   opening: Bridge | null = null;
   bridge: Promise<Bridge> | null = null;
@@ -243,7 +244,7 @@ class Conversation {
   killed = new AbortController();
   interrupts = 0;
   interrupted = new AbortController();
-  open = 0;
+  readonly turns = new Set<Turn>();
   queue: Promise<unknown> = Promise.resolve();
   reports: Promise<unknown> = Promise.resolve();
   starting: Starting | null = null;
@@ -313,7 +314,7 @@ export class Conversations {
     for (const conversation of this.conversations.values()) {
       const turn = conversation.turn;
       const asking = turn !== null && turn.questions > 0 && turn.secrets === 0;
-      if (conversation.open > (asking ? 1 : 0)) return false;
+      if (conversation.turns.size > (asking ? 1 : 0)) return false;
     }
     const conversations = [...this.conversations.values()];
     if (conversations.some((conversation) => conversation.running?.work.busy())) return false;
@@ -324,7 +325,7 @@ export class Conversations {
   }
 
   quiet(): boolean {
-    return this.idle() && [...this.conversations.values()].every((conversation) => conversation.open === 0);
+    return this.idle() && [...this.conversations.values()].every((conversation) => conversation.turns.size === 0);
   }
 
   private look(): void {
@@ -341,8 +342,10 @@ export class Conversations {
   opened(): void {
     this.watched = false;
     for (const conversation of this.conversations.values()) {
-      if (conversation.running !== null) this.facts(conversation);
-      else if (conversation.exitUntold) this.process(conversation, false);
+      if (conversation.running !== null) {
+        this.facts(conversation);
+        this.subagentsChanged(conversation);
+      } else if (conversation.exitUntold) this.process(conversation, false);
       if (conversation.untold || conversation.told !== null) this.retell(conversation);
     }
   }
@@ -470,7 +473,7 @@ export class Conversations {
     conversation.preparing = null;
     const { promise, resolve: settle } = Promise.withResolvers<Result>();
     const waiting: Waiting = { call, route, content, instructing, settle };
-    if (call.at_once === true && conversation.open > 0) await this.atOnce(conversation, waiting);
+    if (call.at_once === true && conversation.turns.size > 0) await this.atOnce(conversation, waiting);
     else conversation.waiting.push(waiting);
     this.next(conversation);
     return { result: promise };
@@ -479,14 +482,14 @@ export class Conversations {
   private async atOnce(conversation: Conversation, waiting: Waiting): Promise<void> {
     while (conversation.sending !== null) await conversation.sending;
     const running = conversation.running;
-    if (running !== null && conversation.open > 0 && steers(running.adapter)) {
+    if (running !== null && conversation.turns.size > 0 && steers(running.adapter)) {
       conversation.sending = this.steer(conversation, running, waiting);
       await conversation.sending;
       conversation.sending = null;
       return;
     }
     this.ahead(conversation, waiting);
-    if (conversation.turn !== null) await this.interrupt(conversation, conversation.turn.id);
+    if (conversation.turns.size > 0) await this.cancel(conversation);
   }
 
   private ahead(conversation: Conversation, waiting: Waiting): void {
@@ -508,6 +511,9 @@ export class Conversations {
     if (outcome === 'promptRequired') {
       this.ahead(conversation, waiting);
     } else if (outcome === 'injected' || outcome === 'startedNewTurn') {
+      if (outcome === 'injected') {
+        for (const turn of conversation.turns) turn.steered ||= turn.prompted;
+      }
       this.kit.calls.keepResult(String(waiting.call.input_id), {});
       waiting.settle({});
     } else {
@@ -517,7 +523,7 @@ export class Conversations {
   }
 
   private next(conversation: Conversation): void {
-    if (conversation.sending !== null || conversation.open > 0) return;
+    if (conversation.sending !== null || conversation.turns.size > 0) return;
     const waiting = conversation.waiting.shift();
     if (waiting === undefined) {
       const step = conversation.preparing ?? (conversation.launch === null ? null : 'session');
@@ -662,7 +668,11 @@ export class Conversations {
   }
 
   private async interrupt(conversation: Conversation, turnId: string): Promise<void> {
-    if (conversation.running === null || conversation.turn?.id !== turnId) return;
+    if ([...conversation.turns].some((turn) => turn.id === turnId)) await this.cancel(conversation);
+  }
+
+  private async cancel(conversation: Conversation): Promise<void> {
+    if (conversation.running === null) return;
     await conversation.running.adapter.connection.agent.notify('session/cancel', {
       sessionId: conversation.running.sessionId,
     });
@@ -778,7 +788,7 @@ export class Conversations {
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
       void work.settled().then(() => scope.record());
       conversation.running = running;
-      adapter.turn(conversation.open > 0);
+      adapter.turn(conversation.turns.size > 0);
       conversation.session = running.sessionId;
       conversation.options = options;
       this.facts(conversation);
@@ -854,6 +864,10 @@ export class Conversations {
     conversation.running = null;
     conversation.commands = null;
     conversation.options = null;
+    if (conversation.subagents.size > 0) {
+      conversation.subagents.clear();
+      this.subagentsChanged(conversation);
+    }
     for (const [id, question] of this.questions) {
       if (question.conversation === conversation) this.questions.delete(id);
     }
@@ -868,6 +882,11 @@ export class Conversations {
     this.process(conversation, true);
     if (conversation.commands !== null) this.commands(conversation, conversation.commands);
     if (conversation.options !== null) this.options(conversation, conversation.options);
+  }
+
+  private subagentsChanged(conversation: Conversation): void {
+    const subagents = [...conversation.subagents.values()].map(({ description, activity }) => ({ description, activity }));
+    this.kit.send({ type: 'subagents', conversation_id: conversation.id, subagents });
   }
 
   private commands(conversation: Conversation, commands: AvailableCommand[]): void {
@@ -907,7 +926,7 @@ export class Conversations {
 
   private begin(conversation: Conversation): Turn {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
-    conversation.open++;
+    conversation.turns.add(turn);
     conversation.running?.adapter.turn(true);
     void this.deliver(conversation, turn, 'started', {}).catch(logged);
     conversation.turn = turn;
@@ -925,8 +944,8 @@ export class Conversations {
     }
     if (notice !== null) turn.parts.start({ type: 'marker', marker: 'retry', text: notice });
     turn.ended = true;
-    conversation.open--;
-    conversation.running?.adapter.turn(conversation.open > 0);
+    conversation.turns.delete(turn);
+    conversation.running?.adapter.turn(conversation.turns.size > 0);
     if (conversation.turn === turn) conversation.turn = null;
     const body = Promise.allSettled(turn.uploads).then(() => ({
       parts: turn.parts.saved(),
@@ -959,7 +978,7 @@ export class Conversations {
           this.end(conversation, turn, exitedWith(running, await running.adapter.exited));
         } else {
           this.took(turn);
-          if (conversation.open === 1 && conversation.running === running) {
+          if (conversation.turns.size === 1 && conversation.turns.has(turn) && conversation.running === running) {
             running.adapter.retire();
             this.detach(conversation, running);
           }
@@ -975,16 +994,19 @@ export class Conversations {
     return turn;
   }
 
-  private ended(conversation: Conversation): void {
+  private ended(conversation: Conversation, stop: Stop | null): void {
     const turn = conversation.turn;
     if (turn === null) return;
-    if (!turn.prompted) {
-      this.end(conversation, turn, null);
-    } else {
-      for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
-      conversation.turn = null;
-      this.kit.changed();
+    const held = stop !== null && !turn.steered && [...conversation.subagents.values()].some((subagent) => subagent.turn === turn);
+    if (!turn.prompted || held) {
+      this.took(turn);
+      this.end(conversation, turn, stop === 'refusal' ? { failure: 'refused', cause: REFUSED } : null);
+      return;
     }
+    if (stop !== null) return;
+    for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
+    conversation.turn = null;
+    this.kit.changed();
   }
 
   private async ask<Response>(
@@ -1043,7 +1065,7 @@ export class Conversations {
         this.started(conversation);
         return;
       case 'ended':
-        this.ended(conversation);
+        this.ended(conversation, event.stop);
         return;
       case 'commands':
         this.commands(conversation, event.commands);
@@ -1057,6 +1079,9 @@ export class Conversations {
         return;
       case 'subagent-done':
         this.subagentDone(conversation, event.id, event.result);
+        return;
+      case 'subagent-activity':
+        this.subagentActivity(conversation, event.id, event.activity);
         return;
       case 'marker':
       case 'image':
@@ -1084,7 +1109,8 @@ export class Conversations {
         return;
       case 'subagent': {
         const index = turn.parts.start({ type: 'subagent', description: event.description, status: 'running', result: null });
-        conversation.subagents.set(event.id, { description: event.description, turn, index });
+        conversation.subagents.set(event.id, { description: event.description, turn, index, activity: null });
+        this.subagentsChanged(conversation);
         return;
       }
       case 'message':
@@ -1107,6 +1133,7 @@ export class Conversations {
     const subagent = conversation.subagents.get(id);
     if (subagent === undefined) return;
     conversation.subagents.delete(id);
+    this.subagentsChanged(conversation);
     if (subagent.turn === conversation.turn) {
       subagent.turn.parts.done(subagent.index, result);
       return;
@@ -1114,6 +1141,13 @@ export class Conversations {
     const part: Part = { type: 'subagent', description: subagent.description, status: 'done', result };
     if (conversation.turn === null) conversation.held.push(part);
     else conversation.turn.parts.start(part);
+  }
+
+  private subagentActivity(conversation: Conversation, id: string, activity: string): void {
+    const subagent = conversation.subagents.get(id);
+    if (subagent === undefined || subagent.activity === activity) return;
+    subagent.activity = activity;
+    this.subagentsChanged(conversation);
   }
 
   private async image(conversation: Conversation, turn: Turn, reserved: number, data: string, mediaType: string): Promise<void> {
