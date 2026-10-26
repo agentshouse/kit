@@ -255,6 +255,8 @@ async function directive(
   }
   if (name === 'wait') {
     await new Promise<void>((resolve) => cancelled.set(sessionId, resolve));
+    // A wait that names milliseconds keeps its turn ending that long after the cancel, the time its spec stages messages in.
+    if (argument !== '') await new Promise((resolve) => setTimeout(resolve, Number(argument)));
     return 'cancelled';
   }
   if (name === 'later') {
@@ -509,11 +511,21 @@ const app = agent({ name: 'adapter-double' })
     const text = promptText(params.prompt);
     log({ method: '_session/steering', params, text });
     if (!steers) throw RequestError.methodNotFound('_session/steering');
-    if (!prompting.has(params.sessionId)) return { outcome: 'promptRequired' };
+    if (existsSync(join(home, 'refuse-steering'))) throw new RequestError(-32603, 'the steer was refused');
+    const steps = directives(text);
+    if (prompting.has(params.sessionId)) {
+      void (async () => {
+        for (const line of steps) await directive(client, params.sessionId, line);
+      })();
+      return { outcome: 'injected' };
+    }
+    if (kind === 'claude-agent-acp') return { outcome: 'promptRequired' };
     void (async () => {
-      for (const line of directives(text)) await directive(client, params.sessionId, line);
+      await turnStarted(client, params.sessionId);
+      for (const line of steps) await directive(client, params.sessionId, line);
+      await turnEnded(client, params.sessionId);
     })();
-    return { outcome: 'injected' };
+    return { outcome: 'startedNewTurn' };
   })
   .onRequest('session/prompt', async ({ params, client }) => {
     const text = promptText(params.prompt);
