@@ -5,8 +5,9 @@ import { rmSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import type { IPty } from '@lydell/node-pty';
-import type { Call, Calls, Result } from './calls.ts';
+import type { Call, Calls, Carried, Result } from './calls.ts';
 import { loginPath, onLoginPath } from './clis.ts';
 import type { Notification } from './connection.ts';
 import { kitHome } from './home.ts';
@@ -36,7 +37,9 @@ interface Plan {
 interface Run {
   plan: Plan;
   input: string | null;
+  output: KeptOutput | null;
   process: { pid: number } | null;
+  pipes: Readable[];
   terminal: IPty | null;
   size: Size | null;
   typed: string[];
@@ -85,10 +88,17 @@ export function removeInputs(): void {
   rmSync(inputs(), { recursive: true, force: true });
 }
 
+function struck(line: string, typed: string[]): boolean {
+  return typed.some((typedLine) => line.includes(typedLine));
+}
+
 class KeptOutput {
   private readonly cap: number;
+  private typedText = '';
   private text = '';
   private bytes = 0;
+  private line = '';
+  private lineBytes = 0;
   private dropping = false;
   private cut = false;
 
@@ -96,39 +106,63 @@ class KeptOutput {
     this.cap = cap;
   }
 
-  add(data: string): void {
-    if (this.dropping) {
-      const next = data.indexOf('\n');
-      if (next === -1) return;
-      data = data.slice(next + 1);
-      this.dropping = false;
-    }
-    this.text += data;
-    this.bytes += Buffer.byteLength(data);
-    if (this.bytes > 2 * this.cap) this.trim();
+  typed(data: string): void {
+    this.typedText += data;
   }
 
-  kept(typed: string[]): { output: string; cut: boolean } {
-    const lines = typed
-      .join('')
-      .split(/\r\n|\r|\n/)
-      .filter((line) => line !== '');
-    this.text = this.text
-      .split(/(?<=\n)/)
-      .filter((line) => !lines.some((typedLine) => line.includes(typedLine)))
-      .join('');
+  add(data: string): void {
+    const pieces = data.split('\n');
+    const rest = pieces.pop()!;
+    for (const piece of pieces) this.ended(piece);
+    this.extend(rest);
+  }
+
+  kept(): { output: string; cut: boolean } {
+    const typed = this.typedLines(true);
+    this.text = [...this.text.split(/(?<=\n)/), this.line].filter((line) => line !== '' && !struck(line, typed)).join('');
     this.bytes = Buffer.byteLength(this.text);
-    if (this.bytes > this.cap) this.trim();
+    this.trim();
     return { output: this.text, cut: this.cut };
   }
 
-  private trim(): void {
-    const bytes = Buffer.from(this.text);
-    const lineEnd = bytes.indexOf(NEWLINE, bytes.length - this.cap - 1);
+  private typedLines(all: boolean): string[] {
+    const lines = this.typedText.split(/\r\n|\r|\n/);
+    if (!all) lines.pop();
+    return lines.filter((line) => line !== '');
+  }
+
+  private ended(piece: string): void {
+    const line = `${this.line}${piece}\n`;
+    const dropped = this.dropping;
+    this.line = '';
+    this.lineBytes = 0;
+    this.dropping = false;
+    if (dropped || struck(line, this.typedLines(false))) return;
+    this.text += line;
+    this.bytes += Buffer.byteLength(line);
+    if (this.bytes > 2 * this.cap) this.trim();
+  }
+
+  private extend(piece: string): void {
+    if (this.dropping) return;
+    this.line += piece;
+    this.lineBytes += Buffer.byteLength(piece);
+    if (this.lineBytes <= this.cap) return;
+    this.text = '';
+    this.bytes = 0;
+    this.line = '';
+    this.lineBytes = 0;
+    this.dropping = true;
     this.cut = true;
-    this.dropping = lineEnd === -1;
-    this.text = lineEnd === -1 ? '' : bytes.subarray(lineEnd + 1).toString('utf8');
-    this.bytes = Buffer.byteLength(this.text);
+  }
+
+  private trim(): void {
+    if (this.bytes <= this.cap) return;
+    const bytes = Buffer.from(this.text);
+    const start = bytes.indexOf(NEWLINE, bytes.length - this.cap - 1) + 1;
+    this.text = bytes.subarray(start).toString('utf8');
+    this.bytes = bytes.length - start;
+    this.cut = true;
   }
 }
 
@@ -158,13 +192,14 @@ export class Scripts {
     for (const run of this.runs.values()) this.end(run, LOST);
   }
 
-  private async run(id: string, plan: Plan): Promise<{ result: Result }> {
+  private async run(id: string, plan: Plan): Promise<Carried> {
     const size = plan.terminal === 'page' ? null : FIRST_SIZE;
-    const run: Run = { plan, input: null, process: null, terminal: null, size, typed: [], ended: null, sized: Promise.withResolvers() };
+    const output = plan.function === null ? null : new KeptOutput(plan.function.outputCap);
+    const run: Run = { plan, input: null, output, process: null, pipes: [], terminal: null, size, typed: [], ended: null, sized: Promise.withResolvers() };
     if (size !== null) run.sized.resolve();
     this.runs.set(id, run);
     try {
-      return { result: await this.ran(id, run) };
+      return { result: await this.ran(id, run), release: plan.function !== null };
     } finally {
       this.runs.delete(id);
       if (run.input !== null) await rm(run.input, { force: true });
@@ -172,8 +207,7 @@ export class Scripts {
   }
 
   private async ran(id: string, run: Run): Promise<Result> {
-    const { plan } = run;
-    const output = plan.function === null ? null : new KeptOutput(plan.function.outputCap);
+    const { plan, output } = run;
     let exited: Promise<number>;
     try {
       const { spawn } = await import('@lydell/node-pty');
@@ -185,7 +219,7 @@ export class Scripts {
       if (run.ended !== null) return run.ended;
       const environment = { ...childEnvironment(), PATH: path, ...(run.input === null ? {} : { HOUSE_INPUT: run.input }) };
       if (plan.terminal === null) {
-        ({ exited } = await this.piped(plan.script, shell, environment, run, (data) => output!.add(data)));
+        ({ exited } = await this.piped(plan.script, shell, environment, run));
       } else {
         const terminal = spawn(shell, ['-c', plan.script], { name: TERMINAL, ...run.size!, cwd: process.cwd(), env: environment });
         run.process = terminal;
@@ -194,44 +228,46 @@ export class Scripts {
           this.send({ type: 'wizard_output', wizard: id, data });
           output?.add(data);
         });
-        for (const data of run.typed) terminal.write(data);
+        for (const data of run.typed.splice(0)) terminal.write(data);
         exited = new Promise((resolve) => terminal.onExit(({ exitCode, signal }) => resolve(signal ? SIGNALLED + signal : exitCode)));
       }
     } catch (error) {
       return failed(plan, causeOf(error));
     }
     let timedOut = false;
-    // House sends a function run's time cap in seconds, and a run still going at its cap is ended with its process group.
+    // House sends a function run's time cap in seconds, and a run still going at its cap ends with its process group and the output pipes it holds.
     const capped = plan.function === null ? undefined : setTimeout(() => {
       timedOut = true;
-      killTree(run.process!);
+      this.stop(run);
     }, plan.function.timeCap * 1000);
     const code = await exited;
     clearTimeout(capped);
     if (run.ended !== null) return run.ended;
     if (output === null) return { exit_code: code };
-    const kept = output.kept(run.typed);
+    const kept = output.kept();
     return timedOut ? { timed_out: true, ...kept } : { exit_code: code, ...kept };
   }
 
-  private async piped(script: string, shell: string, environment: NodeJS.ProcessEnv, run: Run, add: (data: string) => void): Promise<{ exited: Promise<number> }> {
+  private async piped(script: string, shell: string, environment: NodeJS.ProcessEnv, run: Run): Promise<{ exited: Promise<number> }> {
     const child = spawnPiped(shell, ['-c', script], { cwd: process.cwd(), env: environment, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const exited = new Promise<number>((resolve) =>
       child.once('close', (code, signal) => resolve(signal === null ? code! : SIGNALLED + constants.signals[signal])),
     );
     await once(child, 'spawn');
     run.process = { pid: child.pid! };
-    for (const stream of [child.stdout, child.stderr]) {
-      stream.setEncoding('utf8');
-      stream.on('data', add);
+    run.pipes = [child.stdout, child.stderr];
+    for (const pipe of run.pipes) {
+      pipe.setEncoding('utf8');
+      pipe.on('data', (data: string) => run.output!.add(data));
     }
-    if (run.ended !== null) killTree(run.process);
+    if (run.ended !== null) this.stop(run);
     return { exited };
   }
 
   private typed(run: Run, data: string): void {
-    run.typed.push(data);
-    run.terminal?.write(data);
+    run.output?.typed(data);
+    if (run.terminal === null) run.typed.push(data);
+    else run.terminal.write(data);
   }
 
   private resized(run: Run, size: Size): void {
@@ -246,6 +282,11 @@ export class Scripts {
     if (run.ended !== null) return;
     run.ended = result;
     run.sized.resolve();
+    this.stop(run);
+  }
+
+  private stop(run: Run): void {
     if (run.process !== null) killTree(run.process);
+    for (const pipe of run.pipes) pipe.destroy();
   }
 }

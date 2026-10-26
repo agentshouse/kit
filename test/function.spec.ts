@@ -3,9 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
-import { until } from './double.ts';
+import { settle, until } from './double.ts';
 import { hostKit, lastCall, type Hosted } from './environment.ts';
-import { alive, filesUnder } from './kit.ts';
+import { alive, filesUnder, stop } from './kit.ts';
 
 interface Ran {
   exit_code?: number;
@@ -155,6 +155,29 @@ it('keeps the last part of output longer than its cap, from the first whole line
   expect(await ended(hosted, id)).toEqual({ exit_code: 0, output: 'line 98\nline 99\nline 100\n', cut: true });
 });
 
+it('strikes typed lines before it cuts to the cap, so what survives striking is kept whole and uncut', async () => {
+  const hosted = await hostKit([]);
+  const id = run(hosted, 'read -s -p "Code: " code; echo keep-a; for line in $(seq 1 40); do echo "has $code $line"; done', {
+    terminal: true,
+    output_cap: 30,
+  });
+
+  await shown(hosted, id, 'Code: ');
+  send(hosted, { type: 'wizard_input', wizard: id, data: 'zz-41\r' });
+
+  expect(await ended(hosted, id)).toEqual({ exit_code: 0, output: 'Code: keep-a\r\n', cut: false });
+});
+
+it('drops whole a line longer than its cap that arrives in parts, keeping no fragment of it', async () => {
+  const hosted = await hostKit([]);
+  const id = run(hosted, "printf '%080d' 0; read -s go; echo tail-of-long; echo last", { terminal: true, output_cap: 30 });
+
+  await shown(hosted, id, '0'.repeat(80));
+  send(hosted, { type: 'wizard_input', wizard: id, data: '+\r' });
+
+  expect(await ended(hosted, id)).toEqual({ exit_code: 0, output: 'last\r\n', cut: true });
+});
+
 it("ends the script's whole process group, its child included, at its time cap and reports the time cap with what it printed", async () => {
   const hosted = await hostKit([]);
   const id = run(hosted, TREE, { time_cap: 1 });
@@ -163,6 +186,16 @@ it("ends the script's whole process group, its child included, at its time cap a
 
   expect(result).toEqual({ timed_out: true, output: expect.stringMatching(/^child \d+\nscript \d+\n$/), cut: false });
   await until(() => !pidsIn(result.output).some(alive));
+});
+
+it('ends a run at its time cap though a process outside its group still holds its output', async () => {
+  const hosted = await hostKit([]);
+  const id = run(hosted, 'setsid sleep 300 & echo "holder $!"', { time_cap: 1 });
+
+  const result = await ended(hosted, id);
+  onTestFinished(() => stop(Number(/holder (\d+)/.exec(result.output)![1])));
+
+  expect(result).toEqual({ timed_out: true, output: expect.stringMatching(/^holder \d+\n$/), cut: false });
 });
 
 it("reports a script that cannot start with the Kit's cause", async () => {
@@ -200,7 +233,7 @@ it("ends every function run's whole process group when the Kit connection drops 
   await until(() => !pids.some(alive));
 });
 
-it('starts a run id once however often House delivers it, and answers each delivery with its one result', async () => {
+it('starts a run id once however often House delivers it, answering each delivery that arrives while it holds the result', async () => {
   const hosted = await hostKit([]);
   const directory = await scratch();
   const frame = {
@@ -215,8 +248,8 @@ it('starts a run id once however often House delivers it, and answers each deliv
   send(hosted, frame);
   await until(() => answered().length === 2);
   send(hosted, frame);
-  await until(() => answered().length === 3);
+  await settle();
 
-  expect(answered().map((result) => result.body)).toEqual(Array(3).fill({ exit_code: 0, output: 'once\n', cut: false }));
+  expect(answered().map((result) => result.body)).toEqual(Array(2).fill({ exit_code: 0, output: 'once\n', cut: false }));
   expect(await readFile(join(directory, 'runs'), 'utf8')).toBe('ran\n');
 });

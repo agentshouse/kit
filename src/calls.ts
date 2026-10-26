@@ -66,6 +66,7 @@ export type Call<Method extends KitMethod = KitMethod> = {
 export interface Carried {
   result: Result;
   returned?(): Promise<void>;
+  release?: boolean;
 }
 
 function logged(error: unknown): void {
@@ -79,6 +80,7 @@ export class Calls {
   private readonly path = join(kitHome(), 'call-results.json');
   private readonly results: Map<string, Result>;
   private readonly returned = new Set<string>();
+  private readonly released = new Set<string>();
   private open = 0;
 
   constructor(house: House, changed: () => void) {
@@ -100,6 +102,7 @@ export class Calls {
   }
 
   carry(callId: string, work: () => Promise<Carried>): Promise<void> {
+    if (this.released.has(callId)) return Promise.resolve();
     const known = this.carried.get(callId);
     const result = this.results.get(callId);
     const carried = known ?? (result === undefined ? work() : Promise.resolve<Carried>({ result }));
@@ -110,14 +113,19 @@ export class Calls {
     this.open++;
     this.changed();
     return carried
-      .then(async ({ result, returned }) => {
+      .then(async ({ result, returned, release }) => {
         try {
           await this.house.deliver(`/kit/inputs/${callId}/ack`, result);
         } finally {
           this.returned.add(callId);
           if (this.results.delete(callId)) this.save();
         }
-        if (known === undefined) await returned?.();
+        if (known !== undefined) return;
+        if (release) {
+          this.carried.delete(callId);
+          this.released.add(callId);
+        }
+        await returned?.();
       })
       .catch(logged)
       .finally(() => {
