@@ -52,7 +52,11 @@ const COMMAND: Decision = { shown: 'command' };
 const HIDDEN: Decision = { shown: 'hidden' };
 const FINISHED = new Set(['completed', 'failed']);
 export const RUNNING_JOB = new Set(['running', 'paused']);
-const MESSAGE_TARGETS: Record<string, string> = { send_routine_request: 'access', cancel_routine_request: 'request', send_mail: 'request' };
+const MESSAGE_TARGETS: Record<string, string[]> = {
+  send_routine_request: ['routine', 'agent'],
+  cancel_routine_request: ['request'],
+  send_mail: ['conversation', 'request'],
+};
 
 function words(line: string): string[] {
   const found: string[] = [];
@@ -89,10 +93,10 @@ export function houseMessage(line: string): Decision | null {
   } catch {
     return null;
   }
-  const argument = MESSAGE_TARGETS[call.command];
-  if (argument === undefined) return null;
-  const target = call.arguments?.[argument];
-  return { shown: 'message', command: call.command, target: typeof target === 'string' ? target : null };
+  const targets = MESSAGE_TARGETS[call.command];
+  if (targets === undefined) return null;
+  const target = targets.map((argument) => call.arguments?.[argument]).find((value) => typeof value === 'string');
+  return { shown: 'message', command: call.command, target: target ?? null };
 }
 
 function decidedByLine(command: unknown, final: boolean): Decision | null {
