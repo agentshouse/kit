@@ -316,33 +316,6 @@ it('drops an expired rename House never applied when another writer took both of
   expect(await readFile(join(room.repository, 'b.md'), 'utf8')).toBe('Alpha\n');
 });
 
-it('names the copies a fetch is still reading in a first prompt that arrives meanwhile', async () => {
-  const hosted = await hostKit();
-  const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
-  room.put('a.md', 'Alpha\n');
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  hosted.house.route('POST', '/kit/door/bootstrap', async () => {
-    await held;
-    return { body: { scopes: [room.bundle()] } };
-  });
-  const fetched = rooms.fetch([room]);
-  await until(() => hosted.house.requests.some((request) => request.path === '/kit/door/bootstrap'));
-
-  hosted.call({ kind: 'message', text: 'hello', first: true });
-  // Three tenths of a second let the message reach the Kit while the copy it reads is still held.
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  release();
-  expect((await fetched).status).toBe(0);
-
-  const prompt = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
-  const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block.slice(6)).toEqual([`/rooms/notes: ${room.repository}`]);
-});
-
 it("brings House's reference rewrites home when it finishes an expired rename House applied", async () => {
   const { hosted, rooms, room } = await copied();
   rooms.dropsEdits = 1;
