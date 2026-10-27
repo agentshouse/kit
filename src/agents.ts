@@ -150,7 +150,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
     return { signed_in: true, ...(await models(kind, adapter, known.models)) };
   } catch (error) {
     if (!signal?.aborted) process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
-    if (signedOut(error)) return { ...SIGNED_OUT, models: known.models, modes: known.modes };
+    if (signedOut(error)) return SIGNED_OUT;
     return {
       signed_in: adapter === undefined && 'initializeMeta' in probe ? known.signed_in : true,
       models: known.models,
