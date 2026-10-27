@@ -1,6 +1,7 @@
 import {
   ndJsonStream,
   PROTOCOL_VERSION,
+  RequestError,
   type AnyMessage,
   type ClientApp,
   type ClientConnection,
@@ -25,6 +26,12 @@ export interface Adapter {
 }
 
 const RETIRED = 'the CLI was retired';
+
+const SIGNED_OUT = RequestError.authRequired().code;
+
+export function signedOut(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === SIGNED_OUT;
+}
 
 // Claude Code ends a shell command or a model request after ten minutes, so a CLI that owes the Kit an answer and sends nothing for half an hour has hung.
 export const CLI_SILENCE_MS = 30 * 60_000;

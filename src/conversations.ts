@@ -1,6 +1,5 @@
 import {
   client,
-  RequestError,
   type AvailableCommand,
   type ContentBlock,
   type CreateElicitationRequest,
@@ -12,7 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
-import { startAdapter, type Adapter } from './acp.ts';
+import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { Agents, Route } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
@@ -51,8 +50,6 @@ interface Failed {
   failure: Failure;
   cause: string;
 }
-
-const SIGNED_OUT = RequestError.authRequired().code;
 
 const KILLED = 'the conversation was killed';
 
@@ -93,10 +90,6 @@ async function step<T>(reason: string | ((error: unknown) => string), work: Prom
   } catch (error) {
     throw new NotStarted(typeof reason === 'string' ? reason : reason(error), { cause: error });
   }
-}
-
-function signedOut(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === SIGNED_OUT;
 }
 
 function unopened(reason: string): (error: unknown) => string {

@@ -10,7 +10,7 @@ import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { CONVERSATION_METHODS, Conversations, type ConversationCall } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
-import { restart } from './end.ts';
+import { restart, unknownMethod } from './end.ts';
 import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, readEnrolment, restartAsked } from './home.ts';
 import { Calls, type Call } from './calls.ts';
 import { killDescendants } from './scope.ts';
@@ -187,7 +187,7 @@ export async function resident(): Promise<void> {
       else if (call.kind === 'run_wizard' || call.kind === 'run_function') scripts.start(call);
       else if (CONVERSATION_METHODS.has(call.kind)) conversations.call(call as ConversationCall);
       else {
-        const refused = { refused: `This Kit does not know ${(call as { kind: string }).kind}; update the Kit` };
+        const refused = { refused: unknownMethod((call as { kind: string }).kind) };
         void calls.carry(call.input_id, async () => ({ result: refused }));
       }
     },

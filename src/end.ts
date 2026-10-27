@@ -19,9 +19,17 @@ export function restart(reason: string): never {
   exit(reason, 1);
 }
 
-export function updateRequired(): never {
+function updateLine(lead: string): string {
   const command = installCommand();
-  end(command === null ? 'This Kit is too old for House; install it again.' : `This Kit is too old for House. Update it: ${command}`);
+  return command === null ? `${lead}; install it again.` : `${lead}. Update it: ${command}`;
+}
+
+export function updateRequired(): never {
+  end(updateLine('This Kit is too old for House'));
+}
+
+export function unknownMethod(kind: string): string {
+  return updateLine(`This Kit does not know ${kind}`);
 }
 
 export function newerThanHouse(release: string, command: string): never {

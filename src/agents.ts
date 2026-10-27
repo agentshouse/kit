@@ -1,7 +1,7 @@
 import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
 import { readFile, realpath } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startAdapter, type Adapter } from './acp.ts';
+import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_RELEASE, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
@@ -150,6 +150,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
     return { signed_in: true, ...(await models(kind, adapter, known.models)) };
   } catch (error) {
     if (!signal?.aborted) process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
+    if (signedOut(error)) return { ...SIGNED_OUT, models: known.models, modes: known.modes };
     return {
       signed_in: adapter === undefined && 'initializeMeta' in probe ? known.signed_in : true,
       models: known.models,

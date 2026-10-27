@@ -324,6 +324,19 @@ it.each([
   expect(reported(hosted).at(-1)!.agents).toEqual([{ ...known, release: '1.0.48' }]);
 });
 
+it.each(KINDS)('reports %s signed out when its sign-in check passes but its adapter refuses a session as not signed in', async (kind) => {
+  const hosted = await hostKit([{ kind }], {
+    prepare: async (home) => {
+      await signIn(home, kind);
+      await writeFile(join(home, 'signed-out'), '');
+    },
+  });
+
+  await until(() => hosted.kit.stderr().includes(`${kind} did not offer its models: Authentication required`));
+  await settle();
+  expect(reported(hosted).at(-1)!.agents).toEqual([expect.objectContaining({ kind, signed_in: false })]);
+});
+
 it('ends the CLI an adapter started when the Kit reads that CLI and the adapter does not initialize', async () => {
   const hosted = await hostKit([{ kind: 'codex-acp' }], {
     prepare: async (home) => {
