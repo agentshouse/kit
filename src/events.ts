@@ -52,11 +52,11 @@ const COMMAND: Decision = { shown: 'command' };
 const HIDDEN: Decision = { shown: 'hidden' };
 const FINISHED = new Set(['completed', 'failed']);
 export const RUNNING_JOB = new Set(['running', 'paused']);
-const MESSAGE_TARGETS: Record<string, string[]> = {
-  send_routine_request: ['routine', 'agent'],
-  cancel_routine_request: ['request'],
-  send_mail: ['conversation', 'request'],
-};
+const MESSAGE_TARGETS = new Map([
+  ['send_routine_request', ['routine', 'agent']],
+  ['cancel_routine_request', ['request']],
+  ['send_mail', ['conversation', 'request']],
+]);
 
 function words(line: string): string[] {
   const found: string[] = [];
@@ -87,13 +87,14 @@ function words(line: string): string[] {
 export function houseMessage(line: string): Decision | null {
   const [program, verb, json] = words(line.trim());
   if (program !== 'house' || verb !== 'run_command' || json === undefined) return null;
-  let call: Fields;
+  let call: Fields | null;
   try {
-    call = JSON.parse(json) as Fields;
+    call = JSON.parse(json) as Fields | null;
   } catch {
     return null;
   }
-  const targets = MESSAGE_TARGETS[call.command];
+  if (call === null) return null;
+  const targets = MESSAGE_TARGETS.get(call.command);
   if (targets === undefined) return null;
   const target = targets.map((argument) => call.arguments?.[argument]).find((value) => typeof value === 'string');
   return { shown: 'message', command: call.command, target: target ?? null };

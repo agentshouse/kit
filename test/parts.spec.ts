@@ -578,6 +578,19 @@ it.each(['claude', 'codex'])(
   },
 );
 
+it('counts a house run_command naming a key every object inherits, or carrying null, as a command, and the turn goes on to its end', async () => {
+  const keyed = emitted('claude-tools', [[SEARCHED, `house run_command '{"command":"__proto__","arguments":{}}'`]], "house search '");
+  const odd = emitted('claude-routines', [
+    [ROUTINE_SENT, '{"command":"constructor","arguments":{}}'],
+    [ROUTINE_CANCELLED, 'null'],
+  ]);
+
+  const parts = await shown('claude', `${keyed}\n${odd}`);
+
+  expect(parts.filter((part) => part.type === 'message')).toEqual([]);
+  expect(parts.reduce((total, part) => total + Number(part.count), 0)).toBe(3);
+});
+
 it("shows Grok Build's recorded send_routine_request as one part and marks the retries its usage limit cut short", async () => {
   const { turns } = await replayed('grok-routines');
 
