@@ -83,6 +83,18 @@ it.each(['codex-acp', 'grok-build'])(
   },
 );
 
+it('reports a CLI signed out after a sign-in whose status check passes while its adapter still refuses a session as not signed in', async () => {
+  const home = await temporaryHome();
+  await writeFile(join(home, 'signed-out'), '');
+  const { hosted, holds, call } = await signingIn('codex-acp', undefined, 200, home);
+  await until(() => holds[1]);
+
+  await finish(hosted, 'codex-acp');
+
+  expect(await hosted.result(call)).toEqual({});
+  expect(reportBeforeResult(hosted, call)).toMatchObject({ agents: [{ kind: 'codex-acp', signed_in: false }] });
+});
+
 it('signs Claude Code in with the code the page collects and keeps the code nowhere', async () => {
   const code = 'pasted-claude-code#4f1c9e2a';
   const { hosted, holds, call } = await signingIn('claude-agent-acp', (hold) =>

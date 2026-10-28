@@ -51,6 +51,9 @@ interface Reading extends Offer {
 // Two quiet seconds let a fresh conversation start before background model discovery competes for its CPU.
 const MODEL_PROBE_QUIET_MS = 2_000;
 
+// A sign-in's model read that has not answered in ten seconds leaves its sign-in to the status check, so a hung CLI never holds the sign-in's result.
+const SIGNED_IN_READ_MS = 10_000;
+
 const SIGNED_OUT: Offer = { signed_in: false, models: [], modes: [] };
 
 const INSTALLING: Reading = { release: null, failure: null, installing: true, ...SIGNED_OUT };
@@ -119,13 +122,6 @@ async function models(kind: string, adapter: Adapter, known: Model[]): Promise<P
     offered.push({ model: value, efforts: effort === undefined ? [] : values(effort.options) });
   }
   return { models: offered, modes };
-}
-
-async function signedIn(kind: string, cli: string, known: Offer, signal: AbortSignal): Promise<boolean> {
-  const probe = CLIS[kind]!.signedIn;
-  // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
-  if ('command' in probe) return (await run(cli, probe.command, 30_000, false, signal)).status === 0;
-  return (await offer(kind, cli, known, signal)).signed_in;
 }
 
 function ended(signal: AbortSignal): Promise<never> {
@@ -314,7 +310,7 @@ export class Agents {
       await this.examine(
         kind,
         known,
-        async (kind, cli) => ((await signedIn(kind, cli, known, signal)) ? { ...known, signed_in: true } : SIGNED_OUT),
+        (kind, cli) => offer(kind, cli, known, AbortSignal.any([signal, AbortSignal.timeout(SIGNED_IN_READ_MS)])),
         signal,
         owner,
       );
