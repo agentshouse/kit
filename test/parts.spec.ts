@@ -96,13 +96,13 @@ function kinds(turn: Ended): string[] {
   return turn.parts.map((part) => (part.type === 'marker' ? `marker:${part.marker}` : String(part.type)));
 }
 
-it('maps recorded Claude Code tool calls: commands fold into counts, a house routine request is a message, and a sub-agent is one part', async () => {
+it('maps recorded Claude Code tool calls: commands fold into counts, a House Agent function request is a message, and a sub-agent is one part', async () => {
   const { turns } = await replayed('claude-tools', 2);
 
   expect(turns[0]!.parts).toEqual([
     { type: 'commands', count: 4 },
     { type: 'text', text: expect.stringContaining('TodoWrite') },
-    { type: 'message', command: 'send_routine_request', target: 'digest' },
+    { type: 'message', command: 'send_agent_function_request', target: 'digest' },
     { type: 'commands', count: 1 },
     { type: 'subagent', description: 'Count files', status: 'running', result: null },
     { type: 'text', text: expect.stringContaining('still running') },
@@ -144,7 +144,7 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
   ]);
   expect(parts.find((part) => part.type === 'message')).toEqual({
     type: 'message',
-    command: 'send_routine_request',
+    command: 'send_agent_function_request',
     target: 'digest',
   });
   expect(parts.find((part) => part.type === 'subagent')).toEqual({
@@ -496,14 +496,14 @@ it("marks a recorded Codex background terminal's start in its turn and its end, 
   expect((next.body as Ended).parts[0]).toEqual({ type: 'marker', marker: 'job', text: 'sleep 25: completed' });
 });
 
-it.each(['claude-routines', 'codex-routines'])(
-  "shows the recorded send_routine_request and cancel_routine_request of %s as one part each, naming the Routine's card and the request they target",
+it.each(['claude-agent-functions', 'codex-agent-functions'])(
+  "shows the recorded send_agent_function_request and cancel_agent_function_request of %s as one part each, naming the Agent function's card and the request they target",
   async (fixture) => {
     const { turns } = await replayed(fixture);
 
     expect(turns[0]!.parts.filter((part) => part.type === 'message')).toEqual([
-      { type: 'message', command: 'send_routine_request', target: 'digest' },
-      { type: 'message', command: 'cancel_routine_request', target: 'rr_456' },
+      { type: 'message', command: 'send_agent_function_request', target: 'digest' },
+      { type: 'message', command: 'cancel_agent_function_request', target: 'rr_456' },
     ]);
   },
 );
@@ -526,12 +526,12 @@ function emitted(fixture: string, rewrites: [string, string][] = [], call?: stri
 }
 
 const SEARCHED = `house search '{"query":"alpha"}'`;
-const ROUTINE_SENT = '{"command":"send_routine_request","arguments":{"room_ref":null,"routine":"digest","payload":"hi"}}';
-const ROUTINE_CANCELLED = '{"command":"cancel_routine_request","arguments":{"room_ref":null,"request":"rr_456"}}';
+const AGENT_FUNCTION_SENT = '{"command":"send_agent_function_request","arguments":{"room_ref":null,"agent_function":"digest","payload":"hi"}}';
+const AGENT_FUNCTION_CANCELLED = '{"command":"cancel_agent_function_request","arguments":{"room_ref":null,"request":"rr_456"}}';
 const MAILED = '{"command":"send_mail","arguments":{"text":"Here is the summary.","request":"rr_789"}}';
 const ANSWERED = '{"command":"send_mail","arguments":{"text":"Done."}}';
 const LISTED = `house run_command '{"command":"list_conversations","arguments":{}}'`;
-const AGENT_ASKED = '{"command":"send_routine_request","arguments":{"room_ref":null,"agent":"ag_321","payload":"Sum up the week."}}';
+const AGENT_ASKED = '{"command":"send_agent_function_request","arguments":{"room_ref":null,"agent":"ag_321","payload":"Sum up the week."}}';
 const CONVERSATION_MAILED = '{"command":"send_mail","arguments":{"text":"Over to you.","conversation":"cv_654"}}';
 
 async function shown(cli: string, text: string): Promise<Record<string, unknown>[]> {
@@ -548,9 +548,9 @@ it.each(['claude', 'codex'])(
   "shows %s's house send_mail as one part naming the request it names, or no target when it names none, and still counts the house call beside it",
   async (cli) => {
     const searched = emitted(`${cli}-tools`, [], "house search '");
-    const mailed = emitted(`${cli}-routines`, [
-      [ROUTINE_SENT, MAILED],
-      [ROUTINE_CANCELLED, ANSWERED],
+    const mailed = emitted(`${cli}-agent-functions`, [
+      [AGENT_FUNCTION_SENT, MAILED],
+      [AGENT_FUNCTION_CANCELLED, ANSWERED],
     ]);
 
     expect(await shown(cli, `${searched}\n${mailed}`)).toEqual([
@@ -562,17 +562,17 @@ it.each(['claude', 'codex'])(
 );
 
 it.each(['claude', 'codex'])(
-  "shows %s's house send_routine_request naming an Agent and send_mail naming a conversation as one part each naming it, and counts its list_conversations as a command",
+  "shows %s's house send_agent_function_request naming an Agent and send_mail naming a conversation as one part each naming it, and counts its list_conversations as a command",
   async (cli) => {
     const listed = emitted(`${cli}-tools`, [[SEARCHED, LISTED]], "house search '");
-    const sent = emitted(`${cli}-routines`, [
-      [ROUTINE_SENT, AGENT_ASKED],
-      [ROUTINE_CANCELLED, CONVERSATION_MAILED],
+    const sent = emitted(`${cli}-agent-functions`, [
+      [AGENT_FUNCTION_SENT, AGENT_ASKED],
+      [AGENT_FUNCTION_CANCELLED, CONVERSATION_MAILED],
     ]);
 
     expect(await shown(cli, `${listed}\n${sent}`)).toEqual([
       { type: 'commands', count: 1 },
-      { type: 'message', command: 'send_routine_request', target: 'ag_321' },
+      { type: 'message', command: 'send_agent_function_request', target: 'ag_321' },
       { type: 'message', command: 'send_mail', target: 'cv_654' },
     ]);
   },
@@ -580,9 +580,9 @@ it.each(['claude', 'codex'])(
 
 it('counts a house run_command naming a key every object inherits, or carrying null, as a command, and the turn goes on to its end', async () => {
   const keyed = emitted('claude-tools', [[SEARCHED, `house run_command '{"command":"__proto__","arguments":{}}'`]], "house search '");
-  const odd = emitted('claude-routines', [
-    [ROUTINE_SENT, '{"command":"constructor","arguments":{}}'],
-    [ROUTINE_CANCELLED, 'null'],
+  const odd = emitted('claude-agent-functions', [
+    [AGENT_FUNCTION_SENT, '{"command":"constructor","arguments":{}}'],
+    [AGENT_FUNCTION_CANCELLED, 'null'],
   ]);
 
   const parts = await shown('claude', `${keyed}\n${odd}`);
@@ -591,12 +591,12 @@ it('counts a house run_command naming a key every object inherits, or carrying n
   expect(parts.reduce((total, part) => total + Number(part.count), 0)).toBe(3);
 });
 
-it("shows Grok Build's recorded send_routine_request as one part and marks the retries its usage limit cut short", async () => {
-  const { turns } = await replayed('grok-routines');
+it("shows Grok Build's recorded send_agent_function_request as one part and marks the retries its usage limit cut short", async () => {
+  const { turns } = await replayed('grok-agent-functions');
 
   const parts = turns[0]!.parts;
   expect(parts.filter((part) => part.type === 'message')).toEqual([
-    { type: 'message', command: 'send_routine_request', target: 'digest' },
+    { type: 'message', command: 'send_agent_function_request', target: 'digest' },
   ]);
   const retries = parts.filter((part) => part.type === 'marker');
   expect(retries.length).toBeGreaterThan(0);

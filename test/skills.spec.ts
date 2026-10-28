@@ -30,7 +30,7 @@ function skillPage(origin: string): string {
 
 const PAGES: Record<string, string> = {
   'skills/errand.md': skillPage('<origin>'),
-  'routines/weekly.md': '---\ndescription: Sums up the week.\ninput: ""\n---\n# Weekly\n\nSums up the week.\n',
+  'agent-functions/weekly.md': '---\ndescription: Sums up the week.\ninput: ""\n---\n# Weekly\n\nSums up the week.\n',
 };
 
 let plantedRoot: string;
