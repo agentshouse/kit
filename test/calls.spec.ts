@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import type { House } from '../src/api.ts';
@@ -27,10 +27,21 @@ it('refuses a Kit call whose method it does not know, naming the method, and ret
 
   hosted.call({ kind: 'rewind', turn_id: 'turn-1' });
 
-  expect(await hosted.result(lastCall())).toEqual({ refused: 'This Kit does not know rewind; update the Kit' });
+  expect(await hosted.result(lastCall())).toEqual({ refused: 'This Kit does not know rewind; install it again.' });
   await settle();
   expect(hosted.results.map((result) => result.params.input)).toEqual([lastCall()]);
   expect(hosted.connection.notifications.filter((notification) => notification.type === 'process')).toEqual([]);
+});
+
+it('refuses a Kit call whose method it does not know with the install command its bootstrap recorded, which updates it', async () => {
+  const home = await temporaryHome();
+  const command = `sh -c 'kit=$(curl -fsSL "$0") || exit 1; eval "$kit"' https://dev.agents.house/kit --linux`;
+  await writeFile(join(home, 'install-command'), `${command}\n`);
+  const hosted = await hostKit([{}], { home, skills: false });
+
+  hosted.call({ kind: 'rewind', turn_id: 'turn-1' });
+
+  expect(await hosted.result(lastCall())).toEqual({ refused: `This Kit does not know rewind. Update it: ${command}` });
 });
 
 it('carries a Kit call of a method it knows though the call names a field it does not know', async () => {

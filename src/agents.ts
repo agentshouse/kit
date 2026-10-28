@@ -1,7 +1,7 @@
 import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
 import { readFile, realpath } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startAdapter, type Adapter } from './acp.ts';
+import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_RELEASE, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
@@ -50,6 +50,9 @@ interface Reading extends Offer {
 
 // Two quiet seconds let a fresh conversation start before background model discovery competes for its CPU.
 const MODEL_PROBE_QUIET_MS = 2_000;
+
+// A sign-in's model read that has not answered in ten seconds leaves its sign-in to the status check, so a hung CLI never holds the sign-in's result.
+const SIGNED_IN_READ_MS = 10_000;
 
 const SIGNED_OUT: Offer = { signed_in: false, models: [], modes: [] };
 
@@ -121,13 +124,6 @@ async function models(kind: string, adapter: Adapter, known: Model[]): Promise<P
   return { models: offered, modes };
 }
 
-async function signedIn(kind: string, cli: string, known: Offer, signal: AbortSignal): Promise<boolean> {
-  const probe = CLIS[kind]!.signedIn;
-  // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
-  if ('command' in probe) return (await run(cli, probe.command, 30_000, false, signal)).status === 0;
-  return (await offer(kind, cli, known, signal)).signed_in;
-}
-
 function ended(signal: AbortSignal): Promise<never> {
   return new Promise((_, reject) => {
     if (signal.aborted) reject(signal.reason);
@@ -150,6 +146,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
     return { signed_in: true, ...(await models(kind, adapter, known.models)) };
   } catch (error) {
     if (!signal?.aborted) process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
+    if (signedOut(error)) return SIGNED_OUT;
     return {
       signed_in: adapter === undefined && 'initializeMeta' in probe ? known.signed_in : true,
       models: known.models,
@@ -313,7 +310,7 @@ export class Agents {
       await this.examine(
         kind,
         known,
-        async (kind, cli) => ((await signedIn(kind, cli, known, signal)) ? { ...known, signed_in: true } : SIGNED_OUT),
+        (kind, cli) => offer(kind, cli, known, AbortSignal.any([signal, AbortSignal.timeout(SIGNED_IN_READ_MS)])),
         signal,
         owner,
       );
