@@ -66,7 +66,7 @@ it("opens the session in the mode the route names, and Codex runs each `house` o
   );
 });
 
-it('opens a Claude Code session in bypass permissions with `house` allowed in every mode and its sandbox open to unix sockets', async () => {
+it('opens a Claude Code session in bypass permissions with `house` allowed in every mode, its sandbox open to unix sockets and none of the MCP servers the computer or its account configures', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp', model: 'default', effort: null }]);
 
   hosted.call({ kind: 'open' });
@@ -79,6 +79,7 @@ it('opens a Claude Code session in bypass permissions with `house` allowed in ev
       claudeCode: {
         options: {
           allowedTools: ['Bash(house:*)'],
+          strictMcpConfig: true,
           settings: { sandbox: { network: { allowAllUnixSockets: true } } },
         },
       },

@@ -137,6 +137,7 @@ export const CLIS: Record<string, Cli> = {
       claudeCode: {
         options: {
           allowedTools: ['Bash(house:*)'],
+          strictMcpConfig: true,
           includeHookEvents: true,
           title,
           settings: { sandbox: { network: bridgeInClaudeSandbox(bridge) } },

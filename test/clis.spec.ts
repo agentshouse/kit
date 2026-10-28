@@ -78,7 +78,7 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GROK_HOME']) expect(env[variable]).toBeUndefined();
 });
 
-it('opens and resumes Claude sessions under the adapter entrypoint instead of an inherited SDK entrypoint', async () => {
+it('opens and resumes Claude sessions under the adapter entrypoint instead of an inherited SDK entrypoint, and with none of the MCP servers the computer configures', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
     environment: { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' },
   });
@@ -97,6 +97,8 @@ it('opens and resumes Claude sessions under the adapter entrypoint instead of an
   ]);
   expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/resume')!.params).toMatchObject({
     sessionId: opened.provider_session_id,
+    mcpServers: [],
+    _meta: { claudeCode: { options: { strictMcpConfig: true } } },
   });
 });
 
