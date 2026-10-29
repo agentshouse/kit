@@ -46,5 +46,5 @@ export function placeUserCli(directory: string, kind: string, release = RELEASES
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  placeUserCli(process.argv[3]!, process.argv[2]!);
+  placeUserCli(process.argv[3]!, process.argv[2]!, process.argv[4]);
 }

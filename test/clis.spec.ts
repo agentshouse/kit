@@ -167,28 +167,20 @@ it.each(KINDS)('runs a %s its official installer placed beneath the home when th
   expect((entry.env as Record<string, string>).PATH.split(':').filter((path) => path === join(hosted.home, '.local', 'bin'))).toHaveLength(1);
 });
 
-it('reports a CLI below its minimum, starts no conversation of that kind but one of another, and starts it once the login shell finds a newer one', async () => {
-  const minimum = '0.160.1';
-  const hosted = await hostKit([{ kind: 'codex-acp' }, { kind: 'grok-build' }], {
+it("runs a conversation on a CLI below its minimum, reported with the minimum and the CLI's update command, while a CLI that did not install refuses its own", async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }, { kind: 'claude-agent-acp' }], {
     prepare: async (home) => {
       placeUserCli(userBin(home), 'codex-acp', '0.150.0');
+      await rm(join(userBin(home), 'claude'));
+      await writeFile(join(home, 'install-fail'), 'claude-agent-acp\n');
     },
   });
-  await report(hosted, (agents) => agents.some((agent) => agent.minimum === minimum));
-
-  expect(await open(hosted, 'conversation-1', 'agent-1')).toEqual({
-    refused: `codex 0.150.0 is older than ${minimum}, the oldest this Kit runs`,
-  });
-  expect(await open(hosted, 'conversation-2', 'agent-2')).toEqual({ provider_session_id: expect.any(String) });
-  expect((await initialized(hosted)).map((entry) => (entry.cli as { path: string }).path)).not.toContain(
-    join(userBin(hosted.home), 'codex'),
-  );
-
-  placeUserCli(userBin(hosted.home), 'codex-acp', '0.161.0');
+  const reported = await report(hosted, (agents) => agents.some((agent) => agent.kind === 'codex-acp'));
+  expect(reported.find((agent) => agent.kind === 'codex-acp')).toMatchObject({ kind: 'codex-acp', release: '0.150.0', minimum: '0.160.1', update: 'codex update', failure: null });
 
   expect(await open(hosted, 'conversation-1', 'agent-1')).toEqual({ provider_session_id: expect.any(String) });
-  const current = await report(hosted, (agents) => agents.some((agent) => agent.release === '0.161.0'));
-  expect(current.find((agent) => agent.kind === 'codex-acp')).not.toHaveProperty('minimum');
+  expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${join(userBin(hosted.home), 'codex')} 0.150.0`);
+  expect(await open(hosted, 'conversation-2', 'agent-2')).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
 });
 
 it('reads the CLI again at every Conversation process start, its sign-in and every model with its efforts, and reports it only when it changed', async () => {

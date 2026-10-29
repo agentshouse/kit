@@ -12,6 +12,7 @@ export interface Cli {
   bin: string;
   minimum: string;
   install: string;
+  update: string;
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
   fullAccess: string | null;
@@ -102,6 +103,7 @@ export const CLIS: Record<string, Cli> = {
     bin: 'codex',
     minimum: '0.160.1',
     install: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+    update: 'codex update',
     adapter: {
       package: '@agentclientprotocol/codex-acp',
       bin: 'codex-acp',
@@ -125,6 +127,7 @@ export const CLIS: Record<string, Cli> = {
     bin: 'claude',
     minimum: '2.1.303',
     install: 'curl -fsSL https://claude.ai/install.sh | bash',
+    update: 'claude update',
     adapter: {
       package: '@agentclientprotocol/claude-agent-acp',
       bin: 'claude-agent-acp',
@@ -155,6 +158,7 @@ export const CLIS: Record<string, Cli> = {
     bin: 'grok',
     minimum: '1.0.46',
     install: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+    update: 'grok update',
     adapter: null,
     args: ['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio'],
     fullAccess: null,

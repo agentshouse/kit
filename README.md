@@ -23,7 +23,7 @@ install Kit natively, with its workspace at `/agents/house`; `kit` and
 `house` are then on the server's `PATH`.
 
 Kit runs the agent CLIs your login shell finds and installs a missing one
-through that CLI's own installer. Running the command again offers to update
+through that CLI's own installer. A CLI older than the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version, that oldest release and the CLI's own update command, such as `claude update`. Running the command again offers to update
 each CLI older than Kit needs; add `--update-clis` to update every one to
 its latest release without asking. Kit also gives every Agent on the
 Environment the agent skills of `@agentshouse/skills`, at the version each Kit

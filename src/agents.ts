@@ -43,7 +43,6 @@ interface Offer {
 
 interface Reading extends Offer {
   release: string | null;
-  minimum?: string;
   failure: string | null;
   installing?: true;
 }
@@ -158,10 +157,11 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
 }
 
 function reported(kind: string, reading: Reading) {
+  const { minimum, update } = CLIS[kind]!;
   return {
     kind,
     release: reading.release,
-    ...(reading.minimum === undefined ? {} : { minimum: reading.minimum }),
+    ...(reading.release !== null && below(reading.release, minimum) ? { minimum, update } : {}),
     failure: reading.failure,
     ...(reading.installing === undefined ? {} : { installing: reading.installing }),
     signed_in: reading.signed_in,
@@ -172,11 +172,6 @@ function reported(kind: string, reading: Reading) {
 }
 
 const NOT_READY = "the Agent's CLI is not ready on this computer";
-
-function tooOld(kind: string, release: string): string {
-  const cli = CLIS[kind]!;
-  return `${cli.bin} ${release} is older than ${cli.minimum}, the oldest this Kit runs`;
-}
 
 async function sshHostKey(): Promise<string | null> {
   // Listing a local host key takes a moment, so ten seconds only bounds a stuck ssh-keygen.
@@ -274,12 +269,12 @@ export class Agents {
       const resolved = await this.resolve(kind);
       if (!('cli' in resolved)) {
         this.update(kind, resolved);
-        throw new Error(resolved.failure === null ? tooOld(kind, resolved.release!) : NOT_READY);
+        throw new Error(NOT_READY);
       }
       const { cli, release } = resolved;
       const known = this.readings.get(kind);
-      const kept = known?.release === null || known?.minimum !== undefined ? SIGNED_OUT : (known ?? SIGNED_OUT);
-      if (known?.release !== release || known.minimum !== undefined || this.installs.has(kind)) {
+      const kept = known?.release === null ? SIGNED_OUT : (known ?? SIGNED_OUT);
+      if (known?.release !== release || this.installs.has(kind)) {
         this.update(kind, { release, failure: null, signed_in: kept.signed_in, models: kept.models, modes: kept.modes });
       }
       const read = this.nextRead(kind);
@@ -391,8 +386,6 @@ export class Agents {
     }
     const release = await versionOf(cli, signal);
     if (release === null) return { release: null, failure: `${cli} --version names no version`, ...SIGNED_OUT };
-    const minimum = CLIS[kind]!.minimum;
-    if (below(release, minimum)) return { release, minimum, failure: null, ...SIGNED_OUT };
     return { cli, release };
   }
 
@@ -420,7 +413,7 @@ export class Agents {
 
   private async load(kind: string): Promise<void> {
     const known = this.readings.get(kind);
-    if (known !== undefined && known.failure === null && known.minimum === undefined) return;
+    if (known !== undefined && known.failure === null) return;
     await this.examine(kind, SIGNED_OUT, (kind, cli, known) => this.quietOffer(kind, cli, known));
     await this.report();
   }

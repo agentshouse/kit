@@ -345,7 +345,7 @@ it('reports a CLI whose adapter archive has not arrived within the install deadl
   await expect(stat(join(home, 'agents', 'claude-agent-acp', 'node_modules'))).rejects.toThrow();
 });
 
-it('reports a CLI below its minimum with the version found and the minimum, and reads no models from it', async () => {
+it("reports a CLI below its minimum with the version found, the minimum and the CLI's update command, beside its sign-in and models", async () => {
   desired = ['codex-acp'];
   await signIn('codex-acp');
   await start(async () => {
@@ -359,29 +359,23 @@ it('reports a CLI below its minimum with the version found and the minimum, and 
       kind: 'codex-acp',
       release: '0.150.0',
       minimum: '0.160.1',
+      update: 'codex update',
       failure: null,
-      signed_in: false,
-      models: [],
-      modes: [],
+      signed_in: true,
+      models: [
+        { model: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'] },
+        { model: 'gpt-5.5-mini', efforts: ['minimal', 'low', 'medium', 'high'] },
+        { model: 'codex-instant', efforts: [] },
+      ],
+      modes: [
+        { mode: 'read-only', name: 'Read-only' },
+        { mode: 'workspace-write', name: 'Workspace access' },
+        { mode: 'agent', name: 'Auto review' },
+        { mode: 'agent-full-access', name: 'Full access' },
+      ],
       full_access: 'agent-full-access',
     },
   ]);
-  expect(await probes()).toBe(0);
-});
-
-it('reads a CLI below its minimum again at a later work_available notification and reports the release the User updated it to', async () => {
-  desired = ['codex-acp'];
-  await start(async () => {
-    placeUserCli(userBin(home), 'codex-acp', '0.150.0');
-  });
-  expect((await until(() => completeReports()[0])).agents).toEqual([expect.objectContaining({ kind: 'codex-acp', release: '0.150.0', minimum: '0.160.1' })]);
-
-  placeUserCli(userBin(home), 'codex-acp', '0.161.0');
-  house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
-
-  const [current] = (await until(() => completeReports()[1])).agents as Record<string, unknown>[];
-  expect(current).toMatchObject({ kind: 'codex-acp', release: '0.161.0', failure: null });
-  expect(current).not.toHaveProperty('minimum');
 });
 
 it('reports a model its CLI refuses to select with no efforts before the Kit read any for it', async () => {
