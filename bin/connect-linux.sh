@@ -441,7 +441,7 @@ stop_native_service() {
 
 start_native_service() {
   # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
-  printf '[Unit]\nDescription=Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nEnvironment="HOUSE_KIT_HOME=%s"\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' \
+  printf '[Unit]\nDescription=Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nEnvironment="HOUSE_KIT_HOME=%s"\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=on-failure\nRestartSec=5\nDelegate=yes\nOOMPolicy=continue\n\n[Install]\nWantedBy=multi-user.target\n' \
     "$(id -un)" "$(unit_text "$KIT_HOME")" "$NATIVE_WORKSPACE" "$NATIVE_BIN" | elevated tee "$NATIVE_UNIT" >/dev/null &&
     elevated chmod 0644 "$NATIVE_UNIT" || refuse "$NATIVE_UNIT could not be written"
   elevated systemctl daemon-reload || refuse 'systemd could not read the Kit service'
@@ -589,7 +589,7 @@ define_desktop_service() {
       "$SERVICE" "$(xml_text "$NATIVE_BIN")" "$(xml_text "$KIT_HOME")" "$(xml_text "$WORKSPACE")" "$(xml_text "$KIT_HOME")")"
   else
     # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
-    define "$USER_UNIT" "$(printf '[Unit]\nDescription=Kit\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nEnvironment="HOUSE_KIT_HOME=%s"\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n' \
+    define "$USER_UNIT" "$(printf '[Unit]\nDescription=Kit\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nEnvironment="HOUSE_KIT_HOME=%s"\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\nDelegate=yes\nOOMPolicy=continue\n\n[Install]\nWantedBy=graphical-session.target\n' \
       "$(unit_text "$KIT_HOME")" "$(unit_text "$WORKSPACE")" "$(unit_text "$NATIVE_BIN")")"
   fi
 }

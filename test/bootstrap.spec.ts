@@ -288,6 +288,15 @@ it('installs a server with its Kit home where HOUSE_KIT_HOME names, and its serv
   expect((await host.serverUnit()).split('\n')).toContain(`Environment="HOUSE_KIT_HOME=${kitHome}"`);
 });
 
+it("writes the server's unit so the kernel killing one of its processes for memory ends only that process, in a cgroup the Kit's account holds", async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true });
+  await host.mark('systemd');
+
+  expect(host.run(['--linux'])).toMatchObject({ status: 0, stderr: '' });
+
+  expect((await host.serverUnit()).split('\n')).toEqual(expect.arrayContaining(['Delegate=yes', 'OOMPolicy=continue']));
+});
+
 const LISTED = [
   ['codex', '/home/u/.local/bin/codex', '0.150.0', '0.160.1', 'old'],
   ['claude', '/home/u/.local/bin/claude', '2.1.200', '2.1.303', 'old'],

@@ -51,6 +51,8 @@ Environment="HOUSE_KIT_WORKSPACE=${workspace}"
 ExecStart="${home}/.local/bin/kit" resident
 Restart=on-failure
 RestartSec=5
+Delegate=yes
+OOMPolicy=continue
 
 [Install]
 WantedBy=graphical-session.target
