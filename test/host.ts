@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { temporaryHome } from './kit.ts';
@@ -25,12 +25,18 @@ export async function published(): Promise<string> {
   return script;
 }
 
+export const UBUNTU_26_04 = "ID=ubuntu\nVERSION_ID=26.04\nVERSION_CODENAME=resolute\nUBUNTU_CODENAME=resolute\nPRETTY_NAME='Ubuntu 26.04 LTS'\n";
+
 export interface Platform {
   system: 'Linux' | 'Darwin';
   machine: string;
   server?: boolean;
   appleSilicon?: boolean;
   macos?: string;
+  osRelease?: string;
+  systemd?: boolean;
+  glibc?: boolean;
+  absent?: string[];
   shell?: string;
   environment?: Record<string, string>;
 }
@@ -46,6 +52,7 @@ export interface Host {
   run(argv?: string[], added?: Record<string, string>): Ran;
   terminal(argv: string[], typed: string, added?: Record<string, string>): Ran;
   command(name: string, argv: string[]): Ran;
+  shell(line: string): Ran;
   calls(tool: string): string[];
   mark(name: Mark): Promise<void>;
   clear(name: Mark): Promise<void>;
@@ -130,9 +137,17 @@ case "$1" in
     if [ -n "$login" ] && [ -z "$help" ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
     ;;
 esac\n`,
-  sudo: `${LOGGED}exit 1\n`,
+  sudo: `${LOGGED}case "$1" in
+  -u) shift 2; exec "$@" ;;
+  apt-get) exec "$@" ;;
+  tee) { printf 'tee '; tr '\\n' ' '; printf '\\n'; } >> "$FAKE/log" ;;
+esac\n`,
+  'apt-get': `${LOGGED}case "$*" in *docker-ce*) rm -f "$FAKE/docker-down" ;; esac\n`,
+  'dpkg-query': ':\n',
+  dpkg: 'case "$FAKE_MACHINE" in aarch64|arm64) echo arm64 ;; *) echo amd64 ;; esac\n',
+  getconf: '[ "$1" = GNU_LIBC_VERSION ] || exec /usr/bin/getconf "$@"\n[ "$FAKE_GLIBC" = 1 ] && echo \'glibc 2.41\'\n',
   security: `${LOGGED}printf -- '-----BEGIN CERTIFICATE-----\\nthe keychain authority\\n-----END CERTIFICATE-----\\n'\n`,
-  id: '[ "$*" != -un ] || { echo owner; exit 0; }\nexec /usr/bin/id "$@"\n',
+  id: 'case "$*" in -un|-nG|"-nG owner") echo owner ;; *) exec /usr/bin/id "$@" ;; esac\n',
   'xdg-open': `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
   open: `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
   zsh: '[ ! -f "${ZDOTDIR:-$HOME}/.zshenv" ] || . "${ZDOTDIR:-$HOME}/.zshenv"\n[ "$1" != -c ] || eval "$2"\n',
@@ -148,7 +163,7 @@ if [ "\${1##*/}" = service-main.js ]; then
 fi
 `;
 
-const KIT = `printf '%s %s HOUSE_KIT_HOME=%s%s\\n' "\${0##*/}" "$*" "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+ HOUSE_KIT_REPLACES=$HOUSE_KIT_REPLACES}" >> "$FAKE/log"
+const KIT = `printf '%s %s HOUSE_KIT_HOME=%s%s%s\\n' "\${0##*/}" "$*" "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+ HOUSE_KIT_REPLACES=$HOUSE_KIT_REPLACES}" "\${HOUSE_KIT_WORKSPACE:+ HOUSE_KIT_WORKSPACE=$HOUSE_KIT_WORKSPACE}" >> "$FAKE/log"
 [ -z "\${HOUSE_KIT_RELAY-}" ] || printf 'relay %s\\n' "$HOUSE_KIT_RELAY" >> "$FAKE/log"
 [ -z "\${NODE_USE_SYSTEM_CA-}" ] || printf 'ca %s\\n' "$NODE_USE_SYSTEM_CA" >> "$FAKE/log"
 if [ "$1" = login ]; then set -- "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+environment-two}"; ${LOGIN}fi
@@ -164,8 +179,18 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   const fake = await temporaryHome();
   const bin = join(fake, 'bin');
   await mkdir(bin);
-  for (const [tool, body] of Object.entries(TOOLS))
+  const absent = platform.absent ?? [];
+  for (const [tool, body] of Object.entries(TOOLS)) {
+    if (absent.includes(tool)) continue;
     await script(join(bin, tool), platform.server === true && tool === 'sudo' ? `${LOGGED}exec "$@"\n` : body);
+  }
+  let path = `${bin}:/usr/bin:/bin`;
+  if (absent.length > 0) {
+    const present = join(fake, 'present');
+    await mkdir(present);
+    for (const entry of await readdir('/usr/bin')) if (!absent.includes(entry)) await symlink(join('/usr/bin', entry), join(present, entry));
+    path = `${bin}:${present}`;
+  }
   await script(join(fake, 'kit'), KIT);
   const system = platform.system === 'Darwin' ? 'darwin' : 'linux';
   const unpacked = `node-v24.22.1-${system}-${/arm64|aarch64/.test(platform.machine) ? 'arm64' : 'x64'}`;
@@ -181,31 +206,37 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   await writeFile(join(fake, 'ca-certificates.crt'), "-----BEGIN CERTIFICATE-----\nthe computer's own authority\n-----END CERTIFICATE-----\n");
   const bootstrap = await published();
   await writeFile(bootstrap, (await readFile(bootstrap, 'utf8')).replace('/etc/ssl/certs/ca-certificates.crt', join(fake, 'ca-certificates.crt')));
-  if (platform.server === true) {
+  if (platform.system === 'Linux') {
     const osRelease = join(fake, 'os-release');
+    await writeFile(osRelease, platform.osRelease ?? UBUNTU_26_04);
+    await writeFile(
+      bootstrap,
+      (await readFile(bootstrap, 'utf8')).replaceAll('/etc/os-release', osRelease).replace('[[ -d /run/systemd/system ]]', '[[ -e "$FAKE/systemd" ]]'),
+    );
+    if (platform.systemd ?? platform.server !== true) await writeFile(join(fake, 'systemd'), '');
+  }
+  if (platform.server === true) {
     const server = join(fake, 'server');
-    await writeFile(osRelease, "ID=ubuntu\nVERSION_ID=26.04\nPRETTY_NAME='Ubuntu 26.04 LTS'\n");
     await writeFile(
       bootstrap,
       (await readFile(bootstrap, 'utf8'))
-        .replaceAll('/etc/os-release', osRelease)
         .replace('SERVER_PREFIX=/opt/house-kit', `SERVER_PREFIX=${server}/house-kit`)
         .replace('PLACING_OWNER=root:root', `PLACING_OWNER=${process.getuid!()}:${process.getgid!()}`)
         .replace('NATIVE_BIN=/usr/local/bin', `NATIVE_BIN=${server}/bin`)
         .replace('NATIVE_UNIT=/etc/systemd/system/house-kit.service', `NATIVE_UNIT=${server}/house-kit.service`)
-        .replace('NATIVE_WORKSPACE=/agents/house', `NATIVE_WORKSPACE=${server}/workspace`)
-        .replace('[[ -d /run/systemd/system ]]', '[[ -e "$FAKE/systemd" ]]'),
+        .replace('NATIVE_WORKSPACE=/agents/house', `NATIVE_WORKSPACE=${server}/workspace`),
     );
   }
   const environment = {
     HOME: home,
     SHELL: platform.shell === 'zsh' ? join(bin, 'zsh') : (platform.shell ?? '/bin/bash'),
-    PATH: `${bin}:/usr/bin:/bin`,
+    PATH: path,
     FAKE: fake,
     FAKE_SYSTEM: platform.system,
     FAKE_MACHINE: platform.machine,
     FAKE_ARM64: platform.appleSilicon === false ? '0' : '1',
     FAKE_MACOS: platform.macos ?? '27.0.1',
+    FAKE_GLIBC: platform.glibc === false ? '0' : '1',
     ...platform.environment,
   };
   const ran = (command: string, argv: string[], added: Record<string, string> = {}): Ran => {
@@ -223,6 +254,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
       return { status: finished.status, stdout: finished.stdout.replaceAll('\r\n', '\n'), stderr: finished.stderr };
     },
     command: (name, argv) => ran(join(home, '.local', 'bin', name), argv),
+    shell: (line) => ran('sh', ['-c', line]),
     calls: (tool) =>
       readFileSync(join(fake, 'log'), { encoding: 'utf8', flag: 'a+' })
         .split('\n')

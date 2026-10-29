@@ -126,7 +126,7 @@ it.each([
 ] as const)('downloads its packages, Node.js and the Kit %s', async (_case, relay, proxy, served) => {
   const home = await temporaryHome();
   const linux = await readFile(LINUX, 'utf8');
-  const steps = ['host_of', 'served_from', 'download', 'establish_native_packages', 'stage_native_kit'].map(
+  const steps = ['host_of', 'served_from', 'download', 'named', 'establish_native_packages', 'stage_native_kit'].map(
     (step) => new RegExp(`^${step}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0],
   );
   const bin = join(home, 'bin');
@@ -145,10 +145,9 @@ it.each([
       `set -u
 elevated() { "$@"; }
 refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
-installed_packages() { :; }
+absent_native_packages() { ABSENT=(ca-certificates curl git); }
 ${direct(linux)}
 HOUSE=https://agents.house
-NATIVE_PACKAGES=(ca-certificates curl git)
 VERSION=0.2.1-alpha.1
 KIT_SHA256=${'1'.repeat(64)}
 NODE_VERSION=24.22.1
@@ -537,7 +536,7 @@ it('writes the release manifest naming every file Kit installs by name and sha25
     from: 'https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz',
   });
   expect(Object.keys(written.files).filter((name) => name.startsWith('node-')).sort()).toEqual(
-    ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-ppc64le', 'linux-s390x', 'linux-x64'].map((platform) => `node-v24.22.1-${platform}.tar.gz`),
+    ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((platform) => `node-v24.22.1-${platform}.tar.gz`),
   );
   for (const artifact of [...Object.values(ENGINES).flatMap(({ decoder, engine }) => [decoder, engine]), MODEL]) {
     expect(written.files[artifact.name]).toEqual({ sha256: artifact.sha256, from: artifact.from });

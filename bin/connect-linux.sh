@@ -32,7 +32,6 @@ CODE=()
 ALREADY_CONNECTED=0
 CONFIGURED=''
 UPDATE_CLIS=0
-UBUNTU_RELEASES=(jammy noble resolute)
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 CONFLICTING_PACKAGES=(docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc)
 DOCKER_APP=/Applications/Docker.app
@@ -46,8 +45,8 @@ CONTAINER=0
 MACOS=0
 MACOS_RELEASE=27
 NATIVE_RELEASE=26.04
-NATIVE_ARCHITECTURE=amd64
-NATIVE_PACKAGES=(ca-certificates curl git)
+CONTRACT_CHIP=amd64
+CERTIFICATE_BUNDLES=(/etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem)
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c
@@ -292,9 +291,9 @@ install_docker_engine() {
   elevated apt-get update -qq >/dev/null || refuse 'apt could not refresh its package lists'
   elevated apt-get install -y -qq ca-certificates curl >/dev/null || refuse 'apt could not install ca-certificates and curl'
   elevated install -m 0755 -d /etc/apt/keyrings || refuse '/etc/apt/keyrings could not be created'
-  elevated curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc || refuse 'the Docker apt repository key could not be downloaded'
+  elevated curl -fsSL "https://download.docker.com/linux/$2/gpg" -o /etc/apt/keyrings/docker.asc || refuse 'the Docker apt repository key could not be downloaded'
   elevated chmod a+r /etc/apt/keyrings/docker.asc || refuse 'the Docker apt repository key could not be made readable'
-  printf 'Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n' "$2" "$(dpkg --print-architecture)" \
+  printf 'Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n' "$2" "$3" "$(dpkg --print-architecture)" \
     | elevated tee /etc/apt/sources.list.d/docker.sources >/dev/null || refuse 'the Docker apt repository could not be configured'
   elevated apt-get update -qq >/dev/null || refuse 'apt could not read the Docker apt repository'
   elevated apt-get install -y -qq "${DOCKER_PACKAGES[@]}" >/dev/null || refuse 'apt could not install Docker Engine'
@@ -315,15 +314,14 @@ establish_docker_engine() {
     type -P docker >/dev/null || refuse "Kit is not installed; run this command without $FORWARDED and its arguments first"
     refuse "Docker Engine does not answer: $(docker_cause)"
   fi
-  if [[ "$distribution" != ubuntu ]]; then
+  if [[ "$distribution" != ubuntu && "$distribution" != debian ]]; then
     type -P docker >/dev/null || refuse "Docker Engine is not installed on $described; install a working Docker Engine, then rerun this bootstrap"
     refuse "Docker Engine does not answer on $described: $(docker_cause)"
   fi
-  [[ " ${UBUNTU_RELEASES[*]} " == *" $release "* ]] || refuse "this bootstrap installs Docker Engine only on Ubuntu 22.04, 24.04 and 26.04 LTS, not $described; install a working Docker Engine, then rerun this bootstrap$(unanswered)"
   conflicting=$(installed_packages "${CONFLICTING_PACKAGES[@]}" | paste -sd ' ' -)
   [[ -z "$conflicting" ]] || refuse "the installed packages $conflicting conflict with Docker Engine; remove them or make their Docker Engine work, then rerun this bootstrap$(unanswered)"
   present=$(installed_packages "${DOCKER_PACKAGES[@]}" | wc -l)
-  ((present == ${#DOCKER_PACKAGES[@]})) || install_docker_engine "$described" "$release"
+  ((present == ${#DOCKER_PACKAGES[@]})) || install_docker_engine "$described" "$distribution" "$release"
   if ! systemctl is-active --quiet docker.service; then
     printf 'Starting Docker Engine; sudo may ask for your password.\n'
     elevated systemctl start docker.service || refuse 'Docker Engine could not be started'
@@ -342,13 +340,45 @@ service_manager() {
   [[ -d /run/systemd/system ]]
 }
 
+glibc() {
+  getconf GNU_LIBC_VERSION >/dev/null 2>&1
+}
+
+in_container() {
+  printf 'rerun this bootstrap with --container'
+  ((NATIVE == 0)) || printf ' in place of --linux'
+}
+
+named() {
+  printf '%s' "$1"
+  shift
+  while (($# > 1)); do
+    printf ', %s' "$1"
+    shift
+  done
+  (($# == 0)) || printf ' and %s' "$1"
+}
+
+absent_native_packages() {
+  local bundle certified=0
+  ABSENT=()
+  for bundle in "${CERTIFICATE_BUNDLES[@]}"; do
+    [[ ! -f "$bundle" ]] || certified=1
+  done
+  ((certified)) || ABSENT+=(ca-certificates)
+  type -P curl >/dev/null || ABSENT+=(curl)
+  type -P git >/dev/null || ABSENT+=(git)
+}
+
 establish_native_packages() {
-  local present
-  present=$(installed_packages "${NATIVE_PACKAGES[@]}" | wc -l)
-  ((present == ${#NATIVE_PACKAGES[@]})) && return
-  printf 'Installing ca-certificates, curl and git with apt; sudo may ask for your password.\n'
+  local absent
+  absent_native_packages
+  ((${#ABSENT[@]})) || return 0
+  absent=$(named "${ABSENT[@]}")
+  type -P apt-get >/dev/null || refuse "this host has no apt to install $absent; install $absent, then rerun this bootstrap"
+  printf 'Installing %s with apt; sudo may ask for your password.\n' "$absent"
   elevated "${DIRECT[@]}" apt-get update -qq >/dev/null || refuse 'apt could not refresh its package lists'
-  elevated "${DIRECT[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${NATIVE_PACKAGES[@]}" >/dev/null || refuse 'apt could not install ca-certificates, curl and git'
+  elevated "${DIRECT[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${ABSENT[@]}" >/dev/null || refuse "apt could not install $absent"
 }
 
 stage_native_kit() {
@@ -420,6 +450,12 @@ start_native_service() {
 
 announce() {
   case "$1" in
+    unsupervised)
+      local workspace=$WORKSPACE
+      ((NATIVE == 0)) || workspace=$NATIVE_WORKSPACE
+      printf 'Kit %s is installed for Environment %s, but no systemd runs on this host to start it; run env HOUSE_KIT_HOME=%q HOUSE_KIT_WORKSPACE=%q %q/kit resident under your own service manager, restarting it whenever it ends with a failure.\n' \
+        "$VERSION" "$(enrolled environment)" "$KIT_HOME" "$workspace" "$NATIVE_BIN"
+      ;;
     connected) printf 'Kit connected for Environment %s.\n' "$(enrolled environment)" ;;
     updated) printf 'Kit updated.\n' ;;
     running) printf 'Kit is already installed.\n' ;;
@@ -442,6 +478,7 @@ connect_native() {
     refuse 'a Kit process runs natively on this host for another account'
   fi
   keep_other_home
+  notice_host
   establish_native_packages
   [[ ! -L "${NATIVE_WORKSPACE%/*}" ]] || refuse "${NATIVE_WORKSPACE%/*} is a symbolic link"
   if [[ ! -e "$NATIVE_WORKSPACE" && ! -L "$NATIVE_WORKSPACE" ]]; then
@@ -484,8 +521,7 @@ connect_native() {
   fi
   update_clis native_clis native_cli_update
   if ! service_manager; then
-    printf 'Kit %s is installed for Environment %s; no service manager runs on this host, so start it with: %s/kit resident\n' \
-      "$VERSION" "$(enrolled environment)" "$NATIVE_BIN"
+    announce unsupervised
     return
   fi
   start_native_service
@@ -496,23 +532,27 @@ connect_native() {
   announce "$connected"
 }
 
-notice_desktop_host() {
-  local version described=Linux distribution='' release=''
+notice_host() {
+  local found=Linux contract version distribution='' release=''
   if ((MACOS)); then
     version=$(sw_vers -productVersion)
-    if ((${version%%.*} < MACOS_RELEASE)); then
-      printf 'Warning: macOS %s is outdated; update to macOS %s.\n' "$version" "$MACOS_RELEASE"
+    found="macOS $version"
+    contract="macOS $MACOS_RELEASE"
+    ((${version%%.*} < MACOS_RELEASE)) || [[ "$CHIP" != "$CONTRACT_CHIP" ]] || return 0
+  else
+    if [[ -r /etc/os-release ]]; then
+      distribution=$(. /etc/os-release && printf '%s' "${ID:-}")
+      release=$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")
+      found=$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-$found}")
     fi
-    [[ "$ARCH" == arm64 ]] || printf 'Warning: Kit supports Apple silicon, not %s.\n' "$CHIP"
-    return 0
+    contract="Ubuntu $NATIVE_RELEASE LTS"
+    [[ "$distribution" != ubuntu || "$release" != "$NATIVE_RELEASE" || "$CHIP" != "$CONTRACT_CHIP" ]] || return 0
   fi
-  if [[ -r /etc/os-release ]]; then
-    distribution=$(. /etc/os-release && printf '%s' "${ID:-}")
-    release=$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")
-    described=$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-$described}")
+  if [[ "$CHIP" != "$CONTRACT_CHIP" ]]; then
+    found+=" on $CHIP"
+    contract+=" on $CONTRACT_CHIP"
   fi
-  [[ "$distribution" == ubuntu && "$release" == "$NATIVE_RELEASE" && "$ARCH" == "$NATIVE_ARCHITECTURE" ]] && return
-  printf 'Kit supports Ubuntu %s LTS on %s, not %s on %s; it installs without that guarantee.\n' "$NATIVE_RELEASE" "$NATIVE_ARCHITECTURE" "$described" "$ARCH"
+  printf 'Warning: %s is outdated; update to %s.\n' "$found" "$contract"
 }
 
 prepare_roots() {
@@ -737,7 +777,7 @@ connect_desktop() {
   RECONNECT="run $NATIVE_BIN/kit login"
   take_placement native
   keep_other_home
-  notice_desktop_host
+  notice_host
   remove_container
   if ((WORKSPACE_SELECTED == 0)); then
     installed=$(installed_workspace)
@@ -767,6 +807,10 @@ connect_desktop() {
   fi
   record_placement native
   update_clis native_clis native_cli_update
+  if ((MACOS == 0)) && ! service_manager; then
+    announce unsupervised
+    return
+  fi
   define_desktop_service
   if ! desktop_loaded; then
     start_desktop_service
@@ -856,7 +900,7 @@ write_certificates() {
     security find-certificate -a -p /Library/Keychains/System.keychain > "$KIT_HOME/certificates.pem" 2>/dev/null || : > "$KIT_HOME/certificates.pem"
     return 0
   fi
-  for bundle in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
+  for bundle in "${CERTIFICATE_BUNDLES[@]}"; do
     if [[ -f "$bundle" ]]; then
       cp "$bundle" "$KIT_HOME/certificates.pem" || refuse "$KIT_HOME/certificates.pem could not be written"
       return 0
@@ -1005,25 +1049,15 @@ case "$(uname -s)" in
         NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
         NODE_BYTES=58021129
         ;;
-      ppc64le)
-        ARCH=ppc64le
-        NODE_PLATFORM=linux-ppc64le
-        NODE_SHA256=9ce5728445016b29e49ad098f7a336061aa5f770d177d927278bc26fd626e643
-        NODE_BYTES=61137871
-        ;;
-      s390x)
-        ARCH=s390x
-        NODE_PLATFORM=linux-s390x
-        NODE_SHA256=71979aeb1c385bc8ee83100d383a3b1ec0a5202e03df9f996a70403309caffb5
-        NODE_BYTES=57772206
-        ;;
       *) refuse "unsupported Linux architecture $(uname -m)" ;;
     esac
-    [[ "$ARCH" == amd64 || "$ARCH" == arm64 ]] || ((NATIVE == 0 && CONTAINER == 0)) || refuse "unsupported Linux architecture $(uname -m)"
+    CHIP=$ARCH
+    ((CONTAINER)) || glibc || refuse "this Linux has no glibc, so Kit cannot run natively on it; $(in_container) to run Kit in a container"
     ;;
   Darwin)
-    ((NATIVE == 0)) || refuse "--linux runs only on Ubuntu, not macOS"
+    ((NATIVE == 0)) || refuse "--linux runs only on Linux, not macOS"
     MACOS=1
+    CONTRACT_CHIP='Apple silicon'
     PATH="$PATH:$DOCKER_APP/Contents/Resources/bin"
     RUNTIME='Docker Desktop'
     OPENER=open
@@ -1055,7 +1089,10 @@ if ((CONTAINER == 0)); then
   set_rooms_again
   exit 0
 fi
-if ((FORWARDING == 0)); then take_placement container; fi
+if ((FORWARDING == 0)); then
+  take_placement container
+  notice_host
+fi
 
 if [[ "$RUNTIME" == 'Docker Desktop' ]]; then
   establish_docker_desktop "$CHIP"

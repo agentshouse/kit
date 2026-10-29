@@ -178,14 +178,16 @@ function Write-Certificates { $script:Ran += , 'certificates' }
 $Name = 'house-kit'
 $KitHome = 'house-kit-home'
 $KitHomeMount = 'home'
-$MinimumBuild = 22631
 $env:OS = 'Windows_NT'
 $env:USERPROFILE = '/tmp'
+$script:System = [pscustomobject]@{ ProductType = 1; BuildNumber = '26100'; Caption = 'Microsoft Windows 11 Pro' }
+$script:Processor = 9
+$script:DockerPlatform = 'linux/x86_64'
 function Get-CimInstance([string] $ClassName) {
-  if ($ClassName -eq 'Win32_OperatingSystem') { return [pscustomobject]@{ ProductType = 1; BuildNumber = '26100'; Caption = 'Windows 11 Pro' } }
-  [pscustomobject]@{ Architecture = 9 }
+  if ($ClassName -eq 'Win32_OperatingSystem') { return $script:System }
+  [pscustomobject]@{ Architecture = $script:Processor }
 }
-function Initialize-DockerDesktop { [pscustomobject]@{ Platform = 'linux/x86_64'; System = 'Docker Desktop'; Kernel = '6.6.87.2-microsoft-standard-WSL2' } }
+function Initialize-DockerDesktop { [pscustomobject]@{ Platform = $script:DockerPlatform; System = 'Docker Desktop'; Kernel = '6.6.87.2-microsoft-standard-WSL2' } }
 function Protect-Directory([string] $Path) { $Path }
 $script:SecondEnrolment = @{}
 function Read-Enrolment { if ($KitHome -ceq 'house-kit-home') { $script:Enrolment } else { $script:SecondEnrolment } }
@@ -194,7 +196,8 @@ function Test-Path { $true }
 function Set-Configuration { $false }
 $script:CliFailures = @()
 function Update-Clis { $script:CliFailures }
-function Write-Host { }
+$script:Shown = @()
+function Write-Host { $script:Shown += , "$args" }
 $script:Running = 'true'
 function Read-Inspect([string] $Format) {
   if ($Format -ceq '{{.Config.Image}}') { return $Image }
@@ -209,9 +212,11 @@ function Read-Inspect([string] $Format) {
   "$Image on-failure"
 }
 $script:LoginStatus = 0
+$script:ImageAbsent = $false
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
+  if ($args[0] -ceq 'image' -and $script:ImageAbsent) { $global:LASTEXITCODE = 1 }
   if ($args[0] -ceq 'rm') { $script:Installed = $false }
   if ($args -contains 'login') {
     $second = ($args -join ' ').Contains('house-kit-home-agents.house')
@@ -391,6 +396,61 @@ foreach ($case in @(
   if (-not $case[0] -and @($script:Ran | Where-Object { $_ -match $case[1] }).Count -ne 1) { $findings += "the bootstrap whose CLI update failed started no Kit: $($script:Ran -join '|')" }
 }
 $script:CliFailures = @()
+foreach ($case in @(
+  @{ Name = 'Windows 10'; Type = 1; Build = '19045'; Caption = 'Microsoft Windows 10 Pro'; Processor = 9; Platform = 'linux/x86_64'; Warnings = @('Warning: Microsoft Windows 10 Pro is outdated; update to Windows 11.'); Image = 'amd64' },
+  @{ Name = 'a Windows Server edition'; Type = 3; Build = '20348'; Caption = 'Microsoft Windows Server 2022 Datacenter'; Processor = 9; Platform = 'linux/x86_64'; Warnings = @('Warning: Microsoft Windows Server 2022 Datacenter is outdated; update to Windows 11.'); Image = 'amd64' },
+  @{ Name = 'Windows on ARM64'; Type = 1; Build = '26100'; Caption = 'Microsoft Windows 11 Pro'; Processor = 12; Platform = 'linux/aarch64'; Warnings = @('Warning: Microsoft Windows 11 Pro on arm64 is outdated; update to Windows 11 on amd64.'); Image = 'arm64' },
+  @{ Name = 'Windows 11 on amd64'; Type = 1; Build = '22621'; Caption = 'Microsoft Windows 11 Pro'; Processor = 9; Platform = 'linux/x86_64'; Warnings = @(); Image = 'amd64' }
+)) {
+  $script:System = [pscustomobject]@{ ProductType = $case.Type; BuildNumber = $case.Build; Caption = $case.Caption }
+  $script:Processor = $case.Processor
+  $script:DockerPlatform = $case.Platform
+  $script:Installed = $false
+  $script:Enrolment = @{}
+  $script:ImageAbsent = $true
+  $BootstrapArguments = @('--code', 'ahk_code_one')
+  $script:Ran = @()
+  $script:Shown = @()
+  try { Connect-Kit } catch { $findings += "the bootstrap on $($case.Name) refused with: $($_.Exception.Message)" }
+  $warnings = @($script:Shown | Where-Object { $_.StartsWith('Warning: ') })
+  if (($warnings -join '|') -cne ($case.Warnings -join '|')) { $findings += "the bootstrap on $($case.Name) warned: $($warnings -join '|')" }
+  $pulls = @($script:Ran | Where-Object { $_.StartsWith('pull ') })
+  if (($pulls -join '|') -cne "pull --quiet --platform linux/$($case.Image) $Image") { $findings += "the bootstrap on $($case.Name) pulled: $($pulls -join '|')" }
+  if (@($script:Ran | Where-Object { $_ -match '^run -d .* resident$' }).Count -ne 1) { $findings += "the bootstrap on $($case.Name) installed no Kit container: $($script:Ran -join '|')" }
+  $script:Installed = $true
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $BootstrapArguments = @('kit', 'logout', '--help')
+  $script:Shown = @()
+  try { Connect-Kit } catch { $findings += "the bootstrap on $($case.Name) forwarding kit logout --help ended with: $($_.Exception.Message)" }
+  $warnings = @($script:Shown | Where-Object { $_.StartsWith('Warning: ') })
+  if ($warnings.Count -ne 0) { $findings += "the bootstrap on $($case.Name) warned before a forwarded command: $($warnings -join '|')" }
+}
+$script:ImageAbsent = $false
+$script:Processor = 0
+$BootstrapArguments = @('--code', 'ahk_code_one')
+$script:Ran = @()
+try {
+  Connect-Kit
+  $findings += 'the bootstrap on Windows on x86 ended without a refusal'
+} catch {
+  if ($_.Exception.Message -cne 'kit_bootstrap_refused: unsupported Windows architecture x86') { $findings += "the bootstrap on Windows on x86 ended with: $($_.Exception.Message)" }
+}
+if (@($script:Ran | Where-Object { $_ -match '^(volume|pull|run) ' }).Count -ne 0) { $findings += "the bootstrap on Windows on x86 ran: $($script:Ran -join '|')" }
+$script:Processor = 9
+$script:System = [pscustomobject]@{ ProductType = 1; BuildNumber = '26100'; Caption = 'Microsoft Windows 11 Pro' }
+$script:DockerPlatform = 'linux/x86_64'
+$installDesktop = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-DockerDesktop' }, $true)
+. ([scriptblock]::Create($installDesktop.Extent.Text))
+function Invoke-WebRequest([switch] $UseBasicParsing, [string] $Uri, [string] $OutFile) {
+  $script:Downloaded += , $Uri
+  throw 'offline'
+}
+foreach ($Architecture in @('amd64', 'arm64')) {
+  $script:Downloaded = @()
+  try { Install-DockerDesktop } catch { }
+  if (($script:Downloaded -join '|') -cne "https://desktop.docker.com/win/main/$Architecture/Docker%20Desktop%20Installer.exe") { $findings += "Install-DockerDesktop on $Architecture downloaded: $($script:Downloaded -join '|')" }
+}
+Remove-Item Function:Invoke-WebRequest
 $whole = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
 [void][IO.Directory]::CreateDirectory($whole)
 $installer = Join-Path $whole 'connect-windows.ps1'

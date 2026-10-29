@@ -12,9 +12,7 @@ $ConfigureMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/configure-ma
 $ClisMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js'
 $EnrolmentReader = "try{const e=JSON.parse(require('fs').readFileSync('/kit-home/credential.json','utf8'));console.log('house',e.house);console.log('environment',e.environment)}catch(e){if(e.code!=='ENOENT')throw e}"
 $BootstrapArguments = @($args | ForEach-Object { [string]$_ })
-$MinimumBuild = 22631
 $MinimumWsl = [version]'2.1.5'
-$DesktopInstaller = 'https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe'
 # Docker Desktop's first start waits on its own terms and setup windows; five minutes bounds that before asking for a rerun.
 $DesktopWaitSeconds = 300
 
@@ -112,7 +110,7 @@ function Install-DockerDesktop {
     $installer = Join-Path $download 'Docker Desktop Installer.exe'
     Write-Host 'Downloading Docker Desktop for Windows from docker.com.'
     try {
-      Invoke-WebRequest -UseBasicParsing -Uri $DesktopInstaller -OutFile $installer
+      Invoke-WebRequest -UseBasicParsing -Uri "https://desktop.docker.com/win/main/$Architecture/Docker%20Desktop%20Installer.exe" -OutFile $installer
     } catch {
       Stop-Bootstrap "Docker Desktop could not be downloaded: $($_.Exception.Message)"
     }
@@ -354,17 +352,24 @@ function Connect-Kit {
   }
 
   if ($ImageDigest -notmatch '^sha256:[0-9a-f]{64}$') { Stop-Bootstrap 'this bootstrap has not been published with an immutable image digest' }
-  if ($env:OS -ne 'Windows_NT') { Stop-Bootstrap 'this bootstrap is for Windows 11; run connect-linux.sh on Linux and macOS' }
+  if ($env:OS -ne 'Windows_NT') { Stop-Bootstrap 'this bootstrap is for Windows; run connect-linux.sh on Linux and macOS' }
+  $processor = [int]@(Get-CimInstance -ClassName Win32_Processor)[0].Architecture
+  $Architecture = @{ 9 = 'amd64'; 12 = 'arm64' }[$processor]
+  if (-not $Architecture) {
+    $described = @{ 0 = 'x86'; 5 = 'ARM' }[$processor]
+    if (-not $described) { $described = "architecture $processor" }
+    Stop-Bootstrap "unsupported Windows architecture $described"
+  }
   if (-not [Environment]::Is64BitProcess) { Stop-Bootstrap 'this is a 32-bit PowerShell; run this bootstrap from the 64-bit Windows PowerShell' }
   $system = Get-CimInstance -ClassName Win32_OperatingSystem
-  if ([int]$system.ProductType -ne 1) { Stop-Bootstrap "$($system.Caption) is a Windows Server edition; this bootstrap supports Windows 11 on amd64" }
-  if ([int]$system.BuildNumber -lt 22000) { Stop-Bootstrap "$($system.Caption) is not Windows 11; this bootstrap supports Windows 11 on amd64" }
-  if ([int]$system.BuildNumber -lt $MinimumBuild) { Stop-Bootstrap "Docker Desktop needs Windows 11 23H2 (build $MinimumBuild) or later, not build $($system.BuildNumber); update Windows, then rerun this bootstrap" }
-  $processor = [int]@(Get-CimInstance -ClassName Win32_Processor)[0].Architecture
-  if ($processor -ne 9) {
-    $described = @{ 0 = 'x86'; 5 = 'ARM'; 12 = 'ARM64' }[$processor]
-    if (-not $described) { $described = "architecture $processor" }
-    Stop-Bootstrap "Windows on $described is not supported; this bootstrap supports Windows 11 on amd64"
+  if (-not $Forwarding -and ([int]$system.ProductType -ne 1 -or [int]$system.BuildNumber -lt 22000 -or $Architecture -ne 'amd64')) {
+    $found = $system.Caption
+    $contract = 'Windows 11'
+    if ($Architecture -ne 'amd64') {
+      $found += " on $Architecture"
+      $contract += ' on amd64'
+    }
+    Write-Host "Warning: $found is outdated; update to $contract."
   }
   if ($WorkspaceSelected -and $Workspace -notmatch '^[A-Za-z]:\\') { Stop-Bootstrap 'workspace root must be an absolute path' }
 
@@ -372,10 +377,11 @@ function Connect-Kit {
   if (-not $docker.Platform.StartsWith('linux/')) { Stop-Bootstrap "Docker runs $($docker.Platform.Split('/')[0]) containers; switch Docker Desktop to Linux containers, then rerun this bootstrap" }
   if ($docker.System -ne 'Docker Desktop') { Stop-Bootstrap "Docker answers from $($docker.System), not Docker Desktop; stop that engine or switch Docker to Docker Desktop, then rerun this bootstrap" }
   if ($docker.Kernel -notlike '*WSL2*') { Stop-Bootstrap "Docker Desktop does not use its WSL 2 engine; turn on Use the WSL 2 based engine in its settings, then rerun this bootstrap" }
-  if ($docker.Platform -ne 'linux/x86_64' -and $docker.Platform -ne 'linux/amd64') { Stop-Bootstrap "host linux/amd64 does not match Docker Desktop $($docker.Platform)" }
+  $Platform = @{ 'linux/x86_64' = 'linux/amd64'; 'linux/amd64' = 'linux/amd64'; 'linux/aarch64' = 'linux/arm64'; 'linux/arm64' = 'linux/arm64' }[$docker.Platform]
+  if (-not $Platform) { Stop-Bootstrap "unsupported Docker Desktop platform $($docker.Platform)" }
   $Image = Get-KitImage $House
   if ($HouseSelected -and (Invoke-Native docker @('volume', 'inspect', $KitHome)).Status -eq 0) {
-    if ((Invoke-Native docker @('image', 'inspect', '--format', '{{.Id}}', $Image)).Status -ne 0) { Invoke-Docker pull --quiet --platform linux/amd64 $Image | Out-Null }
+    if ((Invoke-Native docker @('image', 'inspect', '--format', '{{.Id}}', $Image)).Status -ne 0) { Invoke-Docker pull --quiet --platform $Platform $Image | Out-Null }
     $held = Read-Enrolment
     if ($held.ContainsKey('house') -and $held['house'] -cne $House) {
       $key = ([uri]$House).Authority.Replace(':', '-')
@@ -394,7 +400,7 @@ function Connect-Kit {
     }
   } else {
     Invoke-Docker volume create $KitHome | Out-Null
-    if ((Invoke-Native docker @('image', 'inspect', '--format', '{{.Id}}', $Image)).Status -ne 0) { Invoke-Docker pull --quiet --platform linux/amd64 $Image | Out-Null }
+    if ((Invoke-Native docker @('image', 'inspect', '--format', '{{.Id}}', $Image)).Status -ne 0) { Invoke-Docker pull --quiet --platform $Platform $Image | Out-Null }
   }
   if (-not $Workspace) { $Workspace = Join-Path $env:USERPROFILE 'AgentsHouse' }
 

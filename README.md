@@ -13,14 +13,14 @@ pass `--workspace <path>`.
 
 Add `--container` to run Kit in one Docker container instead, with your
 workspace mounted at `/agents/house`; your Agents then reach only that
-workspace. On Windows 11 the container is the one choice. Append a `kit` or `house` command to the container's options to run it in that container.
+workspace. On Windows the container is the one choice. Append a `kit` or `house` command to the container's options to run it in that container.
 Running the command for the other choice on a connected computer asks you to
 confirm, then replaces its Environment, whose Agents end, with a new one. Running it with a different `HOUSE_KIT_HOME`
 from the running Kit process asks you to confirm before it replaces that process, and leaves the earlier Kit home as it was.
 
-On your own Linux server, run the Linux command with `--linux` to
-install Kit natively, with its workspace at `/agents/house`; `kit` and
-`house` are then on the server's `PATH`.
+On your own Linux server, run the Linux command with `--linux` to install Kit natively, with its workspace at `/agents/house` and a missing `ca-certificates`, `curl` or `git` installed through apt; `kit` and `house` are then on the server's `PATH`.
+
+Kit is built for macOS 27 on Apple silicon, Ubuntu 26.04 LTS on amd64 and Windows 11 on amd64. On another release, distribution or architecture the command prints one warning line, such as `Warning: macOS 26.7.1 is outdated; update to macOS 27.`, and installs anyway. It refuses only an architecture other than amd64 and arm64, and a native install on a Linux without glibc, where `--container` still runs Kit. On a Linux without systemd it installs and connects Kit but starts nothing: run the `kit resident` command it prints under your own service manager, restarting it whenever it ends with a failure. `--container` installs Docker Engine on Ubuntu and Debian; another Linux needs a working Docker Engine first.
 
 Kit runs the agent CLIs your login shell finds and installs a missing one
 through that CLI's own installer. A CLI older than the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version, that oldest release and the CLI's own update command, such as `claude update`. Running the command again offers to update

@@ -1,19 +1,23 @@
 import { access, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, type Host, type Platform } from './host.ts';
+import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, UBUNTU_26_04, type Host, type Platform } from './host.ts';
 import { temporaryHome } from './kit.ts';
 
-const UNSUPPORTED = 'it installs without that guarantee.';
 const LINK_LINE = `Open this link and confirm: ${LOGIN_LINK}`;
 const UID = process.getuid!();
+const DEBIAN_12 = 'ID=debian\nVERSION_ID="12"\nVERSION_CODENAME=bookworm\nPRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\n';
+const FEDORA_41 = 'ID=fedora\nVERSION_ID=41\nPRETTY_NAME="Fedora Linux 41 (Workstation Edition)"\n';
+const UBUNTU_24_04 = 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\nPRETTY_NAME="Ubuntu 24.04.3 LTS"\n';
+const UBUNTU_25_10 = 'ID=ubuntu\nVERSION_ID="25.10"\nVERSION_CODENAME=questing\nUBUNTU_CODENAME=questing\nPRETTY_NAME="Ubuntu 25.10"\n';
+const ALPINE = 'ID=alpine\nVERSION_ID=3.22.2\nPRETTY_NAME="Alpine Linux v3.22"\n';
 
 function acts(host: Host): string[] {
   return [...host.calls('systemctl'), ...host.calls('launchctl')].filter((call) => !/^((--user )?(is-(active|enabled)|show)|print) /.test(call));
 }
 
 function notices(stdout: string): string[] {
-  return stdout.split('\n').filter((line) => line.endsWith(UNSUPPORTED));
+  return stdout.split('\n').filter((line) => line.startsWith('Warning: '));
 }
 
 function logins(host: Host, placement: readonly string[]): string[] {
@@ -357,30 +361,64 @@ it('asks the Kit for no restart when the one CLI update it tried failed', async 
   await expect(access(join(host.home, '.house-kit', 'restart'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it.each([
-  ['a Linux host outside the native contract', { system: 'Linux', machine: 'aarch64' }, 'Ubuntu 26.04 LTS on amd64, not Debian GNU/Linux 12 (bookworm) on arm64', 'linux-arm64'],
-  ['a Linux host on another architecture Node.js is built for', { system: 'Linux', machine: 'ppc64le' }, 'Ubuntu 26.04 LTS on amd64, not Debian GNU/Linux 12 (bookworm) on ppc64le', 'linux-ppc64le'],
-] as const)('prints exactly one unsupported notice on %s and installs', async (_name, platform, notice, node) => {
-  const host = await fakeHost(platform);
+const OFF_CONTRACT = [
+  ['Debian', DEBIAN_12, 'Debian GNU/Linux 12 (bookworm)'],
+  ['Fedora', FEDORA_41, 'Fedora Linux 41 (Workstation Edition)'],
+  ['an older Ubuntu', UBUNTU_24_04, 'Ubuntu 24.04.3 LTS'],
+] as const;
+
+const NATIVE_ROUTES = [
+  ['the native desktop placement', false, []],
+  ['native-host mode', true, ['--linux']],
+] as const;
+
+it.each(OFF_CONTRACT.flatMap(([host, osRelease, found]) => NATIVE_ROUTES.map(([route, server, placement]) => [host, route, osRelease, found, server, placement] as const)))(
+  'warns in one line on %s in %s naming the host and the contract, then installs Kit and enrols',
+  async (_host, _route, osRelease, found, server, placement) => {
+    const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server, osRelease, systemd: true });
+
+    const ran = host.run([...placement]);
+
+    expect(ran).toMatchObject({ status: 0, stderr: '' });
+    expect(notices(ran.stdout)).toEqual([`Warning: ${found} is outdated; update to Ubuntu 26.04 LTS.`]);
+    expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
+    expect(host.calls('curl')).toEqual([expect.stringContaining('/kit-installer/node-v24.22.1-linux-x64.tar.gz'), expect.stringContaining('/kit-installer/kit-')]);
+    expect(host.calls('kit')).toEqual([expect.stringMatching(/^login /)]);
+  },
+);
+
+it.each(NATIVE_ROUTES)('says nothing about the system on Ubuntu 26.04 LTS on amd64 in %s', async (_route, server, placement) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server, osRelease: UBUNTU_26_04, systemd: true });
+
+  const ran = host.run([...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(notices(ran.stdout)).toEqual([]);
+});
+
+it('warns in one line on Ubuntu 26.04 LTS on arm64, naming both architectures, and installs the arm64 Node.js', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'aarch64' });
 
   const ran = host.run();
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(notices(ran.stdout)).toEqual([`Kit supports ${notice}; ${UNSUPPORTED}`]);
-  expect(host.calls('curl')).toEqual([expect.stringContaining(`/kit-installer/node-v24.22.1-${node}.tar.gz`), expect.stringContaining('/kit-installer/kit-')]);
+  expect(notices(ran.stdout)).toEqual(['Warning: Ubuntu 26.04 LTS on arm64 is outdated; update to Ubuntu 26.04 LTS on amd64.']);
+  expect(host.calls('curl')).toEqual([expect.stringContaining('/kit-installer/node-v24.22.1-linux-arm64.tar.gz'), expect.stringContaining('/kit-installer/kit-')]);
   await installed(host);
 });
 
-it('warns in one line on a macOS older than the supported release and installs', async () => {
-  const host = await fakeHost({ system: 'Darwin', machine: 'arm64', macos: '26.7.1' });
+it.each([
+  ['an older macOS on Apple silicon', { macos: '26.7.1', appleSilicon: true }, 'Warning: macOS 26.7.1 is outdated; update to macOS 27.', 'darwin-arm64'],
+  ['an Intel Mac', { appleSilicon: false }, 'Warning: macOS 27.0.1 on an Intel chip is outdated; update to macOS 27 on Apple silicon.', 'darwin-x64'],
+  ['an older Intel Mac', { macos: '15.7.1', appleSilicon: false }, 'Warning: macOS 15.7.1 on an Intel chip is outdated; update to macOS 27 on Apple silicon.', 'darwin-x64'],
+] as const)('warns in one line on %s and installs', async (_name, mac, notice, node) => {
+  const host = await fakeHost({ system: 'Darwin', machine: mac.appleSilicon ? 'arm64' : 'x86_64', ...mac });
 
   const ran = host.run();
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout.split('\n').filter((line) => /macOS|guarantee/.test(line))).toEqual([
-    'Warning: macOS 26.7.1 is outdated; update to macOS 27.',
-  ]);
-  expect(host.calls('curl')).toEqual([expect.stringContaining('/kit-installer/node-v24.22.1-darwin-arm64.tar.gz'), expect.stringContaining('/kit-installer/kit-')]);
+  expect(notices(ran.stdout)).toEqual([notice]);
+  expect(host.calls('curl')).toEqual([expect.stringContaining(`/kit-installer/node-v24.22.1-${node}.tar.gz`), expect.stringContaining('/kit-installer/kit-')]);
   await installed(host);
 });
 
@@ -390,19 +428,139 @@ it('says nothing about the system on the supported macOS release on Apple silico
   const ran = host.run();
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout).not.toMatch(/macOS|guarantee|Apple silicon/);
+  expect(ran.stdout).not.toMatch(/Warning|macOS|Apple silicon/);
 });
 
-it('warns once on an Intel Mac and installs', async () => {
-  const host = await fakeHost({ system: 'Darwin', machine: 'x86_64', appleSilicon: false });
+it.each([
+  ['the native desktop placement', false, []],
+  ['the container', false, ['--container']],
+  ['native-host mode', true, ['--linux']],
+] as const)('refuses a ppc64le host in %s, naming its architecture, before touching the host', async (_name, server, placement) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'ppc64le', server });
 
-  const ran = host.run();
+  expect(host.run([...placement])).toEqual({ status: 1, stdout: '', stderr: 'kit_bootstrap_refused: unsupported Linux architecture ppc64le\n' });
+  expect([...host.calls('sudo'), ...host.calls('docker'), ...host.calls('curl')]).toEqual([]);
+  await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each([
+  ['the native desktop placement', false, [], 'rerun this bootstrap with --container to run Kit in a container'],
+  ['native-host mode', true, ['--linux'], 'rerun this bootstrap with --container in place of --linux to run Kit in a container'],
+] as const)('refuses %s on a Linux without glibc, naming the container, before touching the host', async (_name, server, placement, rerun) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server, osRelease: ALPINE, glibc: false });
+
+  expect(host.run([...placement])).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: `kit_bootstrap_refused: this Linux has no glibc, so Kit cannot run natively on it; ${rerun}\n`,
+  });
+  expect([...host.calls('sudo'), ...host.calls('docker'), ...host.calls('curl'), ...host.calls('kit')]).toEqual([]);
+});
+
+it('installs the container on a Linux without glibc', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', osRelease: ALPINE, glibc: false });
+
+  const ran = host.run(['--container']);
+
+  expect(ran).toEqual({
+    status: 0,
+    stdout: `Warning: Alpine Linux v3.22 is outdated; update to Ubuntu 26.04 LTS.\n${LINK_LINE}\nKit connected for Environment environment-one.\n`,
+    stderr: '',
+  });
+  expect(host.calls('docker').filter((call) => call.startsWith('run -d '))).toHaveLength(1);
+});
+
+it.each([
+  ['Debian', { system: 'Linux', machine: 'x86_64', osRelease: DEBIAN_12 }, 'Warning: Debian GNU/Linux 12 (bookworm) is outdated; update to Ubuntu 26.04 LTS.'],
+  ['an Intel Mac', { system: 'Darwin', machine: 'x86_64', appleSilicon: false }, 'Warning: macOS 27.0.1 on an Intel chip is outdated; update to macOS 27 on Apple silicon.'],
+] as const)('warns in one line on %s when it installs the container, and not before a command forwarded into it', async (_name, platform, notice) => {
+  const host = await fakeHost(platform);
+
+  const ran = host.run(['--container']);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout.split('\n').filter((line) => line.startsWith('Warning:'))).toEqual([
-    'Warning: Kit supports Apple silicon, not an Intel chip.',
+  expect(notices(ran.stdout)).toEqual([notice]);
+  const forwarded = host.run(['--container', 'kit', 'logout', '--help']);
+  expect(forwarded).toMatchObject({ status: 0, stderr: '' });
+  expect(notices(forwarded.stdout)).toEqual([]);
+});
+
+it.each(NATIVE_ROUTES)(
+  'installs Kit and enrols the Environment on a Linux without systemd in %s, starts nothing and names kit resident',
+  async (_name, server, placement) => {
+    const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server, systemd: false });
+
+    const ran = host.run([...placement]);
+
+    expect(ran).toMatchObject({ status: 0, stderr: '' });
+    expect(host.calls('kit')).toEqual([expect.stringMatching(/^login /)]);
+    expect(JSON.parse(await readFile(join(host.home, '.house-kit', 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one' });
+    expect(acts(host)).toEqual([]);
+    const lines = ran.stdout.split('\n');
+    expect(lines.at(-1)).toBe('');
+    const named = /^Kit (\S+) is installed for Environment environment-one, but no systemd runs on this host to start it; run (.+ resident) under your own service manager, restarting it whenever it ends with a failure\.$/.exec(lines.at(-2)!);
+    expect(named?.[1]).toBe(PUBLISHED_VERSION);
+    await expect(access(join(host.home, '.config', 'systemd', 'user', 'house-kit.service'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await host.forget();
+    expect(host.shell(named![2]!)).toMatchObject({ status: 0, stderr: '' });
+    const workspace = server ? '\\S+/server/workspace' : `${host.home}/AgentsHouse`;
+    expect(host.calls('kit')).toEqual([expect.stringMatching(new RegExp(`^resident HOUSE_KIT_HOME=${host.home}/\\.house-kit HOUSE_KIT_WORKSPACE=${workspace}$`))]);
+  },
+);
+
+it('installs a missing git through apt in native-host mode, then installs Kit', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true, absent: ['git'] });
+
+  const ran = host.run(['--linux']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout).toContain('Installing git with apt; sudo may ask for your password.\n');
+  expect(host.calls('apt-get')).toEqual(['update -qq', 'install -y -qq git']);
+  expect(host.calls('kit')).toEqual([expect.stringMatching(/^login /)]);
+});
+
+it('stops native-host mode on a host without apt, naming the missing git, before installing Kit', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true, osRelease: FEDORA_41, absent: ['git', 'apt-get'] });
+
+  const ran = host.run(['--linux']);
+
+  expect(ran).toMatchObject({ status: 1, stderr: 'kit_bootstrap_refused: this host has no apt to install git; install git, then rerun this bootstrap\n' });
+  expect([...host.calls('curl'), ...host.calls('kit')]).toEqual([]);
+});
+
+it.each([
+  ['Debian', DEBIAN_12, 'debian', 'bookworm', 'Debian GNU/Linux 12 (bookworm)'],
+  ['a non-LTS Ubuntu release', UBUNTU_25_10, 'ubuntu', 'questing', 'Ubuntu 25.10'],
+] as const)("installs Docker Engine from Docker's apt repository on %s, then the container", async (_name, osRelease, distribution, suite, described) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', osRelease });
+  await host.mark('docker-down');
+
+  const ran = host.run(['--container']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout).toContain(`Installing Docker Engine from Docker's apt repository for ${described}; sudo may ask for your password.\n`);
+  expect(host.calls('sudo')).toEqual(
+    expect.arrayContaining([
+      `curl -fsSL https://download.docker.com/linux/${distribution}/gpg -o /etc/apt/keyrings/docker.asc`,
+      'apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin',
+    ]),
+  );
+  expect(host.calls('tee')).toEqual([
+    `Types: deb URIs: https://download.docker.com/linux/${distribution} Suites: ${suite} Components: stable Architectures: amd64 Signed-By: /etc/apt/keyrings/docker.asc `,
   ]);
-  await installed(host);
+  expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
+  expect(host.calls('docker').filter((call) => call.startsWith('run -d '))).toHaveLength(1);
+});
+
+it('stops the container route on another distribution without Docker Engine, naming what it needs', async () => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', osRelease: FEDORA_41, absent: ['docker'] });
+
+  expect(host.run(['--container'])).toEqual({
+    status: 1,
+    stdout: 'Warning: Fedora Linux 41 (Workstation Edition) is outdated; update to Ubuntu 26.04 LTS.\n',
+    stderr: 'kit_bootstrap_refused: Docker Engine is not installed on Fedora Linux 41 (Workstation Edition); install a working Docker Engine, then rerun this bootstrap\n',
+  });
+  expect([...host.calls('sudo'), ...host.calls('apt-get')]).toEqual([]);
 });
 
 it('says the Kit updated when a rerun installs a newer release', async () => {
@@ -488,23 +646,6 @@ it('refuses a stored credential House refuses, in a terminal too, and offers no 
   expect(host.calls('kit')).toEqual([]);
 });
 
-it('refuses a Linux architecture Node.js is not built for before installing anything', async () => {
-  const host = await fakeHost({ system: 'Linux', machine: 'armv7l' });
-
-  expect(host.run()).toEqual({ status: 1, stdout: '', stderr: 'kit_bootstrap_refused: unsupported Linux architecture armv7l\n' });
-  await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
-});
-
-it.each([['--container'], ['--linux']])(
-  'refuses %s on a Linux architecture only the native desktop placement takes, before touching the host',
-  async (choice) => {
-    const host = await fakeHost({ system: 'Linux', machine: 's390x' });
-
-    expect(host.run([choice])).toEqual({ status: 1, stdout: '', stderr: 'kit_bootstrap_refused: unsupported Linux architecture s390x\n' });
-    expect([...host.calls('sudo'), ...host.calls('docker'), ...host.calls('curl')]).toEqual([]);
-  },
-);
-
 it("installs the container from the Building's registry only with the container choice, handing it the computer's certificate authorities", async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   const image = `agents.house/kit@sha256:${'a'.repeat(64)}`;
@@ -543,7 +684,11 @@ it('installs the container on macOS through Docker Desktop, publishing no port, 
 
   const ran = host.run(['--container']);
 
-  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nKit connected for Environment environment-one.\n`, stderr: '' });
+  expect(ran).toEqual({
+    status: 0,
+    stdout: `Warning: macOS 27.0.1 on an Intel chip is outdated; update to macOS 27 on Apple silicon.\n${LINK_LINE}\nKit connected for Environment environment-one.\n`,
+    stderr: '',
+  });
   expect(host.calls('docker').filter((call) => call.endsWith(' login'))).toEqual([
     `run --rm --env NODE_EXTRA_CA_CERTS=/kit-home/certificates.pem --user ${uid} ${mounts} ${image} login`,
   ]);
@@ -684,7 +829,7 @@ it('sets the Rooms of the connected Environment again through kit login when a r
   const ran = host.run(['--no-private', '--linux']);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(ran.stdout.split('\n').slice(-3)).toEqual([expect.stringContaining('no service manager runs on this host'), LINK_LINE, '']);
+  expect(ran.stdout.split('\n').slice(-3)).toEqual([expect.stringContaining('no systemd runs on this host'), LINK_LINE, '']);
   expect(host.calls('kit')).toEqual([expect.stringMatching(/^login --no-private /)]);
 });
 
