@@ -9,11 +9,11 @@ Run `sh -c 'kit=$(curl -fsSL "$0") || { echo "Kit could not be downloaded; run t
 or `& { try { $kit = irm agents.house/kit.ps1 } catch { throw 'Kit could not be downloaded; run this command again.' }; & ([scriptblock]::Create($kit)) @args }` on Windows, which run nothing of a failed download, and again to update; options follow `agents.house/kit`.
 On macOS and Linux it installs Kit natively under your own account, without an admin password, as a service that runs
 while you are logged in. `kit` and `house` are then on your login shell's `PATH`, and your workspace is `~/AgentsHouse` unless you
-pass `--workspace <path>`.
+pass `--workspace <path>`. Every run places the Kit release your Building serves, with the Node.js it runs on, in a directory of its own beside the one that runs, then starts it; the earlier one stays until the next release.
 
-Add `--container` to run Kit in one Docker container instead, with your
-workspace mounted at `/agents/house`; your Agents then reach only that
-workspace. On Windows the container is the one choice. Append a `kit` or `house` command to the container's options to run it in that container.
+Add `--container` to run Kit in one Docker container instead, with your workspace mounted at `/agents/house`; your Agents then reach only that
+workspace. The container's image holds no Kit release and no Node.js: every run places them in Kit home's `kit` folder, which a container created again keeps. On Windows,
+Kit home is the Docker volume `house-kit-home` and the container is the one choice. Append a `kit` or `house` command to the container's options to run it in that container.
 Running the command for the other choice on a connected computer asks you to
 confirm, then replaces its Environment, whose Agents end, with a new one. Running it with a different `HOUSE_KIT_HOME`
 from the running Kit process asks you to confirm before it replaces that process, and leaves the earlier Kit home as it was.

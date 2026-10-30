@@ -55,13 +55,14 @@ SERVER_PREFIX=/opt/house-kit
 DESKTOP_PREFIX="$HOME/.local/share/house-kit"
 DESKTOP_BIN="$HOME/.local/bin"
 NATIVE_PREFIX="$SERVER_PREFIX"
-NATIVE_PACKAGE="$SERVER_PREFIX/lib/node_modules/@agentshouse/kit/dist"
-IMAGE_PACKAGE=/usr/local/lib/node_modules/@agentshouse/kit/dist
+CONTAINED=/kit-home/kit
+PACKAGE=lib/node_modules/@agentshouse/kit/dist
+PLACE=''
+PLACED=0
+TRUST=()
 DIRECT=(env)
 [[ -z "${HOUSE_KIT_RELAY:-}" ]] || DIRECT=(env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy)
-PLACING=(elevated)
-PLACING_OWNER=root:root
-PLACING_NOTE='; sudo may ask for your password'
+LINKING=(elevated)
 NATIVE_BIN=/usr/local/bin
 NATIVE_SERVICE=house-kit.service
 NATIVE_UNIT=/etc/systemd/system/house-kit.service
@@ -75,7 +76,6 @@ OTHER_HOME=0
 SECOND=0
 OTHER_HOUSE=''
 CERTIFICATES=/kit-home/certificates.pem
-RELEASE="@agentshouse/kit@$VERSION node@$NODE_VERSION"
 
 refuse() {
   printf 'kit_bootstrap_refused: %s\n' "$1" >&2
@@ -106,11 +106,11 @@ registry() {
 download() {
   local most=${5:-} seconds
   if [[ -z "$most" ]]; then
-    "${DIRECT[@]}" curl -fsSL -o "$4" "$(served_from)/kit-installer/$2" || refuse "$1 could not be downloaded from $HOUSE"
+    "${DIRECT[@]}" curl ${TRUST[@]+"${TRUST[@]}"} -fsSL -o "$4" "$(served_from)/kit-installer/$2" || refuse "$1 could not be downloaded from $HOUSE"
   else
     seconds=$(((most + 99999) / 100000))
     # A download with a pinned size arrives at a hundred kilobytes a second or ends, so a stalled Building cannot hold the install open.
-    (trap '' XFSZ && ulimit -f $(((most + 1023) / 1024)) && exec "${DIRECT[@]}" curl -fsSL --max-time "$seconds" -o "$4" "$(served_from)/kit-installer/$2") || {
+    (trap '' XFSZ && ulimit -f $(((most + 1023) / 1024)) && exec "${DIRECT[@]}" curl ${TRUST[@]+"${TRUST[@]}"} -fsSL --max-time "$seconds" -o "$4" "$(served_from)/kit-installer/$2") || {
       local failed=$?
       (($(wc -c 2>/dev/null < "$4" || echo 0) < most)) || refuse "the $1 download is larger than its pinned $most bytes"
       ((failed != 28)) || refuse "the $1 download did not arrive within $seconds seconds"
@@ -361,38 +361,61 @@ establish_native_packages() {
   elevated "${DIRECT[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${ABSENT[@]}" >/dev/null || refuse "apt could not install $absent"
 }
 
-stage_native_kit() {
-  umask 022
-  NATIVE_STAGE=$(mktemp -d) || refuse 'no temporary directory for the Kit package'
-  trap 'rm -rf "$NATIVE_STAGE"' EXIT
-  printf 'Downloading Node.js %s and Kit %s from %s.\n' "$NODE_VERSION" "$VERSION" "$HOUSE"
-  download Node.js "node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz" "$NODE_SHA256" "$NATIVE_STAGE/node.tar.gz" "$NODE_BYTES"
-  download Kit "kit-$VERSION.tar.gz" "$KIT_SHA256" "$NATIVE_STAGE/kit.tar.gz"
-  mkdir "$NATIVE_STAGE/kit"
-  tar -xzf "$NATIVE_STAGE/node.tar.gz" -C "$NATIVE_STAGE/kit" --strip-components=1 --no-same-owner || refuse 'Node.js could not be unpacked'
-  tar -xzf "$NATIVE_STAGE/kit.tar.gz" -C "$NATIVE_STAGE/kit" --no-same-owner || refuse "Kit $VERSION could not be unpacked"
-  printf '%s\n' "$RELEASE" > "$NATIVE_STAGE/kit/release"
-  chmod 0755 "$NATIVE_STAGE/kit"
+trust_extra_authorities() {
+  local bundle
+  TRUST=()
+  [[ -s "${NODE_EXTRA_CA_CERTS:-}" ]] || return 0
+  for bundle in "${CERTIFICATE_BUNDLES[@]}"; do
+    [[ -f "$bundle" ]] || continue
+    cat "$bundle" "$NODE_EXTRA_CA_CERTS" > "$1/authorities.pem" || refuse "$1/authorities.pem could not be written"
+    TRUST=(--cacert "$1/authorities.pem")
+    return 0
+  done
 }
 
-place_native_kit() {
-  local command
-  printf 'Installing Kit in %s%s.\n' "$NATIVE_PREFIX" "$PLACING_NOTE"
-  "${PLACING[@]}" mkdir -p "${NATIVE_PREFIX%/*}" "$NATIVE_BIN" && "${PLACING[@]}" rm -rf "$NATIVE_PREFIX.new" "$NATIVE_PREFIX.old" &&
-    "${PLACING[@]}" mv "$NATIVE_STAGE/kit" "$NATIVE_PREFIX.new" && "${PLACING[@]}" chown -R "$PLACING_OWNER" "$NATIVE_PREFIX.new" ||
-    refuse "Kit could not be installed in $NATIVE_PREFIX"
-  if [[ -e "$NATIVE_PREFIX" ]]; then
-    "${PLACING[@]}" mv "$NATIVE_PREFIX" "$NATIVE_PREFIX.old" || refuse "Kit could not be installed in $NATIVE_PREFIX"
+place_release() {
+  local prefix=$1 current='' mask command placed
+  PLACED=0
+  [[ ! -f "$prefix/current" ]] || current=$(cat "$prefix/current")
+  [[ "$current" != "$VERSION" ]] || return 0
+  mask=$(umask)
+  umask 022
+  mkdir -p "$prefix/releases" "$prefix/bin" || refuse "Kit could not be placed in $prefix"
+  if [[ ! -d "$prefix/releases/$VERSION" ]]; then
+    rm -rf "$prefix/placing" && mkdir -p "$prefix/placing/release" || refuse "Kit could not be placed in $prefix"
+    trust_extra_authorities "$prefix/placing"
+    printf 'Downloading Node.js %s and Kit %s from %s.\n' "$NODE_VERSION" "$VERSION" "$HOUSE"
+    download Node.js "node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz" "$NODE_SHA256" "$prefix/placing/node.tar.gz" "$NODE_BYTES"
+    download Kit "kit-$VERSION.tar.gz" "$KIT_SHA256" "$prefix/placing/kit.tar.gz"
+    tar -xzf "$prefix/placing/node.tar.gz" -C "$prefix/placing/release" --strip-components=1 --no-same-owner || refuse 'Node.js could not be unpacked'
+    tar -xzf "$prefix/placing/kit.tar.gz" -C "$prefix/placing/release" --no-same-owner || refuse "Kit $VERSION could not be unpacked"
+    mv "$prefix/placing/release" "$prefix/releases/$VERSION" && rm -rf "$prefix/placing" || refuse "Kit could not be placed in $prefix"
   fi
-  if ! "${PLACING[@]}" mv "$NATIVE_PREFIX.new" "$NATIVE_PREFIX"; then
-    [[ ! -e "$NATIVE_PREFIX.old" ]] || "${PLACING[@]}" mv "$NATIVE_PREFIX.old" "$NATIVE_PREFIX"
-    refuse "Kit could not be installed in $NATIVE_PREFIX"
-  fi
-  "${PLACING[@]}" rm -rf "$NATIVE_PREFIX.old"
   for command in kit house; do
-    printf '#!/bin/sh\nexport NODE_USE_SYSTEM_CA=1\nPATH="%s/bin:$PATH" exec "%s/bin/%s" "$@"\n' "$NATIVE_PREFIX" "$NATIVE_PREFIX" "$command" |
-      "${PLACING[@]}" tee "$NATIVE_BIN/$command" >/dev/null && "${PLACING[@]}" chmod 0755 "$NATIVE_BIN/$command" ||
-      refuse "$NATIVE_BIN/$command could not be written"
+    printf '#!/bin/sh\nprefix=${0%%/bin/*}\nread -r release < "$prefix/current"\nexport NODE_USE_SYSTEM_CA=1\nPATH="$prefix/releases/$release/bin:$PATH" exec "$prefix/releases/$release/bin/%s" "$@"\n' "$command" > "$prefix/bin/$command.new" &&
+      chmod 0755 "$prefix/bin/$command.new" && mv -f "$prefix/bin/$command.new" "$prefix/bin/$command" || refuse "$prefix/bin/$command could not be written"
+  done
+  printf '%s\n' "$VERSION" > "$prefix/current.new" && mv -f "$prefix/current.new" "$prefix/current" || refuse "Kit could not be placed in $prefix"
+  for placed in "$prefix/releases"/*; do
+    [[ "${placed##*/}" == "$VERSION" || "${placed##*/}" == "$current" ]] || rm -rf "$placed"
+  done
+  umask "$mask"
+  PLACED=1
+}
+
+own_prefix() {
+  [[ ! -O "$NATIVE_PREFIX" ]] || return 0
+  printf 'Creating %s for Kit; sudo may ask for your password.\n' "$NATIVE_PREFIX"
+  stop_native_service
+  elevated rm -rf "$NATIVE_PREFIX" && elevated install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$NATIVE_PREFIX" || refuse "$NATIVE_PREFIX could not be created"
+}
+
+link_commands() {
+  local command
+  "${LINKING[@]}" mkdir -p "$NATIVE_BIN" || refuse "$NATIVE_BIN could not be created"
+  for command in kit house; do
+    printf '#!/bin/sh\nexec "%s/bin/%s" "$@"\n' "$NATIVE_PREFIX" "$command" | "${LINKING[@]}" tee "$NATIVE_BIN/$command" >/dev/null &&
+      "${LINKING[@]}" chmod 0755 "$NATIVE_BIN/$command" || refuse "$NATIVE_BIN/$command could not be written"
   done
 }
 
@@ -401,7 +424,7 @@ enroll_kit() {
   IFS= read -rs -p 'Kit credential: ' credential || true
   if [[ -t 0 ]]; then printf '\n' >&2; fi
   [[ -n "$credential" ]] || refuse 'no Kit credential on standard input'
-  printf '%s' "$credential" | HOUSE_KIT_HOME="$KIT_HOME" "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/enrol-main.js" "$HOUSE" "$ENROLL" ||
+  printf '%s' "$credential" | HOUSE_KIT_HOME="$KIT_HOME" "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/enrol-main.js" "$HOUSE" "$ENROLL" ||
     refuse 'the Kit credential could not be stored'
 }
 
@@ -465,10 +488,12 @@ connect_native() {
   if ((ENROLL_SELECTED)) && [[ -f "$KIT_HOME/credential.json" && "$(enrolled environment)" != "$ENROLL" ]]; then
     refuse "this host is enrolled for Environment $(enrolled environment), not $ENROLL"
   fi
-  if [[ "$(cat "$NATIVE_PREFIX/release" 2>/dev/null || true)" != "$RELEASE" ]]; then
-    stage_native_kit
+  own_prefix
+  place_release "$NATIVE_PREFIX"
+  RELEASE_DIR="$NATIVE_PREFIX/releases/$VERSION"
+  if ((PLACED)); then
+    link_commands
     stop_native_service
-    place_native_kit
   elif service_manager && systemctl is-active --quiet "$NATIVE_SERVICE"; then
     connected=running
   else
@@ -476,16 +501,16 @@ connect_native() {
   fi
   record_placement server
   if [[ -f "$KIT_HOME/credential.json" ]]; then
-    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+    check_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
   fi
-  configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
+  configure_kit "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/configure-main.js"
   LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
   if [[ -f "$KIT_HOME/credential.json" ]]; then
     ALREADY_CONNECTED=1
   elif ((ENROLL_SELECTED)); then
     connected=connected
     enroll_kit
-    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+    check_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
   else
     connected=connected
     login_arguments
@@ -643,7 +668,7 @@ start_desktop_service() {
 
 start_stopped_desktop() {
   local started
-  started=$("$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/service-main.js") || refuse 'the Kit service could not be started'
+  started=$("$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/service-main.js") || refuse 'the Kit service could not be started'
   [[ -n "$started" ]]
 }
 
@@ -740,34 +765,33 @@ remove_native() {
 connect_desktop() {
   local connected=running installed
   NATIVE_PREFIX="$DESKTOP_PREFIX"
-  NATIVE_PACKAGE="$DESKTOP_PREFIX/lib/node_modules/@agentshouse/kit/dist"
   NATIVE_BIN="$DESKTOP_BIN"
-  PLACING=(env)
-  PLACING_OWNER="$(id -u):$(id -g)"
-  PLACING_NOTE=''
+  LINKING=(env)
   RECONNECT="run $NATIVE_BIN/kit login"
   take_placement native
   keep_other_home
   notice_host
   remove_container
+  rm -rf "$KIT_HOME/kit" || refuse "the container's Kit release in $KIT_HOME/kit could not be removed"
   if ((WORKSPACE_SELECTED == 0)); then
     installed=$(installed_workspace)
     WORKSPACE=${installed:-$WORKSPACE}
   fi
   prepare_roots
   bind_house stop_loaded_desktop
-  if [[ "$(cat "$NATIVE_PREFIX/release" 2>/dev/null || true)" != "$RELEASE" ]]; then
+  place_release "$NATIVE_PREFIX"
+  RELEASE_DIR="$NATIVE_PREFIX/releases/$VERSION"
+  if ((PLACED)); then
     connected=updated
-    stage_native_kit
+    link_commands
     stop_loaded_desktop
-    place_native_kit
   fi
   add_path_line
   [[ -f "$KIT_HOME/credential.json" ]] || record_placement native
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_authority "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/authority-main.js"
+    check_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
   fi
-  configure_kit "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/configure-main.js"
+  configure_kit "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/configure-main.js"
   LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
   if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
     connected=connected
@@ -883,8 +907,13 @@ second_building() {
   ((WORKSPACE_SELECTED)) || WORKSPACE="$HOME/AgentsHouse-$key"
 }
 
+place_contained() {
+  [[ "$(cat "$KIT_HOME/kit/current" 2>/dev/null || true)" != "$VERSION" ]] || return 0
+  "${DOCKER_RUN[@]:0:2}" -i --entrypoint bash "${DOCKER_RUN[@]:2}" -s - --house "$HOUSE" --place "$CONTAINED" < "${BASH_SOURCE[0]}" || exit
+  PLACED=1
+}
+
 update_kit() {
-  docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null
   docker rm -f "$NAME" >/dev/null
   start_resident
   printf 'Kit updated.\n'
@@ -917,6 +946,50 @@ connect_kit() {
   record_placement container
   start_resident
   printf 'Kit connected for Environment %s.\n' "$(enrolled environment)"
+}
+
+read_host() {
+  [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$KIT_SHA256" =~ ^[0-9a-f]{64}$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
+    refuse 'this bootstrap has not been published with an immutable release'
+  case "$(uname -s)" in
+    Linux)
+      case "$(uname -m)" in
+        x86_64|amd64) ARCH=amd64 ;;
+        aarch64|arm64)
+          ARCH=arm64
+          NODE_PLATFORM=linux-arm64
+          NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
+          NODE_BYTES=58021129
+          ;;
+        *) refuse "unsupported Linux architecture $(uname -m)" ;;
+      esac
+      CHIP=$ARCH
+      ((CONTAINER)) || glibc || refuse "this Linux has no glibc, so Kit cannot run natively on it; $(in_container) to run Kit in a container"
+      ;;
+    Darwin)
+      ((NATIVE == 0)) || refuse "--linux runs only on Linux, not macOS"
+      MACOS=1
+      CONTRACT_CHIP='Apple silicon'
+      PATH="$PATH:$DOCKER_APP/Contents/Resources/bin"
+      RUNTIME='Docker Desktop'
+      OPENER=open
+      CHECKSUM=(shasum -a 256)
+      if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == 1 ]]; then
+        ARCH=arm64
+        CHIP='Apple silicon'
+        NODE_PLATFORM=darwin-arm64
+        NODE_SHA256=89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7
+        NODE_BYTES=53062778
+      else
+        ARCH=amd64
+        CHIP='an Intel chip'
+        NODE_PLATFORM=darwin-x64
+        NODE_SHA256=d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035
+        NODE_BYTES=54382566
+      fi
+      ;;
+    *) refuse "unsupported host $(uname -s); this bootstrap is for Linux and macOS" ;;
+  esac
 }
 
 while (($#)); do
@@ -970,6 +1043,11 @@ while (($#)); do
       CODE+=(--code "$2")
       shift 2
       ;;
+    --place)
+      (($# >= 2)) || refuse "$1 requires one value"
+      PLACE="$2"
+      shift 2
+      ;;
     --no-skills)
       NO_SKILLS=(--no-skills)
       shift
@@ -977,6 +1055,11 @@ while (($#)); do
     *) refuse "unknown argument $1" ;;
   esac
 done
+if [[ -n "$PLACE" ]]; then
+  read_host
+  place_release "$PLACE"
+  exit 0
+fi
 ((NATIVE == 0 || CONTAINER == 0)) || refuse '--linux and --container are two placements; choose one'
 ((ENROLL_SELECTED == 0 || NATIVE)) || refuse '--enroll enrolls a server; add --linux'
 ((FORWARDING == 0 || NATIVE == 0)) || refuse "--linux puts kit and house on this host's PATH; run $FORWARDED there directly"
@@ -992,47 +1075,7 @@ elif ((CONTAINER && FORWARDING && SECOND == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; t
 fi
 [[ "$WORKSPACE" == /* ]] || refuse 'workspace root must be an absolute path'
 
-[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$KIT_SHA256" =~ ^[0-9a-f]{64}$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
-  refuse 'this bootstrap has not been published with an immutable release'
-case "$(uname -s)" in
-  Linux)
-    case "$(uname -m)" in
-      x86_64|amd64) ARCH=amd64 ;;
-      aarch64|arm64)
-        ARCH=arm64
-        NODE_PLATFORM=linux-arm64
-        NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
-        NODE_BYTES=58021129
-        ;;
-      *) refuse "unsupported Linux architecture $(uname -m)" ;;
-    esac
-    CHIP=$ARCH
-    ((CONTAINER)) || glibc || refuse "this Linux has no glibc, so Kit cannot run natively on it; $(in_container) to run Kit in a container"
-    ;;
-  Darwin)
-    ((NATIVE == 0)) || refuse "--linux runs only on Linux, not macOS"
-    MACOS=1
-    CONTRACT_CHIP='Apple silicon'
-    PATH="$PATH:$DOCKER_APP/Contents/Resources/bin"
-    RUNTIME='Docker Desktop'
-    OPENER=open
-    CHECKSUM=(shasum -a 256)
-    if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == 1 ]]; then
-      ARCH=arm64
-      CHIP='Apple silicon'
-      NODE_PLATFORM=darwin-arm64
-      NODE_SHA256=89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7
-      NODE_BYTES=53062778
-    else
-      ARCH=amd64
-      CHIP='an Intel chip'
-      NODE_PLATFORM=darwin-x64
-      NODE_SHA256=d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035
-      NODE_BYTES=54382566
-    fi
-    ;;
-  *) refuse "unsupported host $(uname -s); this bootstrap is for Linux and macOS" ;;
-esac
+read_host
 
 if ((NATIVE)); then
   connect_native
@@ -1083,8 +1126,12 @@ RELAY=()
 if [[ -n "${HOUSE_KIT_RELAY:-}" ]]; then RELAY=(--env "HOUSE_KIT_RELAY=$HOUSE_KIT_RELAY"); fi
 DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${RELAY[@]+"${RELAY[@]}"} --env "NODE_EXTRA_CA_CERTS=$CERTIFICATES" --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
 LOGIN_KIT=("${DOCKER_RUN[@]:0:2}" ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
-AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/authority-main.js")
-CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/configure-main.js")
+AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint "$CONTAINED/releases/$VERSION/bin/node" "${DOCKER_RUN[@]:2}" "$CONTAINED/releases/$VERSION/$PACKAGE/authority-main.js")
+CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint "$CONTAINED/releases/$VERSION/bin/node" "${DOCKER_RUN[@]:2}" "$CONTAINED/releases/$VERSION/$PACKAGE/configure-main.js")
+if ((FORWARDING == 0)); then
+  docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null
+  place_contained
+fi
 
 if kit_installed; then
   check_installation
@@ -1103,14 +1150,13 @@ if kit_installed; then
   if [[ -f "$KIT_HOME/credential.json" ]]; then check_authority "${AUTHORITY[@]}"; fi
   if [[ ! -f "$KIT_HOME/credential.json" ]]; then
     remove_container
-    docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null
     connect_kit
     exit 0
   fi
   ALREADY_CONNECTED=1
   record_placement container
   configure_kit "${CONFIGURE[@]}"
-  if [[ "$(docker inspect --format '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}' "$NAME")" != "$IMAGE on-failure" ]]; then
+  if ((PLACED)) || [[ "$(docker inspect --format '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}' "$NAME")" != "$IMAGE on-failure" ]]; then
     update_kit
   else
     resume_kit
@@ -1119,6 +1165,5 @@ if kit_installed; then
   exit 0
 fi
 
-docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null
 connect_kit
 set_rooms_again

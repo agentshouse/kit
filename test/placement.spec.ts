@@ -85,7 +85,7 @@ async function nativeUnchanged(host: Host): Promise<void> {
   expect(host.calls('docker').filter((call) => /^(run|rm|pull) /.test(call))).toEqual([]);
   expect(host.calls('systemctl').filter((call) => !call.startsWith('--user is-active '))).toEqual([]);
   expect(await readFile(join(host.home, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8')).toContain('ExecStart=');
-  await access(join(host.home, '.local', 'share', 'house-kit', 'release'));
+  await access(join(host.home, '.local', 'share', 'house-kit', 'current'));
   expect(await enrolled(host)).toBe('environment-one');
 }
 

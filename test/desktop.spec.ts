@@ -5,6 +5,8 @@ import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, UBUNTU_26_04, type Host, type 
 import { temporaryHome } from './kit.ts';
 
 const LINK_LINE = `Open this link and confirm: ${LOGIN_LINK}`;
+const DOWNLOADING = `Downloading Node.js 24.22.1 and Kit ${PUBLISHED_VERSION} from https://agents.house.\n`;
+const CONTAINED = `/kit-home/kit/releases/${PUBLISHED_VERSION}`;
 const UID = process.getuid!();
 const DEBIAN_12 = 'ID=debian\nVERSION_ID="12"\nVERSION_CODENAME=bookworm\nPRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\n';
 const FEDORA_41 = 'ID=fedora\nVERSION_ID=41\nPRETTY_NAME="Fedora Linux 41 (Workstation Edition)"\n';
@@ -26,7 +28,8 @@ function logins(host: Host, placement: readonly string[]): string[] {
 
 async function installed(host: Host): Promise<void> {
   const prefix = join(host.home, '.local', 'share', 'house-kit');
-  expect(await readFile(join(prefix, 'release'), 'utf8')).toBe(`@agentshouse/kit@${PUBLISHED_VERSION} node@24.22.1\n`);
+  expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${PUBLISHED_VERSION}\n`);
+  await access(join(prefix, 'releases', PUBLISHED_VERSION, 'bin', 'node'));
   for (const command of ['kit', 'house']) {
     const trusted = host.calls('ca').length;
     expect(host.command(command, ['--help'])).toMatchObject({ status: 0 });
@@ -194,7 +197,7 @@ it('stops a running Linux service that is no longer enabled before it replaces t
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   expect(host.run()).toMatchObject({ status: 0 });
   await host.clear('enabled');
-  await writeFile(join(host.home, '.local', 'share', 'house-kit', 'release'), '@agentshouse/kit@0.2.1-alpha.0 node@24.22.1\n');
+  await host.outdate();
   await host.forget();
 
   const ran = host.run();
@@ -445,7 +448,7 @@ it('installs the container on a Linux without glibc', async () => {
 
   expect(ran).toEqual({
     status: 0,
-    stdout: `Warning: Alpine Linux v3.22 is outdated; update to Ubuntu 26.04 LTS.\n${LINK_LINE}\nKit connected for Environment environment-one.\n`,
+    stdout: `Warning: Alpine Linux v3.22 is outdated; update to Ubuntu 26.04 LTS.\n${DOWNLOADING}${LINK_LINE}\nKit connected for Environment environment-one.\n`,
     stderr: '',
   });
   expect(host.calls('docker').filter((call) => call.startsWith('run -d '))).toHaveLength(1);
@@ -547,7 +550,7 @@ it('stops the container route on another distribution without Docker Engine, nam
 it('says the Kit updated when a rerun installs a newer release', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
   expect(host.run()).toMatchObject({ status: 0 });
-  await writeFile(join(host.home, '.local', 'share', 'house-kit', 'release'), '@agentshouse/kit@0.2.1-alpha.0 node@24.22.1\n');
+  await host.outdate();
 
   const ran = host.run();
 
@@ -601,7 +604,7 @@ it("runs a second Building's Kit in a container of its own beside the native Kit
   expect(JSON.parse(await readFile(join(host.home, '.house-kit-agents.house', 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one' });
   expect(JSON.parse(await readFile(join(host.home, '.house-kit', 'credential.json'), 'utf8'))).toMatchObject({ house: 'https://dev.agents.house' });
   expect(await readFile(join(host.home, '.house-kit', 'own-agent.json'), 'utf8')).toBe('{"user":"user-one"}\n');
-  await access(join(host.home, '.local', 'share', 'house-kit', 'release'));
+  await access(join(host.home, '.local', 'share', 'house-kit', 'current'));
   expect(host.calls('systemctl')).toEqual([]);
   await host.forget();
 
@@ -638,21 +641,22 @@ it("installs the container from the Building's registry only with the container 
 
   expect(ran).toEqual({
     status: 0,
-    stdout: `${LINK_LINE}\nKit connected for Environment environment-one.\n`,
+    stdout: `${DOWNLOADING}${LINK_LINE}\nKit connected for Environment environment-one.\n`,
     stderr: '',
   });
   expect(host.calls('docker')).toEqual([
     'info --format {{.OSType}}/{{.Architecture}}',
     'container inspect house-kit',
-    'container inspect house-kit',
     `pull --quiet --platform linux/amd64 ${image}`,
-    `run --entrypoint node --rm --network host ${authorities} --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,
+    `run -i --entrypoint bash --rm --network host ${authorities} --user ${uid} ${mounts} ${image} -s - --house https://agents.house --place /kit-home/kit`,
+    'container inspect house-kit',
+    `run --entrypoint ${CONTAINED}/bin/node --rm --network host ${authorities} --user ${uid} ${mounts} ${image} ${CONTAINED}/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,
     `run --rm --network host ${authorities} --user ${uid} ${mounts} ${image} login`,
     `run -d --name house-kit --restart on-failure ${authorities} --user ${uid} ${mounts} --label agentshouse.house=https://agents.house ${image} resident`,
   ]);
   expect(await readFile(join(host.home, '.house-kit', 'certificates.pem'), 'utf8')).toContain("the computer's own authority");
   expect(host.calls('xdg-open')).toEqual([LOGIN_LINK]);
-  expect([...host.calls('curl'), ...host.calls('systemctl'), ...host.calls('sudo')]).toEqual([]);
+  expect([...host.calls('systemctl'), ...host.calls('sudo')]).toEqual([]);
   await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
@@ -666,7 +670,7 @@ it('installs the container on macOS through Docker Desktop, publishing no port, 
 
   expect(ran).toEqual({
     status: 0,
-    stdout: `Warning: macOS 27.0.1 on an Intel chip is outdated; update to macOS 27 on Apple silicon.\n${LINK_LINE}\nKit connected for Environment environment-one.\n`,
+    stdout: `Warning: macOS 27.0.1 on an Intel chip is outdated; update to macOS 27 on Apple silicon.\n${DOWNLOADING}${LINK_LINE}\nKit connected for Environment environment-one.\n`,
     stderr: '',
   });
   expect(host.calls('docker').filter((call) => call.endsWith(' login'))).toEqual([
@@ -689,7 +693,7 @@ it.each([
 
   const ran = host.run(['--container']);
 
-  expect(ran).toEqual({ status: 0, stdout: `${LINK_LINE}\nKit connected for Environment environment-one.\n`, stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: `${DOWNLOADING}${LINK_LINE}\nKit connected for Environment environment-one.\n`, stderr: '' });
   expect(JSON.parse(await readFile(join(host.home, '.house-kit', 'credential.json'), 'utf8'))).toMatchObject({
     environment: 'environment-one',
   });

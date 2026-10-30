@@ -28,7 +28,9 @@ it('leaves the release exactly one image digest, one Kit release and one Kit arc
   expect(linux.split('__KIT_RELEASE__')).toHaveLength(2);
   expect(linux.split('__KIT_SHA256__')).toHaveLength(2);
   expect(windows.split('__IMAGE_DIGEST__')).toHaveLength(2);
+  expect(windows.split('__KIT_RELEASE__')).toHaveLength(2);
   expect(windows).toMatch(/^[\x09\x0a\x20-\x7e]*$/);
+  expect(linux).toMatch(/^[\x09\x0a\x20-\x7e]*$/);
 });
 
 it('installs natively the Node.js release the package runs on', async () => {
@@ -74,37 +76,6 @@ it('leaves a native host its own kit and house rather than forwarding to them', 
   });
 });
 
-it('keeps the installed Kit in place when its replacement cannot be placed beside it', async () => {
-  const home = await temporaryHome();
-  const linux = await readFile(LINUX, 'utf8');
-  const placement = /^place_native_kit\(\) \{\n[\s\S]*?\n\}\n/m.exec(linux)![0];
-  const ran = spawnSync(
-    'bash',
-    [
-      '-c',
-      `set -u
-elevated() { "$@"; }
-refuse() { printf 'refused: %s\\n' "$1" >&2; exit 1; }
-NATIVE_PREFIX="$0/opt/house-kit"
-NATIVE_STAGE="$0/stage"
-NATIVE_BIN="$0/bin"
-PLACING=(elevated)
-PLACING_OWNER=root:root
-PLACING_NOTE=''
-mkdir -p "$NATIVE_PREFIX" "$NATIVE_BIN" "$NATIVE_STAGE"
-printf old > "$NATIVE_PREFIX/release"
-${placement}
-place_native_kit`,
-      home,
-    ],
-    { encoding: 'utf8' },
-  );
-
-  expect(ran.status).toBe(1);
-  expect(ran.stderr).toContain(`refused: Kit could not be installed in ${home}/opt/house-kit`);
-  expect(await readFile(join(home, 'opt', 'house-kit', 'release'), 'utf8')).toBe('old');
-});
-
 const PROXIES = {
   HTTP_PROXY: 'http://forwarder:3128',
   HTTPS_PROXY: 'http://forwarder:3128',
@@ -122,7 +93,7 @@ it.each([
 ] as const)('downloads its packages, Node.js and the Kit %s', async (_case, relay, proxy, served) => {
   const home = await temporaryHome();
   const linux = await readFile(LINUX, 'utf8');
-  const steps = ['host_of', 'served_from', 'download', 'named', 'establish_native_packages', 'stage_native_kit'].map(
+  const steps = ['host_of', 'served_from', 'download', 'named', 'establish_native_packages', 'trust_extra_authorities', 'place_release'].map(
     (step) => new RegExp(`^${step}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0],
   );
   const bin = join(home, 'bin');
@@ -151,10 +122,9 @@ NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
 NODE_BYTES=58290700
 CHECKSUM=(sha256sum)
-RELEASE=release
 ${steps.join('')}
 establish_native_packages
-stage_native_kit`,
+place_release "$TMPDIR/prefix"`,
     ],
     {
       encoding: 'utf8',
@@ -173,7 +143,7 @@ stage_native_kit`,
 });
 
 function staging(linux: string, house: string, bytes: number): string {
-  const defined = ['host_of', 'served_from', 'download', 'stage_native_kit'].map(
+  const defined = ['host_of', 'served_from', 'download', 'trust_extra_authorities', 'place_release'].map(
     (step) => new RegExp(`^${step}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0],
   );
   return `set -u
@@ -187,9 +157,8 @@ NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
 NODE_BYTES=${bytes}
 CHECKSUM=(sha256sum)
-RELEASE=release
 ${defined.join('')}
-stage_native_kit`;
+place_release "$TMPDIR/prefix"`;
 }
 
 it('stops a Node.js download larger than its pinned size and downloads nothing more', async () => {

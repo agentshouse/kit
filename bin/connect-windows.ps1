@@ -2,14 +2,25 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $ImageDigest = 'sha256:__IMAGE_DIGEST__'
+$Release = '__KIT_RELEASE__'
 $Name = 'house-kit'
 $KitHome = 'house-kit-home'
 $KitHomeMount = "type=volume,src=$KitHome,dst=/kit-home"
 $Certificates = '/kit-home/certificates.pem'
 $Link = 'Open this link and confirm: '
-$AuthorityMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/authority-main.js'
-$ConfigureMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js'
-$EnrolmentReader = "try{const e=JSON.parse(require('fs').readFileSync('/kit-home/credential.json','utf8'));console.log('house',e.house);console.log('environment',e.environment)}catch(e){if(e.code!=='ENOENT')throw e}"
+$Contained = '/kit-home/kit'
+$Node = "$Contained/releases/$Release/bin/node"
+$AuthorityMain = "$Contained/releases/$Release/lib/node_modules/@agentshouse/kit/dist/authority-main.js"
+$ConfigureMain = "$Contained/releases/$Release/lib/node_modules/@agentshouse/kit/dist/configure-main.js"
+$KitHomeReader = @'
+for field in house environment; do
+  value=$(sed -n "s/.*\"$field\":\"\([^\"]*\)\".*/\1/p" /kit-home/credential.json 2>/dev/null)
+  [ -z "$value" ] || printf '%s %s\n' "$field" "$value"
+done
+[ ! -f /kit-home/kit/current ] || printf 'release %s\n' "$(cat /kit-home/kit/current)"
+exit 0
+
+'@
 $BootstrapArguments = @($args | ForEach-Object { [string]$_ })
 $MinimumWsl = [version]'2.1.5'
 # Docker Desktop's first start waits on its own terms and setup windows; five minutes bounds that before asking for a rerun.
@@ -186,10 +197,10 @@ function Protect-Directory([string] $Path) {
 
 function Read-Enrolment {
   $ErrorActionPreference = 'Continue'
-  $output = @(& docker run --rm --network none --mount $KitHomeMount --entrypoint node $Image -e $EnrolmentReader 2>&1 | ForEach-Object { "$_" })
+  $output = @($KitHomeReader | & docker run -i --rm --network none --mount $KitHomeMount --entrypoint sh $Image -s 2>&1 | ForEach-Object { "$_" })
   if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "the Kit home could not be read: $(@($output | Where-Object { $_ })[-1])" }
   $enrolment = @{}
-  foreach ($line in @($output | Where-Object { $_ -match '^(house|environment) \S+$' })) {
+  foreach ($line in @($output | Where-Object { $_ -match '^(house|environment|release) \S+$' })) {
     $field, $value = $line -split ' ', 2
     $enrolment[$field] = $value
   }
@@ -223,7 +234,7 @@ function Invoke-Login([string[]] $LoginArguments) {
 }
 
 function Test-Authority {
-  & docker run --rm @Network --entrypoint node @Common $AuthorityMain
+  & docker run --rm @Network --entrypoint $Node @Common $AuthorityMain
   if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
 }
 
@@ -254,9 +265,22 @@ function Set-Configuration {
   if ($env:HOUSE_KIT_INSTALL_COMMAND) { $record += '; printenv HOUSE_KIT_INSTALL_COMMAND > /kit-home/install-command' }
   Invoke-Docker run --rm --network none --env HOUSE_KIT_INSTALL_COMMAND --mount $KitHomeMount --entrypoint sh $Image -c $record | Out-Null
   $ErrorActionPreference = 'Continue'
-  $output = @(& docker run --rm --network none --mount $KitHomeMount --entrypoint node $Image $ConfigureMain @NoSkills 2>&1 | ForEach-Object { "$_" })
+  $output = @(& docker run --rm --network none --mount $KitHomeMount --entrypoint $Node $Image $ConfigureMain @NoSkills 2>&1 | ForEach-Object { "$_" })
   if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "the Kit configuration could not be written: $(@($output | Where-Object { $_ })[-1])" }
   $output -contains 'changed'
+}
+
+function Install-Release {
+  $served = $House
+  if ($env:HOUSE_KIT_RELAY) { $served = "$($env:HOUSE_KIT_RELAY)/$(([uri]$House).Authority)" }
+  try {
+    $installer = Invoke-RestMethod -UseBasicParsing -Uri "$served/kit-installer/connect-linux.sh"
+  } catch {
+    Stop-Bootstrap "the Kit installer could not be downloaded from ${House}: $($_.Exception.Message)"
+  }
+  $ErrorActionPreference = 'Continue'
+  $installer | & docker run -i --rm @Network @Relay --env "NODE_EXTRA_CA_CERTS=$Certificates" --mount $KitHomeMount --entrypoint bash $Image -s - --house $House --place $Contained | ForEach-Object { Write-Host $_ }
+  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "Kit $Release could not be placed in Kit home: docker run ended with status $LASTEXITCODE" }
 }
 
 function Get-HouseWorkdir([string] $Here, [string] $Root) {
@@ -323,7 +347,7 @@ function Connect-Kit {
     }
   }
 
-  if ($ImageDigest -notmatch '^sha256:[0-9a-f]{64}$') { Stop-Bootstrap 'this bootstrap has not been published with an immutable image digest' }
+  if ($ImageDigest -notmatch '^sha256:[0-9a-f]{64}$' -or $Release -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { Stop-Bootstrap 'this bootstrap has not been published with an immutable release' }
   if ($env:OS -ne 'Windows_NT') { Stop-Bootstrap 'this bootstrap is for Windows; run connect-linux.sh on Linux and macOS' }
   $processor = [int]@(Get-CimInstance -ClassName Win32_Processor)[0].Architecture
   $Architecture = @{ 9 = 'amd64'; 12 = 'arm64' }[$processor]
@@ -390,7 +414,14 @@ function Connect-Kit {
   $Relay = @()
   if ($env:HOUSE_KIT_RELAY) { $Relay = @('--env', "HOUSE_KIT_RELAY=$($env:HOUSE_KIT_RELAY)") }
   $Common = $Relay + @('--env', "NODE_EXTRA_CA_CERTS=$Certificates", '--mount', $KitHomeMount, '--mount', $WorkspaceMount, $Image)
-  if (-not $Forwarding) { Write-Certificates }
+  $placed = $false
+  if (-not $Forwarding) {
+    Write-Certificates
+    if ($enrolment['release'] -cne $Release) {
+      Install-Release
+      $placed = $true
+    }
+  }
 
   if (Test-Container) {
     $installed = Read-Inspect '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}'
@@ -431,7 +462,7 @@ function Connect-Kit {
 
   if (Test-Container) {
     $configured = Set-Configuration
-    if ($installed -cne "$Image on-failure") {
+    if ($placed -or $installed -cne "$Image on-failure") {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
       Write-Host 'Kit updated.'

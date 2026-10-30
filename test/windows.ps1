@@ -31,6 +31,7 @@ $Image = 'image'
 $configuration = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-Configuration' }, $true)
 . ([scriptblock]::Create($configuration.Extent.Text))
 $ConfigureMain = 'configure-main.js'
+$Node = 'node'
 $NoSkills = @()
 foreach ($case in @(
   @('installed', 'echo windows > /kit-home/placement; printenv HOUSE_KIT_INSTALL_COMMAND > /kit-home/install-command'),
@@ -42,6 +43,17 @@ foreach ($case in @(
   if ($script:Ran[0] -cne "run --rm --network none --env HOUSE_KIT_INSTALL_COMMAND --mount home --entrypoint sh image -c $($case[1])") { $findings += "Set-Configuration recorded Kit home with: $($script:Ran[0])" }
 }
 Remove-Item Env:HOUSE_KIT_INSTALL_COMMAND -ErrorAction Ignore
+$readerAssignment = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$KitHomeReader' }, $true)
+. ([scriptblock]::Create($readerAssignment.Extent.Text))
+$readHome = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+[void][IO.Directory]::CreateDirectory((Join-Path $readHome 'kit'))
+[IO.File]::WriteAllText((Join-Path $readHome 'credential.json'), '{"house":"https://agents.house","environment":"environment-one","credential":"ahk_one"}')
+[IO.File]::WriteAllText((Join-Path $readHome 'kit/current'), "0.2.1-alpha.1`n")
+foreach ($ending in @('', "`r`n")) {
+  $read = @(($KitHomeReader.Replace('/kit-home', $readHome) + $ending) | & sh -s 2>&1 | ForEach-Object { "$_" })
+  if ($LASTEXITCODE -ne 0 -or ($read -join '|') -cne 'house https://agents.house|environment environment-one|release 0.2.1-alpha.1') { $findings += "the Kit home reader read $($read -join '|') and ended with $LASTEXITCODE" }
+}
+Remove-Item -LiteralPath $readHome -Recurse -Force
 $workdir = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-HouseWorkdir' }, $true)
 . ([scriptblock]::Create($workdir.Extent.Text))
 foreach ($case in @(
@@ -117,9 +129,19 @@ Write-Certificates
 if (($script:Ran -join '|') -cne 'run -i --rm --network none --mount home --entrypoint sh image -c cat > /kit-home/certificates.pem') { $findings += "Write-Certificates ran: $($script:Ran -join '|')" }
 if ($script:Piped -cne $expectedPem) { $findings += "Write-Certificates wrote: $($script:Piped)" }
 Remove-Item Function:Get-ChildItem
-foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Get-KitImage', 'Connect-Kit')) {
+foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Get-KitImage', 'Install-Release', 'Connect-Kit')) {
   $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
   . ([scriptblock]::Create($found.Extent.Text))
+}
+$Release = '0.2.1-alpha.1'
+foreach ($name in @('$Contained', '$Node', '$AuthorityMain', '$ConfigureMain')) {
+  $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq $name }, $true)
+  . ([scriptblock]::Create($found.Extent.Text))
+}
+$Installer = "#!/usr/bin/env bash`necho the Building's installer`n"
+function Invoke-RestMethod([switch] $UseBasicParsing, [string] $Uri) {
+  $script:Fetched += , $Uri
+  $Installer
 }
 $ImageDigest = 'sha256:' + ('a' * 64)
 $Image = "agents.house/kit@$ImageDigest"
@@ -163,6 +185,7 @@ $script:ImageAbsent = $false
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
+  if ($args -contains '--place') { $script:Piped += , (@($input) -join "`n") }
   if ($args[0] -ceq 'image' -and $script:ImageAbsent) { $global:LASTEXITCODE = 1 }
   if ($args[0] -ceq 'rm') { $script:Installed = $false }
   if ($args -contains 'login') {
@@ -177,7 +200,7 @@ function docker {
       $global:LASTEXITCODE = $script:LoginStatus
       return
     }
-    if ($second) { $script:SecondEnrolment = @{ environment = 'environment-two'; house = 'https://agents.house' } } else { $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' } }
+    if ($second) { $script:SecondEnrolment = @{ environment = 'environment-two'; house = 'https://agents.house' } } else { $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' } }
     $printed
   }
 }
@@ -193,7 +216,7 @@ foreach ($case in @(
 )) {
   $script:Installed = $case[0]
   $script:Enrolment = @{}
-  if ($case[0]) { $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' } }
+  if ($case[0]) { $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' } }
   $BootstrapArguments = $case[1]
   $script:Ran = @()
   try { Connect-Kit } catch { $findings += "Connect-Kit $($case[1] -join ' ') refused with: $($_.Exception.Message)" }
@@ -201,7 +224,7 @@ foreach ($case in @(
   if ($logins.Count -ne 1 -or -not $logins[0].EndsWith(" $Image $($case[2])")) { $findings += "the bootstrap $($case[1] -join ' ') ran kit login as: $($logins -join '|')" }
 }
 $script:Installed = $true
-$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }
 $BootstrapArguments = @('kit', 'login', '--code', 'ahk_code_unused')
 $script:Ran = @()
 try {
@@ -215,7 +238,7 @@ foreach ($rerun in @(
   @('--workspace', 'C:\Users\u\AgentsHouse')
 )) {
   $script:Installed = $true
-  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }
   $BootstrapArguments = $rerun
   $script:Ran = @()
   try { Connect-Kit } catch { $findings += "the enrolled bootstrap $($rerun -join ' ') refused with: $($_.Exception.Message)" }
@@ -223,7 +246,7 @@ foreach ($rerun in @(
   if ($logins.Count -ne 0) { $findings += "the enrolled bootstrap $($rerun -join ' ') ran kit login as: $($logins -join '|')" }
 }
 $script:Installed = $false
-$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }
 $BootstrapArguments = @('--no-private')
 $script:Ran = @()
 try { Connect-Kit } catch { $findings += "an enrolled bootstrap with no container refused --no-private with: $($_.Exception.Message)" }
@@ -237,7 +260,7 @@ foreach ($case in @(
   $withContainer = $case[0]
   $script:Installed = $withContainer
   $script:Running = 'false'
-  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }
   $BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse', '--no-private')
   $script:Ran = @()
   try {
@@ -268,6 +291,41 @@ if ($residentRun.Count -ne 1 -or -not $residentRun[0].StartsWith('run -d --name 
   $findings += "the first bootstrap ran resident as: $($residentRun -join '|')"
 }
 if (@($script:Ran | Where-Object { $_ -ceq 'certificates' }).Count -ne 1) { $findings += "the first bootstrap wrote the certificate authorities: $($script:Ran -join '|')" }
+$place = "run -i --rm --env NODE_EXTRA_CA_CERTS=/kit-home/certificates.pem --mount home --entrypoint bash agents.house/kit@$ImageDigest -s - --house https://agents.house --place /kit-home/kit"
+$authority = '^run --rm --entrypoint /kit-home/kit/releases/0\.2\.1-alpha\.1/bin/node .* /kit-home/kit/releases/0\.2\.1-alpha\.1/lib/node_modules/@agentshouse/kit/dist/authority-main\.js$'
+$configure = '^run --rm --network none --mount home --entrypoint /kit-home/kit/releases/0\.2\.1-alpha\.1/bin/node \S+ /kit-home/kit/releases/0\.2\.1-alpha\.1/lib/node_modules/@agentshouse/kit/dist/configure-main\.js$'
+. ([scriptblock]::Create($configuration.Extent.Text))
+foreach ($case in @(
+  @{ Name = 'a first install'; Installed = $false; Enrolment = @{}; Arguments = @('--house', 'https://agents.house', '--code', 'ahk_code_one'); Ran = @('^certificates$', "^$([regex]::Escape($place))$", $configure, ' login --house https://agents.house --code ahk_code_one$', '^run -d .* resident$'); Shown = 'Kit connected for Environment environment-one.' },
+  @{ Name = 'a rerun against a newer release'; Installed = $true; Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.0' }; Arguments = @('--workspace', 'C:\Users\u\AgentsHouse', '--no-private'); Ran = @('^certificates$', "^$([regex]::Escape($place))$", $authority, $configure, '^rm -f house-kit$', '^run -d .* resident$', ' login --no-private$'); Shown = 'Kit updated.' },
+  @{ Name = 'a rerun against the release Kit home holds'; Installed = $true; Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }; Arguments = @('--workspace', 'C:\Users\u\AgentsHouse'); Ran = @('^certificates$', $authority, $configure); Shown = 'Kit is already installed.' }
+)) {
+  $script:Installed = $case.Installed
+  $script:Enrolment = $case.Enrolment
+  $script:Running = 'true'
+  $BootstrapArguments = $case.Arguments
+  $script:Ran = @()
+  $script:Piped = @()
+  $script:Fetched = @()
+  $script:Shown = @()
+  try { Connect-Kit } catch { $findings += "$($case.Name) refused with: $($_.Exception.Message)" }
+  $acts = @($script:Ran | Where-Object { $_ -ceq 'certificates' -or $_ -match '^(run|rm) ' -and $_ -notmatch ' --entrypoint sh ' })
+  $matched = $acts.Count -eq $case.Ran.Count
+  for ($index = 0; $matched -and $index -lt $acts.Count; $index++) { $matched = $acts[$index] -match $case.Ran[$index] }
+  if (-not $matched) { $findings += "$($case.Name) ran: $($acts -join '|')" }
+  $placed = [int]($case.Ran -contains "^$([regex]::Escape($place))$")
+  if ($script:Fetched.Count -ne $placed -or ($placed -and ($script:Fetched[0] -cne 'https://agents.house/kit-installer/connect-linux.sh' -or $script:Piped[0] -cne $Installer))) { $findings += "$($case.Name) placed the installer from $($script:Fetched -join '|'): $($script:Piped -join '|')" }
+  if (-not ($script:Shown -ccontains $case.Shown)) { $findings += "$($case.Name) said: $($script:Shown -join '|')" }
+  if (@($script:Ran | Where-Object { $_ -match '^volume rm ' }).Count -ne 0) { $findings += "$($case.Name) removed Kit home: $($script:Ran -join '|')" }
+}
+function Set-Configuration { $false }
+$script:Installed = $true
+$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.0' }
+$BootstrapArguments = @('kit', 'logout', '--help')
+$script:Ran = @()
+$script:Fetched = @()
+try { Connect-Kit } catch { $findings += "a forwarded kit logout --help refused with: $($_.Exception.Message)" }
+if ($script:Fetched.Count -ne 0 -or @($script:Ran | Where-Object { $_.Contains('--place') }).Count -ne 0) { $findings += "a forwarded kit logout --help placed a release: $($script:Ran -join '|')" }
 $script:Installed = $false
 $script:Enrolment = @{ environment = 'environment-one'; house = 'https://dev.agents.house' }
 $script:SecondEnrolment = @{}
@@ -311,7 +369,7 @@ foreach ($case in @(
   @(@('kit', 'logout'), 1)
 )) {
   $script:Installed = $true
-  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }
   $BootstrapArguments = $case[0]
   $script:Ran = @()
   try { Connect-Kit } catch { $findings += "the bootstrap forwarding $($case[0] -join ' ') ended with: $($_.Exception.Message)" }
@@ -320,7 +378,7 @@ foreach ($case in @(
 }
 $script:Running = 'false'
 $script:Installed = $true
-$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+$script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }
 $BootstrapArguments = @('kit', 'login', '--help')
 $script:Ran = @()
 try { Connect-Kit } catch { $findings += "the bootstrap forwarding kit login --help ended with: $($_.Exception.Message)" }
@@ -350,7 +408,7 @@ foreach ($case in @(
   if (($pulls -join '|') -cne "pull --quiet --platform linux/$($case.Image) $Image") { $findings += "the bootstrap on $($case.Name) pulled: $($pulls -join '|')" }
   if (@($script:Ran | Where-Object { $_ -match '^run -d .* resident$' }).Count -ne 1) { $findings += "the bootstrap on $($case.Name) installed no Kit container: $($script:Ran -join '|')" }
   $script:Installed = $true
-  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
+  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }
   $BootstrapArguments = @('kit', 'logout', '--help')
   $script:Shown = @()
   try { Connect-Kit } catch { $findings += "the bootstrap on $($case.Name) forwarding kit logout --help ended with: $($_.Exception.Message)" }
@@ -386,7 +444,7 @@ Remove-Item Function:Invoke-WebRequest
 $whole = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
 [void][IO.Directory]::CreateDirectory($whole)
 $installer = Join-Path $whole 'connect-windows.ps1'
-[IO.File]::WriteAllText($installer, [IO.File]::ReadAllText('/kit/bin/connect-windows.ps1').Replace('__IMAGE_DIGEST__', 'a' * 64))
+[IO.File]::WriteAllText($installer, [IO.File]::ReadAllText('/kit/bin/connect-windows.ps1').Replace('__IMAGE_DIGEST__', 'a' * 64).Replace('__KIT_RELEASE__', '0.2.1-alpha.1'))
 [IO.File]::WriteAllText((Join-Path $whole 'docker'), "#!/bin/sh`nif [ `"`$1`" = info ]; then echo 'linux/x86_64|Docker Desktop|6.6.87.2-microsoft-standard-WSL2'; exit 0; fi`necho 'docker: no space left on device' >&2`nexit 3`n")
 & chmod 755 (Join-Path $whole 'docker')
 $prelude = "`$env:OS = 'Windows_NT'; `$env:ProgramFiles = '$whole'; `$env:LOCALAPPDATA = '$whole'; `$env:PATH = '$whole' + ':' + `$env:PATH; function Get-CimInstance([string] `$ClassName) { if (`$ClassName -eq 'Win32_OperatingSystem') { return [pscustomobject]@{ ProductType = 1; BuildNumber = '26100'; Caption = 'Windows 11 Pro' } }; [pscustomobject]@{ Architecture = 9 } };"

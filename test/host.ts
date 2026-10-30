@@ -10,6 +10,7 @@ const SERVICE_MAIN = fileURLToPath(new URL('../src/service-main.ts', import.meta
 const DARWIN = fileURLToPath(new URL('./darwin.ts', import.meta.url));
 
 export const PUBLISHED_VERSION = '0.2.1-alpha.1';
+const OUTDATED_VERSION = '0.2.1-alpha.0';
 export const LOGIN_LINK = 'https://agents.house/kit/login/one';
 
 export async function published(): Promise<string> {
@@ -49,6 +50,7 @@ export interface Ran {
 
 export interface Host {
   home: string;
+  prefixes: { desktop: string; server: string; container: string };
   run(argv?: string[], added?: Record<string, string>): Ran;
   terminal(argv: string[], typed: string, added?: Record<string, string>): Ran;
   command(name: string, argv: string[]): Ran;
@@ -58,6 +60,7 @@ export interface Host {
   clear(name: Mark): Promise<void>;
   forget(): Promise<void>;
   outdate(): Promise<void>;
+  publish(version: string): Promise<void>;
   uninstall(tool: string): Promise<void>;
   serverUnit(): Promise<string>;
   restartPolicy(policy: string): Promise<void>;
@@ -121,6 +124,7 @@ case "$1" in
       case "$previous" in
         --restart) policy=$argument ;;
         --label) label=\${argument#*=} ;;
+        --entrypoint) entrypoint=$argument ;;
       esac
       case "$argument" in
         *dst=/kit-home) home=\${argument#*src=}; home=\${home%%\\",dst=*} ;;
@@ -134,6 +138,10 @@ case "$1" in
       previous=$argument
     done
     [ -z "$detached" ] || printf 'image=%s\\npolicy=%s\\nhome=%s\\nworkspace=%s\\nlabel=%s\\n' "$image" "$policy" "$home" "$workspace" "$label" > "$FAKE/container"
+    if [ "$entrypoint" = bash ]; then
+      while [ "$1" != - ]; do shift; done
+      exec env FAKE_SYSTEM=Linux FAKE_MACHINE=x86_64 FAKE_GLIBC=1 NODE_EXTRA_CA_CERTS="$home/certificates.pem" bash -s -- "$2" "$3" "$4" "$home\${5#/kit-home}"
+    fi
     if [ -n "$login" ] && [ -z "$help" ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
     ;;
 esac\n`,
@@ -220,7 +228,6 @@ export async function fakeHost(platform: Platform): Promise<Host> {
       bootstrap,
       (await readFile(bootstrap, 'utf8'))
         .replace('SERVER_PREFIX=/opt/house-kit', `SERVER_PREFIX=${server}/house-kit`)
-        .replace('PLACING_OWNER=root:root', `PLACING_OWNER=${process.getuid!()}:${process.getgid!()}`)
         .replace('NATIVE_BIN=/usr/local/bin', `NATIVE_BIN=${server}/bin`)
         .replace('NATIVE_UNIT=/etc/systemd/system/house-kit.service', `NATIVE_UNIT=${server}/house-kit.service`)
         .replace('NATIVE_WORKSPACE=/agents/house', `NATIVE_WORKSPACE=${server}/workspace`),
@@ -244,11 +251,14 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   };
   return {
     home,
+    prefixes: {
+      desktop: join(home, '.local', 'share', 'house-kit'),
+      server: join(fake, 'server', 'house-kit'),
+      container: join(platform.environment?.HOUSE_KIT_HOME ?? join(home, '.house-kit'), 'kit'),
+    },
     run: (argv = [], added = {}) => ran('bash', [bootstrap, ...argv], added),
     terminal: (argv, typed, added = {}) => {
-      const line = ['cat', bootstrap, '|', 'bash', '-s', '--', ...argv]
-        .map((word) => (word === '|' ? word : `'${word.replaceAll("'", `'\\''`)}'`))
-        .join(' ');
+      const line = ['bash', bootstrap, ...argv].map((word) => `'${word.replaceAll("'", `'\\''`)}'`).join(' ');
       const finished = spawnSync('script', ['-qec', line, '/dev/null'], { encoding: 'utf8', env: { ...environment, ...added }, input: typed });
       return { status: finished.status, stdout: finished.stdout.replaceAll('\r\n', '\n'), stderr: finished.stderr };
     },
@@ -263,10 +273,8 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     clear: (name) => rm(join(fake, name), { force: true }),
     forget: () => writeFile(join(fake, 'log'), ''),
     outdate: () =>
-      writeFile(
-        join(platform.server === true ? join(fake, 'server', 'house-kit') : join(home, '.local', 'share', 'house-kit'), 'release'),
-        '@agentshouse/kit@0.2.1-alpha.0 node@24.22.1\n',
-      ),
+      writeFile(join(platform.server === true ? join(fake, 'server', 'house-kit') : join(home, '.local', 'share', 'house-kit'), 'current'), `${OUTDATED_VERSION}\n`),
+    publish: async (version) => writeFile(bootstrap, (await readFile(bootstrap, 'utf8')).replace(/^VERSION='[^']*'$/m, `VERSION='${version}'`)),
     uninstall: (tool) => rm(join(bin, tool)),
     serverUnit: () => readFile(join(fake, 'server', 'house-kit.service'), 'utf8'),
     restartPolicy: async (policy) =>
