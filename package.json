@@ -26,7 +26,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "2.0.1",
     "@agentshouse/mdmodel": "0.1.0-c4f4d37bc9d6a",
-    "@agentshouse/skills": "0.1.0-c1884c2b56810",
+    "@agentshouse/skills": "0.1.0-cdd0f15bef719",
     "@lydell/node-pty": "1.2.0-beta.15",
     "yaml": "2.9.1"
   },
