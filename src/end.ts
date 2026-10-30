@@ -19,7 +19,7 @@ export function restart(reason: string): never {
   exit(reason, 1);
 }
 
-function updateLine(lead: string): string {
+export function updateLine(lead: string): string {
   const command = installCommand();
   return command === null ? `${lead}; install it again.` : `${lead}. Update it: ${command}`;
 }

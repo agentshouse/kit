@@ -147,6 +147,7 @@ export interface Hosting {
   tls?: boolean;
   transcribe?: boolean;
   environment?: Record<string, string>;
+  node?: string[];
   home?: string;
   skills?: boolean;
   prepare?: (home: string) => Promise<void>;
@@ -299,7 +300,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     ...(hosting.tls ? { NODE_EXTRA_CA_CERTS: certificate().path } : {}),
     ...hosting.environment,
   };
-  const kit = runKit(['resident'], environment);
+  const kit = runKit(['resident'], environment, hosting.node);
   const connection = await until(() => house.connections[0]);
   await until(() => house.requests.find((request) => request.path === '/kit/local-copy/selection'));
   const hosted: Hosted = {
@@ -325,7 +326,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
       const idled = idles.length;
       stop(hosted.kit.pid);
       await hosted.kit.exited;
-      hosted.kit = runKit(['resident'], environment);
+      hosted.kit = runKit(['resident'], environment, hosting.node);
       await until(() => house.connections.length > opened);
       await until(() => idles.length > idled);
     },

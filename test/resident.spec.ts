@@ -17,10 +17,10 @@ async function enrol(house: House, home: string, credential: string) {
   );
 }
 
-async function resident(house: House, home?: string): Promise<KitRun> {
+async function resident(house: House, home?: string, environment: Record<string, string> = {}): Promise<KitRun> {
   home ??= await temporaryHome();
   await enrol(house, home, 'ahk_held');
-  return runKit(['resident'], { HOUSE_KIT_HOME: home });
+  return runKit(['resident'], { HOUSE_KIT_HOME: home, ...environment });
 }
 
 async function ended(kit: KitRun): Promise<number | null> {
@@ -353,7 +353,15 @@ it('opens its Kit connection again after an answer to its opening that carries n
   expect(openings(house)).toBe(2);
 });
 
-const TOO_OLD = { status: 426, body: { error: { code: 'kit_update_required', retryable: false } } };
+const COMMANDS = { macos: 'macos command', linux: 'linux command', container: 'container command', server: 'server command', windows: 'windows command' };
+
+const TOO_OLD = { status: 426, body: { error: { code: 'kit_update_required', retryable: false, release: '0.2.2-c0ffee000002', commands: COMMANDS } } };
+
+const SANDBOX = { HOUSE_KIT_SANDBOX: '1' };
+
+function placements(house: House): string[] {
+  return house.requests.filter((request) => request.path.startsWith('/kit-installer/')).map((request) => request.path);
+}
 
 it('names its wire in its stream subprotocol and in a header on every other /kit/ request', async () => {
   const house = await startHouse();
@@ -365,68 +373,30 @@ it('names its wire in its stream subprotocol and in a header on every other /kit
   expect(requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(requests.map(() => '4'));
 });
 
-it('ends, left stopped, saying it must be installed again, when House refuses its Kit connection opening as too old and no bootstrap recorded its install command', async () => {
+it("ends a Sandbox's Kit, left stopped and placing nothing, saying it must be installed again, when House refuses its Kit connection opening as too old", async () => {
   const house = await startHouse();
   house.route('UPGRADE', '/kit/stream', () => TOO_OLD);
-  const kit = await resident(house);
+  const kit = await resident(house, undefined, SANDBOX);
 
   expect(await ended(kit)).toBe(0);
   expect(kit.stderr()).toContain('kit: This Kit is too old for House; install it again.\n');
   expect(openings(house)).toBe(1);
+  expect(placements(house)).toEqual([]);
 });
 
 const KIT_RELEASE = (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
-const COMMANDS = {
-  macos: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit",
-  linux: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit",
-  container: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit --container",
-  server: "sh -c 'kit=$(curl -fsSL \"$0\") || exit 1; eval \"$kit\"' bank.example/kit --linux",
-  windows: "& { try { $kit = irm bank.example/kit.ps1 } catch { throw 'failed' }; & ([scriptblock]::Create($kit)) @args }",
-};
-
 const NEWER = { status: 426, body: { error: { code: 'kit_newer_than_house', retryable: false, release: '0.2.0-c0ffee000001', commands: COMMANDS } } };
 
-it.each(['container', 'server', 'windows'] as const)(
-  "ends, left stopped, naming its version, the Building's Kit release and the %s install command House named, when House refuses its Kit connection opening as newer than the Building",
-  async (placement) => {
-    const house = await startHouse();
-    house.route('UPGRADE', '/kit/stream', () => NEWER);
-    const home = await temporaryHome();
-    await writeFile(join(home, 'placement'), `${placement}\n`);
-    const kit = await resident(house, home);
-
-    expect(await ended(kit)).toBe(0);
-    expect(kit.stderr()).toContain(
-      `kit: Kit ${KIT_RELEASE} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS[placement]}\n`,
-    );
-    expect(openings(house)).toBe(1);
-  },
-);
-
-it("ends, left stopped, naming the native install command House named for this computer, when House refuses any of its calls as newer than the Building", async () => {
+it("ends a Sandbox's Kit, left stopped and placing nothing, naming its version, the Building's Kit release and the Linux install command House named, when House refuses any of its calls as newer than the Building", async () => {
   const house = await startHouse();
   house.route('POST', '/kit/restarted', () => NEWER);
-  const home = await temporaryHome();
-  await writeFile(join(home, 'placement'), 'native\n');
-  const kit = await resident(house, home);
+  const kit = await resident(house, undefined, SANDBOX);
 
   expect(await ended(kit)).toBe(0);
   expect(kit.stderr()).toContain(
-    `kit: Kit ${KIT_RELEASE} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS.linux}\n`,
+    `kit: Kit ${KIT_RELEASE} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: linux command\n`,
   );
   expect(openings(house)).toBe(0);
-});
-
-it('ends, left stopped, naming the install command its bootstrap recorded even outside its service, when House refuses any of its calls as too old', async () => {
-  const house = await startHouse();
-  house.route('POST', '/kit/restarted', () => TOO_OLD);
-  const home = await temporaryHome();
-  const command = `HOUSE_KIT_RELAY=https://relay.example sh -c 'kit=$(curl -fsSL "$0") || exit 1; eval "$kit"' https://relay.example/dev.agents.house/kit --linux`;
-  await writeFile(join(home, 'install-command'), `${command}\n`);
-  const kit = await resident(house, home);
-
-  expect(await ended(kit)).toBe(0);
-  expect(kit.stderr()).toContain(`kit: This Kit is too old for House. Update it: ${command}\n`);
-  expect(openings(house)).toBe(0);
+  expect(placements(house)).toEqual([]);
 });

@@ -5,24 +5,44 @@ import { refusalOf } from './refusals.ts';
 export const KIT_WIRE = 4;
 export const KIT_WIRE_HEADER = 'x-house-kit-wire';
 
-interface NewerThanHouse {
+interface Unserved {
   code: string;
   release: string;
   commands: Record<Machine, string>;
 }
 
-function newer(text: string): NewerThanHouse | null {
-  let body: { error?: NewerThanHouse } | null;
+let take: ((release: string) => void) | null = null;
+let taken = false;
+
+function unservedBy(text: string): Unserved | null {
+  let body: { error?: Unserved } | null;
   try {
-    body = JSON.parse(text) as { error?: NewerThanHouse } | null;
+    body = JSON.parse(text) as { error?: Unserved } | null;
   } catch {
     return null;
   }
-  return body?.error?.code === 'kit_newer_than_house' ? body.error : null;
+  const error = body?.error;
+  if (error?.code !== 'kit_update_required' && error?.code !== 'kit_newer_than_house') return null;
+  return typeof error.release === 'string' ? error : null;
+}
+
+export function takeUnservedRelease(taking: (release: string) => void): void {
+  take = taking;
+}
+
+export function unserved(): boolean {
+  return taken;
 }
 
 export function endUnserved(text: string): void {
+  const refused = unservedBy(text);
+  if (refused !== null && take !== null) {
+    if (!taken) {
+      taken = true;
+      take(refused.release);
+    }
+    return;
+  }
   if (refusalOf(text)?.code === 'kit_update_required') updateRequired();
-  const refused = newer(text);
-  if (refused !== null) newerThanHouse(refused.release, refused.commands[machine()]);
+  if (refused?.code === 'kit_newer_than_house') newerThanHouse(refused.release, refused.commands[machine()]);
 }

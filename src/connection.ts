@@ -5,7 +5,7 @@ import { end, REPLACED, signInAgain } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
 import { Silence } from './silence.ts';
-import { endUnserved, KIT_WIRE } from './wire.ts';
+import { endUnserved, KIT_WIRE, unserved } from './wire.ts';
 
 export type Notification = { type: string } & Record<string, unknown>;
 
@@ -59,7 +59,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
 
   const connect = async () => {
     const { house, credential } = (await readEnrolment())!;
-    if (socket !== null) return;
+    if (socket !== null || unserved()) return;
     refused = null;
     const opening = new WebSocket(relayed(connectionUrl(house)), {
       protocols: [SUBPROTOCOL],

@@ -20,6 +20,7 @@ import { SignIns } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
 import { holdConnection, type Connection, type Notification } from './connection.ts';
 import { KitUpdate } from './update.ts';
+import { takeUnservedRelease } from './wire.ts';
 import { codexLauncher } from './work.ts';
 
 function report(error: unknown): void {
@@ -158,6 +159,7 @@ export async function resident(): Promise<void> {
   });
   const signIns = new SignIns(house, agents, calls);
   const update = new KitUpdate(calls);
+  if (process.env.HOUSE_KIT_SANDBOX !== '1') takeUnservedRelease((release) => logged(update.takeRefused(release)));
   removeInputs();
   const scripts = new Scripts(calls, (notification) => connection?.send(notification) ?? false);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
