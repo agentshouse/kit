@@ -71,12 +71,14 @@ export interface Host {
   restartPolicy(policy: string): Promise<void>;
 }
 
-type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-abandoned' | 'login-fails' | 'opener-fails' | 'refused' | 'stopped' | 'systemd';
+type Mark = 'active' | 'changed' | 'container' | 'docker-down' | 'enabled' | 'login-abandoned' | 'login-fails' | 'login-hangs-up' | 'opener-fails' | 'refused' | 'stopped' | 'systemd';
 
 const LOGGED = 'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n';
 
 const LOGIN = `printf 'placement %s\\n' "$(cat "$1/placement" 2>/dev/null)" >> "$FAKE/log"
 [ ! -e "$FAKE/login-fails" ] || exit 7
+[ ! -e "$FAKE/login-hangs-up" ] || { kill -HUP "$(awk '{ print $4 }' "/proc/$PPID/stat")"; exit 1; }
+[ -z "$coded" ] || [ ! -e "$1/credential.json" -a ! -e "$1/disconnected.json" ] || { echo 'kit: --code connects a new machine' >&2; exit 1; }
 printf 'Open this link and confirm: ${LOGIN_LINK}\\n'
 [ ! -e "$FAKE/login-abandoned" ] || { kill -INT "$PPID"; kill -INT $$; }
 printf '{"house":"https://agents.house","environment":"%s","credential":"ahk_one"}' "\${2:-environment-one}" > "$1/credential.json"
@@ -137,7 +139,9 @@ case "$1" in
         HOUSE_KIT_REPLACES=*) replacing=environment-two ;;
         -d) detached=1 ;;
         login) login=1 ;;
+        --code) coded=1 ;;
         --help) help=1 ;;
+        */authority-main.js) [ ! -e "$FAKE/refused" ] || exit 1 ;;
       esac
       image=$previous
       previous=$argument
@@ -179,7 +183,7 @@ const KIT = `printf '%s %s HOUSE_KIT_HOME=%s%s%s\\n' "\${0##*/}" "$*" "$HOUSE_KI
 [ -z "\${HOUSE_KIT_RELAY-}" ] || printf 'relay %s\\n' "$HOUSE_KIT_RELAY" >> "$FAKE/log"
 [ -z "\${NODE_USE_SYSTEM_CA-}" ] || printf 'ca %s\\n' "$NODE_USE_SYSTEM_CA" >> "$FAKE/log"
 [ -z "\${HOUSE_KIT_PREFIX-}" ] || printf 'release %s\\n' "\${0%/bin/*}" >> "$FAKE/log"
-if [ "$1" = login ]; then set -- "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+environment-two}"; ${LOGIN}fi
+if [ "$1" = login ]; then case " $* " in *' --code '*) coded=1 ;; esac; set -- "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+environment-two}"; ${LOGIN}fi
 `;
 
 async function script(path: string, body: string): Promise<void> {

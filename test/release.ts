@@ -18,22 +18,36 @@ export interface Released {
   adapters: Record<string, Buffer>;
 }
 
-const adapterArchives = new Map<string, Buffer>();
+const archives = new Map<string, Promise<Buffer>>();
 
 export function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-export async function released(version: string): Promise<Released> {
-  const work = await temporaryHome();
-  const node = join(work, 'node-v24.22.1-linux-x64');
-  await mkdir(join(node, 'bin'), { recursive: true });
-  await writeFile(
-    join(node, 'bin', 'node'),
-    '#!/bin/sh\nkit=$(sed -n 2p "$1")\nshift\nprintf \'%s|%s|%s|%s|%s\\n\' "$0" "$kit" "$*" "$NODE_USE_SYSTEM_CA" "$HOUSE_KIT_PREFIX"\n',
-    { mode: 0o755 },
-  );
-  const tree = join(work, 'kit');
+function packed(directory: string, ...entries: string[]): Buffer {
+  return spawnSync('tar', ['-czf', '-', '-C', directory, ...entries]).stdout;
+}
+
+function archive(name: string, make: (work: string) => Promise<Buffer>): Promise<Buffer> {
+  if (!archives.has(name)) archives.set(name, temporaryHome().then(make));
+  return archives.get(name)!;
+}
+
+export function released(version: string): Promise<Released> {
+  return releasedOnNode(version, 'official');
+}
+
+export async function releasedOnNode(version: string, nodeBuild: string): Promise<Released> {
+  const node = archive(`node ${nodeBuild}`, async (work) => {
+    await mkdir(join(work, 'node-v24.22.1-linux-x64', 'bin'), { recursive: true });
+    await writeFile(
+      join(work, 'node-v24.22.1-linux-x64', 'bin', 'node'),
+      `#!/bin/sh\n# Node.js ${nodeBuild} build\nkit=$(sed -n 2p "$1")\nshift\nprintf '%s|%s|%s|%s|%s\\n' "$0" "$kit" "$*" "$NODE_USE_SYSTEM_CA" "$HOUSE_KIT_PREFIX"\n`,
+      { mode: 0o755 },
+    );
+    return packed(work, 'node-v24.22.1-linux-x64');
+  });
+  const tree = join(await temporaryHome(), 'kit');
   const dist = join(tree, 'lib', 'node_modules', '@agentshouse', 'kit', 'dist');
   await mkdir(dist, { recursive: true });
   await mkdir(join(tree, 'bin'));
@@ -41,18 +55,15 @@ export async function released(version: string): Promise<Released> {
     await writeFile(join(dist, `${command}-main.js`), `#!/usr/bin/env node\n// ${command} ${version}\n`, { mode: 0o755 });
     await symlink(`../lib/node_modules/@agentshouse/kit/dist/${command}-main.js`, join(tree, 'bin', command));
   }
-  const packed = (directory: string, ...entries: string[]) => spawnSync('tar', ['-czf', '-', '-C', directory, ...entries]).stdout;
   const adapters: Record<string, Buffer> = {};
   for (const kind of ADAPTED) {
-    if (!adapterArchives.has(kind)) {
-      const adapter = join(work, 'adapters', kind);
-      await mkdir(join(adapter, 'node_modules', '.bin'), { recursive: true });
-      await writeFile(join(adapter, 'node_modules', '.bin', CLIS[kind]!.adapter!.bin), `#!/bin/sh\necho ${adapterArchive(kind)}\n`, { mode: 0o755 });
-      adapterArchives.set(kind, packed(adapter, 'node_modules'));
-    }
-    adapters[kind] = adapterArchives.get(kind)!;
+    adapters[kind] = await archive(`adapter ${kind}`, async (work) => {
+      await mkdir(join(work, 'node_modules', '.bin'), { recursive: true });
+      await writeFile(join(work, 'node_modules', '.bin', CLIS[kind]!.adapter!.bin), `#!/bin/sh\necho ${adapterArchive(kind)}\n`, { mode: 0o755 });
+      return packed(work, 'node_modules');
+    });
   }
-  return { version, kit: packed(tree, 'lib', 'bin'), node: packed(work, 'node-v24.22.1-linux-x64'), adapters };
+  return { version, kit: packed(tree, 'lib', 'bin'), node: await node, adapters };
 }
 
 export async function placing(release: Released, kitSha256 = sha256(release.kit), adapterSha256 = (kind: string) => sha256(release.adapters[kind]!)): Promise<string> {

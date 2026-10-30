@@ -1,4 +1,4 @@
-import { access, readFile, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { ADAPTER_ARCHIVES, fakeHost, LOGIN_LINK, PUBLISHED_VERSION, UBUNTU_26_04, type Host, type Platform } from './host.ts';
@@ -806,6 +806,92 @@ it.each(CONNECTED)('leaves a login code unused when a rerun on the connected com
   expect(ran.stdout.split('\n').at(-2)).toBe('Kit is already installed.');
   expect(logins(host, placement)).toEqual([]);
 });
+
+it.each(CONNECTED)('connects with the login code a rerun carries when House refuses the stored credential %s', async (_name, platform, placement) => {
+  const host = await connectedHost(platform, placement);
+  await host.mark('refused');
+
+  const ran = host.run(['--code', 'ahk_code_two', ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').at(-2)).toBe('Kit connected for Environment environment-one.');
+  expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --code ahk_code_two( |$)/)]);
+});
+
+it.each(CONNECTED)('connects with the login code a rerun carries when Kit home holds only the disconnected Environment %s', async (_name, platform, placement) => {
+  const host = await connectedHost(platform, placement);
+  const kitHome = join(host.home, '.house-kit');
+  await rename(join(kitHome, 'credential.json'), join(kitHome, 'disconnected.json'));
+
+  const ran = host.run(['--code', 'ahk_code_two', ...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').at(-2)).toBe('Kit connected for Environment environment-one.');
+  expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --code ahk_code_two( |$)/)]);
+  await expect(access(join(kitHome, 'disconnected.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each(CONNECTED.flatMap(([name, platform, placement]) => (['refused', 'disconnected'] as const).map((held) => [held, name, platform, placement] as const)))(
+  'keeps the %s Environment Kit home records when House refuses the login code a rerun carries %s',
+  async (held, _name, platform, placement) => {
+    const host = await connectedHost(platform, placement);
+    const kitHome = join(host.home, '.house-kit');
+    const record = held === 'refused' ? 'credential.json' : 'disconnected.json';
+    if (held === 'refused') await host.mark('refused');
+    else await rename(join(kitHome, 'credential.json'), join(kitHome, record));
+    const kept = await readFile(join(kitHome, record), 'utf8');
+    await host.mark('login-fails');
+
+    const ran = host.run(['--code', 'ahk_code_spent', ...placement]);
+
+    expect(ran.status).toBe(7);
+    expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --code ahk_code_spent( |$)/)]);
+    expect(await readFile(join(kitHome, record), 'utf8')).toBe(kept);
+    await expect(access(join(kitHome, 'held-enrolment'))).rejects.toMatchObject({ code: 'ENOENT' });
+  },
+);
+
+it.each(CONNECTED)('puts back the Environment Kit home records when the run is hung up during the code login it carries %s', async (_name, platform, placement) => {
+  const host = await connectedHost(platform, placement);
+  const kitHome = join(host.home, '.house-kit');
+  await host.mark('refused');
+  const kept = await readFile(join(kitHome, 'credential.json'), 'utf8');
+  await host.mark('login-hangs-up');
+
+  const ran = host.run(['--code', 'ahk_code_two', ...placement]);
+
+  expect(ran.status).toBe(130);
+  expect(await readFile(join(kitHome, 'credential.json'), 'utf8')).toBe(kept);
+  await expect(access(join(kitHome, 'held-enrolment'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each(CONNECTED)('puts back the Environment a killed code login left held before a rerun reads Kit home %s', async (_name, platform, placement) => {
+  const host = await connectedHost(platform, placement);
+  const kitHome = join(host.home, '.house-kit');
+  await mkdir(join(kitHome, 'held-enrolment'));
+  await rename(join(kitHome, 'credential.json'), join(kitHome, 'held-enrolment', 'credential.json'));
+
+  const ran = host.run([...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(logins(host, placement)).toEqual([]);
+  expect(JSON.parse(await readFile(join(kitHome, 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one' });
+  await expect(access(join(kitHome, 'held-enrolment'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each(CONNECTED.filter(([, , placement]) => !(placement as readonly string[]).includes('--container')))(
+  'redeems the login code at the House the stored credential names when the run names none %s',
+  async (_name, platform, placement) => {
+    const host = await connectedHost(platform, placement);
+    const credential = join(host.home, '.house-kit', 'credential.json');
+    await writeFile(credential, (await readFile(credential, 'utf8')).replace('https://agents.house', 'https://dev.agents.house'));
+    await host.mark('refused');
+
+    expect(host.run(['--code', 'ahk_code_two', ...placement])).toMatchObject({ status: 0 });
+
+    expect(logins(host, placement)).toEqual([expect.stringMatching(/(^| )login --code ahk_code_two --house https:\/\/dev\.agents\.house( |$)/)]);
+  },
+);
 
 it('sets the Rooms of the connected Environment again through kit login when a rerun naming --no-private finds no service manager on the server', async () => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server: true });

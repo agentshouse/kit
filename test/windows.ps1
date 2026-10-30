@@ -129,12 +129,12 @@ Write-Certificates
 if (($script:Ran -join '|') -cne 'run -i --rm --network none --mount home --entrypoint sh image -c cat > /kit-home/certificates.pem') { $findings += "Write-Certificates ran: $($script:Ran -join '|')" }
 if ($script:Piped -cne $expectedPem) { $findings += "Write-Certificates wrote: $($script:Piped)" }
 Remove-Item Function:Get-ChildItem
-foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Get-KitImage', 'Install-Release', 'Connect-Kit')) {
+foreach ($name in @('ConvertTo-NativeArgument', 'Invoke-Native', 'Invoke-Docker', 'Read-Source', 'Start-Resident', 'Get-KitImage', 'Install-Release', 'Invoke-KitHome', 'Connect-Kit')) {
   $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
   . ([scriptblock]::Create($found.Extent.Text))
 }
 $Release = '0.2.1-alpha.1'
-foreach ($name in @('$Contained', '$Node', '$AuthorityMain', '$ConfigureMain')) {
+foreach ($name in @('$Contained', '$Node', '$AuthorityMain', '$ConfigureMain', '$HoldEnrolment', '$SettleEnrolment')) {
   $found = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq $name }, $true)
   . ([scriptblock]::Create($found.Extent.Text))
 }
@@ -161,7 +161,7 @@ function Get-CimInstance([string] $ClassName) {
 function Initialize-DockerDesktop { [pscustomobject]@{ Platform = $script:DockerPlatform; System = 'Docker Desktop'; Kernel = '6.6.87.2-microsoft-standard-WSL2' } }
 function Protect-Directory([string] $Path) { $Path }
 $script:SecondEnrolment = @{}
-function Read-Enrolment { if ($KitHome -ceq 'house-kit-home') { $script:Enrolment } else { $script:SecondEnrolment } }
+function Read-Enrolment { if ($KitHome -ceq 'house-kit-home') { $script:Enrolment.Clone() } else { $script:SecondEnrolment.Clone() } }
 function Test-Container { $script:Installed }
 function Test-Path { $true }
 function Set-Configuration { $false }
@@ -182,17 +182,32 @@ function Read-Inspect([string] $Format) {
 }
 $script:LoginStatus = 0
 $script:ImageAbsent = $false
+$script:Refused = $false
+$script:Disconnected = $false
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
   if ($args -contains '--place') { $script:Piped += , (@($input) -join "`n") }
   if ($args[0] -ceq 'image' -and $script:ImageAbsent) { $global:LASTEXITCODE = 1 }
   if ($args[0] -ceq 'rm') { $script:Installed = $false }
+  if ($script:Refused -and $args -contains $AuthorityMain) { $global:LASTEXITCODE = 1 }
+  if ($args -contains $HoldEnrolment) {
+    $script:HeldRecords = @{ Environment = $script:Enrolment['environment']; Disconnected = $script:Disconnected }
+    $script:Enrolment.Remove('environment')
+    $script:Disconnected = $false
+  }
+  if ($args -contains $SettleEnrolment -and $script:HeldRecords) {
+    if (-not $script:Enrolment.ContainsKey('environment')) {
+      if ($script:HeldRecords.Environment) { $script:Enrolment['environment'] = $script:HeldRecords.Environment }
+      $script:Disconnected = $script:HeldRecords.Disconnected
+    }
+    $script:HeldRecords = $null
+  }
   if ($args -contains 'login') {
     $second = ($args -join ' ').Contains('house-kit-home-agents.house')
     $held = $script:Enrolment
     if ($second) { $held = $script:SecondEnrolment }
-    if ($args -contains '--code' -and $held.ContainsKey('environment')) {
+    if ($args -contains '--code' -and ($held.ContainsKey('environment') -or (-not $second -and $script:Disconnected))) {
       $global:LASTEXITCODE = 1
       return
     }
@@ -207,7 +222,7 @@ function docker {
 foreach ($case in @(
   @($false, @('--rooms', 'r_k2v.4,r_9qd.x'), 'login --rooms r_k2v.4,r_9qd.x'),
   @($false, @('--no-private', '--house', 'https://agents.house'), 'login --no-private --house https://agents.house'),
-  @($false, @('--code', 'ahk_code_one'), 'login --code ahk_code_one'),
+  @($false, @('--code', 'ahk_code_one'), 'login --code ahk_code_one --house https://agents.house'),
   @($true, @('--workspace', 'C:\Users\u\AgentsHouse', '--no-private'), 'login --no-private'),
   @($true, @('--workspace', 'C:\Users\u\AgentsHouse', '--rooms', 'r_k2v.4'), 'login --rooms r_k2v.4'),
   @($true, @('--workspace', 'C:\Users\u\AgentsHouse', '--code', 'ahk_code_unused', '--no-private'), 'login --no-private'),
@@ -245,6 +260,40 @@ foreach ($rerun in @(
   $logins = @($script:Ran | Where-Object { $_ -match ' login( |$)' })
   if ($logins.Count -ne 0) { $findings += "the enrolled bootstrap $($rerun -join ' ') ran kit login as: $($logins -join '|')" }
 }
+foreach ($status in @(0, 7)) {
+  foreach ($case in @(
+    @{ Name = 'a rerun on a container whose stored credential House refuses'; Installed = $true; Environment = 'environment-one'; Refused = $true; Disconnected = $false },
+    @{ Name = 'a rerun on a Kit home whose stored credential House refuses'; Installed = $false; Environment = 'environment-one'; Refused = $true; Disconnected = $false },
+    @{ Name = 'a rerun on a Kit home that holds only the disconnected Environment'; Installed = $false; Environment = $null; Refused = $false; Disconnected = $true }
+  )) {
+    $script:Installed = $case.Installed
+    $script:Enrolment = @{ house = 'https://agents.house'; release = '0.2.1-alpha.1' }
+    if ($case.Environment) { $script:Enrolment['environment'] = $case.Environment }
+    $script:Refused = $case.Refused
+    $script:Disconnected = $case.Disconnected
+    $script:LoginStatus = $status
+    $BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse', '--code', 'ahk_code_two')
+    $script:Ran = @()
+    $script:Shown = @()
+    $refusal = $null
+    try { Connect-Kit } catch { $refusal = $_.Exception.Message }
+    $held = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_].EndsWith(" -c $HoldEnrolment") })
+    $loggedIn = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_] -match ' login --code ahk_code_two --house https://agents\.house$' })
+    $settled = @(0..($script:Ran.Count - 1) | Where-Object { $script:Ran[$_].EndsWith(" -c $SettleEnrolment") })
+    if ($held.Count -ne 1 -or $loggedIn.Count -ne 1 -or $settled.Count -ne 2 -or $settled[0] -gt $held[0] -or $held[0] -gt $loggedIn[0] -or $loggedIn[0] -gt $settled[1]) {
+      $findings += "$($case.Name) carrying a login code House answers with $status ran: $($script:Ran -join '|')"
+    }
+    if ($status -eq 0 -and ($refusal -or -not ($script:Shown -ccontains 'Kit connected for Environment environment-one.'))) {
+      $findings += "$($case.Name) carrying a login code ended with: $refusal $($script:Shown -join '|')"
+    }
+    if ($status -ne 0 -and ($refusal -cne 'kit_bootstrap_refused: kit login ended with status 7' -or $script:Enrolment['environment'] -cne $case.Environment -or $script:Disconnected -ne $case.Disconnected)) {
+      $findings += "$($case.Name) carrying a login code House refuses ended with: $refusal, leaving environment $($script:Enrolment['environment']) and disconnected $($script:Disconnected)"
+    }
+  }
+}
+$script:LoginStatus = 0
+$script:Refused = $false
+$script:Disconnected = $false
 $script:Installed = $false
 $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house'; release = '0.2.1-alpha.1' }
 $BootstrapArguments = @('--no-private')

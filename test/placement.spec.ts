@@ -196,6 +196,38 @@ it('replaces a container Environment with a new native one once the User confirm
   expect(await enrolled(host)).toBe('environment-two');
 });
 
+it.each([
+  ['a native Environment in the container', native, ['--container'], 'container\n'],
+  ['a container Environment natively', contained, [], 'native\n'],
+] as const)('replaces %s with the Environment its login code connects once the User confirms', async (_name, held, choice, placed) => {
+  const host = await held();
+
+  const ran = host.terminal([...choice, '--code', 'ahk_code_two'], 'y\n');
+
+  expect(ran.status).toBe(0);
+  expect(ran.stdout).toContain('Kit connected for Environment environment-two.');
+  expect([...host.calls('kit'), ...host.calls('docker')].filter((call) => / login( |$)|^login /.test(call))).toEqual([
+    expect.stringMatching(/(^| )login --code ahk_code_two( |$)/),
+  ]);
+  expect(await placement(host)).toBe(placed);
+  await keptTheRest(host);
+});
+
+it.each([
+  ['a native Environment in the container', native, ['--container']],
+  ['a container Environment natively', contained, []],
+] as const)('keeps %s Kit home records when House refuses the login code of a switch the User confirmed', async (_name, held, choice) => {
+  const host = await held();
+  await host.mark('login-fails');
+
+  const ran = host.terminal([...choice, '--code', 'ahk_code_spent'], 'y\n');
+
+  expect(ran.status).not.toBe(0);
+  expect(await enrolled(host)).toBe('environment-one');
+  await absent(join(host.home, '.house-kit', 'held-enrolment'));
+  await keptTheRest(host);
+});
+
 it('asks again after a switch whose login did not finish, and returning to the old placement keeps its Environment', async () => {
   const host = await contained();
   await host.mark('login-fails');

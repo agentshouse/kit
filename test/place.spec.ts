@@ -9,7 +9,7 @@ import { expect, it, onTestFinished } from 'vitest';
 import { CLIS, adapterArchive } from '../src/clis.ts';
 import { ADAPTER_ARCHIVES, fakeHost, PUBLISHED_VERSION, type Host, type Platform } from './host.ts';
 import { temporaryHome } from './kit.ts';
-import { ADAPTED, placing, released, served, sha256 } from './release.ts';
+import { ADAPTED, placing, released, releasedOnNode, served, sha256 } from './release.ts';
 
 const NEWER = '0.2.1-alpha.2';
 
@@ -97,6 +97,36 @@ it('places a newer release beside the one that runs without writing into its dir
   expect(started(prefix)).toBe(`${prefix}/releases/${three!.version}/bin/node|// kit ${three!.version}|status|1|${prefix}\n`);
 });
 
+it('places a newer release on the Node.js the running release holds while the release pins the same Node.js, downloading only the Kit and its adapters', async () => {
+  const one = await released('0.2.1-c000000000001');
+  const two = await released('0.2.1-c000000000002');
+  const house = await building(served(one, two));
+  const prefix = join(await temporaryHome(), 'house-kit');
+  expect(await place(await placing(one), house.origin, prefix)).toMatchObject({ status: 0 });
+  house.requests.length = 0;
+
+  const ran = await place(await placing(two), house.origin, prefix);
+
+  expect(ran).toEqual({ status: 0, stdout: `Downloading Kit ${two.version} from ${house.origin}.\n`, stderr: '' });
+  expect(house.requests).toEqual([`/kit-installer/kit-${two.version}.tar.gz`, ...ADAPTED.map((kind) => `/kit-installer/${adapterArchive(kind)}`)]);
+  expect(started(prefix)).toBe(`${prefix}/releases/${two.version}/bin/node|// kit ${two.version}|status|1|${prefix}\n`);
+  expect(started(prefix, 'house')).toBe(`${prefix}/releases/${two.version}/bin/node|// house ${two.version}|status|1|${prefix}\n`);
+});
+
+it('downloads Node.js again for a newer release that pins another Node.js than the running release holds', async () => {
+  const one = await released('0.2.1-c000000000001');
+  const two = await releasedOnNode('0.2.1-c000000000002', 'rebuilt');
+  const prefix = join(await temporaryHome(), 'house-kit');
+  expect(await place(await placing(one), (await building(served(one))).origin, prefix)).toMatchObject({ status: 0 });
+  const house = await building(served(two));
+
+  const ran = await place(await placing(two), house.origin, prefix);
+
+  expect(ran).toEqual({ status: 0, stdout: `Downloading Node.js 24.22.1 and Kit ${two.version} from ${house.origin}.\n`, stderr: '' });
+  expect(house.requests[0]).toBe('/kit-installer/node-v24.22.1-linux-x64.tar.gz');
+  expect(await readFile(join(prefix, 'releases', two.version, 'bin', 'node'), 'utf8')).toContain('rebuilt');
+});
+
 it.each([
   ['a Kit archive that does not match its digest', 'kit_bootstrap_refused: the Kit download does not match its pinned checksum\n', true],
   ['a Building that does not serve the Kit archive', 'kit_bootstrap_refused: Kit could not be downloaded from %s\n', false],
@@ -174,6 +204,13 @@ function placedInImage(host: Host): number {
   return host.calls('docker').findIndex((call) => /^run -i --entrypoint bash .* -s - --house https:\/\/agents\.house --place \/kit-home\/kit$/.test(call));
 }
 
+function newerKitAlone(): unknown[] {
+  return [
+    expect.stringMatching(new RegExp(` https://agents\\.house/kit-installer/kit-${NEWER.replaceAll('.', '\\.')}\\.tar\\.gz$`)),
+    ...ADAPTER_ARCHIVES.map((name) => expect.stringContaining(` https://agents.house/kit-installer/${name}`)),
+  ];
+}
+
 async function holds(prefix: string, version: string): Promise<void> {
   expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${version}\n`);
   await access(join(prefix, 'releases', version, 'bin', 'node'));
@@ -220,6 +257,7 @@ it.each([
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout.split('\n').at(-2)).toBe('Kit updated.');
+  expect(host.calls('curl')).toEqual(newerKitAlone());
   await holds(host.prefixes[route], NEWER);
   expect(await snapshot(old)).toEqual(before);
   expect(acts(host)).toEqual(started);
@@ -316,6 +354,7 @@ it.each(CONTAINERS)('places a newer release in Kit home when the install command
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout).toContain('Kit updated.\n');
+  expect(host.calls('curl')).toEqual(newerKitAlone());
   await holds(host.prefixes.container, NEWER);
   const node = `/kit-home/kit/releases/${NEWER}/bin/node`;
   const dist = `/kit-home/kit/releases/${NEWER}/lib/node_modules/@agentshouse/kit/dist`;

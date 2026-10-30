@@ -73,6 +73,7 @@ LAUNCH_AGENT="$HOME/Library/LaunchAgents/$SERVICE.plist"
 USER_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE.service"
 REDEFINED=0
 REPLACES=''
+STORED_REFUSED=0
 OTHER_HOME=0
 SECOND=0
 OTHER_HOUSE=''
@@ -149,11 +150,38 @@ login_kit() {
   [[ -f "$KIT_HOME/credential.json" ]] || refuse 'kit login connected no Environment'
 }
 
-login_arguments() {
-  LOGIN=()
-  if ((HOUSE_SELECTED)); then LOGIN+=(--house "$HOUSE"); fi
-  LOGIN+=(${ROOMS[@]+"${ROOMS[@]}"})
-  LOGIN+=(${CODE[@]+"${CODE[@]}"})
+needs_login() {
+  [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]] || ((STORED_REFUSED))
+}
+
+log_in() {
+  local login=() record failed=0
+  if ((HOUSE_SELECTED)); then login+=(--house "$HOUSE"); fi
+  login+=(${ROOMS[@]+"${ROOMS[@]}"} ${CODE[@]+"${CODE[@]}"})
+  if ((${#CODE[@]} == 0)); then
+    login_kit ${login[@]+"${login[@]}"}
+    return
+  fi
+  ((HOUSE_SELECTED)) || login+=(--house "$HOUSE")
+  trap 'settle_enrolment; exit 130' HUP INT TERM
+  mkdir "$KIT_HOME/held-enrolment" || refuse "$KIT_HOME could not be cleared"
+  for record in credential.json disconnected.json; do
+    [[ ! -f "$KIT_HOME/$record" ]] || mv "$KIT_HOME/$record" "$KIT_HOME/held-enrolment/" || { settle_enrolment; refuse "$KIT_HOME could not be cleared"; }
+  done
+  (login_kit "${login[@]}") || failed=$?
+  trap - HUP INT TERM
+  settle_enrolment
+  ((failed == 0)) || exit "$failed"
+}
+
+settle_enrolment() {
+  local record
+  if [[ ! -e "$KIT_HOME/credential.json" ]]; then
+    for record in credential.json disconnected.json; do
+      [[ ! -f "$KIT_HOME/held-enrolment/$record" ]] || mv "$KIT_HOME/held-enrolment/$record" "$KIT_HOME/" || true
+    done
+  fi
+  rm -rf "$KIT_HOME/held-enrolment" || true
 }
 
 set_rooms_again() {
@@ -197,6 +225,14 @@ confirmed() {
 check_authority() {
   HOUSE_KIT_HOME="$KIT_HOME" "$@" ||
     refuse "House refuses the stored Kit credential of Environment $(enrolled environment); to reconnect it, $RECONNECT"
+}
+
+check_stored_authority() {
+  if ((${#CODE[@]} == 0)); then
+    check_authority "$@"
+  elif ((STORED_REFUSED == 0)); then
+    HOUSE_KIT_HOME="$KIT_HOME" "$@" || STORED_REFUSED=1
+  fi
 }
 
 configure_kit() {
@@ -375,7 +411,7 @@ trust_extra_authorities() {
 }
 
 place_release() {
-  local prefix=$1 current='' mask command placed adapter
+  local prefix=$1 current='' mask command placed adapter entry
   PLACED=0
   [[ ! -f "$prefix/current" ]] || current=$(cat "$prefix/current")
   [[ "$current" != "$VERSION" ]] || return 0
@@ -385,10 +421,21 @@ place_release() {
   if [[ ! -d "$prefix/releases/$VERSION" ]]; then
     rm -rf "$prefix/placing" && mkdir -p "$prefix/placing/release" || refuse "Kit could not be placed in $prefix"
     trust_extra_authorities "$prefix/placing"
-    printf 'Downloading Node.js %s and Kit %s from %s.\n' "$NODE_VERSION" "$VERSION" "$HOUSE"
-    download Node.js "node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz" "$NODE_SHA256" "$prefix/placing/node.tar.gz" "$NODE_BYTES"
+    if [[ -n "$current" && "$(cat "$prefix/releases/$current/node.sha256" 2>/dev/null)" == "$NODE_SHA256" ]]; then
+      printf 'Downloading Kit %s from %s.\n' "$VERSION" "$HOUSE"
+      for entry in "$prefix/releases/$current"/*; do
+        [[ "${entry##*/}" == adapters ]] || cp -pR "$entry" "$prefix/placing/release/" || refuse "Kit could not be placed in $prefix"
+      done
+      chmod -R u+w "$prefix/placing/release" &&
+        rm -rf "$prefix/placing/release/lib/node_modules/@agentshouse" "$prefix/placing/release/bin/kit" "$prefix/placing/release/bin/house" ||
+        refuse "Kit could not be placed in $prefix"
+    else
+      printf 'Downloading Node.js %s and Kit %s from %s.\n' "$NODE_VERSION" "$VERSION" "$HOUSE"
+      download Node.js "node-v$NODE_VERSION-$NODE_PLATFORM.tar.gz" "$NODE_SHA256" "$prefix/placing/node.tar.gz" "$NODE_BYTES"
+      tar -xzf "$prefix/placing/node.tar.gz" -C "$prefix/placing/release" --strip-components=1 --no-same-owner || refuse 'Node.js could not be unpacked'
+      printf '%s\n' "$NODE_SHA256" > "$prefix/placing/release/node.sha256" || refuse "Kit could not be placed in $prefix"
+    fi
     download Kit "kit-$VERSION.tar.gz" "$KIT_SHA256" "$prefix/placing/kit.tar.gz"
-    tar -xzf "$prefix/placing/node.tar.gz" -C "$prefix/placing/release" --strip-components=1 --no-same-owner || refuse 'Node.js could not be unpacked'
     tar -xzf "$prefix/placing/kit.tar.gz" -C "$prefix/placing/release" --no-same-owner || refuse "Kit $VERSION could not be unpacked"
     for adapter in $ADAPTERS; do
       download "${adapter%=*}" "${adapter%=*}" "${adapter#*=}" "$prefix/placing/adapter.tar.gz"
@@ -508,11 +555,11 @@ connect_native() {
   fi
   record_placement server
   if [[ -f "$KIT_HOME/credential.json" ]]; then
-    check_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
+    check_stored_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
   fi
   configure_kit "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/configure-main.js"
   LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
-  if [[ -f "$KIT_HOME/credential.json" ]]; then
+  if ! needs_login; then
     ALREADY_CONNECTED=1
   elif ((ENROLL_SELECTED)); then
     connected=connected
@@ -520,8 +567,7 @@ connect_native() {
     check_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
   else
     connected=connected
-    login_arguments
-    login_kit ${LOGIN[@]+"${LOGIN[@]}"}
+    log_in
   fi
   if ! service_manager; then
     announce unsupervised
@@ -796,14 +842,13 @@ connect_desktop() {
   add_path_line
   [[ -f "$KIT_HOME/credential.json" ]] || record_placement native
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
+    check_stored_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
   fi
   configure_kit "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/configure-main.js"
   LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
-  if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
+  if needs_login; then
     connected=connected
-    login_arguments
-    login_kit ${LOGIN[@]+"${LOGIN[@]}"}
+    log_in
   else
     ALREADY_CONNECTED=1
   fi
@@ -941,12 +986,11 @@ resume_kit() {
 connect_kit() {
   [[ -f "$KIT_HOME/credential.json" ]] || record_placement container
   if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_authority "${AUTHORITY[@]}"
+    check_stored_authority "${AUTHORITY[@]}"
   fi
   configure_kit "${CONFIGURE[@]}"
-  if [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]]; then
-    login_arguments
-    login_kit ${LOGIN[@]+"${LOGIN[@]}"}
+  if needs_login; then
+    log_in
   else
     ALREADY_CONNECTED=1
   fi
@@ -1088,6 +1132,7 @@ fi
 [[ "$WORKSPACE" == /* ]] || refuse 'workspace root must be an absolute path'
 
 read_host
+settle_enrolment
 
 if ((NATIVE)); then
   connect_native
@@ -1159,8 +1204,8 @@ if kit_installed; then
     if [[ "$FORWARDED" == kit && "${FORWARD[*]:-}" == logout ]]; then docker stop "$NAME" >/dev/null; fi
     exit 0
   fi
-  if [[ -f "$KIT_HOME/credential.json" ]]; then check_authority "${AUTHORITY[@]}"; fi
-  if [[ ! -f "$KIT_HOME/credential.json" ]]; then
+  if [[ -f "$KIT_HOME/credential.json" ]]; then check_stored_authority "${AUTHORITY[@]}"; fi
+  if needs_login; then
     remove_container
     connect_kit
     exit 0

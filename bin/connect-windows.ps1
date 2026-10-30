@@ -12,6 +12,8 @@ $Contained = '/kit-home/kit'
 $Node = "$Contained/releases/$Release/bin/node"
 $AuthorityMain = "$Contained/releases/$Release/lib/node_modules/@agentshouse/kit/dist/authority-main.js"
 $ConfigureMain = "$Contained/releases/$Release/lib/node_modules/@agentshouse/kit/dist/configure-main.js"
+$HoldEnrolment = 'cd /kit-home && mkdir held-enrolment && for record in credential.json disconnected.json; do [ ! -f $record ] || mv $record held-enrolment/ || exit 1; done'
+$SettleEnrolment = 'cd /kit-home && if [ ! -e credential.json ]; then for record in credential.json disconnected.json; do [ ! -f held-enrolment/$record ] || mv held-enrolment/$record .; done; fi; rm -rf held-enrolment'
 $KitHomeReader = @'
 for field in house environment; do
   value=$(sed -n "s/.*\"$field\":\"\([^\"]*\)\".*/\1/p" /kit-home/credential.json 2>/dev/null)
@@ -235,7 +237,13 @@ function Invoke-Login([string[]] $LoginArguments) {
 
 function Test-Authority {
   & docker run --rm @Network --entrypoint $Node @Common $AuthorityMain
-  if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
+  if ($LASTEXITCODE -eq 0) { return }
+  if (-not $Code) { Stop-Bootstrap "House refuses the stored Kit credential of Environment $($enrolment['environment']); to reconnect it, run this command again with kit login appended" }
+  $enrolment.Remove('environment')
+}
+
+function Invoke-KitHome([string] $Script) {
+  Invoke-Docker run --rm --network none --mount $KitHomeMount --entrypoint sh $Image -c $Script | Out-Null
 }
 
 function Get-KitImage([string] $Origin) {
@@ -306,6 +314,7 @@ function Connect-Kit {
   $Forward = @()
   $NoSkills = @()
   $Login = @()
+  $Code = $null
   $Rooms = @()
   $Arguments = $BootstrapArguments
   for ($index = 0; $index -lt $Arguments.Count; $index++) {
@@ -339,7 +348,8 @@ function Connect-Kit {
     } elseif ($argument -ceq '--code') {
       if ($index + 1 -ge $Arguments.Count) { Stop-Bootstrap "$argument requires one value" }
       $index++
-      $Login += @('--code', $Arguments[$index])
+      $Code = $Arguments[$index]
+      $Login += @('--code', $Code)
     } elseif ($argument -ceq '--no-skills') {
       $NoSkills = @('--no-skills')
     } else {
@@ -402,6 +412,7 @@ function Connect-Kit {
 
   $Workspace = Protect-Directory $Workspace
   $WorkspaceMount = "type=bind,src=$Workspace,dst=/agents/house"
+  Invoke-KitHome $SettleEnrolment
   $enrolment = Read-Enrolment
   if ($enrolment.ContainsKey('environment')) {
     if (-not $enrolment.ContainsKey('house')) { Stop-Bootstrap 'the stored credential names no House origin' }
@@ -457,7 +468,8 @@ function Connect-Kit {
       if ($Forwarded -ceq 'kit' -and ($Forward -join ' ') -ceq 'logout') { Invoke-Docker stop $Name | Out-Null }
       return
     }
-    if ($enrolment.ContainsKey('environment')) { Test-Authority } else { Invoke-Docker rm -f $Name | Out-Null }
+    if ($enrolment.ContainsKey('environment')) { Test-Authority }
+    if (-not $enrolment.ContainsKey('environment')) { Invoke-Docker rm -f $Name | Out-Null }
   }
 
   if (Test-Container) {
@@ -479,11 +491,17 @@ function Connect-Kit {
     return
   }
 
+  if ($enrolment.ContainsKey('environment')) { Test-Authority }
   $alreadyConnected = $enrolment.ContainsKey('environment')
-  if ($alreadyConnected) { Test-Authority }
   [void](Set-Configuration)
   if (-not $alreadyConnected) {
-    Invoke-Login $Login
+    if ($Code -and -not $HouseSelected) { $Login += @('--house', $House) }
+    try {
+      if ($Code) { Invoke-KitHome $HoldEnrolment }
+      Invoke-Login $Login
+    } finally {
+      if ($Code) { Invoke-KitHome $SettleEnrolment }
+    }
     $enrolment = Read-Enrolment
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
   }
