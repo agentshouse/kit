@@ -17,10 +17,24 @@ async function served(name: string, signal?: AbortSignal): Promise<Response> {
   throw new Error(`House answered ${answer.status} for ${name}`);
 }
 
-export async function servedDigest(name: string, signal?: AbortSignal): Promise<string | null> {
-  const manifest = (await (await served(MANIFEST, signal)).json()) as { files?: Record<string, { sha256?: unknown }> };
-  const sha256 = manifest.files?.[name]?.sha256;
-  return typeof sha256 === 'string' ? sha256 : null;
+export interface ServedRelease {
+  version: string;
+  installer: string;
+  sha256: string;
+}
+
+export async function servedRelease(signal?: AbortSignal): Promise<ServedRelease> {
+  const manifest = (await (await served(MANIFEST, signal)).json()) as {
+    version?: unknown;
+    hosts?: { linux?: unknown };
+    files?: Record<string, { sha256?: unknown }>;
+  };
+  const installer = manifest.hosts?.linux;
+  const sha256 = typeof installer === 'string' ? manifest.files?.[installer]?.sha256 : undefined;
+  if (typeof manifest.version !== 'string' || typeof installer !== 'string' || typeof sha256 !== 'string') {
+    throw new Error(`House serves no Kit release in ${MANIFEST}`);
+  }
+  return { version: manifest.version, installer, sha256 };
 }
 
 export async function downloadServed(name: string, sha256: string, destination: string, signal?: AbortSignal, most = Infinity): Promise<void> {

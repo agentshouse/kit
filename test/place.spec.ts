@@ -1,62 +1,17 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { access, lstat, readdir, readFile, mkdir, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, lstat, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
-import { fakeHost, PUBLISHED_VERSION, type Host, type Platform } from './host.ts';
+import { CLIS, adapterArchive } from '../src/clis.ts';
+import { ADAPTER_ARCHIVES, fakeHost, PUBLISHED_VERSION, type Host, type Platform } from './host.ts';
 import { temporaryHome } from './kit.ts';
+import { ADAPTED, placing, released, served, sha256 } from './release.ts';
 
-const LINUX = fileURLToPath(new URL('../bin/connect-linux.sh', import.meta.url));
 const NEWER = '0.2.1-alpha.2';
-
-interface Released {
-  version: string;
-  kit: Buffer;
-  node: Buffer;
-}
-
-function sha256(bytes: Buffer): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
-
-async function released(version: string): Promise<Released> {
-  const work = await temporaryHome();
-  const node = join(work, 'node-v24.22.1-linux-x64');
-  await mkdir(join(node, 'bin'), { recursive: true });
-  await writeFile(
-    join(node, 'bin', 'node'),
-    '#!/bin/sh\nkit=$(sed -n 2p "$1")\nshift\nprintf \'%s|%s|%s|%s\\n\' "$0" "$kit" "$*" "$NODE_USE_SYSTEM_CA"\n',
-    { mode: 0o755 },
-  );
-  const tree = join(work, 'kit');
-  const dist = join(tree, 'lib', 'node_modules', '@agentshouse', 'kit', 'dist');
-  await mkdir(dist, { recursive: true });
-  await mkdir(join(tree, 'bin'));
-  for (const command of ['kit', 'house']) {
-    await writeFile(join(dist, `${command}-main.js`), `#!/usr/bin/env node\n// ${command} ${version}\n`, { mode: 0o755 });
-    await symlink(`../lib/node_modules/@agentshouse/kit/dist/${command}-main.js`, join(tree, 'bin', command));
-  }
-  const packed = (directory: string, ...entries: string[]) => spawnSync('tar', ['-czf', '-', '-C', directory, ...entries]).stdout;
-  return { version, kit: packed(tree, 'lib', 'bin'), node: packed(work, 'node-v24.22.1-linux-x64') };
-}
-
-async function placing(release: Released, kitSha256 = sha256(release.kit)): Promise<string> {
-  const script = join(await temporaryHome(), 'connect-linux.sh');
-  await writeFile(
-    script,
-    (await readFile(LINUX, 'utf8'))
-      .replace('__IMAGE_DIGEST__', 'a'.repeat(64))
-      .replace('__KIT_RELEASE__', release.version)
-      .replace('__KIT_SHA256__', kitSha256)
-      .replace(/NODE_SHA256=[0-9a-f]{64}/g, `NODE_SHA256=${sha256(release.node)}`)
-      .replace(/NODE_BYTES=\d+/g, `NODE_BYTES=${release.node.length}`),
-  );
-  return script;
-}
 
 interface Served {
   origin: string;
@@ -76,16 +31,6 @@ async function building(files: Record<string, Buffer>, secure?: { key: Buffer; c
   onTestFinished(() => new Promise<void>((closed) => server.close(() => closed())));
   const { port } = server.address() as AddressInfo;
   return { origin: `${secure === undefined ? 'http' : 'https'}://127.0.0.1:${port}`, requests };
-}
-
-function served(...releases: Released[]): Record<string, Buffer> {
-  return Object.fromEntries(
-    releases.flatMap((release) => [
-      [`kit-${release.version}.tar.gz`, release.kit],
-      ['node-v24.22.1-linux-x64.tar.gz', release.node],
-      ['node-v24.22.1-linux-arm64.tar.gz', release.node],
-    ]),
-  );
 }
 
 function place(script: string, house: string, prefix: string, added: Record<string, string> = {}): Promise<{ status: number | null; stdout: string; stderr: string }> {
@@ -120,8 +65,12 @@ it('places a release in a directory of its own beside the launchers that start i
   expect(ran).toEqual({ status: 0, stdout: `Downloading Node.js 24.22.1 and Kit ${one.version} from ${house.origin}.\n`, stderr: '' });
   expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${one.version}\n`);
   expect((await readdir(prefix)).sort()).toEqual(['bin', 'current', 'releases']);
-  expect(started(prefix)).toBe(`${prefix}/releases/${one.version}/bin/node|// kit ${one.version}|status|1\n`);
-  expect(started(prefix, 'house')).toBe(`${prefix}/releases/${one.version}/bin/node|// house ${one.version}|status|1\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${one.version}/bin/node|// kit ${one.version}|status|1|${prefix}\n`);
+  expect(started(prefix, 'house')).toBe(`${prefix}/releases/${one.version}/bin/node|// house ${one.version}|status|1|${prefix}\n`);
+  for (const kind of ADAPTED) {
+    const adapter = join(prefix, 'releases', one.version, 'adapters', kind, 'node_modules', '.bin', CLIS[kind]!.adapter!.bin);
+    expect(spawnSync(adapter, { encoding: 'utf8' }).stdout).toBe(`${adapterArchive(kind)}\n`);
+  }
   house.requests.length = 0;
 
   expect(await place(await placing(one), house.origin, prefix)).toEqual({ status: 0, stdout: '', stderr: '' });
@@ -141,11 +90,11 @@ it('places a newer release beside the one that runs without writing into its dir
   expect(await place(await placing(two!), house.origin, prefix)).toMatchObject({ status: 0, stderr: '' });
 
   expect(await snapshot(running)).toEqual(before);
-  expect(started(prefix)).toBe(`${prefix}/releases/${two!.version}/bin/node|// kit ${two!.version}|status|1\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${two!.version}/bin/node|// kit ${two!.version}|status|1|${prefix}\n`);
   spawnSync('chmod', ['-R', 'u+w', running]);
   expect(await place(await placing(three!), house.origin, prefix)).toMatchObject({ status: 0, stderr: '' });
   expect((await readdir(join(prefix, 'releases'))).sort()).toEqual([two!.version, three!.version]);
-  expect(started(prefix)).toBe(`${prefix}/releases/${three!.version}/bin/node|// kit ${three!.version}|status|1\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${three!.version}/bin/node|// kit ${three!.version}|status|1|${prefix}\n`);
 });
 
 it.each([
@@ -163,7 +112,27 @@ it.each([
   expect(ran.stderr).toContain(refusal.replace('%s', house.origin));
   expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${one!.version}\n`);
   expect(await readdir(join(prefix, 'releases'))).toEqual([one!.version]);
-  expect(started(prefix)).toBe(`${prefix}/releases/${one!.version}/bin/node|// kit ${one!.version}|status|1\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${one!.version}/bin/node|// kit ${one!.version}|status|1|${prefix}\n`);
+});
+
+it('leaves the running release and its launchers as they were after an adapter archive that does not match its digest', async () => {
+  const [one, two] = await Promise.all(['0.2.1-c000000000001', '0.2.1-c000000000002'].map(released));
+  const house = await building(served(one!, two!));
+  const prefix = join(await temporaryHome(), 'house-kit');
+  expect(await place(await placing(one!), house.origin, prefix)).toMatchObject({ status: 0 });
+  const [mismatched] = ADAPTED;
+
+  const ran = await place(
+    await placing(two!, sha256(two!.kit), (kind) => (kind === mismatched ? sha256(Buffer.from('another archive')) : sha256(two!.adapters[kind]!))),
+    house.origin,
+    prefix,
+  );
+
+  expect(ran.status).toBe(1);
+  expect(ran.stderr).toContain(`kit_bootstrap_refused: the ${adapterArchive(mismatched!)} download does not match its pinned checksum\n`);
+  expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${one!.version}\n`);
+  expect(await readdir(join(prefix, 'releases'))).toEqual([one!.version]);
+  expect(started(prefix)).toBe(`${prefix}/releases/${one!.version}/bin/node|// kit ${one!.version}|status|1|${prefix}\n`);
 });
 
 it("downloads through the authorities NODE_EXTRA_CA_CERTS names beside the computer's own, as a container's Kit trusts them", async () => {
@@ -209,9 +178,10 @@ async function holds(prefix: string, version: string): Promise<void> {
   expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${version}\n`);
   await access(join(prefix, 'releases', version, 'bin', 'node'));
   await access(join(prefix, 'releases', version, 'lib', 'node_modules', '@agentshouse', 'kit', 'dist'));
+  for (const kind of ADAPTED) await access(join(prefix, 'releases', version, 'adapters', kind, 'node_modules', '.bin', 'adapter'));
 }
 
-it.each(ROUTES)('places the Building’s Kit release and its Node runtime through the one placement in %s, and its launcher starts that release', async (_name, platform, placement, route) => {
+it.each(ROUTES)('places the Building’s Kit release with its Node runtime and adapters through the one placement in %s, and its launcher starts that release', async (_name, platform, placement, route) => {
   const host = await fakeHost(platform);
 
   expect(host.run([...placement])).toMatchObject({ status: 0, stderr: '' });
@@ -221,6 +191,7 @@ it.each(ROUTES)('places the Building’s Kit release and its Node runtime throug
   expect(host.calls('curl')).toEqual([
     expect.stringMatching(new RegExp(` https://agents\\.house/kit-installer/node-v24\\.22\\.1-${node}\\.tar\\.gz$`)),
     expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/kit-0\.2\.1-alpha\.1\.tar\.gz$/),
+    ...ADAPTER_ARCHIVES.map((name) => expect.stringContaining(` https://agents.house/kit-installer/${name}`)),
   ]);
   if (route === 'container') {
     expect(placedInImage(host)).toBeGreaterThan(-1);
@@ -252,6 +223,36 @@ it.each([
   await holds(host.prefixes[route], NEWER);
   expect(await snapshot(old)).toEqual(before);
   expect(acts(host)).toEqual(started);
+});
+
+async function supervisor(host: Host, route: Route, platform: Platform): Promise<{ restarts: boolean; command: string }> {
+  if (route === 'container') {
+    const resident = host.calls('docker').findLast((call) => call.startsWith('run -d '))!;
+    const [, , launcher] = JSON.parse(/^ENTRYPOINT (.+)$/m.exec(await readFile(DOCKERFILE, 'utf8'))![1]!) as string[];
+    return { restarts: / --restart on-failure /.test(resident), command: `${launcher!.replace('/kit-home/kit', host.prefixes.container)} resident` };
+  }
+  if (platform.system === 'Darwin') {
+    const agent = await readFile(join(host.home, 'Library', 'LaunchAgents', 'house-kit.plist'), 'utf8');
+    const [launcher, argument] = [.../<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]+)<\/string>\s*<string>([^<]+)<\/string>/.exec(agent)!].slice(1);
+    return { restarts: /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/.test(agent), command: `${launcher} ${argument}` };
+  }
+  const unit = route === 'server' ? await host.serverUnit() : await readFile(join(host.home, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8');
+  return { restarts: unit.split('\n').includes('Restart=on-failure'), command: /^ExecStart=(.+)$/m.exec(unit)![1]!.replaceAll('"', '') };
+}
+
+it.each(ROUTES)('restarts Kit through %s’s supervisor when it ends with a failure, and its launcher starts the release the last placement placed', async (_name, platform, placement, route) => {
+  const host = await fakeHost(platform);
+  expect(host.run([...placement])).toMatchObject({ status: 0, stderr: '' });
+  const { restarts, command } = await supervisor(host, route, platform);
+  await host.publish(NEWER);
+
+  expect(host.run(['--place', host.prefixes[route]])).toMatchObject({ status: 0, stderr: '' });
+  await host.forget();
+  expect(host.shell(command)).toMatchObject({ status: 0, stderr: '' });
+
+  expect(restarts).toBe(true);
+  expect(host.calls('release')).toEqual([join(host.prefixes[route], 'releases', NEWER)]);
+  expect(host.calls('kit')).toEqual([expect.stringMatching(/^resident /)]);
 });
 
 it('places the native-host release owned by the account its Kit service runs as, elevating only to make its directory that account’s', async () => {

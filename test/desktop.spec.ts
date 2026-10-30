@@ -1,7 +1,7 @@
 import { access, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { fakeHost, LOGIN_LINK, PUBLISHED_VERSION, UBUNTU_26_04, type Host, type Platform } from './host.ts';
+import { ADAPTER_ARCHIVES, fakeHost, LOGIN_LINK, PUBLISHED_VERSION, UBUNTU_26_04, type Host, type Platform } from './host.ts';
 import { temporaryHome } from './kit.ts';
 
 const LINK_LINE = `Open this link and confirm: ${LOGIN_LINK}`;
@@ -107,8 +107,9 @@ it("installs Kit natively beneath the home on Linux as the User's systemd servic
   expect(host.calls('curl')).toEqual([
     expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/node-v24\.22\.1-linux-x64\.tar\.gz$/),
     expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/kit-0\.2\.1-alpha\.1\.tar\.gz$/),
+    ...ADAPTER_ARCHIVES.map((name) => expect.stringContaining(` https://agents.house/kit-installer/${name}`)),
   ]);
-  expect(host.calls('sha256sum')).toEqual(['--check', '--check']);
+  expect(host.calls('sha256sum')).toEqual(Array(2 + ADAPTER_ARCHIVES.length).fill('--check'));
   expect(host.calls('sudo')).toEqual([]);
   expect(host.calls('docker')).toEqual([
     'container inspect house-kit',
@@ -135,8 +136,9 @@ it("installs Kit natively beneath the home on macOS as the User's LaunchAgent, w
   expect(host.calls('curl')).toEqual([
     expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/node-v24\.22\.1-darwin-arm64\.tar\.gz$/),
     expect.stringMatching(/ https:\/\/agents\.house\/kit-installer\/kit-0\.2\.1-alpha\.1\.tar\.gz$/),
+    ...ADAPTER_ARCHIVES.map((name) => expect.stringContaining(` https://agents.house/kit-installer/${name}`)),
   ]);
-  expect(host.calls('shasum')).toEqual(['-a 256 --check', '-a 256 --check']);
+  expect(host.calls('shasum')).toEqual(Array(2 + ADAPTER_ARCHIVES.length).fill('-a 256 --check'));
   expect(host.calls('sudo')).toEqual([]);
   expect(ran.stdout).toContain(`${LINK_LINE}\n`);
   expect(host.calls('open')).toEqual([]);
@@ -366,7 +368,7 @@ it.each(OFF_CONTRACT.flatMap(([host, osRelease, found]) => NATIVE_ROUTES.map(([r
     expect(ran).toMatchObject({ status: 0, stderr: '' });
     expect(notices(ran.stdout)).toEqual([`Warning: ${found} is outdated; update to Ubuntu 26.04 LTS.`]);
     expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
-    expect(host.calls('curl')).toEqual([expect.stringContaining('/kit-installer/node-v24.22.1-linux-x64.tar.gz'), expect.stringContaining('/kit-installer/kit-')]);
+    expect(host.calls('curl')).toEqual([expect.stringContaining('/kit-installer/node-v24.22.1-linux-x64.tar.gz'), expect.stringContaining('/kit-installer/kit-'), ...ADAPTER_ARCHIVES.map((name) => expect.stringContaining(`/kit-installer/${name}`))]);
     expect(host.calls('kit')).toEqual([expect.stringMatching(/^login /)]);
   },
 );
@@ -387,7 +389,7 @@ it('warns in one line on Ubuntu 26.04 LTS on arm64, naming both architectures, a
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(notices(ran.stdout)).toEqual(['Warning: Ubuntu 26.04 LTS on arm64 is outdated; update to Ubuntu 26.04 LTS on amd64.']);
-  expect(host.calls('curl')).toEqual([expect.stringContaining('/kit-installer/node-v24.22.1-linux-arm64.tar.gz'), expect.stringContaining('/kit-installer/kit-')]);
+  expect(host.calls('curl')).toEqual([expect.stringContaining('/kit-installer/node-v24.22.1-linux-arm64.tar.gz'), expect.stringContaining('/kit-installer/kit-'), ...ADAPTER_ARCHIVES.map((name) => expect.stringContaining(`/kit-installer/${name}`))]);
   await installed(host);
 });
 
@@ -402,7 +404,7 @@ it.each([
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(notices(ran.stdout)).toEqual([notice]);
-  expect(host.calls('curl')).toEqual([expect.stringContaining(`/kit-installer/node-v24.22.1-${node}.tar.gz`), expect.stringContaining('/kit-installer/kit-')]);
+  expect(host.calls('curl')).toEqual([expect.stringContaining(`/kit-installer/node-v24.22.1-${node}.tar.gz`), expect.stringContaining('/kit-installer/kit-'), ...ADAPTER_ARCHIVES.map((name) => expect.stringContaining(`/kit-installer/${name}`))]);
   await installed(host);
 });
 
@@ -887,6 +889,7 @@ it.each([
     expect(host.calls('curl')).toEqual([
       expect.stringMatching(/ https:\/\/kit-relay\.example\/agents\.house\/kit-installer\/node-v24\.22\.1-\S+\.tar\.gz$/),
       expect.stringMatching(/ https:\/\/kit-relay\.example\/agents\.house\/kit-installer\/kit-0\.2\.1-alpha\.1\.tar\.gz$/),
+      ...ADAPTER_ARCHIVES.map((name) => expect.stringContaining(` https://kit-relay.example/agents.house/kit-installer/${name}`)),
     ]);
   } else {
     expect(host.calls('docker')).toContain(`pull --quiet --platform linux/amd64 kit-relay.example/agents.house/kit@sha256:${'a'.repeat(64)}`);

@@ -1,361 +1,135 @@
-import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { expect, it, onTestFinished } from 'vitest';
+import { expect, it } from 'vitest';
+import { CLIS, KIT_RELEASE, adapterArchive } from '../src/clis.ts';
 import { settle, until } from './double.ts';
-import { hostKit, lastCall, type Hosted } from './environment.ts';
-import { fakeBin, runKit } from './kit.ts';
+import { hostKit, lastCall, releasePrefix, type Hosted } from './environment.ts';
+import { alive, entriesUnder } from './kit.ts';
+import { ADAPTED, callUpdate, placing, released, serveRelease, sha256 } from './release.ts';
 
-const SYSTEMD_RUN = `#!/bin/sh
-printf '%s\\n' "$*" >> "$HOUSE_KIT_HOME/systemd-run.log"
-printf '%s' "$PPID" > "$HOUSE_KIT_HOME/resident.pid"
-while [ "\${1#--}" != "$1" ]; do shift; done
-exec "$@"
-`;
+const PLACED = '0.2.1-c000000000002';
+const LATER = '0.2.1-c000000000003';
 
-const KILL_RESIDENT = 'kill -9 "$(cat "$HOUSE_KIT_HOME/resident.pid")"\n';
-
-async function serve(hosted: Hosted, script: string): Promise<{ bootstrap: string; sha256: string }> {
-  await writeFile(join(hosted.home, 'bin', 'systemd-run'), SYSTEMD_RUN);
-  await chmod(join(hosted.home, 'bin', 'systemd-run'), 0o755);
-  hosted.house.route('GET', '/releases/connect-linux.sh', () => ({
-    bytes: { type: 'text/x-shellscript', content: script },
-  }));
-  return {
-    bootstrap: `${hosted.house.origin}/releases/connect-linux.sh`,
-    sha256: createHash('sha256').update(script).digest('hex'),
-  };
+function prefix(hosted: Hosted): string {
+  return releasePrefix(hosted.home);
 }
 
-async function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string }): Promise<void> {
-  const open = await until(() => hosted.house.connections.findLast((connection) => connection.transport.readyState === connection.transport.OPEN));
-  open.send({
-    type: 'input',
-    input_id: id,
-    kind: 'update',
-    conversation_id: null,
-    agent_id: null,
-    provider_session_id: null,
-    ...pin,
-  });
+async function placedReleases(hosted: Hosted): Promise<string[]> {
+  return (await readdir(join(prefix(hosted), 'releases'))).sort();
 }
 
-const ran = (hosted: Hosted) => readFile(join(hosted.home, 'bootstrap.ran'), 'utf8').catch(() => undefined);
-
-// The bootstrap looks for the spec's go file every tenth of a second, so it runs until the spec lets it end.
-const HELD = 'until [ -e "$HOUSE_KIT_HOME/go" ]; do sleep 0.1; done\nprintf "%s\\n" "$*" >> "$HOUSE_KIT_HOME/bootstrap.ran"\n';
-
-const FAST_INTERVALS = fileURLToPath(new URL('./fast-intervals.ts', import.meta.url));
-
-const FAST_DEADLINES = fileURLToPath(new URL('./fast-deadlines.ts', import.meta.url));
-
-const downloaded = (hosted: Hosted) => hosted.house.requests.find((request) => request.path === '/releases/connect-linux.sh');
-
-const checkpoint = (hosted: Hosted) => readFile(join(hosted.home, 'update', 'pending.json'), 'utf8').catch(() => undefined);
-
-const started = (hosted: Hosted) => hosted.turns.find((turn) => turn.path.endsWith('/started'));
-
-const requested = (hosted: Hosted) => hosted.house.requests.map((request) => request.path);
-
-function expectRunAfterTurn(hosted: Hosted): void {
-  const reached = requested(hosted);
-  const turnEnded = reached.findIndex((path) => path.endsWith('/ended'));
-  expect(turnEnded).toBeGreaterThan(-1);
-  expect(reached.indexOf('/releases/connect-linux.sh')).toBeGreaterThan(turnEnded);
+async function current(hosted: Hosted): Promise<string> {
+  return (await readFile(join(prefix(hosted), 'current'), 'utf8')).trim();
 }
+
+function adapterOf(hosted: Hosted, release: string, kind: string): string {
+  const adapter = join(prefix(hosted), 'releases', release, 'adapters', kind, 'node_modules', '.bin', CLIS[kind]!.adapter!.bin);
+  return spawnSync(adapter, { encoding: 'utf8' }).stdout;
+}
+
+const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 
 async function opened(hosted: Hosted): Promise<void> {
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
 }
 
-it('reruns the verified bootstrap with --linux outside its own service and returns the result of the update', async () => {
+it('places the release House names with its adapters beside the one it runs, writing nothing into that one, and ends with a failure once it is idle so its supervisor starts the new one', async () => {
   const hosted = await hostKit();
-  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
+  await serveRelease(hosted, await released(PLACED));
+  const running = await entriesUnder(join(prefix(hosted), 'releases', KIT_RELEASE));
 
-  await update(hosted, 'update-1', pin);
+  callUpdate(hosted, 'update-1', PLACED);
 
   expect(await hosted.result('update-1')).toEqual({});
-  expect(await ran(hosted)).toBe('--linux\n');
-  const launched = await readFile(join(hosted.home, 'systemd-run.log'), 'utf8');
-  expect(launched).toMatch(
-    /^--wait --collect --quiet --unit=house-kit-update-update-1 --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; timeout 3600 bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --linux\n$/,
-  );
+  expect(await hosted.kit.exited).toBe(1);
+  expect(hosted.kit.stderr()).toContain(`kit: Kit ${PLACED} is placed; its supervisor starts it\n`);
+  expect(await current(hosted)).toBe(PLACED);
+  expect(await placedReleases(hosted)).toEqual([KIT_RELEASE, PLACED].sort());
+  for (const kind of ADAPTED) expect(adapterOf(hosted, PLACED, kind)).toBe(`${adapterArchive(kind)}\n`);
+  expect(await entriesUnder(join(prefix(hosted), 'releases', KIT_RELEASE))).toEqual(running);
 });
 
-it('reruns the bootstrap of its desktop placement in its workspace through the user service manager when it runs as a user service', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'kit-workspace-'));
-  onTestFinished(() => rm(workspace, { recursive: true, force: true }));
-  const hosted = await hostKit([{}], {
-    environment: { INVOCATION_ID: 'invocation', MANAGERPID: '1', HOUSE_KIT_WORKSPACE: workspace },
-  });
-  await writeFile(join(hosted.home, 'bin', 'systemctl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOUSE_KIT_HOME/systemctl.log"\n');
-  await chmod(join(hosted.home, 'bin', 'systemctl'), 0o755);
-  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
-
-  await update(hosted, 'update-user', pin);
-
-  expect(await hosted.result('update-user')).toEqual({});
-  expect(await ran(hosted)).toBe(`--workspace ${workspace}\n`);
-  expect(await readFile(join(hosted.home, 'systemd-run.log'), 'utf8')).toMatch(
-    /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; timeout 3600 bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+\n$/,
-  );
-  expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('--user start house-kit.service\n');
-});
-
-it('reruns the bootstrap with --linux as its own account through sudo when it runs as the system service of an account that is not root', async () => {
-  const hosted = await hostKit([{}], { environment: { INVOCATION_ID: 'invocation' } });
-  await writeFile(join(hosted.home, 'bin', 'sudo'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOUSE_KIT_HOME/sudo.log"\nshift\nexec "$@"\n', { mode: 0o755 });
-  await writeFile(join(hosted.home, 'bin', 'systemctl'), '#!/bin/sh\n', { mode: 0o755 });
-  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
-
-  await update(hosted, 'update-sudo', pin);
-
-  expect(await hosted.result('update-sudo')).toEqual({});
-  expect(await ran(hosted)).toBe('--linux\n');
-  const elevated = (await readFile(join(hosted.home, 'sudo.log'), 'utf8')).split('\n');
-  expect(elevated).toContainEqual(expect.stringMatching(new RegExp(`^-n systemd-run --uid=${process.getuid!()} --gid=${process.getgid!()} --wait `)));
-  expect(elevated).toContain('-n systemctl start house-kit.service');
-});
-
-it('refuses a bootstrap that does not match its sha256 and runs nothing', async () => {
+it('keeps running a turn open when it placed the release, refuses to place another meanwhile, and ends once that turn ended', async () => {
   const hosted = await hostKit();
-  const pin = await serve(hosted, 'touch "$HOUSE_KIT_HOME/bootstrap.ran"\n');
-
-  await update(hosted, 'update-2', { ...pin, sha256: '0'.repeat(64) });
-
-  expect(await hosted.result('update-2')).toEqual({ refused: 'the Kit bootstrap does not match its sha256' });
-  expect(await ran(hosted)).toBeUndefined();
-});
-
-it('refuses a bootstrap larger than a million bytes and runs nothing, and runs one of exactly a million bytes', async () => {
-  const hosted = await hostKit();
-  const writes = 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n#';
-  const sized = (bytes: number) => `${writes}${'x'.repeat(bytes - writes.length - 1)}\n`;
-  const larger = await serve(hosted, sized(1_000_001));
-
-  await update(hosted, 'update-large', larger);
-
-  expect(await hosted.result('update-large')).toEqual({ refused: 'the Kit bootstrap is larger than 1000000 bytes' });
-  expect(await ran(hosted)).toBeUndefined();
-
-  const largest = sized(1_000_000);
-  hosted.house.route('GET', '/releases/largest/connect-linux.sh', () => ({
-    bytes: { type: 'text/x-shellscript', content: largest },
-  }));
-  await update(hosted, 'update-largest', {
-    bootstrap: `${hosted.house.origin}/releases/largest/connect-linux.sh`,
-    sha256: createHash('sha256').update(largest).digest('hex'),
-  });
-
-  expect(await hosted.result('update-largest')).toEqual({});
-  expect(await ran(hosted)).toBe('--linux\n');
-});
-
-it('refuses a bootstrap that has not arrived within its deadline and runs nothing', async () => {
-  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_DEADLINES}` } });
-  const pin = await serve(hosted, 'touch "$HOUSE_KIT_HOME/bootstrap.ran"\n');
-  let release = (): void => {};
-  hosted.house.route('GET', '/releases/connect-linux.sh', () => new Promise((settle) => {
-    release = () => settle({ body: {} });
-  }));
-  onTestFinished(() => release());
-
-  await update(hosted, 'update-stalled', pin);
-
-  expect(await hosted.result('update-stalled')).toEqual({ refused: 'the Kit bootstrap did not arrive within 120 seconds' });
-  expect(await ran(hosted)).toBeUndefined();
-});
-
-it('runs an update House sends while a turn runs only once that turn ended', async () => {
-  const hosted = await hostKit();
+  await serveRelease(hosted, await released(PLACED));
   await opened(hosted);
-  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
-  // The turn holds a second and a half, so the update House sends once it started arrives while it runs.
-  hosted.call({ kind: 'message', text: '@hold 1500\n@say done', first: true });
-  await until(() => started(hosted));
+  hosted.call({ kind: 'message', text: '@gate go\n@say done', first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
 
-  await update(hosted, 'update-busy', pin);
-
+  callUpdate(hosted, 'update-busy', PLACED);
   expect(await hosted.result('update-busy')).toEqual({});
-  expect(await ran(hosted)).toBe('--linux\n');
-  expectRunAfterTurn(hosted);
+  callUpdate(hosted, 'update-later', LATER);
+  expect(await hosted.result('update-later')).toEqual({ refused: `Kit ${PLACED} is placed and starts first, once no turn is open` });
+  await settle();
+  expect(alive(hosted.kit.pid)).toBe(true);
+  await writeFile(join(hosted.home, 'go'), '');
+
+  expect(await hosted.kit.exited).toBe(1);
+  expect(ended(hosted)).toHaveLength(1);
+  expect(await current(hosted)).toBe(PLACED);
 });
 
-it('runs an update House sends while a turn waits on a question only once that turn ended, though it reports idle meanwhile', async () => {
+it('keeps running while a turn waits on a question, though it reports idle, and ends once that turn ended', async () => {
   const hosted = await hostKit();
+  await serveRelease(hosted, await released(PLACED));
   await opened(hosted);
   await until(() => hosted.idles[1]);
-  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
   hosted.call({ kind: 'message', text: '@ask', first: true });
   const question = await until(() => hosted.interactions[0]);
   await until(() => hosted.idles[2]);
 
-  await update(hosted, 'update-asking', pin);
+  callUpdate(hosted, 'update-asking', PLACED);
+  expect(await hosted.result('update-asking')).toEqual({});
+  await settle();
+  expect(alive(hosted.kit.pid)).toBe(true);
   const { interaction_id } = question.body as { interaction_id: string };
   hosted.call({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
 
-  expect(await hosted.result('update-asking')).toEqual({});
-  expectRunAfterTurn(hosted);
+  expect(await hosted.kit.exited).toBe(1);
+  expect(ended(hosted)).toHaveLength(1);
 });
 
-it('takes no Kit call while the bootstrap of its update runs and opens its connection again once that bootstrap returned', async () => {
+it.each([
+  ['a Kit archive that does not match its digest', 'the Kit download does not match its pinned checksum'],
+  ['a Building that does not answer', /^the Building did not answer: .+/],
+] as const)('answers with the reason and keeps running on its release after %s, and places the release when House calls again', async (failure, reason) => {
   const hosted = await hostKit();
-  const pin = await serve(hosted, HELD);
-  await update(hosted, 'update-quiet', pin);
-  await until(() => downloaded(hosted));
+  const release = await released(PLACED);
+  const mismatched = failure.startsWith('a Kit archive');
+  const building = await serveRelease(hosted, release, mismatched ? await placing(release, sha256(Buffer.from('another archive'))) : undefined);
+  building.answers = mismatched;
 
-  await until(() => hosted.connection.transport.readyState === hosted.connection.transport.CLOSED);
-  // Three and a half seconds outlast the three at most after which a Kit reconnects a connection that closed.
-  await new Promise((resolve) => setTimeout(resolve, 3500));
-  expect(hosted.house.connections).toHaveLength(1);
-  await writeFile(join(hosted.home, 'go'), '');
+  callUpdate(hosted, 'update-failed', PLACED);
 
-  expect(await hosted.result('update-quiet')).toEqual({});
-  await until(() => hosted.house.connections[1]);
-  await opened(hosted);
-});
-
-it('carries two updates House sent while a turn ran one after the other once it ended, each with its own bootstrap and status, and reports idle only after both', async () => {
-  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
-  await opened(hosted);
-  const failing = await serve(hosted, `${HELD}exit 3\n`);
-  const next = 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n';
-  hosted.house.route('GET', '/releases/next/connect-linux.sh', () => ({
-    bytes: { type: 'text/x-shellscript', content: next },
-  }));
-  // The turn holds a second and a half, so both updates House sends once it started arrive while it runs.
-  hosted.call({ kind: 'message', text: '@hold 1500\n@say done', first: true });
-  await until(() => started(hosted));
-
-  await update(hosted, 'update-6', failing);
-  await update(hosted, 'update-7', {
-    bootstrap: `${hosted.house.origin}/releases/next/connect-linux.sh`,
-    sha256: createHash('sha256').update(next).digest('hex'),
-  });
-  await until(() => downloaded(hosted));
+  const answered = (await hosted.result('update-failed')) as { refused: string };
+  const refused = answered.refused.replace(`Kit ${PLACED} could not be placed: `, '');
+  if (typeof reason === 'string') expect(refused).toBe(reason);
+  else expect(refused).toMatch(reason);
+  expect(answered.refused.startsWith(`Kit ${PLACED} could not be placed: `)).toBe(true);
   await settle();
-  const turnEnded = requested(hosted).findIndex((path) => path.endsWith('/ended'));
-  expect(requested(hosted).slice(turnEnded)).not.toContain('/kit/idle');
-  await writeFile(join(hosted.home, 'go'), '');
+  expect(alive(hosted.kit.pid)).toBe(true);
+  expect(await current(hosted)).toBe(KIT_RELEASE);
+  expect(await placedReleases(hosted)).toEqual([KIT_RELEASE]);
 
-  expect(await hosted.result('update-6')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
-  expect(await hosted.result('update-7')).toEqual({});
-  expect(await ran(hosted)).toBe('--linux\n');
-  await until(() => requested(hosted).lastIndexOf('/kit/idle') > turnEnded);
-  expect(requested(hosted).slice(turnEnded).filter((path) => path === '/kit/idle' || path.startsWith('/kit/inputs/update-'))).toEqual([
-    '/kit/inputs/update-6/ack',
-    '/kit/inputs/update-7/ack',
-    '/kit/idle',
-  ]);
+  await serveRelease(hosted, release);
+  callUpdate(hosted, 'update-again', PLACED);
+
+  expect(await hosted.result('update-again')).toEqual({});
+  expect(await hosted.kit.exited).toBe(1);
+  expect(await current(hosted)).toBe(PLACED);
 });
 
-it('refuses the update with the exit status of a bootstrap that fails', async () => {
+it('answers an update naming the release it runs at once and keeps running, placing nothing', async () => {
   const hosted = await hostKit();
-  const pin = await serve(hosted, 'exit 3\n');
+  await serveRelease(hosted, await released(PLACED));
 
-  await update(hosted, 'update-3', pin);
+  callUpdate(hosted, 'update-same', KIT_RELEASE);
 
-  expect(await hosted.result('update-3')).toEqual({ refused: 'the Kit bootstrap exited with 3' });
-});
-
-it('reruns no bootstrap for an update House sends again after the update ended, and returns its result again', async () => {
-  const hosted = await hostKit();
-  const pin = await serve(hosted, HELD);
-  await update(hosted, 'update-8', pin);
-  await until(() => downloaded(hosted));
-  await writeFile(join(hosted.home, 'go'), '');
-  await hosted.result('update-8');
-  await until(async () => (await checkpoint(hosted)) === undefined);
-
-  await update(hosted, 'update-8', pin);
-
-  await until(() => hosted.results[1]);
+  expect(await hosted.result('update-same')).toEqual({});
   await settle();
-  expect(await ran(hosted)).toBe('--linux\n');
-  expect(hosted.results.map((result) => [result.params.input, result.body])).toEqual([
-    ['update-8', {}],
-    ['update-8', {}],
-  ]);
-});
-
-it('reports no idle while an update runs and reports idle once it returned the result of the update', async () => {
-  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_INTERVALS}` } });
-  const pin = await serve(hosted, HELD);
-  await update(hosted, 'update-9', pin);
-  await until(() => downloaded(hosted));
-  await settle();
-  expect(hosted.idles).toHaveLength(1);
-
-  await writeFile(join(hosted.home, 'go'), '');
-
-  await hosted.result('update-9');
-  await until(() => hosted.idles[1]);
-  const paths = hosted.house.requests.map((request) => request.path);
-  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf('/kit/inputs/update-9/ack'));
-});
-
-async function restartAfter(hosted: Hosted, id: string, script: string): Promise<unknown> {
-  const pin = await serve(hosted, script);
-  await update(hosted, id, pin);
-  await hosted.kit.exited;
-  await until(() => readFile(join(hosted.home, 'update', 'outcome'), 'utf8').catch(() => undefined));
-  expect(hosted.results).toHaveLength(0);
-  const restarted = runKit(['resident'], { HOUSE_KIT_HOME: hosted.home, PATH: await fakeBin(hosted.home) });
-  const result = await hosted.result(id);
-  await until(() => hosted.house.connections[1]);
-  process.kill(restarted.pid, 'SIGKILL');
-  await restarted.exited;
-  return result;
-}
-
-it('returns the result of the update once the restarted Kit process runs again', async () => {
-  const hosted = await hostKit();
-
-  expect(await restartAfter(hosted, 'update-4', KILL_RESIDENT)).toEqual({});
-});
-
-it('refuses an update whose bootstrap failed after it stopped the Kit process', async () => {
-  const hosted = await hostKit();
-
-  expect(await restartAfter(hosted, 'update-5', `${KILL_RESIDENT}exit 3\n`)).toEqual({
-    refused: 'the Kit bootstrap exited with 3',
-  });
-});
-
-// The test bound ends the bootstrap after one second instead of an hour, through the system's own timeout.
-const SHORT_BOUND = '#!/bin/sh\nshift\nexec /usr/bin/timeout 1 "$@"\n';
-
-async function bounded(hosted: Hosted): Promise<void> {
-  await writeFile(join(hosted.home, 'bin', 'timeout'), SHORT_BOUND, { mode: 0o755 });
-  await writeFile(join(hosted.home, 'bin', 'systemctl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOUSE_KIT_HOME/systemctl.log"\n', {
-    mode: 0o755,
-  });
-}
-
-it('ends a bootstrap still running at its bound, starts the Kit service again, refuses the update naming the bound and opens its connection again', async () => {
-  const hosted = await hostKit();
-  await bounded(hosted);
-  const pin = await serve(hosted, HELD);
-
-  await update(hosted, 'update-hung', pin);
-
-  expect(await hosted.result('update-hung')).toEqual({ refused: 'the Kit bootstrap did not finish within 3600 seconds' });
-  expect(await ran(hosted)).toBeUndefined();
-  expect(await readFile(join(hosted.home, 'systemd-run.log'), 'utf8')).toContain('; timeout 3600 bash "$0" "$@"; ');
-  expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('start house-kit.service\n');
-  await until(() => hosted.house.connections[1]);
-  await opened(hosted);
-});
-
-it('refuses an update whose bootstrap hung after it stopped the Kit process once the bound ended it', async () => {
-  const hosted = await hostKit();
-  await bounded(hosted);
-
-  expect(await restartAfter(hosted, 'update-hung-stopped', `${KILL_RESIDENT}${HELD}`)).toEqual({
-    refused: 'the Kit bootstrap did not finish within 3600 seconds',
-  });
-  expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('start house-kit.service\n');
+  expect(alive(hosted.kit.pid)).toBe(true);
+  expect(hosted.house.requests.filter((request) => request.path.startsWith('/kit-installer/'))).toEqual([]);
+  expect(await current(hosted)).toBe(KIT_RELEASE);
 });

@@ -1,25 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { run } from './clis.ts';
+import { join, resolve } from 'node:path';
 import { kitHome } from './home.ts';
-
-type Service = 'user' | 'system';
-
-export function service(): Service | null {
-  if (process.platform !== 'linux' || !process.env.INVOCATION_ID) return null;
-  return process.env.MANAGERPID ? 'user' : 'system';
-}
-
-export function throughSudo(): boolean {
-  return service() === 'system' && process.getuid!() !== 0;
-}
-
-export async function updatesItself(): Promise<boolean> {
-  if (service() === null) return false;
-  if (!throughSudo()) return true;
-  // sudo answers at once, so ten seconds only bounds a stuck sudo.
-  return (await run('sudo', ['-n', 'true'], 10_000)).status === 0;
-}
 
 export type Machine = 'macos' | 'linux' | 'container' | 'server' | 'windows';
 
@@ -40,4 +21,14 @@ export function machine(): Machine {
   const placed = recorded('placement');
   if (placed === 'container' || placed === 'server' || placed === 'windows') return placed;
   return process.platform === 'darwin' ? 'macos' : 'linux';
+}
+
+export function placedPrefix(): string {
+  const prefix = process.env.HOUSE_KIT_PREFIX;
+  if (prefix === undefined || prefix === '') throw new Error('this Kit process was not started by a launcher its installer placed');
+  return resolve(prefix);
+}
+
+export function releaseDirectory(release: string): string {
+  return join(placedPrefix(), 'releases', release);
 }

@@ -1,11 +1,10 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants, readFileSync } from 'node:fs';
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
-import { downloadServed, servedDigest } from './building.ts';
-import { kitHome } from './home.ts';
+import { releaseDirectory } from './placement.ts';
 import { childEnvironment } from './relay.ts';
 
 export interface Cli {
@@ -186,21 +185,8 @@ const INSTALL_MS = 15 * 60_000;
 const READ_MS = 30_000;
 const CAUSE_CHARACTERS = 4000;
 
-function prefix(kind: string): string {
-  return join(kitHome(), 'agents', kind);
-}
-
 export function adapterCommand(kind: string): string {
-  return join(prefix(kind), 'node_modules', '.bin', CLIS[kind]!.adapter!.bin);
-}
-
-async function installedAdapter(kind: string): Promise<string | null> {
-  try {
-    const manifest = join(prefix(kind), 'node_modules', CLIS[kind]!.adapter!.package, 'package.json');
-    return (JSON.parse(await readFile(manifest, 'utf8')) as { version: string }).version;
-  } catch {
-    return null;
-  }
+  return join(releaseDirectory(KIT_RELEASE), 'adapters', kind, 'node_modules', '.bin', CLIS[kind]!.adapter!.bin);
 }
 
 export interface Ran {
@@ -255,30 +241,6 @@ export function failureOf(ran: Ran, program: string): string {
 
 export function adapterArchive(kind: string): string {
   return `${kind}-${KIT_PACKAGE.peerDependencies[CLIS[kind]!.adapter!.package]!}.tar.gz`;
-}
-
-export async function installAdapter(kind: string, signal?: AbortSignal): Promise<string | null> {
-  const adapter = CLIS[kind]!.adapter;
-  if (adapter === null) return null;
-  if ((await installedAdapter(kind)) === KIT_PACKAGE.peerDependencies[adapter.package]) return null;
-  const name = adapterArchive(kind);
-  const archive = `${prefix(kind)}.tar.gz`;
-  const deadline = AbortSignal.timeout(INSTALL_MS);
-  const bounded = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
-  try {
-    const sha256 = await servedDigest(name, bounded);
-    if (sha256 === null) return `House serves no ${name}`;
-    await rm(prefix(kind), { recursive: true, force: true });
-    await mkdir(prefix(kind), { recursive: true });
-    await downloadServed(name, sha256, archive, bounded);
-    const ran = await run('tar', ['-xzf', archive, '-C', prefix(kind)], INSTALL_MS, true, signal);
-    return ran.status === 0 ? null : failureOf(ran, 'tar');
-  } catch (error) {
-    if (deadline.aborted && signal?.aborted !== true) return `${name} did not arrive within ${INSTALL_MS / 1000} seconds`;
-    return error instanceof Error ? error.message : String(error);
-  } finally {
-    await rm(archive, { force: true });
-  }
 }
 
 async function bounded(program: string, work: (signal: AbortSignal) => Promise<Ran>, signal?: AbortSignal): Promise<string | null> {

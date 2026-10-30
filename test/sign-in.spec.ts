@@ -2,10 +2,8 @@ import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
-import { KIT_FILE_HOLD } from './building.ts';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { settle, until } from './double.ts';
-import { CLIS } from '../src/clis.ts';
 import { hostKit, lastCall, userBin, type Hosted } from './environment.ts';
 import { alive, filesUnder, temporaryHome } from './kit.ts';
 
@@ -322,9 +320,10 @@ it('keeps reporting a CLI installing when a sign-in queued behind its install ru
 
 it('ends the install a sign-in started when the time House gave the sign-in runs out, and returns its result', async () => {
   const hosted = await hostKit([{ kind: 'codex-acp' }]);
-  const hold = join(hosted.home, KIT_FILE_HOLD);
+  const hold = join(hosted.home, 'install-hold-claude-agent-acp');
   await writeFile(hold, '');
   onTestFinished(() => rm(hold, { force: true }));
+  await rm(join(userBin(hosted.home), 'claude'));
 
   hosted.call({ kind: 'sign_in', conversation_id: null, cli: 'claude-agent-acp', ends_in: 2 });
 
@@ -332,8 +331,7 @@ it('ends the install a sign-in started when the time House gave the sign-in runs
   await until(() => hosted.kit.stderr().includes('the claude-agent-acp sign-in reached the end House set for it'));
   await rm(hold);
   await settle();
-  const adapter = CLIS['claude-agent-acp']!.adapter!.package;
-  await expect(access(join(hosted.home, 'agents', 'claude-agent-acp', 'node_modules', adapter, 'package.json'))).rejects.toThrow();
+  await expect(access(join(hosted.home, '.local', 'bin', 'claude'))).rejects.toThrow();
   await expect(access(join(hosted.home, 'login.log'))).rejects.toThrow();
   expect(hosted.kit.stderr()).not.toContain('claude-agent-acp did not install');
 });

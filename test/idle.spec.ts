@@ -10,6 +10,7 @@ import { settle, until } from './double.ts';
 import { hostKit, installHeld, lastCall, type Hosted } from './environment.ts';
 import { MODELS } from './fixtures/clis/session-options.ts';
 import { alive, stop } from './kit.ts';
+import { callUpdate, released, serveRelease } from './release.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 
@@ -23,6 +24,12 @@ const SILENT_READ_ENDED_MS = 20_000;
 async function opened(hosted: Hosted): Promise<void> {
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
+}
+
+const CONTROL_GROUP = process.env.KIT_TEST_CGROUP === '1';
+
+function controlGroup(pid: number): string {
+  return readFileSync(`/proc/${pid}/cgroup`, 'utf8').split('\n').find((line) => line.startsWith('0::'))!.slice(3);
 }
 
 it('reports idle once no turn runs and not while a turn runs without waiting on a question', async () => {
@@ -159,6 +166,24 @@ it('does not count a turn waiting on a question as idle while a process the conv
   for (const target of [job.spawned, job.clean]) stop(target as number);
 
   await until(() => hosted.idles[2]);
+});
+
+it(`holds the exit of a placed Kit release while a Conversation process its turn started still runs, tracked ${CONTROL_GROUP ? 'in a control group the Kit makes' : 'by the marker the Kit falls back to where it cannot make a control group'}, and ends once that process ended`, async () => {
+  const hosted = await hostKit();
+  await serveRelease(hosted, await released('0.2.1-c000000000002'));
+  await opened(hosted);
+  hosted.call({ kind: 'message', text: '@spawn\n@say started', first: true });
+  await until(() => ended(hosted)[0]);
+  const job = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned !== undefined)))!;
+  expect(controlGroup(job.spawned as number) !== controlGroup(hosted.kit.pid)).toBe(CONTROL_GROUP);
+
+  callUpdate(hosted, 'update-held', '0.2.1-c000000000002');
+  expect(await hosted.result('update-held')).toEqual({});
+  await settle();
+  expect(alive(hosted.kit.pid)).toBe(true);
+  for (const target of [job.spawned, job.clean]) stop(target as number);
+
+  expect(await hosted.kit.exited).toBe(1);
 });
 
 it('does not count a turn waiting on a secret question as idle', async () => {

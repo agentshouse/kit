@@ -1,198 +1,109 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { run } from './clis.ts';
-import { kitHome, workspaceRoot } from './home.ts';
+import { downloadServed, servedRelease } from './building.ts';
 import type { Call, Calls, Result } from './calls.ts';
-import { service, throughSudo } from './placement.ts';
-import { relayed } from './relay.ts';
+import { KIT_RELEASE } from './clis.ts';
+import { kitHome, readEnrolment } from './home.ts';
+import { placedPrefix } from './placement.ts';
+import { childEnvironment, relayOrigin } from './relay.ts';
 
 export type UpdateCall = Call<'update'>;
 
-const BOOTSTRAP_BYTES = 1_000_000;
+const INSTALLER_BYTES = 1_000_000;
 
-// A bootstrap is at most a million bytes, so two minutes carry it over ten kilobytes a second and no stalled host holds the update queue.
-const BOOTSTRAP_MS = 120_000;
+// A release's Node.js, Kit package and adapters are about a hundred megabytes, so an hour carries them at thirty kilobytes a second, and a placement still running then has hung.
+const PLACEMENT_MS = 60 * 60_000;
 
-// A bootstrap's downloads take minutes, so one still running after an hour has hung and is ended before it keeps the Kit offline.
-const RERUN_MS = 60 * 60_000;
+const REFUSED = 'kit_bootstrap_refused: ';
 
-const TIMED_OUT = '124';
+const OUTPUT_CHARACTERS = 4000;
 
-function directory(): string {
-  return join(kitHome(), 'update');
+function causeOf(error: unknown): string {
+  if (error instanceof TypeError && error.cause instanceof Error) return `the Building did not answer: ${error.cause.message}`;
+  return error instanceof Error ? error.message : String(error);
 }
 
-function pending(): string {
-  return join(directory(), 'pending.json');
-}
-
-function outcome(): string {
-  return join(directory(), 'outcome');
-}
-
-function unit(callId: string): string {
-  return `house-kit-update-${callId}`;
-}
-
-function manager(): string[] {
-  return service() === 'user' ? ['--user'] : [];
-}
-
-function elevated(): string[] {
-  return throughSudo() ? ['sudo', '-n'] : [];
-}
-
-function account(): string[] {
-  return throughSudo() ? [`--uid=${process.getuid!()}`, `--gid=${process.getgid!()}`] : [];
-}
-
-function placement(): string[] {
-  return service() === 'user' ? ['--workspace', workspaceRoot()] : ['--linux'];
-}
-
-function record(): string {
-  return `outcome=$1; shift; timeout ${RERUN_MS / 1000} bash "$0" "$@"; printf %s "$?" > "$outcome"; ${[...elevated(), 'systemctl', ...manager(), 'start', 'house-kit.service'].join(' ')}`;
-}
-
-async function pendingCall(): Promise<string | null> {
-  try {
-    return (JSON.parse(await readFile(pending(), 'utf8')) as { input_id: string }).input_id;
-  } catch {
-    return null;
-  }
-}
-
-async function recorded(): Promise<Result | null> {
-  const status = await readFile(outcome(), 'utf8').catch(() => null);
-  if (status === null) return null;
-  if (status.trim() === TIMED_OUT) return { refused: `the Kit bootstrap did not finish within ${RERUN_MS / 1000} seconds` };
-  return status.trim() === '0' ? {} : { refused: `the Kit bootstrap exited with ${status.trim()}` };
-}
-
-async function forget(callId: string): Promise<void> {
-  if ((await pendingCall()) !== callId) return;
-  await rm(pending(), { force: true });
-  await rm(outcome(), { force: true });
-}
-
-async function finished(callId: string): Promise<Result> {
-  for (;;) {
-    const result = await recorded();
-    if (result !== null) return result;
-    // systemctl answers at once, so ten seconds only bounds a stuck service manager.
-    if ((await run('systemctl', [...manager(), 'is-active', '--quiet', unit(callId)], 10_000)).status !== 0) {
-      return (await recorded()) ?? { refused: 'the Kit bootstrap did not finish' };
-    }
-    // The bootstrap runs for minutes, so checking each second sees its outcome within a second at little cost.
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-}
-
-async function bounded(body: ReadableStream<Uint8Array> | null, most: number): Promise<Buffer | null> {
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  for await (const chunk of body ?? []) {
-    bytes += chunk.length;
-    if (bytes > most) return null;
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks, bytes);
-}
-
-function rerun(script: string, callId: string): Promise<Result | null> {
+function placing(installer: string, house: string, prefix: string, signal: AbortSignal): Promise<string | null> {
   return new Promise((resolve) => {
-    const [command, ...args] = [
-      ...elevated(),
-      'systemd-run',
-      ...manager(),
-      ...account(),
-      '--wait',
-      '--collect',
-      '--quiet',
-      `--unit=${unit(callId)}`,
-      `--setenv=HOME=${homedir()}`,
-      `--setenv=HOUSE_KIT_HOME=${kitHome()}`,
-      '/bin/sh',
-      '-c',
-      record(),
-      script,
-      outcome(),
-      ...placement(),
-    ];
-    const child = spawn(command!, args, { stdio: ['ignore', 'ignore', 'inherit'] });
-    child.on('error', () => resolve({ refused: 'no service manager runs this Kit process' }));
-    child.on('close', () => resolve(null));
+    const relay = relayOrigin();
+    const child = spawn('bash', [installer, '--house', house, '--place', prefix], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...childEnvironment(), ...(relay === undefined ? {} : { HOUSE_KIT_RELAY: relay }) },
+      detached: true,
+    });
+    const stop = () => {
+      try {
+        process.kill(-child.pid!, 'SIGKILL');
+      } catch {}
+    };
+    signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted) stop();
+    let output = '';
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.setEncoding('utf8').on('data', (chunk: string) => {
+        output = (output + chunk).slice(-OUTPUT_CHARACTERS);
+      });
+    }
+    const ended = (failure: string | null) => {
+      signal.removeEventListener('abort', stop);
+      resolve(failure);
+    };
+    child.on('error', (error) => ended(error.message));
+    child.on('close', (status) => {
+      if (status === 0) return ended(null);
+      if (signal.aborted) return ended(`the placement did not end within ${PLACEMENT_MS / 1000} seconds`);
+      const lines = output.split('\n').filter((line) => line.trim() !== '');
+      const refused = lines.findLast((line) => line.startsWith(REFUSED));
+      ended(refused?.slice(REFUSED.length) ?? lines.at(-1) ?? `the placement ended with status ${status ?? 'a signal'}`);
+    });
   });
 }
 
 export class KitUpdate {
   private readonly calls: Calls;
-  private readonly changed: () => void;
-  private readonly waiting = new Map<string, UpdateCall>();
-  private queue: Promise<void> = Promise.resolve();
+  private queue: Promise<unknown> = Promise.resolve();
+  private placed: string | null = null;
 
-  constructor(calls: Calls, changed: () => void) {
+  constructor(calls: Calls) {
     this.calls = calls;
-    this.changed = changed;
   }
 
-  async resumed(): Promise<void> {
-    const callId = await pendingCall();
-    if (callId === null) return;
-    await this.enqueue(callId, () => finished(callId));
-  }
-
-  hold(call: UpdateCall): void {
-    this.waiting.set(call.input_id, call);
-    this.changed();
-  }
-
-  held(): boolean {
-    return this.waiting.size > 0;
-  }
-
-  apply(resume: () => void): void {
-    const held = [...this.waiting.values()];
-    this.waiting.clear();
-    void Promise.all(held.map((call) => this.enqueue(call.input_id, () => this.carry(call)))).then(resume);
-  }
-
-  private enqueue(callId: string, work: () => Promise<Result>): Promise<void> {
-    const before = this.queue;
-    const carried = this.calls.carry(callId, async () => {
-      await before;
-      return { result: await work(), returned: () => forget(callId) };
+  take(call: UpdateCall): void {
+    void this.calls.carry(call.input_id, () => {
+      const taken = this.queue.then(() => this.place(call.release));
+      this.queue = taken.catch(() => undefined);
+      return taken.then((result) => ({ result }));
     });
-    this.queue = before.then(() => carried);
-    return carried;
   }
 
-  private async carry(call: UpdateCall): Promise<Result> {
-    if ((await pendingCall()) === call.input_id) return finished(call.input_id);
-    const deadline = AbortSignal.timeout(BOOTSTRAP_MS);
-    let script: Buffer | null;
+  placedRelease(): string | null {
+    return this.placed;
+  }
+
+  private async place(release: string): Promise<Result> {
+    if (release === (this.placed ?? KIT_RELEASE)) return {};
+    if (this.placed !== null) return { refused: `Kit ${this.placed} is placed and starts first, once no turn is open` };
+    const signal = AbortSignal.timeout(PLACEMENT_MS);
+    let failure: string | null;
     try {
-      const answer = await fetch(relayed(call.bootstrap), { signal: deadline });
-      if (!answer.ok) return { refused: `the Kit bootstrap could not be downloaded: ${answer.status}` };
-      script = await bounded(answer.body, BOOTSTRAP_BYTES);
+      const prefix = placedPrefix();
+      const served = await servedRelease(signal);
+      if (served.version !== release) throw new Error(`the Building serves Kit ${served.version}, not Kit ${release}`);
+      await mkdir(join(kitHome(), 'update'), { recursive: true, mode: 0o700 });
+      const installer = join(kitHome(), 'update', served.installer);
+      await downloadServed(served.installer, served.sha256, installer, signal, INSTALLER_BYTES);
+      failure = await placing(installer, (await readEnrolment())!.house, prefix, signal);
     } catch (error) {
-      if (!deadline.aborted) throw error;
-      return { refused: `the Kit bootstrap did not arrive within ${BOOTSTRAP_MS / 1000} seconds` };
+      failure = signal.aborted ? `the placement did not end within ${PLACEMENT_MS / 1000} seconds` : causeOf(error);
     }
-    if (script === null) return { refused: `the Kit bootstrap is larger than ${BOOTSTRAP_BYTES} bytes` };
-    if (createHash('sha256').update(script).digest('hex') !== call.sha256) {
-      return { refused: 'the Kit bootstrap does not match its sha256' };
+    if (failure !== null) {
+      const refused = `Kit ${release} could not be placed: ${failure}`;
+      process.stderr.write(`kit: ${refused}\n`);
+      return { refused };
     }
-    await mkdir(directory(), { recursive: true, mode: 0o700 });
-    const path = join(directory(), 'connect-linux.sh');
-    await writeFile(path, script, { mode: 0o700 });
-    await rm(outcome(), { force: true });
-    await writeFile(pending(), `${JSON.stringify({ input_id: call.input_id })}\n`, { mode: 0o600 });
-    return (await rerun(path, call.input_id)) ?? (await recorded()) ?? {
-      refused: 'the Kit bootstrap did not finish',
-    };
+    this.placed = release;
+    process.stderr.write(`kit: Kit ${release} is placed; it starts once no turn is open\n`);
+    return {};
   }
 }

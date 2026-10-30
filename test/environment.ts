@@ -8,10 +8,11 @@ import { BINS, placeUserCli } from './cli.ts';
 import { certificate, startHouse, until, type House, type KitConnection, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './adapters.ts';
-import { KIT_FILE_HOLD, serveKitFiles } from './building.ts';
+import { serveKitFiles } from './building.ts';
 import { MISMATCH, startStore, type Store } from './store.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+  version: string;
   peerDependencies: Record<string, string>;
 };
 
@@ -26,9 +27,18 @@ export async function placeUserClis(home: string): Promise<void> {
   await writeFile(join(home, '.profile'), 'PATH="$HOME/user-bin:$HOME/bin:$PATH"\n');
 }
 
-export function placePinnedAdapter(home: string, kind: string): void {
-  const adapter = CLIS[kind]!.adapter;
-  if (adapter !== null) placeAdapter(join(home, 'agents', kind), kind, KIT_PACKAGE.peerDependencies[adapter.package]!);
+export function releasePrefix(home: string): string {
+  return join(home, 'kit');
+}
+
+export async function placeRelease(home: string): Promise<{ HOUSE_KIT_PREFIX: string }> {
+  const prefix = releasePrefix(home);
+  await mkdir(prefix, { recursive: true });
+  await writeFile(join(prefix, 'current'), `${KIT_PACKAGE.version}\n`);
+  for (const [kind, { adapter }] of Object.entries(CLIS)) {
+    if (adapter !== null) placeAdapter(join(prefix, 'releases', KIT_PACKAGE.version, 'adapters', kind), kind, KIT_PACKAGE.peerDependencies[adapter.package]!);
+  }
+  return { HOUSE_KIT_PREFIX: prefix };
 }
 
 export interface ToolResult {
@@ -210,7 +220,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     ...route,
   }));
   const kinds = [...new Set(resolved.map((route) => route.kind))];
-  for (const kind of kinds) placePinnedAdapter(home, kind);
+  const placed = await placeRelease(home);
   await placeUserClis(home);
   await hosting.prepare?.(home);
   const results: Received[] = [];
@@ -282,6 +292,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   });
   const environment = {
     HOUSE_KIT_HOME: home,
+    ...placed,
     PATH: await fakeBin(home),
     ...LOGIN_SHELL,
     ...GIT_IDENTITY,
@@ -391,9 +402,10 @@ export function lastMessage(): string {
 }
 
 export async function installHeld(hosted: Hosted): Promise<string> {
-  const hold = join(hosted.home, KIT_FILE_HOLD);
+  const hold = join(hosted.home, 'install-hold-claude-agent-acp');
   await writeFile(hold, '');
   onTestFinished(() => rm(hold, { force: true }));
+  await rm(join(userBin(hosted.home), BINS['claude-agent-acp']!), { force: true });
   const added = {
     agent_id: 'agent-2',
     kind: 'claude-agent-acp',
@@ -406,7 +418,7 @@ export async function installHeld(hosted: Hosted): Promise<string> {
     body: { agents: ['codex-acp', 'claude-agent-acp'], routes: [added] },
   }));
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
-  await until(() => hosted.house.requests.some((request) => request.path === '/kit-installer/bootstrap.json'));
+  await until(async () => (await readFile(join(hosted.home, 'curl.log'), 'utf8').catch(() => '')).includes('https://claude.ai/install.sh'));
   return hold;
 }
 

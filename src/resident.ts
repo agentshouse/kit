@@ -10,7 +10,7 @@ import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { CONVERSATION_METHODS, Conversations, type ConversationCall } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
-import { unknownMethod } from './end.ts';
+import { restart, unknownMethod } from './end.ts';
 import { agentBase, enrolled, kitHome, ownerLock, ownerSocket, readEnrolment } from './home.ts';
 import { Calls, type Call } from './calls.ts';
 import { killDescendants } from './scope.ts';
@@ -140,8 +140,8 @@ export async function resident(): Promise<void> {
   const changed = () => {
     if (!idle()) {
       reported = false;
-    } else if (update.held() && conversations.quiet()) {
-      update.apply(connection!.pause());
+    } else if (update.placedRelease() !== null && conversations.quiet()) {
+      restart(`Kit ${update.placedRelease()} is placed; its supervisor starts it`);
     } else if (!reported) {
       reported = true;
       logged(house.deliver('/kit/idle', {}, idle));
@@ -157,7 +157,7 @@ export async function resident(): Promise<void> {
     changed,
   });
   const signIns = new SignIns(house, agents, calls);
-  const update = new KitUpdate(calls, changed);
+  const update = new KitUpdate(calls);
   removeInputs();
   const scripts = new Scripts(calls, (notification) => connection?.send(notification) ?? false);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
@@ -169,7 +169,6 @@ export async function resident(): Promise<void> {
   }
 
   await house.deliver('/kit/restarted', {}).catch(report);
-  await update.resumed().catch(report);
   logged(agents.refresh());
   agents.keepCurrent();
   connection = holdConnection({
@@ -181,7 +180,7 @@ export async function resident(): Promise<void> {
     closed: () => scripts.disconnected(),
     call: (call: Call) => {
       if (call.kind === 'sign_in') signIns.start(call);
-      else if (call.kind === 'update') update.hold(call);
+      else if (call.kind === 'update') update.take(call);
       else if (call.kind === 'run_wizard' || call.kind === 'run_function') scripts.start(call);
       else if (CONVERSATION_METHODS.has(call.kind)) conversations.call(call as ConversationCall);
       else {

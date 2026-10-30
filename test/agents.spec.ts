@@ -3,10 +3,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, expect, it } from 'vitest';
 import { RELEASES, placeUserCli } from './cli.ts';
-import { KIT_FILE_CORRUPT, KIT_FILE_MISSING, KIT_FILE_STALL, kitFileRequests, serveKitFiles } from './building.ts';
+import { serveKitFiles } from './building.ts';
 import { startHouse, until, type House } from './double.ts';
-import { LOGIN_SHELL, macOS, placeUserClis, userBin } from './environment.ts';
-import { HOST_KEY, fakeBin, placeHostKey, readOnlyHome, runKit, temporaryHome, type KitRun } from './kit.ts';
+import { LOGIN_SHELL, placeUserClis, placeRelease, userBin } from './environment.ts';
+import { HOST_KEY, fakeBin, placeHostKey, runKit, temporaryHome, type KitRun } from './kit.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
@@ -16,9 +16,6 @@ const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.
 const PINNED = KIT_PACKAGE.peerDependencies;
 const FAST_INTERVALS = ['--import', fileURLToPath(new URL('./fast-intervals.ts', import.meta.url))];
 const FAST_DEADLINES = ['--import', fileURLToPath(new URL('./fast-deadlines.ts', import.meta.url))];
-const ROOT = ['--import', fileURLToPath(new URL('./root.ts', import.meta.url))];
-const USER_SERVICE = { INVOCATION_ID: 'invocation', MANAGERPID: '1' };
-const SYSTEM_SERVICE = { INVOCATION_ID: 'invocation' };
 
 let house: House;
 let kit: KitRun | undefined;
@@ -64,15 +61,11 @@ async function logged(name: string): Promise<string[]> {
   return log.split('\n').filter((line) => line !== '');
 }
 
-function adapterInstalls(): string[] {
-  return kitFileRequests(house);
-}
-
 async function start(prepare?: () => Promise<void>, node: string[] = [], environment: Record<string, string> = {}) {
   const path = await fakeBin(home);
   await placeUserClis(home);
   await prepare?.();
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path, ...LOGIN_SHELL, ...environment }, node);
+  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path, ...LOGIN_SHELL, ...(await placeRelease(home)), ...environment }, node);
 }
 
 async function signIn(...kinds: string[]): Promise<void> {
@@ -120,38 +113,7 @@ it('pins in its package only the Codex and Claude Code adapters, no CLI and no G
   expect(Object.keys({ ...KIT_PACKAGE.dependencies, ...PINNED }).join(' ')).not.toMatch(/grok|@openai\/codex|claude-code/);
 });
 
-it('installs the pinned adapter of each named CLI that has one, and of one a later work_available notification names', async () => {
-  desired = ['codex-acp', 'grok-build'];
-  await start();
-
-  await until(() => completeReports()[0]);
-  expect(adapterInstalls()).toEqual([`codex-acp-${PINNED['@agentclientprotocol/codex-acp']}.tar.gz`]);
-
-  reports.length = 0;
-  desired = ['codex-acp', 'claude-agent-acp'];
-  const connection = await until(() => house.connections[0]);
-  connection.send({ type: 'work_available', subject: 'agents' });
-
-  await until(() => completeReports()[0]);
-  expect(adapterInstalls().slice(1)).toEqual([`claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`]);
-  expect(await logged('curl.log')).toEqual([]);
-});
-
-it('installs a pinned adapter into Kit home from a read-only home', async () => {
-  desired = ['codex-acp'];
-  const readOnly = await temporaryHome();
-  await writeFile(join(readOnly, '.profile'), `PATH="${userBin(home)}:$PATH"\n`);
-  await readOnlyHome(readOnly);
-  await start(undefined, [], { HOME: readOnly });
-
-  expect(await until(() => completeReports()[0])).toMatchObject({ agents: [{ kind: 'codex-acp', failure: null }] });
-  expect(adapterInstalls()).toEqual([`codex-acp-${PINNED['@agentclientprotocol/codex-acp']}.tar.gz`]);
-  expect(JSON.parse(await readFile(join(home, 'agents', 'codex-acp', 'node_modules', '@agentclientprotocol', 'codex-acp', 'package.json'), 'utf8'))).toMatchObject({
-    version: PINNED['@agentclientprotocol/codex-acp'],
-  });
-});
-
-it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit release, its wire, whether it updates itself and its transcription engine', async () => {
+it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit release, its wire and its transcription engine', async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -162,8 +124,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
     os: expect.stringMatching(/\S/),
     ...('form' in report ? { form: expect.stringMatching(/^(laptop|desktop|server)$/) } : {}),
     kit_release: KIT_PACKAGE.version,
-    wire: 3,
-    updates_itself: false,
+    wire: 4,
     agent_base: '/agents/house/agents',
     agents: [
       {
@@ -312,53 +273,6 @@ it('reports a CLI whose install has not ended within the install deadline as fai
   ]);
 });
 
-it('reports a CLI whose adapter archive its House does not serve with no release and that cause', async () => {
-  const archive = `claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`;
-  desired = ['claude-agent-acp'];
-  await start(() => writeFile(join(home, KIT_FILE_MISSING), archive));
-
-  const report = await until(() => completeReports()[0]);
-
-  expect(report.agents).toEqual([
-    {
-      kind: 'claude-agent-acp',
-      release: null,
-      failure: `House serves no ${archive}`,
-      signed_in: false,
-      models: [],
-      modes: [],
-      full_access: 'bypassPermissions',
-    },
-  ]);
-  expect(kit!.stderr()).toContain(`claude-agent-acp did not install: House serves no ${archive}`);
-});
-
-it('reports a CLI whose adapter archive does not match the sha256 its House names, installing nothing of it', async () => {
-  const archive = `claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`;
-  desired = ['claude-agent-acp'];
-  await start(() => writeFile(join(home, KIT_FILE_CORRUPT), archive));
-
-  const report = await until(() => completeReports()[0]);
-
-  expect(report.agents).toEqual([
-    { kind: 'claude-agent-acp', release: null, failure: `${archive} does not match its sha256`, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
-  ]);
-  await expect(stat(join(home, 'agents', 'claude-agent-acp', 'node_modules'))).rejects.toThrow();
-});
-
-it('reports a CLI whose adapter archive has not arrived within the install deadline, installing nothing of it', async () => {
-  const archive = `claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`;
-  desired = ['claude-agent-acp'];
-  await start(() => writeFile(join(home, KIT_FILE_STALL), archive), FAST_DEADLINES);
-
-  const report = await until(() => completeReports()[0]);
-
-  expect(report.agents).toEqual([
-    { kind: 'claude-agent-acp', release: null, failure: `${archive} did not arrive within 900 seconds`, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
-  ]);
-  await expect(stat(join(home, 'agents', 'claude-agent-acp', 'node_modules'))).rejects.toThrow();
-});
-
 it("reports a CLI below its minimum with the version found, the minimum and the CLI's update command, beside its sign-in and models", async () => {
   desired = ['codex-acp'];
   await signIn('codex-acp');
@@ -472,25 +386,3 @@ it('creates and reports the agents folder of the native workspace root as its Ag
   expect((await stat(join(workspace, 'agents'))).isDirectory()).toBe(true);
 });
 
-it.each([
-  ['as a user service', [], USER_SERVICE, null, true],
-  ['as a system service it runs as root', ROOT, SYSTEM_SERVICE, null, true],
-  ['as a system service of an account sudo lets act without a password', [], SYSTEM_SERVICE, 0, true],
-  ['as a system service of an account sudo asks for a password', [], SYSTEM_SERVICE, 1, false],
-  ['outside a service manager', [], {}, null, false],
-])('reports whether it updates itself when it runs on Linux %s', async (_, node, environment, sudo, updates) => {
-  desired = [];
-  const placeSudo = async () => {
-    if (sudo !== null) await writeFile(join(home, 'bin', 'sudo'), `#!/bin/sh\nexit ${sudo}\n`, { mode: 0o755 });
-  };
-  await start(placeSudo, node, environment);
-
-  expect((await until(() => completeReports()[0])).updates_itself).toBe(updates);
-});
-
-it('reports that it does not update itself on macOS', async () => {
-  desired = [];
-  await start(undefined, [], { ...USER_SERVICE, ...(await macOS(home)) });
-
-  expect(await until(() => completeReports()[0])).toMatchObject({ os: 'macOS 27.0.1', updates_itself: false });
-});

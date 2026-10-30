@@ -3,9 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
-import { CLIS, KIT_RELEASE, below, installAdapter, installCli, locate, run, updateCli, versionOf } from './clis.ts';
+import { CLIS, KIT_RELEASE, below, installCli, locate, run, updateCli, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
-import { updatesItself } from './placement.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
 import { KIT_WIRE } from './wire.ts';
 
@@ -366,8 +365,6 @@ export class Agents {
   }
 
   private async ensure(kind: string, signal?: AbortSignal, owner: object = {}): Promise<string> {
-    const failed = await installAdapter(kind, signal);
-    if (failed !== null) throw new Error(failed);
     const found = await locate(kind, signal);
     if (found !== null) return found;
     this.installs.set(kind, owner);
@@ -467,7 +464,6 @@ export class Agents {
       ...(form === undefined ? {} : { form }),
       kit_release: KIT_RELEASE,
       wire: KIT_WIRE,
-      updates_itself: await updatesItself(),
       agent_base: agentBase(),
       agents,
       transcription: transcriptionReport(),

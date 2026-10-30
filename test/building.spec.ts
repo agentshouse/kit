@@ -20,28 +20,38 @@ async function enrolled(house: string): Promise<{ home: string; building: typeof
   return { home, building: await import('../src/building.ts') };
 }
 
-function serving(house: House, prefix = ''): void {
-  house.route('GET', `${prefix}/kit-installer/bootstrap.json`, () => ({
-    body: { schemaVersion: 3, files: { 'codex-acp-2.2.2.tar.gz': { sha256: SHA256 } } },
-  }));
-  house.route('GET', `${prefix}/kit-installer/codex-acp-2.2.2.tar.gz`, () => ({ bytes: { type: 'application/octet-stream', content: CONTENT } }));
+const MANIFEST = {
+  schemaVersion: 3,
+  version: '0.2.1-c000000000002',
+  hosts: { linux: 'connect-linux.sh', macos: 'connect-linux.sh', windows: 'connect-windows.ps1' },
+  files: { 'connect-linux.sh': { sha256: SHA256 }, 'connect-windows.ps1': { sha256: '0'.repeat(64) } },
+};
+
+function serving(house: House, prefix = '', manifest: unknown = MANIFEST): void {
+  house.route('GET', `${prefix}/kit-installer/bootstrap.json`, () => ({ body: manifest }));
+  house.route('GET', `${prefix}/kit-installer/connect-linux.sh`, () => ({ bytes: { type: 'application/octet-stream', content: CONTENT } }));
 }
 
-it('downloads a file by name from the House its enrolment names and answers the sha256 that House names for it', async () => {
+it('reads the Kit release the House its enrolment names serves, with its Linux installer and that file’s sha256, and downloads that file', async () => {
   const house = await startHouse();
   serving(house);
   const { home, building } = await enrolled(house.origin);
 
-  expect(await building.servedDigest('codex-acp-2.2.2.tar.gz')).toBe(SHA256);
-  expect(await building.servedDigest('claude-agent-acp-0.94.0.tar.gz')).toBeNull();
-  await building.downloadServed('codex-acp-2.2.2.tar.gz', SHA256, join(home, 'file'));
+  expect(await building.servedRelease()).toEqual({ version: '0.2.1-c000000000002', installer: 'connect-linux.sh', sha256: SHA256 });
+  await building.downloadServed('connect-linux.sh', SHA256, join(home, 'file'));
 
   expect(await readFile(join(home, 'file'))).toEqual(CONTENT);
-  expect(house.requests.map((request) => request.path)).toEqual([
-    '/kit-installer/bootstrap.json',
-    '/kit-installer/bootstrap.json',
-    '/kit-installer/codex-acp-2.2.2.tar.gz',
-  ]);
+  expect(house.requests.map((request) => request.path)).toEqual(['/kit-installer/bootstrap.json', '/kit-installer/connect-linux.sh']);
+});
+
+it('refuses a manifest that names no Kit release or no digest of its Linux installer', async () => {
+  for (const manifest of [{ ...MANIFEST, version: undefined }, { ...MANIFEST, files: {} }]) {
+    const house = await startHouse();
+    serving(house, '', manifest);
+    const { building } = await enrolled(house.origin);
+
+    await expect(building.servedRelease()).rejects.toThrow('House serves no Kit release in bootstrap.json');
+  }
 });
 
 it('downloads through the Kit relay, naming the House host first, and never House directly', async () => {
@@ -51,12 +61,12 @@ it('downloads through the Kit relay, naming the House host first, and never Hous
   vi.stubEnv('HOUSE_KIT_RELAY', relay.origin);
   const { home, building } = await enrolled(house.origin);
 
-  await building.downloadServed('codex-acp-2.2.2.tar.gz', await building.servedDigest('codex-acp-2.2.2.tar.gz') ?? '', join(home, 'file'));
+  await building.downloadServed('connect-linux.sh', (await building.servedRelease()).sha256, join(home, 'file'));
 
   expect(await readFile(join(home, 'file'))).toEqual(CONTENT);
   expect(relay.requests.map((request) => request.path)).toEqual([
     `/${new URL(house.origin).host}/kit-installer/bootstrap.json`,
-    `/${new URL(house.origin).host}/kit-installer/codex-acp-2.2.2.tar.gz`,
+    `/${new URL(house.origin).host}/kit-installer/connect-linux.sh`,
   ]);
   expect(house.requests).toEqual([]);
 });
@@ -66,8 +76,8 @@ it('keeps nothing of a file whose bytes do not match the sha256 it was given, na
   serving(house);
   const { home, building } = await enrolled(house.origin);
 
-  await expect(building.downloadServed('codex-acp-2.2.2.tar.gz', '0'.repeat(64), join(home, 'file'))).rejects.toThrow(
-    'codex-acp-2.2.2.tar.gz does not match its sha256',
+  await expect(building.downloadServed('connect-linux.sh', '0'.repeat(64), join(home, 'file'))).rejects.toThrow(
+    'connect-linux.sh does not match its sha256',
   );
   await expect(readFile(join(home, 'file'))).rejects.toThrow();
 });

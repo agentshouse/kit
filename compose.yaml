@@ -20,6 +20,23 @@ services:
       - 'if [ ! node_modules/.package-lock.json -nt package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund --loglevel=error || exit 1; fi; exec "$$@"'
       - kit-test
     command: ["npm", "test"]
+  cgroup:
+    extends: test
+    user: "0:0"
+    privileged: true
+    cgroup: private
+    environment:
+      KIT_TEST_CGROUP: "1"
+      KIT_TEST_USER: "${KIT_TEST_UID:-1001}:${KIT_TEST_GID:-1001}"
+    entrypoint:
+      - sh
+      - -c
+      - 'mkdir -p /sys/fs/cgroup/kit && chown -R "$$KIT_TEST_USER" /sys/fs/cgroup/kit && echo $$$$ > /sys/fs/cgroup/kit/cgroup.procs && exec setpriv --reuid="$${KIT_TEST_USER%:*}" --regid="$${KIT_TEST_USER#*:}" --clear-groups -- "$$@"'
+      - kit-cgroup
+    command:
+      - sh
+      - -c
+      - 'if [ ! node_modules/.package-lock.json -nt package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund --loglevel=error || exit 1; fi; exec npx vitest run --project kit test/idle.spec.ts -t "Conversation process its turn started"'
   windows:
     image: mcr.microsoft.com/powershell@sha256:62300a213a9293916333df2b014cd3a8f22fb0b0b65f2bb446aaf436bcf8c868
     network_mode: none

@@ -68,7 +68,7 @@ it("names the Kit's wire in a header on its call to House's MCP door", async () 
 
   await runHouse(home, ['search', '{"query":"invoice"}']);
 
-  expect(house.requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(['3']);
+  expect(house.requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(['4']);
 });
 
 function zeros(size: number): string {

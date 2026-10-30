@@ -24,6 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           docker compose run --rm -T test sh -c 'npm test && npm run build'
+          docker compose run --rm -T cgroup
           docker compose run --rm -T windows
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -82,11 +83,12 @@ jobs:
           node -e "const m=require('./tmp/manifest.json'); const p=m.manifests.map(x=>x.platform.os+'/'+x.platform.architecture); if(!p.includes('linux/amd64')||!p.includes('linux/arm64')) process.exit(1)"
           npm run release-files -- tmp/kit.tgz tmp/release
           kit=$(sha256sum "tmp/release/kit-$VERSION.tar.gz" | cut -d ' ' -f 1)
-          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_RELEASE__/$VERSION/" -e "s/__KIT_SHA256__/$kit/" bin/connect-linux.sh > tmp/release/connect-linux.sh
+          adapters=$(cd tmp/release && for archive in *.tar.gz; do [ "$archive" = "kit-$VERSION.tar.gz" ] || printf '%s=%s ' "$archive" "$(sha256sum "$archive" | cut -d ' ' -f 1)"; done)
+          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_RELEASE__/$VERSION/" -e "s/__KIT_SHA256__/$kit/" -e "s/__ADAPTERS__/${adapters% }/" bin/connect-linux.sh > tmp/release/connect-linux.sh
           sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_RELEASE__/$VERSION/" bin/connect-windows.ps1 > tmp/release/connect-windows.ps1
           npm run bootstrap-manifest -- tmp/release "$digest"
           mkdir -p tmp/building/kit-installer
-          cp "tmp/release/kit-$VERSION.tar.gz" tmp/building/kit-installer/
+          cp tmp/release/*.tar.gz tmp/building/kit-installer/
           for node in $(node -p "Object.keys(require('./tmp/release/bootstrap.json').files).filter(n=>/^node-v.*-linux-/.test(n)).join(' ')"); do
             curl -fsSL -o "tmp/building/kit-installer/$node" "$(node -p "require('./tmp/release/bootstrap.json').files['$node'].from")"
           done

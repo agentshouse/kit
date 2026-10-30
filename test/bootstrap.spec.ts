@@ -19,7 +19,7 @@ function bootstrap(script: string, argv: string[]) {
   return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
 }
 
-it('leaves the release exactly one image digest, one Kit release and one Kit archive digest to fill', async () => {
+it('leaves the release exactly one image digest, one Kit release, one Kit archive digest and one list of adapter digests to fill', async () => {
   const linux = await readFile(LINUX, 'utf8');
   const windows = await readFile(WINDOWS, 'utf8');
 
@@ -27,6 +27,7 @@ it('leaves the release exactly one image digest, one Kit release and one Kit arc
   expect(linux.split('__IMAGE_DIGEST__')).toHaveLength(2);
   expect(linux.split('__KIT_RELEASE__')).toHaveLength(2);
   expect(linux.split('__KIT_SHA256__')).toHaveLength(2);
+  expect(linux.split('__ADAPTERS__')).toHaveLength(2);
   expect(windows.split('__IMAGE_DIGEST__')).toHaveLength(2);
   expect(windows.split('__KIT_RELEASE__')).toHaveLength(2);
   expect(windows).toMatch(/^[\x09\x0a\x20-\x7e]*$/);
@@ -41,11 +42,16 @@ it('installs natively the Node.js release the package runs on', async () => {
   expect(await readFile(LINUX, 'utf8')).toContain(`\nNODE_VERSION=${engines.node}\n`);
 });
 
-it('refuses to run before the release fills it', () => {
-  expect(bootstrap(LINUX, [])).toMatchObject({
+it('refuses to run before the release fills it, its adapter digests included', async () => {
+  const refused = {
     status: 1,
     stderr: 'kit_bootstrap_refused: this bootstrap has not been published with an immutable release\n',
-  });
+  };
+  const unpinned = join(await temporaryHome(), 'connect-linux.sh');
+  await writeFile(unpinned, (await readFile(await published(), 'utf8')).replace(/^ADAPTERS='[^']*'$/m, "ADAPTERS='__ADAPTERS__'"));
+
+  expect(bootstrap(LINUX, [])).toMatchObject(refused);
+  expect(bootstrap(unpinned, [])).toMatchObject(refused);
 });
 
 it('enrolls with a credential only on a server', async () => {
@@ -117,6 +123,7 @@ ${direct(linux)}
 HOUSE=https://agents.house
 VERSION=0.2.1-alpha.1
 KIT_SHA256=${'1'.repeat(64)}
+ADAPTERS='codex-acp-2.2.2.tar.gz=${'2'.repeat(64)}'
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
@@ -139,6 +146,7 @@ place_release "$TMPDIR/prefix"`,
     `apt-get ${repeated} git`,
     `curl ${repeated} ${served}/kit-installer/node-v24.22.1-linux-x64.tar.gz`,
     `curl ${repeated} ${served}/kit-installer/kit-0.2.1-alpha.1.tar.gz`,
+    `curl ${repeated} ${served}/kit-installer/codex-acp-2.2.2.tar.gz`,
   ]);
 });
 
@@ -152,6 +160,7 @@ ${direct(linux)}
 HOUSE=${house}
 VERSION=0.2.1-alpha.1
 KIT_SHA256=${'1'.repeat(64)}
+ADAPTERS=''
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}

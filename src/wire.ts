@@ -2,7 +2,7 @@ import { newerThanHouse, updateRequired } from './end.ts';
 import { machine, type Machine } from './placement.ts';
 import { refusalOf } from './refusals.ts';
 
-export const KIT_WIRE = 3;
+export const KIT_WIRE = 4;
 export const KIT_WIRE_HEADER = 'x-house-kit-wire';
 
 interface NewerThanHouse {

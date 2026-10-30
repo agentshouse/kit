@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CLIS, adapterArchive } from '../src/clis.ts';
 import { temporaryHome } from './kit.ts';
 
 const LINUX = fileURLToPath(new URL('../bin/connect-linux.sh', import.meta.url));
@@ -12,6 +13,9 @@ const DARWIN = fileURLToPath(new URL('./darwin.ts', import.meta.url));
 export const PUBLISHED_VERSION = '0.2.1-alpha.1';
 const OUTDATED_VERSION = '0.2.1-alpha.0';
 export const LOGIN_LINK = 'https://agents.house/kit/login/one';
+export const ADAPTER_ARCHIVES = Object.keys(CLIS)
+  .filter((kind) => CLIS[kind]!.adapter !== null)
+  .map((kind) => adapterArchive(kind));
 
 export async function published(): Promise<string> {
   const home = await temporaryHome();
@@ -21,7 +25,8 @@ export async function published(): Promise<string> {
     (await readFile(LINUX, 'utf8'))
       .replace('__IMAGE_DIGEST__', 'a'.repeat(64))
       .replace('__KIT_RELEASE__', PUBLISHED_VERSION)
-      .replace('__KIT_SHA256__', 'b'.repeat(64)),
+      .replace('__KIT_SHA256__', 'b'.repeat(64))
+      .replace('__ADAPTERS__', ADAPTER_ARCHIVES.map((name) => `${name}=${'c'.repeat(64)}`).join(' ')),
   );
   return script;
 }
@@ -81,7 +86,7 @@ const TOOLS: Record<string, string> = {
   uname: 'case "$1" in -s) echo "$FAKE_SYSTEM" ;; -m) echo "$FAKE_MACHINE" ;; *) exec /bin/uname "$@" ;; esac\n',
   sysctl: 'echo "$FAKE_ARM64"\n',
   sw_vers: 'echo "$FAKE_MACOS"\n',
-  curl: `${LOGGED}while [ $# -gt 1 ]; do [ "$1" != -o ] || out=$2; shift; done\ncase "$1" in */kit-installer/node-v*) cp "$FAKE/node.tar.gz" "$out" ;; */kit-installer/kit-*) cp "$FAKE/kit.tar.gz" "$out" ;; *) cp "$FAKE/node.tar.gz" "$out" ;; esac\n`,
+  curl: `${LOGGED}while [ $# -gt 1 ]; do [ "$1" != -o ] || out=$2; shift; done\ncase "$1" in */kit-installer/node-v*) cp "$FAKE/node.tar.gz" "$out" ;; */kit-installer/kit-*) cp "$FAKE/kit.tar.gz" "$out" ;; */kit-installer/*-acp-[0-9]*) cp "$FAKE/adapter.tar.gz" "$out" ;; *) cp "$FAKE/node.tar.gz" "$out" ;; esac\n`,
   sha256sum: `${LOGGED}cat >/dev/null\n`,
   shasum: `${LOGGED}cat >/dev/null\n`,
   systemctl: `${LOGGED}case "$*" in
@@ -173,6 +178,7 @@ fi
 const KIT = `printf '%s %s HOUSE_KIT_HOME=%s%s%s\\n' "\${0##*/}" "$*" "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+ HOUSE_KIT_REPLACES=$HOUSE_KIT_REPLACES}" "\${HOUSE_KIT_WORKSPACE:+ HOUSE_KIT_WORKSPACE=$HOUSE_KIT_WORKSPACE}" >> "$FAKE/log"
 [ -z "\${HOUSE_KIT_RELAY-}" ] || printf 'relay %s\\n' "$HOUSE_KIT_RELAY" >> "$FAKE/log"
 [ -z "\${NODE_USE_SYSTEM_CA-}" ] || printf 'ca %s\\n' "$NODE_USE_SYSTEM_CA" >> "$FAKE/log"
+[ -z "\${HOUSE_KIT_PREFIX-}" ] || printf 'release %s\\n' "\${0%/bin/*}" >> "$FAKE/log"
 if [ "$1" = login ]; then set -- "$HOUSE_KIT_HOME" "\${HOUSE_KIT_REPLACES:+environment-two}"; ${LOGIN}fi
 `;
 
@@ -210,6 +216,10 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   await script(join(packaged, 'bin', 'kit'), KIT);
   await script(join(packaged, 'bin', 'house'), KIT);
   spawnSync('tar', ['-czf', join(fake, 'kit.tar.gz'), '-C', packaged, 'lib', 'bin']);
+  const adapter = join(fake, 'adapter-tree');
+  await mkdir(join(adapter, 'node_modules', '.bin'), { recursive: true });
+  await script(join(adapter, 'node_modules', '.bin', 'adapter'), 'exit 0\n');
+  spawnSync('tar', ['-czf', join(fake, 'adapter.tar.gz'), '-C', adapter, 'node_modules']);
   await writeFile(join(fake, 'ca-certificates.crt'), "-----BEGIN CERTIFICATE-----\nthe computer's own authority\n-----END CERTIFICATE-----\n");
   const bootstrap = await published();
   await writeFile(bootstrap, (await readFile(bootstrap, 'utf8')).replace('/etc/ssl/certs/ca-certificates.crt', join(fake, 'ca-certificates.crt')));

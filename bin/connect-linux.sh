@@ -5,6 +5,7 @@ export NODE_USE_SYSTEM_CA=1
 IMAGE_DIGEST='sha256:__IMAGE_DIGEST__'
 VERSION='__KIT_RELEASE__'
 KIT_SHA256='__KIT_SHA256__'
+ADAPTERS='__ADAPTERS__'
 NAME='house-kit'
 HOUSE='https://agents.house'
 WORKSPACE="$HOME/AgentsHouse"
@@ -374,7 +375,7 @@ trust_extra_authorities() {
 }
 
 place_release() {
-  local prefix=$1 current='' mask command placed
+  local prefix=$1 current='' mask command placed adapter
   PLACED=0
   [[ ! -f "$prefix/current" ]] || current=$(cat "$prefix/current")
   [[ "$current" != "$VERSION" ]] || return 0
@@ -389,10 +390,16 @@ place_release() {
     download Kit "kit-$VERSION.tar.gz" "$KIT_SHA256" "$prefix/placing/kit.tar.gz"
     tar -xzf "$prefix/placing/node.tar.gz" -C "$prefix/placing/release" --strip-components=1 --no-same-owner || refuse 'Node.js could not be unpacked'
     tar -xzf "$prefix/placing/kit.tar.gz" -C "$prefix/placing/release" --no-same-owner || refuse "Kit $VERSION could not be unpacked"
+    for adapter in $ADAPTERS; do
+      download "${adapter%=*}" "${adapter%=*}" "${adapter#*=}" "$prefix/placing/adapter.tar.gz"
+      mkdir -p "$prefix/placing/release/adapters/${adapter%%-[0-9]*}" &&
+        tar -xzf "$prefix/placing/adapter.tar.gz" -C "$prefix/placing/release/adapters/${adapter%%-[0-9]*}" --no-same-owner ||
+        refuse "${adapter%=*} could not be unpacked"
+    done
     mv "$prefix/placing/release" "$prefix/releases/$VERSION" && rm -rf "$prefix/placing" || refuse "Kit could not be placed in $prefix"
   fi
   for command in kit house; do
-    printf '#!/bin/sh\nprefix=${0%%/bin/*}\nread -r release < "$prefix/current"\nexport NODE_USE_SYSTEM_CA=1\nPATH="$prefix/releases/$release/bin:$PATH" exec "$prefix/releases/$release/bin/%s" "$@"\n' "$command" > "$prefix/bin/$command.new" &&
+    printf '#!/bin/sh\nprefix=${0%%/bin/*}\nread -r release < "$prefix/current"\nexport NODE_USE_SYSTEM_CA=1 HOUSE_KIT_PREFIX="$prefix"\nPATH="$prefix/releases/$release/bin:$PATH" exec "$prefix/releases/$release/bin/%s" "$@"\n' "$command" > "$prefix/bin/$command.new" &&
       chmod 0755 "$prefix/bin/$command.new" && mv -f "$prefix/bin/$command.new" "$prefix/bin/$command" || refuse "$prefix/bin/$command could not be written"
   done
   printf '%s\n' "$VERSION" > "$prefix/current.new" && mv -f "$prefix/current.new" "$prefix/current" || refuse "Kit could not be placed in $prefix"
@@ -949,8 +956,13 @@ connect_kit() {
 }
 
 read_host() {
+  local adapter
   [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$KIT_SHA256" =~ ^[0-9a-f]{64}$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
     refuse 'this bootstrap has not been published with an immutable release'
+  for adapter in $ADAPTERS; do
+    [[ "$adapter" =~ ^[a-z][a-z0-9-]*-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?\.tar\.gz=[0-9a-f]{64}$ ]] ||
+      refuse 'this bootstrap has not been published with an immutable release'
+  done
   case "$(uname -s)" in
     Linux)
       case "$(uname -m)" in
