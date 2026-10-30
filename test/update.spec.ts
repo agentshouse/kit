@@ -29,7 +29,7 @@ async function serve(hosted: Hosted, script: string): Promise<{ bootstrap: strin
   };
 }
 
-async function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string; update_clis?: boolean }): Promise<void> {
+async function update(hosted: Hosted, id: string, pin: { bootstrap: string; sha256: string }): Promise<void> {
   const open = await until(() => hosted.house.connections.findLast((connection) => connection.transport.readyState === connection.transport.OPEN));
   open.send({
     type: 'input',
@@ -95,12 +95,12 @@ it('reruns the bootstrap of its desktop placement in its workspace through the u
   await chmod(join(hosted.home, 'bin', 'systemctl'), 0o755);
   const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
 
-  await update(hosted, 'update-user', { ...pin, update_clis: true });
+  await update(hosted, 'update-user', pin);
 
   expect(await hosted.result('update-user')).toEqual({});
-  expect(await ran(hosted)).toBe(`--workspace ${workspace} --update-clis\n`);
+  expect(await ran(hosted)).toBe(`--workspace ${workspace}\n`);
   expect(await readFile(join(hosted.home, 'systemd-run.log'), 'utf8')).toMatch(
-    /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; timeout 3600 bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+ --update-clis\n$/,
+    /^--user --wait --collect --quiet --unit=house-kit-update-update-user --setenv=HOME=\S+ --setenv=HOUSE_KIT_HOME=\S+ \/bin\/sh -c outcome=\$1; shift; timeout 3600 bash "\$0" "\$@"; printf %s "\$\?" > "\$outcome"; systemctl --user start house-kit\.service \S+\/connect-linux\.sh \S+\/outcome --workspace \S+\n$/,
   );
   expect(await readFile(join(hosted.home, 'systemctl.log'), 'utf8')).toBe('--user start house-kit.service\n');
 });
@@ -118,19 +118,6 @@ it('reruns the bootstrap with --linux as its own account through sudo when it ru
   const elevated = (await readFile(join(hosted.home, 'sudo.log'), 'utf8')).split('\n');
   expect(elevated).toContainEqual(expect.stringMatching(new RegExp(`^-n systemd-run --uid=${process.getuid!()} --gid=${process.getgid!()} --wait `)));
   expect(elevated).toContain('-n systemctl start house-kit.service');
-});
-
-it.each([
-  [true, '--linux --update-clis\n'],
-  [false, '--linux\n'],
-])('reruns the bootstrap with --update-clis only when the update Kit call carries the flag (%s)', async (flag, argv) => {
-  const hosted = await hostKit();
-  const pin = await serve(hosted, 'printf "%s\\n" "$*" > "$HOUSE_KIT_HOME/bootstrap.ran"\n');
-
-  await update(hosted, `update-flag-${flag}`, { ...pin, update_clis: flag });
-
-  expect(await hosted.result(`update-flag-${flag}`)).toEqual({});
-  expect(await ran(hosted)).toBe(argv);
 });
 
 it('refuses a bootstrap that does not match its sha256 and runs nothing', async () => {

@@ -2,7 +2,7 @@ import { agent, ndJsonStream, RequestError, type AgentContext, type PromptRespon
 import { spawn, spawnSync, type ChildProcess, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { appendFileSync, closeSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Readable, Writable } from 'node:stream';
@@ -396,7 +396,7 @@ async function directive(
     log({ server: later.pid });
   }
   if (name === 'host') {
-    const host = spawn('sleep', ['604'], { argv0: `${cli.path}-code-mode-host`, stdio: 'ignore' });
+    const host = spawn('sleep', ['604'], { argv0: `${realpathSync(cli.path!)}-code-mode-host`, stdio: 'ignore' });
     host.unref();
     log({ host: host.pid });
   }

@@ -180,7 +180,7 @@ const KIT_PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.me
 export const KIT_RELEASE = KIT_PACKAGE.version;
 
 const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/;
-// An install still running after fifteen minutes is ended and reported as failed, so a hung download cannot hold its CLI's report.
+// An install or update still running after fifteen minutes is ended as failed, so a hung download can neither hold its CLI's report nor keep the Kit busy.
 const INSTALL_MS = 15 * 60_000;
 // A login shell or a version read is ended after half a minute, so a profile that waits for input cannot stall the report.
 const READ_MS = 30_000;
@@ -281,9 +281,15 @@ export async function installAdapter(kind: string, signal?: AbortSignal): Promis
   }
 }
 
-export async function installCli(kind: string, signal?: AbortSignal): Promise<string | null> {
-  const ran = await run('bash', ['-o', 'pipefail', '-c', CLIS[kind]!.install], INSTALL_MS, true, signal);
-  return ran.status === 0 ? null : failureOf(ran, 'the install');
+async function bounded(program: string, work: (signal: AbortSignal) => Promise<Ran>, signal?: AbortSignal): Promise<string | null> {
+  const deadline = AbortSignal.timeout(INSTALL_MS);
+  const ran = await work(signal === undefined ? deadline : AbortSignal.any([signal, deadline]));
+  if (deadline.aborted && signal?.aborted !== true) return `${program} did not end within ${INSTALL_MS / 1000} seconds`;
+  return ran.status === 0 ? null : failureOf(ran, program);
+}
+
+export function installCli(kind: string, signal?: AbortSignal): Promise<string | null> {
+  return bounded('the install', (within) => run('bash', ['-o', 'pipefail', '-c', CLIS[kind]!.install], INSTALL_MS, true, within), signal);
 }
 
 function loginShell(): string {
@@ -294,8 +300,8 @@ const FOUND = 'house-kit-cli ';
 const LOOKUP = `found=$(command -v "$1") || exit 0; case $found in /*) ;; *) found=$(pwd -P)/$found ;; esac; printf "${FOUND}%s\\n" "$found"`;
 const USER_BIN = 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin" ;; esac; export PATH';
 
-function inLoginShell(script: string, argument = '', signal?: AbortSignal): Promise<Ran> {
-  return run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${USER_BIN}; ${script}' sh ${argument}`], READ_MS, true, signal);
+function inLoginShell(script: string, argument = '', signal?: AbortSignal, timeoutMs = READ_MS): Promise<Ran> {
+  return run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${USER_BIN}; ${script}' sh ${argument}`], timeoutMs, true, signal);
 }
 
 export async function onLoginPath(program: string, signal?: AbortSignal): Promise<string | null> {
@@ -305,6 +311,10 @@ export async function onLoginPath(program: string, signal?: AbortSignal): Promis
 
 export function locate(kind: string, signal?: AbortSignal): Promise<string | null> {
   return onLoginPath(CLIS[kind]!.bin, signal);
+}
+
+export function updateCli(kind: string): Promise<string | null> {
+  return bounded('the update', (within) => inLoginShell(CLIS[kind]!.update, '', within, INSTALL_MS));
 }
 
 export async function loginPath(): Promise<string> {

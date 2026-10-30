@@ -156,7 +156,6 @@ esac\n`,
 const NODE = `printf 'node %s\\n' "\${1##*/}" >> "$FAKE/log"
 [ "\${1##*/}" != authority-main.js ] || [ ! -e "$FAKE/refused" ] || exit 1
 [ "\${1##*/}" != configure-main.js ] || [ ! -e "$FAKE/changed" ] || echo changed
-[ "\${1##*/}" != clis-main.js ] || [ ! -e "$HOME/.clis" ] || cat "$HOME/.clis"
 if [ "\${1##*/}" = service-main.js ]; then
   [ "$FAKE_SYSTEM" != Darwin ] || exec ${process.execPath} --import ${DARWIN} ${SERVICE_MAIN}
   exec ${process.execPath} ${SERVICE_MAIN}

@@ -16,68 +16,18 @@ $findings += @($ast.FindAll({ param($node)
   $node.Value.Contains([char]34) -and ($node.Value.Contains('{{') -or $node.Value.Contains('require('))
 }, $true) | ForEach-Object { "double quote in a native argument $($_.Extent.StartLineNumber)" })
 
-foreach ($name in @('Update-Clis', 'Invoke-Docker')) {
-  $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
-  . ([scriptblock]::Create($definition.Extent.Text))
-}
-$script:ListStatus = 0
-$script:FailingCli = ''
+$docker = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Docker' }, $true)
+. ([scriptblock]::Create($docker.Extent.Text))
 function docker {
   $script:Ran += , ($args -join ' ')
   $global:LASTEXITCODE = 0
-  if ($args[-1] -ceq 'update' -and $args -contains $script:FailingCli) { $global:LASTEXITCODE = 1 }
-  if ($args -contains 'node') {
-    $global:LASTEXITCODE = $script:ListStatus
-    "codex`t/kit-home/.local/bin/codex`t0.150.0`t0.160.1`told"
-    "claude`t/kit-home/.local/bin/claude`t2.1.200`t2.1.303`told"
-    "grok`t/kit-home/.grok/bin/grok`t1.0.50`t1.0.46`tcurrent"
-  }
 }
 function Read-Host([string] $Prompt) {
   $script:Prompts += , $Prompt
-  $answer = $script:Answers[$script:Prompts.Count - 1]
-  $answer
+  $script:Answers[$script:Prompts.Count - 1]
 }
-$ClisMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js'
-$Network = @('--network', 'host')
-$Common = @('--mount', 'home', '--mount', 'workspace', 'image')
 $KitHomeMount = 'home'
 $Image = 'image'
-function Test-Updates([bool] $Flag, [bool] $Terminal, [string[]] $Given, [int] $Asked, [string[]] $Expected, [string[]] $Failures = @()) {
-  $script:UpdateClis = $Flag
-  $script:Interactive = $Terminal
-  $script:Answers = $Given
-  $script:Prompts = @()
-  $script:Ran = @()
-  $failed = @(Update-Clis)
-  $updates = @($script:Ran | Where-Object { $_.EndsWith(' update') })
-  $restarts = @($script:Ran | Where-Object { $_ -ceq 'run --rm --network none --mount home --entrypoint touch image /kit-home/restart' })
-  $succeeded = @($Expected | Where-Object { -not $script:FailingCli -or -not $_.Contains("--entrypoint $script:FailingCli ") })
-  if ($restarts.Count -ne $succeeded.Count) { "Update-Clis asked the Kit to restart $($restarts.Count) times after $($succeeded.Count) updates that succeeded" }
-  if (($failed -join '|') -cne ($Failures -join '|')) { "Update-Clis reported the failures: $($failed -join '|')" }
-  if ($script:Ran[0] -ne "run --rm --network host --entrypoint node --mount home --mount workspace image $ClisMain") { "Update-Clis read the CLIs with: $($script:Ran[0])" }
-  if ($script:Prompts.Count -ne $Asked) { "Update-Clis asked $($script:Prompts.Count) times, not $Asked" }
-  if (($updates -join '|') -ne ($Expected -join '|')) { "Update-Clis ran: $($updates -join '|')" }
-}
-$UpdateClis = $false
-$Interactive = $false
-$findings += @(Test-Updates $false $true @('', 'n') 2 @('run -i -t --rm --network host --entrypoint /kit-home/.local/bin/codex --mount home --mount workspace image update'))
-$findings += @(Test-Updates $true $false @() 0 @(
-  'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --mount home --mount workspace image update',
-  'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --mount home --mount workspace image update',
-  'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --mount home --mount workspace image update'
-))
-$findings += @(Test-Updates $false $false @('') 0 @())
-$script:FailingCli = '/kit-home/.local/bin/claude'
-$findings += @(Test-Updates $true $false @() 0 @(
-  'run -i --rm --network host --entrypoint /kit-home/.local/bin/codex --mount home --mount workspace image update',
-  'run -i --rm --network host --entrypoint /kit-home/.local/bin/claude --mount home --mount workspace image update',
-  'run -i --rm --network host --entrypoint /kit-home/.grok/bin/grok --mount home --mount workspace image update'
-) @('claude could not be updated; it stays at 2.1.200'))
-$script:FailingCli = ''
-$script:ListStatus = 7
-$findings += @(Test-Updates $true $false @() 0 @() @('Kit could not read the agent CLIs, so it updated none; docker run ended with status 7'))
-$script:ListStatus = 0
 $configuration = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-Configuration' }, $true)
 . ([scriptblock]::Create($configuration.Extent.Text))
 $ConfigureMain = 'configure-main.js'
@@ -110,7 +60,6 @@ function Stop-Bootstrap([string] $Cause) { throw "kit_bootstrap_refused: $Cause"
 function docker { $global:LASTEXITCODE = 1 }
 $AuthorityMain = 'authority-main.js'
 $enrolment = @{ environment = 'environment-one' }
-$Interactive = $true
 $script:Answers = @('y')
 $script:Prompts = @()
 try {
@@ -194,8 +143,6 @@ function Read-Enrolment { if ($KitHome -ceq 'house-kit-home') { $script:Enrolmen
 function Test-Container { $script:Installed }
 function Test-Path { $true }
 function Set-Configuration { $false }
-$script:CliFailures = @()
-function Update-Clis { $script:CliFailures }
 $script:Shown = @()
 function Write-Host { $script:Shown += , "$args" }
 $script:Running = 'true'
@@ -313,6 +260,9 @@ $script:Enrolment = @{}
 $BootstrapArguments = @('--house', 'https://agents.house', '--code', 'ahk_code_one')
 $script:Ran = @()
 try { Connect-Kit } catch { $findings += "a first bootstrap refused with: $($_.Exception.Message)" }
+if (@($script:Ran | Where-Object { $_.Contains('clis-main.js') -or $_.EndsWith(' update') -or $_.Contains('/kit-home/restart') }).Count -ne 0) {
+  $findings += "the first bootstrap listed or updated a CLI: $($script:Ran -join '|')"
+}
 $residentRun = @($script:Ran | Where-Object { $_ -match '^run .* resident( |$)' })
 if ($residentRun.Count -ne 1 -or -not $residentRun[0].StartsWith('run -d --name house-kit --restart on-failure --env NODE_EXTRA_CA_CERTS=/kit-home/certificates.pem --mount home ') -or -not $residentRun[0].EndsWith(" agents.house/kit@$ImageDigest resident")) {
   $findings += "the first bootstrap ran resident as: $($residentRun -join '|')"
@@ -378,24 +328,6 @@ if (@($script:Ran | Where-Object { $_ -match ' login( |$)' -or $_ -match '^(star
   $findings += "the bootstrap forwarding kit login --help into a stopped container ran: $($script:Ran -join '|')"
 }
 $script:Running = 'true'
-$script:CliFailures = @('grok could not be updated; it stays at 1.0.50')
-foreach ($case in @(
-  @($true, '^restart house-kit$|^start house-kit$|^rm '),
-  @($false, '^run -d .* resident$')
-)) {
-  $script:Installed = $case[0]
-  $script:Enrolment = @{ environment = 'environment-one'; house = 'https://agents.house' }
-  $BootstrapArguments = @('--workspace', 'C:\Users\u\AgentsHouse')
-  $script:Ran = @()
-  try {
-    Connect-Kit
-    $findings += "the bootstrap with a container installed $($case[0]) whose CLI update failed ended without a refusal"
-  } catch {
-    if ($_.Exception.Message -cne 'kit_bootstrap_refused: grok could not be updated; it stays at 1.0.50') { $findings += "the bootstrap with a container installed $($case[0]) whose CLI update failed ended with: $($_.Exception.Message)" }
-  }
-  if (-not $case[0] -and @($script:Ran | Where-Object { $_ -match $case[1] }).Count -ne 1) { $findings += "the bootstrap whose CLI update failed started no Kit: $($script:Ran -join '|')" }
-}
-$script:CliFailures = @()
 foreach ($case in @(
   @{ Name = 'Windows 10'; Type = 1; Build = '19045'; Caption = 'Microsoft Windows 10 Pro'; Processor = 9; Platform = 'linux/x86_64'; Warnings = @('Warning: Microsoft Windows 10 Pro is outdated; update to Windows 11.'); Image = 'amd64' },
   @{ Name = 'a Windows Server edition'; Type = 3; Build = '20348'; Caption = 'Microsoft Windows Server 2022 Datacenter'; Processor = 9; Platform = 'linux/x86_64'; Warnings = @('Warning: Microsoft Windows Server 2022 Datacenter is outdated; update to Windows 11.'); Image = 'amd64' },
@@ -460,6 +392,7 @@ $installer = Join-Path $whole 'connect-windows.ps1'
 $prelude = "`$env:OS = 'Windows_NT'; `$env:ProgramFiles = '$whole'; `$env:LOCALAPPDATA = '$whole'; `$env:PATH = '$whole' + ':' + `$env:PATH; function Get-CimInstance([string] `$ClassName) { if (`$ClassName -eq 'Win32_OperatingSystem') { return [pscustomobject]@{ ProductType = 1; BuildNumber = '26100'; Caption = 'Windows 11 Pro' } }; [pscustomobject]@{ Architecture = 9 } };"
 foreach ($case in @(
   @('--house https://agents.house --bogus', 'kit_bootstrap_refused: unknown argument --bogus'),
+  @('--house https://agents.house --update-clis', 'kit_bootstrap_refused: unknown argument --update-clis'),
   @('--house https://agents.house', 'kit_bootstrap_refused: docker volume ended with status 3')
 )) {
   $output = @(& pwsh -NoProfile -NonInteractive -Command "$prelude & { & ([scriptblock]::Create([IO.File]::ReadAllText('$installer'))) @args } $($case[0])" 2>&1 | ForEach-Object { "$_" })

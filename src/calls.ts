@@ -33,7 +33,7 @@ export interface KitMethods {
     readonly result: Result;
   };
   readonly update: {
-    readonly params: { bootstrap: string; sha256: string; update_clis?: boolean };
+    readonly params: { bootstrap: string; sha256: string };
     readonly result: Result;
   };
   readonly run_wizard: { readonly params: { script: string }; readonly result: Result };

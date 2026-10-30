@@ -10,8 +10,8 @@ import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { CONVERSATION_METHODS, Conversations, type ConversationCall } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
-import { restart, unknownMethod } from './end.ts';
-import { agentBase, enrolled, forgetRestart, kitHome, ownerLock, ownerSocket, readEnrolment, restartAsked } from './home.ts';
+import { unknownMethod } from './end.ts';
+import { agentBase, enrolled, kitHome, ownerLock, ownerSocket, readEnrolment } from './home.ts';
 import { Calls, type Call } from './calls.ts';
 import { killDescendants } from './scope.ts';
 import { removeInputs, Scripts } from './scripts.ts';
@@ -112,7 +112,6 @@ function connected(): Promise<void> {
 
 async function started(): Promise<void> {
   await connected();
-  await forgetRestart();
   watch(kitHome(), () => {
     if (enrolled()) return;
     killDescendants();
@@ -141,8 +140,6 @@ export async function resident(): Promise<void> {
   const changed = () => {
     if (!idle()) {
       reported = false;
-    } else if (restartAsked() && conversations.quiet()) {
-      restart('restarting for an updated CLI');
     } else if (update.held() && conversations.quiet()) {
       update.apply(connection!.pause());
     } else if (!reported) {
@@ -174,6 +171,7 @@ export async function resident(): Promise<void> {
   await house.deliver('/kit/restarted', {}).catch(report);
   await update.resumed().catch(report);
   logged(agents.refresh());
+  agents.keepCurrent();
   connection = holdConnection({
     opened: () => {
       conversations.opened();

@@ -1,5 +1,5 @@
 import { execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 interface Running {
@@ -129,16 +129,24 @@ function members(group: string): number[] {
   return pids;
 }
 
+function besideCli(cli: string): string | null {
+  try {
+    return `${realpathSync(cli)}-`;
+  } catch {
+    return null;
+  }
+}
+
 export class Scope {
   private readonly marker: string;
-  private readonly cli: string;
+  private readonly helpers: string | null;
   private group: string | null;
   private session: string | null = null;
   private recorded: Set<number> | null = null;
 
   constructor(marker: string, name: string, cli: string) {
     this.marker = marker;
-    this.cli = cli;
+    this.helpers = besideCli(cli);
     const own = ownGroup();
     this.group = own === null ? null : join(own, name);
     try {
@@ -174,7 +182,7 @@ export class Scope {
     if (this.recorded === null) return found.size > 0;
     return [...found].some(
       ([pid, { session, command }]) =>
-        session !== this.session || !(this.recorded!.has(pid) || command.startsWith(`${this.cli}-`)),
+        session !== this.session || !(this.recorded!.has(pid) || (this.helpers !== null && command.startsWith(this.helpers))),
     );
   }
 

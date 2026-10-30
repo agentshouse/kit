@@ -298,6 +298,20 @@ it("keeps the end of a long installer output as the cause, so it stays within wh
   expect(grok!.failure.endsWith('Downloading Grok Build\nChecksum verification failed')).toBe(true);
 });
 
+it('reports a CLI whose install has not ended within the install deadline as failed, having ended every process the install started', async () => {
+  desired = ['claude-agent-acp'];
+  await start(async () => {
+    await rm(join(userBin(home), 'claude'));
+    await writeFile(join(home, 'install-stall-claude-agent-acp'), '');
+  }, FAST_DEADLINES);
+
+  const report = await until(() => completeReports()[0]);
+
+  expect(report.agents).toEqual([
+    { kind: 'claude-agent-acp', release: null, failure: 'the install did not end within 900 seconds', signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
+  ]);
+});
+
 it('reports a CLI whose adapter archive its House does not serve with no release and that cause', async () => {
   const archive = `claude-agent-acp-${PINNED['@agentclientprotocol/claude-agent-acp']}.tar.gz`;
   desired = ['claude-agent-acp'];
@@ -376,6 +390,25 @@ it("reports a CLI below its minimum with the version found, the minimum and the 
       full_access: 'agent-full-access',
     },
   ]);
+});
+
+it("reports the version a CLI's update command leaves, with the sign-in and models it read, and without the minimum that version reaches", async () => {
+  desired = ['codex-acp'];
+  await signIn('codex-acp');
+  await start(async () => {
+    placeUserCli(userBin(home), 'codex-acp', '0.150.0');
+    await writeFile(join(home, 'update-codex-acp'), RELEASES['codex-acp']!);
+  });
+
+  const outdated = await until(() =>
+    reports.flatMap((report) => report.agents as Record<string, unknown>[]).find((agent) => agent.release === '0.150.0' && agent.signed_in === true),
+  );
+  const updated = await until(() => reports.find((report) => (report.agents as { release: string }[])[0]?.release === RELEASES['codex-acp']));
+
+  const { minimum, update, ...read } = outdated;
+  expect({ minimum, update }).toEqual({ minimum: '0.160.1', update: 'codex update' });
+  expect(updated.agents).toEqual([{ ...read, release: RELEASES['codex-acp'] }]);
+  expect(await probes()).toBe(1);
 });
 
 it('reports a model its CLI refuses to select with no efforts before the Kit read any for it', async () => {

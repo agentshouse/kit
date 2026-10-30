@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { access, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
-import { RELEASES } from './cli.ts';
+import { RELEASES, updatesRun } from './cli.ts';
 import { settle, until } from './double.ts';
 import { hostKit, installHeld, lastCall, type Hosted } from './environment.ts';
 import { MODELS } from './fixtures/clis/session-options.ts';
@@ -14,6 +14,8 @@ import { alive, stop } from './kit.ts';
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
 
 const FAST_SILENCE = fileURLToPath(new URL('./fast-silence.ts', import.meta.url));
+
+const FAST_UPDATES = fileURLToPath(new URL('./fast-updates.ts', import.meta.url));
 
 // A model read waits two quiet seconds and its silent CLI ends five seconds later under fast-silence, so twenty seconds see the idle report on a loaded runner.
 const SILENT_READ_ENDED_MS = 20_000;
@@ -99,58 +101,19 @@ it('reports idle again once it has loaded the agents House asked it to refresh a
   expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.lastIndexOf('/kit/agents/desired'));
 });
 
-it('restarts with a failure at its first idle moment after a CLI update asks it to, and not while a turn runs', async () => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  await until(() => hosted.idles[1]);
-  let code: number | null | undefined;
-  void hosted.kit.exited.then((exited) => {
-    code = exited;
-  });
-
-  // The turn holds four seconds, outlasting the two seconds after which the Kit looks at its work again.
-  hosted.call({ kind: 'message', text: '@hold 4000\n@say done', first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
-  await writeFile(join(hosted.home, 'restart'), '');
-  // Two and a half seconds outlast the Kit's next look at its work while the turn still runs.
-  await new Promise((resolve) => setTimeout(resolve, 2500));
-  expect(code).toBeUndefined();
-
-  await until(() => ended(hosted)[0]);
-  expect(await hosted.kit.exited).toBe(1);
-  expect(hosted.kit.stderr()).toContain('kit: restarting for an updated CLI\n');
-});
-
-it('restarts for a CLI update not while a turn it reports idle waits on a question, only once that turn ends', async () => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  await until(() => hosted.idles[1]);
-  let code: number | null | undefined;
-  void hosted.kit.exited.then((exited) => {
-    code = exited;
-  });
-  hosted.call({ kind: 'message', text: '@ask', first: true });
-  const question = await until(() => hosted.interactions[0]);
-  await until(() => hosted.idles[2]);
-
-  await writeFile(join(hosted.home, 'restart'), '');
-  // Two and a half seconds outlast the Kit's next look at its work while the turn waits on its question.
-  await new Promise((resolve) => setTimeout(resolve, 2500));
-  expect(code).toBeUndefined();
-
-  const { interaction_id } = question.body as { interaction_id: string };
-  hosted.call({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'selected', optionId: 'allow' } } });
-  await until(() => ended(hosted)[0]);
-  expect(await hosted.kit.exited).toBe(1);
-  expect(hosted.kit.stderr()).toContain('kit: restarting for an updated CLI\n');
-});
-
-it('forgets a restart a CLI update asked for before it connected', async () => {
-  const hosted = await hostKit([{}], { prepare: (home) => writeFile(join(home, 'restart'), '') });
-
+it('does not report idle while the update command its interval started runs, and reports idle once that command ends', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_UPDATES}` } });
   await until(() => hosted.idles[0]);
-  await expect(access(join(hosted.home, 'restart'))).rejects.toMatchObject({ code: 'ENOENT' });
-  expect(alive(hosted.kit.pid)).toBe(true);
+
+  await writeFile(join(hosted.home, 'update-hold'), '');
+  await until(() => updatesRun(hosted.home).find((update) => update.held));
+  const idled = hosted.idles.length;
+  await settle();
+  expect(hosted.idles).toHaveLength(idled);
+
+  await rm(join(hosted.home, 'update-hold'));
+
+  await until(() => hosted.idles.length > idled);
 });
 
 it('reports idle only after it returns the result of the Kit call it carried out', async () => {

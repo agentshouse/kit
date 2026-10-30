@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
+import { linkUserCli } from './cli.ts';
 import { settle, until } from './double.ts';
-import { hostKit, lastCall, type Hosted } from './environment.ts';
+import { hostKit, lastCall, userBin, type Hosted } from './environment.ts';
 import { alive, stop } from './kit.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
@@ -16,8 +17,13 @@ async function spawned(hosted: Hosted): Promise<{ spawned: number; clean: number
   };
 }
 
-async function serving(): Promise<Hosted> {
-  const hosted = await hostKit([{}], { prepare: (home) => writeFile(join(home, 'start-server'), '') });
+async function serving(prepare: (home: string) => void = () => undefined): Promise<Hosted> {
+  const hosted = await hostKit([{}], {
+    prepare: async (home) => {
+      prepare(home);
+      await writeFile(join(home, 'start-server'), '');
+    },
+  });
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
   await until(() => hosted.idles[1]);
@@ -41,8 +47,10 @@ it('stays busy while a process the conversation started runs, double-forked into
   await until(() => hosted.idles[2]);
 });
 
-it("stays busy while a process started after the session started runs, while a helper the CLI ships beside its executable does not", async () => {
-  const hosted = await serving();
+it("stays busy while a process started after the session started runs, while a helper the CLI ships beside the file its link names does not", async () => {
+  const hosted = await serving((home) => {
+    linkUserCli(home, userBin(home), 'codex-acp');
+  });
   hosted.call({ kind: 'message', text: '@host\n@say hosted', first: true });
   await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);

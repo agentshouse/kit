@@ -31,7 +31,6 @@ ROOMS=()
 CODE=()
 ALREADY_CONNECTED=0
 CONFIGURED=''
-UPDATE_CLIS=0
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 CONFLICTING_PACKAGES=(docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc)
 DOCKER_APP=/Applications/Docker.app
@@ -201,25 +200,6 @@ check_authority() {
 
 configure_kit() {
   CONFIGURED=$(HOUSE_KIT_HOME="$KIT_HOME" "$@" ${NO_SKILLS[@]+"${NO_SKILLS[@]}"}) || refuse 'the Kit configuration could not be written'
-}
-
-update_clis() {
-  local listed name path release minimum state answer
-  listed=$("$1") || { printf 'Kit could not read the agent CLIs, so it updates none.\n' >&2; return 0; }
-  [[ -n "$listed" ]] || return 0
-  while IFS=$'\t' read -r -u 3 name path release minimum state; do
-    if ((UPDATE_CLIS == 0)); then
-      [[ "$state" == old ]] && terminal || continue
-      read -r -p "$name $release is older than $minimum, the oldest this Kit runs. Update it? [Y/n] " answer </dev/tty || answer=n
-      [[ -z "$answer" || "$answer" == [Yy]* ]] || continue
-    fi
-    printf 'Updating %s %s.\n' "$name" "$release"
-    if "$2" "$path"; then
-      : > "$KIT_HOME/restart"
-    else
-      printf '%s could not be updated; it stays at %s.\n' "$name" "$release" >&2
-    fi
-  done 3<<< "$listed"
 }
 
 elevated() {
@@ -425,14 +405,6 @@ enroll_kit() {
     refuse 'the Kit credential could not be stored'
 }
 
-native_clis() {
-  HOUSE_KIT_HOME="$KIT_HOME" "$NATIVE_PREFIX/bin/node" "$NATIVE_PACKAGE/clis-main.js"
-}
-
-native_cli_update() {
-  "${DIRECT[@]}" "$1" update
-}
-
 stop_native_service() {
   if service_manager && systemctl is-active --quiet "$NATIVE_SERVICE"; then
     elevated systemctl stop "$NATIVE_SERVICE" || refuse 'the Kit service could not be stopped'
@@ -519,7 +491,6 @@ connect_native() {
     login_arguments
     login_kit ${LOGIN[@]+"${LOGIN[@]}"}
   fi
-  update_clis native_clis native_cli_update
   if ! service_manager; then
     announce unsupervised
     return
@@ -806,7 +777,6 @@ connect_desktop() {
     ALREADY_CONNECTED=1
   fi
   record_placement native
-  update_clis native_clis native_cli_update
   if ((MACOS == 0)) && ! service_manager; then
     announce unsupervised
     return
@@ -878,16 +848,6 @@ forward_kit() {
   fi
 }
 
-container_clis() {
-  "${DOCKER_RUN[@]:0:2}" --entrypoint node "${DOCKER_RUN[@]:2}" "$IMAGE_PACKAGE/clis-main.js"
-}
-
-container_cli_update() {
-  local terminal=()
-  if [[ -t 0 && -t 1 ]]; then terminal=(-t); fi
-  "${DOCKER_RUN[@]:0:2}" -i ${terminal[@]+"${terminal[@]}"} --entrypoint "$1" "${DOCKER_RUN[@]:2}" update
-}
-
 start_resident() {
   local network=()
   [[ "$HOUSE" == https://* ]] || network=(--network host)
@@ -955,7 +915,6 @@ connect_kit() {
     ALREADY_CONNECTED=1
   fi
   record_placement container
-  update_clis container_clis container_cli_update
   start_resident
   printf 'Kit connected for Environment %s.\n' "$(enrolled environment)"
 }
@@ -1013,10 +972,6 @@ while (($#)); do
       ;;
     --no-skills)
       NO_SKILLS=(--no-skills)
-      shift
-      ;;
-    --update-clis)
-      UPDATE_CLIS=1
       shift
       ;;
     *) refuse "unknown argument $1" ;;
@@ -1155,7 +1110,6 @@ if kit_installed; then
   ALREADY_CONNECTED=1
   record_placement container
   configure_kit "${CONFIGURE[@]}"
-  update_clis container_clis container_cli_update
   if [[ "$(docker inspect --format '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}' "$NAME")" != "$IMAGE on-failure" ]]; then
     update_kit
   else

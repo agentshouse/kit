@@ -9,7 +9,6 @@ $Certificates = '/kit-home/certificates.pem'
 $Link = 'Open this link and confirm: '
 $AuthorityMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/authority-main.js'
 $ConfigureMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js'
-$ClisMain = '/usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js'
 $EnrolmentReader = "try{const e=JSON.parse(require('fs').readFileSync('/kit-home/credential.json','utf8'));console.log('house',e.house);console.log('environment',e.environment)}catch(e){if(e.code!=='ENOENT')throw e}"
 $BootstrapArguments = @($args | ForEach-Object { [string]$_ })
 $MinimumWsl = [version]'2.1.5'
@@ -260,29 +259,6 @@ function Set-Configuration {
   $output -contains 'changed'
 }
 
-function Update-Clis {
-  $ErrorActionPreference = 'Continue'
-  $listed = @(& docker run --rm @Network --entrypoint node @Common $ClisMain)
-  if ($LASTEXITCODE -ne 0) { return "Kit could not read the agent CLIs, so it updated none; docker run ended with status $LASTEXITCODE" }
-  foreach ($line in $listed) {
-    $name, $path, $release, $minimum, $state = "$line".Split("`t")
-    if (-not $UpdateClis) {
-      if ($state -cne 'old' -or -not $Interactive) { continue }
-      $answer = Read-Host "$name $release is older than $minimum, the oldest this Kit runs. Update it? [Y/n]"
-      if ($answer -and $answer -notmatch '^[Yy]') { continue }
-    }
-    Write-Host "Updating $name $release."
-    $terminal = @()
-    if ($Interactive) { $terminal = @('-t') }
-    & docker run -i @terminal --rm @Network --entrypoint $path @Common update | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-      "$name could not be updated; it stays at $release"
-      continue
-    }
-    Invoke-Docker run --rm --network none --mount $KitHomeMount --entrypoint touch $Image /kit-home/restart | Out-Null
-  }
-}
-
 function Get-HouseWorkdir([string] $Here, [string] $Root) {
   if ($Here -ieq $Root -or $Here.StartsWith("$Root\", [StringComparison]::OrdinalIgnoreCase)) {
     return "/agents/house$($Here.Substring($Root.Length).Replace('\', '/'))"
@@ -307,8 +283,6 @@ function Connect-Kit {
   $NoSkills = @()
   $Login = @()
   $Rooms = @()
-  $UpdateClis = $false
-  $Interactive = -not [Console]::IsInputRedirected
   $Arguments = $BootstrapArguments
   for ($index = 0; $index -lt $Arguments.Count; $index++) {
     $argument = $Arguments[$index]
@@ -344,8 +318,6 @@ function Connect-Kit {
       $Login += @('--code', $Arguments[$index])
     } elseif ($argument -ceq '--no-skills') {
       $NoSkills = @('--no-skills')
-    } elseif ($argument -ceq '--update-clis') {
-      $UpdateClis = $true
     } else {
       Stop-Bootstrap "unknown argument $argument"
     }
@@ -459,7 +431,6 @@ function Connect-Kit {
 
   if (Test-Container) {
     $configured = Set-Configuration
-    $failed = @(Update-Clis)
     if ($installed -cne "$Image on-failure") {
       Invoke-Docker rm -f $Name | Out-Null
       Start-Resident
@@ -474,7 +445,6 @@ function Connect-Kit {
       Write-Host 'Kit is already installed.'
     }
     if ($Rooms.Count -gt 0) { Invoke-Login $Rooms }
-    if ($failed.Count -gt 0) { Stop-Bootstrap ($failed -join '; ') }
     return
   }
 
@@ -486,11 +456,9 @@ function Connect-Kit {
     $enrolment = Read-Enrolment
     if (-not $enrolment.ContainsKey('environment')) { Stop-Bootstrap 'kit login connected no Environment' }
   }
-  $failed = @(Update-Clis)
   Start-Resident
   Write-Host "Kit connected for Environment $($enrolment['environment'])."
   if ($alreadyConnected -and $Rooms.Count -gt 0) { Invoke-Login $Rooms }
-  if ($failed.Count -gt 0) { Stop-Bootstrap ($failed -join '; ') }
 }
 
 $consoleEncoding = [Console]::OutputEncoding

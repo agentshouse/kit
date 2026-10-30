@@ -325,42 +325,21 @@ it('restarts the running service when a rerun changes the Kit configuration', as
 it.each([
   ['Linux', { system: 'Linux', machine: 'x86_64' }],
   ['macOS', { system: 'Darwin', machine: 'arm64' }],
-] as const)(
-  "updates every chosen CLI the native placement's Kit names with its own update command under --update-clis, and asks the running %s Kit to restart once idle instead of restarting it",
-  async (_name, platform) => {
-    const host = await fakeHost(platform);
-    expect(host.run()).toMatchObject({ status: 0 });
-    const codex = join(host.home, 'codex');
-    await writeFile(codex, '#!/bin/sh\nprintf \'codex %s\\n\' "$*" >> "$FAKE/log"\n', { mode: 0o755 });
-    await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.161.0\t0.160.1\tcurrent\n`);
-    await host.forget();
-
-    const ran = host.run(['--update-clis']);
-
-    expect(ran).toMatchObject({ status: 0, stderr: '' });
-    expect(ran.stdout).toContain('Updating codex 0.161.0.\n');
-    expect(ran.stdout).toContain('Kit is already installed.\n');
-    expect(host.calls('node')).toContain('clis-main.js');
-    expect(host.calls('codex')).toEqual(['update']);
-    expect(acts(host)).toEqual([]);
-    await expect(access(join(host.home, '.house-kit', 'restart'))).resolves.toBeUndefined();
-  },
-);
-
-it('asks the Kit for no restart when the one CLI update it tried failed', async () => {
-  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
+] as const)('lists and updates no CLI, asks nothing about one and leaves Kit home no restart marker when the native placement on %s runs again, and refuses --update-clis as unknown', async (_name, platform) => {
+  const host = await fakeHost(platform);
   expect(host.run()).toMatchObject({ status: 0 });
-  const codex = join(host.home, 'codex');
-  await writeFile(codex, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-  await writeFile(join(host.home, '.clis'), `codex\t${codex}\t0.161.0\t0.160.1\tcurrent\n`);
+  await writeFile(join(host.home, '.local', 'bin', 'codex'), '#!/bin/sh\nprintf \'codex %s\\n\' "$*" >> "$FAKE/log"\n', { mode: 0o755 });
   await host.forget();
 
-  const ran = host.run(['--update-clis']);
+  const ran = host.terminal([], '\n');
 
-  expect(ran).toMatchObject({ status: 0, stderr: 'codex could not be updated; it stays at 0.161.0.\n' });
-  expect(ran.stdout).toContain('Kit is already installed.\n');
+  expect(ran).toMatchObject({ status: 0, stdout: expect.stringContaining('Kit is already installed.\n') });
+  expect(ran.stdout).not.toMatch(/Update it\?|Updating /);
+  expect(host.calls('node')).not.toContain('clis-main.js');
+  expect(host.calls('codex')).toEqual([]);
   expect(acts(host)).toEqual([]);
   await expect(access(join(host.home, '.house-kit', 'restart'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(host.run(['--update-clis'])).toMatchObject({ status: 1, stderr: 'kit_bootstrap_refused: unknown argument --update-clis\n' });
 });
 
 const OFF_CONTRACT = [
@@ -669,7 +648,6 @@ it("installs the container from the Building's registry only with the container 
     `pull --quiet --platform linux/amd64 ${image}`,
     `run --entrypoint node --rm --network host ${authorities} --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/configure-main.js`,
     `run --rm --network host ${authorities} --user ${uid} ${mounts} ${image} login`,
-    `run --entrypoint node --rm --network host ${authorities} --user ${uid} ${mounts} ${image} /usr/local/lib/node_modules/@agentshouse/kit/dist/clis-main.js`,
     `run -d --name house-kit --restart on-failure ${authorities} --user ${uid} ${mounts} --label agentshouse.house=https://agents.house ${image} resident`,
   ]);
   expect(await readFile(join(host.home, '.house-kit', 'certificates.pem'), 'utf8')).toContain("the computer's own authority");

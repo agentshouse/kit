@@ -16,7 +16,7 @@ const BOOTSTRAP_BYTES = 1_000_000;
 // A bootstrap is at most a million bytes, so two minutes carry it over ten kilobytes a second and no stalled host holds the update queue.
 const BOOTSTRAP_MS = 120_000;
 
-// A bootstrap's downloads and CLI updates take minutes, so one still running after an hour has hung and is ended before it keeps the Kit offline.
+// A bootstrap's downloads take minutes, so one still running after an hour has hung and is ended before it keeps the Kit offline.
 const RERUN_MS = 60 * 60_000;
 
 const TIMED_OUT = '124';
@@ -102,7 +102,7 @@ async function bounded(body: ReadableStream<Uint8Array> | null, most: number): P
   return Buffer.concat(chunks, bytes);
 }
 
-function rerun(script: string, callId: string, flags: string[]): Promise<Result | null> {
+function rerun(script: string, callId: string): Promise<Result | null> {
   return new Promise((resolve) => {
     const [command, ...args] = [
       ...elevated(),
@@ -121,7 +121,6 @@ function rerun(script: string, callId: string, flags: string[]): Promise<Result 
       script,
       outcome(),
       ...placement(),
-      ...flags,
     ];
     const child = spawn(command!, args, { stdio: ['ignore', 'ignore', 'inherit'] });
     child.on('error', () => resolve({ refused: 'no service manager runs this Kit process' }));
@@ -192,7 +191,7 @@ export class KitUpdate {
     await writeFile(path, script, { mode: 0o700 });
     await rm(outcome(), { force: true });
     await writeFile(pending(), `${JSON.stringify({ input_id: call.input_id })}\n`, { mode: 0o600 });
-    return (await rerun(path, call.input_id, call.update_clis ? ['--update-clis'] : [])) ?? (await recorded()) ?? {
+    return (await rerun(path, call.input_id)) ?? (await recorded()) ?? {
       refused: 'the Kit bootstrap did not finish',
     };
   }

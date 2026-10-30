@@ -1,9 +1,9 @@
 import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
-import { CLIS, KIT_RELEASE, below, installAdapter, installCli, locate, run, versionOf } from './clis.ts';
+import { CLIS, KIT_RELEASE, below, installAdapter, installCli, locate, run, updateCli, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
 import { updatesItself } from './placement.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
@@ -49,6 +49,9 @@ interface Reading extends Offer {
 
 // Two quiet seconds let a fresh conversation start before background model discovery competes for its CPU.
 const MODEL_PROBE_QUIET_MS = 2_000;
+
+// A CLI's maker can publish several releases a day, so running each chosen CLI's update command hourly brings a new one to the next conversation within the hour for one small check.
+export const CLI_UPDATE_MS = 60 * 60_000;
 
 // A sign-in's model read that has not answered in ten seconds leaves its sign-in to the status check, so a hung CLI never holds the sign-in's result.
 const SIGNED_IN_READ_MS = 10_000;
@@ -214,6 +217,8 @@ export class Agents {
   private sending: Promise<void> = Promise.resolve();
   private sent: string | null = null;
   private refreshing = 0;
+  private loaded: Promise<unknown> = Promise.resolve();
+  private updating: Promise<void> | null = null;
   private readonly changed: () => void;
 
   constructor(house: House, changed: () => void = () => undefined) {
@@ -222,7 +227,7 @@ export class Agents {
   }
 
   idle(): boolean {
-    return this.refreshing === 0;
+    return this.refreshing === 0 && this.updating === null;
   }
 
   read(): Promise<void> {
@@ -244,7 +249,7 @@ export class Agents {
       return this.desired;
     });
     this.reading = reading;
-    reading
+    this.loaded = reading
       .then(({ agents, transcribe }) =>
         Promise.all([
           holdTranscription(transcribe)
@@ -261,6 +266,11 @@ export class Agents {
         this.changed();
       });
     return reading.then(() => undefined);
+  }
+
+  keepCurrent(): void {
+    this.updateAll(this.loaded);
+    setInterval(() => this.updateAll(Promise.resolve()), CLI_UPDATE_MS);
   }
 
   cli(kind: string): Promise<string> {
@@ -378,7 +388,7 @@ export class Agents {
   ): Promise<{ cli: string; release: string } | Reading> {
     let cli: string;
     try {
-      cli = await realpath(await this.ensure(kind, signal, owner));
+      cli = await this.ensure(kind, signal, owner);
     } catch (error) {
       const failure = causeOf(error);
       process.stderr.write(`kit: ${kind} did not install: ${failure}\n`);
@@ -401,6 +411,33 @@ export class Agents {
     const reading =
       'cli' in resolved ? { release: resolved.release, failure: null, ...(await read(kind, resolved.cli, known)) } : resolved;
     if (this.reads.get(kind) === current && !signal?.aborted) this.hold(kind, reading);
+  }
+
+  private updateAll(after: Promise<unknown>): void {
+    if (this.updating !== null) return;
+    this.updating = after
+      .then(async () => {
+        for (const kind of this.desired.agents) {
+          if (this.installs.has(kind) || !this.readings.get(kind)?.release) continue;
+          const failure = await updateCli(kind);
+          if (failure !== null) process.stderr.write(`kit: ${kind} did not update: ${failure}\n`);
+          await this.readVersion(kind);
+        }
+      })
+      .catch(logged)
+      .finally(() => {
+        this.updating = null;
+        this.changed();
+      });
+    this.changed();
+  }
+
+  private async readVersion(kind: string): Promise<void> {
+    const cli = await locate(kind);
+    const release = cli === null ? null : await versionOf(cli);
+    const current = this.readings.get(kind);
+    if (release === null || !current?.release || current.release === release) return;
+    this.update(kind, { ...current, release });
   }
 
   private async quietOffer(kind: string, cli: string, known: Offer): Promise<Offer> {

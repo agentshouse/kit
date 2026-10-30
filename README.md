@@ -22,12 +22,12 @@ On your own Linux server, run the Linux command with `--linux` to install Kit na
 
 Kit is built for macOS 27 on Apple silicon, Ubuntu 26.04 LTS on amd64 and Windows 11 on amd64. On another release, distribution or architecture the command prints one warning line, such as `Warning: macOS 26.7.1 is outdated; update to macOS 27.`, and installs anyway. It refuses only an architecture other than amd64 and arm64, and a native install on a Linux without glibc, where `--container` still runs Kit. On a Linux without systemd it installs and connects Kit but starts nothing: run the `kit resident` command it prints under your own service manager, restarting it whenever it ends with a failure. `--container` installs Docker Engine on Ubuntu and Debian; another Linux needs a working Docker Engine first.
 
-Kit runs the agent CLIs your login shell finds and installs a missing one
-through that CLI's own installer. A CLI older than the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version, that oldest release and the CLI's own update command, such as `claude update`. Running the command again offers to update
-each CLI older than Kit needs; add `--update-clis` to update every one to
-its latest release without asking. Kit also gives every Agent on the
-Environment the agent skills of `@agentshouse/skills`, at the version each Kit
-release installs. Add `--no-skills` to the command to leave them out; running it again without the flag brings them back.
+Kit runs each agent CLI through the link your login shell finds and installs a missing one through that CLI's own
+installer. When it starts and regularly after, Kit runs each CLI's own update command, such as `claude update`, beside
+your conversations: a running conversation keeps its version and the next one runs the new release. A CLI older than
+the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version, that
+oldest release and its update command. Kit also gives every Agent on the Environment the agent skills of
+`@agentshouse/skills`, at the version each Kit release installs. Add `--no-skills` to the command to leave them out; running it again without the flag brings them back.
 
 ## Commands
 

@@ -27,7 +27,6 @@ const ENROLMENT = 'credential.json';
 const DISCONNECTED = 'disconnected.json';
 const CONFIGURATION = 'kit.json';
 const OWN_AGENT = 'own-agent.json';
-const RESTART = 'restart';
 
 let defaulted: string | undefined;
 
@@ -156,14 +155,6 @@ export async function forgetRejected(rejected: string): Promise<void> {
 
 export function enrolled(): boolean {
   return existsSync(join(kitHome(), ENROLMENT));
-}
-
-export function restartAsked(): boolean {
-  return existsSync(join(kitHome(), RESTART));
-}
-
-export function forgetRestart(): Promise<void> {
-  return rm(join(kitHome(), RESTART), { force: true });
 }
 
 export function readOwnAgent(): Promise<OwnAgent | null> {
