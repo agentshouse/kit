@@ -425,6 +425,7 @@ async function directive(
     await replay(client, sessionId, argument);
     return 'answered';
   }
+  if (name === 'asked') await replay(client, sessionId, argument);
   return undefined;
 }
 
@@ -437,8 +438,10 @@ async function replay(client: AgentContext, sessionId: string, fixture: string):
       method: string;
       params: Record<string, unknown>;
     };
-    if (request) await client.request(method as 'session/request_permission', params as never).catch(() => undefined);
-    else await client.notify(method as 'session/update', params as never);
+    if (request) {
+      const answered = await client.request(method as 'session/request_permission', params as never).catch((error: RequestError) => ({ code: error.code }));
+      log({ replayed: method, answered });
+    } else await client.notify(method as 'session/update', params as never);
   }
 }
 
@@ -453,10 +456,12 @@ const app = agent({ name: 'adapter-double' })
       _meta: { ...(steers ? { steering: { supported: true } } : {}), ...(signedIn() ? { defaultAuthMethodId: 'device' } : {}) },
     };
   })
-  .onRequest('session/new', async ({ params }) => {
+  .onRequest('session/new', async ({ params, client }) => {
     await configured;
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
+    // The CLI asks a fifth of a second after it opens, with no prompt, once the Kit has taken the session.
+    if (existsSync(join(home, 'ask-unprompted'))) setTimeout(() => void directive(client, sessionId, '@asked codex-permission'), 200);
     if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
     if (existsSync(join(home, 'signed-out'))) throw RequestError.authRequired();
     // Twenty milliseconds opens the held session as soon as the spec removes its file.

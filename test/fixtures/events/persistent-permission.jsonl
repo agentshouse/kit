@@ -1,0 +1,1 @@
+{"request":true,"method":"session/request_permission","params":{"sessionId":"01a197aa-8833-7a32-b2b9-018c112ec5e4","toolCall":{"toolCallId":"call_exec_command","title":"touch probe-file"},"options":[{"optionId":"cancel","name":"No","kind":"reject_once"},{"optionId":"allow_for_session","name":"Yes, for this session","kind":"allow_always"}]}}

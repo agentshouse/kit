@@ -1,3 +1,4 @@
+import type { CreateElicitationRequest } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants, readFileSync } from 'node:fs';
@@ -19,6 +20,7 @@ export interface Cli {
   unknownSession(error: unknown): boolean;
   renames: boolean;
   allowHouse(path: string): Promise<void>;
+  questionFields(request: CreateElicitationRequest): string[];
   signedIn: { command: string[] } | { initializeMeta: string };
   login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
   air: string[];
@@ -84,6 +86,24 @@ export async function allowHouseInCodex(path: string): Promise<void> {
 
 async function nothing(): Promise<void> {}
 
+interface Form {
+  _meta?: { codex?: unknown } | null;
+  requestedSchema?: {
+    properties?: Record<string, { _meta?: { jetbrains?: { air?: { customAnswer?: unknown } } } }>;
+    required?: string[] | null;
+  };
+}
+
+function claudeQuestionFields(request: CreateElicitationRequest): string[] {
+  const properties = (request as Form).requestedSchema?.properties ?? {};
+  return Object.keys(properties).filter((name) => properties[name]!._meta?.jetbrains?.air?.customAnswer !== undefined);
+}
+
+function codexQuestionFields(request: CreateElicitationRequest): string[] {
+  const { _meta, requestedSchema } = request as Form;
+  return _meta?.codex === undefined ? [] : (requestedSchema?.required ?? []);
+}
+
 interface Answered {
   code?: unknown;
   data?: { details?: unknown; code?: unknown } | null;
@@ -118,6 +138,7 @@ export const CLIS: Record<string, Cli> = {
     },
     renames: true,
     allowHouse: allowHouseInCodex,
+    questionFields: codexQuestionFields,
     signedIn: { command: ['login', 'status'] },
     login: { args: ['login', '--device-auth'], code: 'show' },
     air: ['asyncTasks', 'nativeSubagentSessions'],
@@ -149,6 +170,7 @@ export const CLIS: Record<string, Cli> = {
     unknownSession: (error) => answered(error).code === -32002,
     renames: false,
     allowHouse: nothing,
+    questionFields: claudeQuestionFields,
     signedIn: { command: ['auth', 'status'] },
     login: { args: ['auth', 'login', '--claudeai'], code: 'collect', rejected: 'Invalid code' },
     air: ['asyncTasks', 'sessionFailure'],
@@ -165,6 +187,7 @@ export const CLIS: Record<string, Cli> = {
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
     renames: false,
     allowHouse: nothing,
+    questionFields: () => [],
     signedIn: { initializeMeta: 'defaultAuthMethodId' },
     login: { args: ['login', '--device-auth'], code: 'show' },
     air: ['asyncTasks'],

@@ -1,0 +1,1 @@
+{"request":true,"method":"elicitation/create","params":{"mode":"form","sessionId":"0768192f-fe50-4fbb-9420-984705cee674","message":"Name the project","requestedSchema":{"type":"object","properties":{"project":{"type":"string","title":"Project"}},"required":["project"]}}}

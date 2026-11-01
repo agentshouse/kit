@@ -12,11 +12,11 @@ export type Result =
   | Record<string, never>;
 
 export interface KitMethods {
-  readonly open: { readonly params: Record<never, never>; readonly result: Result };
+  readonly open: { readonly params: { afk?: true }; readonly result: Result };
   readonly kill: { readonly params: Record<never, never>; readonly result: Result };
   readonly done: { readonly params: Record<never, never>; readonly result: Result };
   readonly message: {
-    readonly params: { message_id: string; text: string; first: boolean; at_once?: true; recent?: string };
+    readonly params: { message_id: string; text: string; first: boolean; at_once?: true; recent?: string; afk?: true };
     readonly result: Result;
   };
   readonly interrupt: { readonly params: { turn_id: string }; readonly result: Result };

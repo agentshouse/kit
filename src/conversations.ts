@@ -1,5 +1,6 @@
 import {
   client,
+  RequestError,
   type AvailableCommand,
   type ContentBlock,
   type CreateElicitationRequest,
@@ -12,6 +13,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
+import { formAnswered, grokQuestionAnswered, permissionAllowed, PLAN_APPROVED, type GrokQuestions } from './afk.ts';
 import type { Agents, Route } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
@@ -111,6 +113,12 @@ const EXIT_PLAN_MODE = {
       throw new Error('_x.ai/exit_plan_mode needs an object');
     }
     return value as Record<string, unknown>;
+  },
+};
+
+const GROK_QUESTION = {
+  parse(value: unknown): GrokQuestions {
+    return value as GrokQuestions;
   },
 };
 
@@ -222,6 +230,7 @@ class Conversation {
   commands: AvailableCommand[] | null = null;
   options: SessionConfigOption[] | null = null;
   exitUntold = false;
+  afk = false;
   context: Context | null = null;
   readonly leftovers = new Set<Scope>();
   readonly waiting: Waiting[] = [];
@@ -286,6 +295,7 @@ export class Conversations {
   call(call: ConversationCall): void {
     void this.kit.calls.carry(call.input_id, () => {
       const conversation = this.conversation(call.conversation_id);
+      if (call.kind === 'open' || call.kind === 'message') conversation.afk = call.afk === true;
       if (call.kind === 'kill') {
         conversation.kills++;
         conversation.killed.abort(new Error(KILLED));
@@ -726,14 +736,18 @@ export class Conversations {
     reader.session = sessionId;
     const app = client({ name: '@agentshouse/kit' })
       .onRequest('session/request_permission', ({ params, signal }) =>
-        this.ask(conversation, 'session/request_permission', params, false, signal),
+        conversation.afk ? permissionAllowed(params) : this.ask(conversation, 'session/request_permission', params, false, signal),
       )
       .onRequest('elicitation/create', ({ params, signal }) =>
-        this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
+        conversation.afk ? formAnswered(route.kind, params) : this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       )
       .onRequest('_x.ai/exit_plan_mode', EXIT_PLAN_MODE, ({ params, signal }) =>
-        this.ask(conversation, '_x.ai/exit_plan_mode', params, false, signal),
-      );
+        conversation.afk ? PLAN_APPROVED : this.ask(conversation, '_x.ai/exit_plan_mode', params, false, signal),
+      )
+      .onRequest('_x.ai/ask_user_question', GROK_QUESTION, ({ params }) => {
+        if (!conversation.afk) throw RequestError.methodNotFound('_x.ai/ask_user_question');
+        return grokQuestionAnswered(params);
+      });
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridging = this.bridged(conversation);
     const bridge = await step(unbridged, bridging);
