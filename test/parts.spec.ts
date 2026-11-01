@@ -8,9 +8,17 @@ import { hostKit, lastCall, type Hosted, type RouteOverrides } from './environme
 
 const KINDS: Record<string, string> = { claude: 'claude-agent-acp', codex: 'codex-acp', grok: 'grok-build' };
 
+interface Tokens {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+
 interface Ended {
   parts: Record<string, unknown>[];
   context: { used: number; window: number } | null;
+  tokens?: Tokens;
 }
 
 interface Replayed {
@@ -619,7 +627,7 @@ it("marks Grok Build's model switch, reads the context window of the model it sw
 });
 
 it.each(['claude-tools', 'codex-tools', 'grok-tools'])(
-  'writes the part operations of %s as it maps them, and its counts carry only their number, with no token count or cost',
+  'writes the part operations of %s as it maps them, and its counts carry only their number, with no cost and no field of the CLI',
   async (fixture) => {
     const { hosted, turns } = await replayed(fixture, fixture === 'claude-tools' ? 2 : 1);
 
@@ -627,7 +635,7 @@ it.each(['claude-tools', 'codex-tools', 'grok-tools'])(
     expect(operations).toEqual(expect.arrayContaining(['start', 'append', 'context']));
     expect(operations.every((op) => ['start', 'append', 'count', 'status', 'plan', 'context'].includes(String(op)))).toBe(true);
     for (const turn of turns) {
-      expect(Object.keys(turn).sort()).toEqual(['context', 'parts']);
+      expect(['context', 'parts', 'tokens']).toEqual(expect.arrayContaining(Object.keys(turn)));
       expect(Object.keys(turn.context!).sort()).toEqual(['used', 'window']);
       for (const part of turn.parts.filter((candidate) => candidate.type === 'commands')) {
         expect(Object.keys(part).sort()).toEqual(['count', 'type']);
@@ -636,3 +644,98 @@ it.each(['claude-tools', 'codex-tools', 'grok-tools'])(
     expect(JSON.stringify(turns)).not.toMatch(/"cost"|"amount"|Tokens"|_tokens"/);
   },
 );
+
+async function spent(kind: string, usage: Record<string, unknown>): Promise<Ended> {
+  const hosted = await hostKit([{ kind }]);
+  hosted.call({ kind: 'message', text: `@spent ${JSON.stringify(usage)}\n@say ok`, first: true });
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  return ended.body as Ended;
+}
+
+it("carries Claude Code's tokens by kind from every model of the turn, so a sub-agent's tokens count", async () => {
+  const row = (model: string, input: number, read: number, write: number, output: number) => ({
+    model,
+    token_count: {
+      totalTokens: input + read + write + output,
+      inputTokens: input,
+      cachedInputTokens: read,
+      cachedWriteTokens: write,
+      outputTokens: output,
+      reasoningOutputTokens: 0,
+    },
+  });
+  const body = await spent('claude-agent-acp', {
+    usage: { inputTokens: 5, outputTokens: 7, cachedReadTokens: 11, cachedWriteTokens: 13, totalTokens: 36 },
+    _meta: { quota: { model_usage: [row('claude-main', 5, 11, 13, 7), row('claude-subagent', 100, 200, 300, 400)] } },
+  });
+  expect(body.tokens).toEqual({ input: 105, output: 407, cache_read: 211, cache_write: 313 });
+});
+
+it("carries Codex's tokens by kind, its reasoning already inside its output", async () => {
+  const body = await spent('codex-acp', {
+    usage: { inputTokens: 10, outputTokens: 20, cachedReadTokens: 30, cachedWriteTokens: 40, thoughtTokens: 15, totalTokens: 100 },
+  });
+  expect(body.tokens).toEqual({ input: 10, output: 20, cache_read: 30, cache_write: 40 });
+});
+
+it("carries Grok's tokens by kind: its input holds its cache reads, its reasoning sits inside its output, and a sub-agent that finished within the turn is already in its parent's", async () => {
+  const { turns } = await replayed('grok-tools');
+  expect(turns[0]!.tokens).toEqual({ input: 21345 + 20412, output: 2349 + 394, cache_read: 163072 + 2304, cache_write: 0 });
+});
+
+it('leaves out a Grok sub-agent that outlives its turn, which its parent and the turn after it leave out too', async () => {
+  const { turns } = await replayed('grok-subagent', 2);
+  const total = turns.flatMap((turn) => (turn.tokens === undefined ? [] : [turn.tokens])).reduce(
+    (sum, tokens) => ({
+      input: sum.input + tokens.input,
+      output: sum.output + tokens.output,
+      cache_read: sum.cache_read + tokens.cache_read,
+      cache_write: sum.cache_write + tokens.cache_write,
+    }),
+    { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  );
+  expect(total).toEqual({ input: 275 + 326, output: 174 + 83, cache_read: 50432 + 25472, cache_write: 0 });
+});
+
+it.each([
+  [{ outputTokens: 20 }],
+  [{ inputTokens: 5, outputTokens: 20, cacheCreationTokens: 0 }],
+  [{ inputTokens: 5, outputTokens: 20, cachedReadTokens: 9, cacheCreationTokens: 0 }],
+  [null],
+])(
+  'carries no tokens on a Grok turn whose usage is %j, and the turn still ends',
+  async (usage) => {
+    const hosted = await hostKit([{ kind: 'grok-build' }]);
+    hosted.call({ kind: 'message', text: `@say ok\n@completed ${JSON.stringify(usage)}`, first: true });
+    const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+    expect(ended.body).not.toHaveProperty('tokens');
+    expect(kinds(ended.body as Ended)).toContain('text');
+  },
+);
+
+it.each([
+  ['claude-agent-acp', { _meta: { quota: { model_usage: [] } } }],
+  ['claude-agent-acp', { _meta: { quota: { model_usage: [{ model: 'renamed', tokens: {} }] } } }],
+  [
+    'claude-agent-acp',
+    {
+      _meta: {
+        quota: {
+          model_usage: [
+            { model: 'whole', token_count: { inputTokens: 1, outputTokens: 2, cachedInputTokens: 3, cachedWriteTokens: 4 } },
+            { model: 'renamed', token_count: { inputTokens: 1, outputTokens: 2, cachedInputTokens: 3 } },
+          ],
+        },
+      },
+    },
+  ],
+  ['codex-acp', { usage: null }],
+  ['codex-acp', {}],
+  ['codex-acp', { usage: { outputTokens: 20 } }],
+  ['codex-acp', { usage: { inputTokens: 10, outputTokens: 20, cachedWriteTokens: 0 } }],
+  ['grok-build', {}],
+])('carries no tokens on a %s turn whose usage is absent or incomplete, and the turn still ends', async (kind, usage) => {
+  const body = await spent(kind, usage);
+  expect(body).not.toHaveProperty('tokens');
+  expect(kinds(body)).toContain('text');
+});

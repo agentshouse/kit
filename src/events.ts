@@ -1,5 +1,5 @@
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk';
-import type { Marker, PlanStep } from './parts.ts';
+import type { Marker, PlanStep, Tokens } from './parts.ts';
 
 type Fields = Record<string, any>;
 
@@ -25,6 +25,7 @@ export type Event =
   | { kind: 'marker'; marker: Marker; text: string }
   | { kind: 'plan'; entries: PlanStep[] }
   | { kind: 'context'; used: number; window: number }
+  | { kind: 'tokens'; tokens: Tokens }
   | { kind: 'commands'; commands: AvailableCommand[] }
   | { kind: 'options'; options: SessionConfigOption[] };
 
@@ -57,6 +58,11 @@ const MESSAGE_TARGETS = new Map([
   ['cancel_agent_function_request', ['request']],
   ['send_mail', ['conversation', 'request']],
 ]);
+
+function counted(reports: Tokens[]): Event[] {
+  const whole = reports.every((tokens) => Object.values(tokens).every((count) => Number.isSafeInteger(count) && count >= 0));
+  return whole ? reports.map((tokens) => ({ kind: 'tokens', tokens })) : [];
+}
 
 function words(line: string): string[] {
   const found: string[] = [];
@@ -318,6 +324,19 @@ class ClaudeReader extends Reader {
   private readonly tasks = new Map<string, string>();
   private stop: Stop | null = null;
 
+  protected override answered(result: Fields | undefined): Event[] {
+    const models = (result?._meta?.quota?.model_usage ?? []) as Fields[];
+    const spent = counted(
+      models.map(({ token_count: count }) => ({
+        input: count?.inputTokens,
+        output: count?.outputTokens,
+        cache_read: count?.cachedInputTokens,
+        cache_write: count?.cachedWriteTokens,
+      })),
+    );
+    return [...spent, ...super.answered(result)];
+  }
+
   protected override own(message: Message): Event[] {
     if (message.params?.update?._meta?.claudeCode?.parentToolUseId !== undefined) return [];
     return super.own(message);
@@ -399,6 +418,22 @@ class CodexReader extends Reader {
   protected override readonly watchedOptions: Record<string, Marker> = { mode: 'mode', collaboration_mode: 'mode' };
   private readonly children = new Map<string, { id: string | null; text: string }>();
 
+  protected override answered(result: Fields | undefined): Event[] {
+    const usage = result?.usage as Fields | null | undefined;
+    const spent =
+      usage === null || usage === undefined
+        ? []
+        : counted([
+            {
+              input: usage.inputTokens,
+              output: usage.outputTokens,
+              cache_read: usage.cachedReadTokens,
+              cache_write: usage.cachedWriteTokens,
+            },
+          ]);
+    return [...spent, ...super.answered(result)];
+  }
+
   protected override own(message: Message): Event[] {
     if (message.method === 'session/request_permission' && message.params!.toolCall?.kind === 'switch_mode') {
       return [{ kind: 'started' }, { kind: 'marker', marker: 'mode', text: message.params!.toolCall.title ?? '' }];
@@ -478,13 +513,21 @@ class GrokReader extends Reader {
       return (message.params!.runningPromptId ?? null) !== null && session === this.session ? [{ kind: 'started' }] : [];
     }
     if (message.params?.update?.sessionUpdate === 'turn_completed') {
-      return session === this.session ? [{ kind: 'ended', stop: null }] : [];
+      if (session !== this.session) return [];
+      return [...this.spent(message.params.update.usage as Fields | null | undefined), { kind: 'ended', stop: null }];
     }
     if (message.method === '_x.ai/models/update') {
       this.offered(message.params!);
       return [];
     }
     return super.read(message);
+  }
+
+  private spent(usage: Fields | null | undefined): Event[] {
+    if (usage === null || usage === undefined) return [];
+    const { inputTokens, outputTokens, cachedReadTokens, cacheCreationTokens } = usage;
+    const input = inputTokens - cachedReadTokens - cacheCreationTokens;
+    return counted([{ input, output: outputTokens, cache_read: cachedReadTokens, cache_write: cacheCreationTokens }]);
   }
 
   private offered(models: Fields): void {

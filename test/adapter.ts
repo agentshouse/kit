@@ -59,6 +59,7 @@ const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode, collab
 const cancelled = new Map<string, () => void>();
 const prompting = new Set<string>();
 const turning = new Set<string>();
+let spent: Record<string, unknown> = {};
 const steers = kind !== 'grok-build';
 
 // A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.
@@ -228,6 +229,13 @@ async function directive(
     return { stopReason: 'end_turn', _meta: { jetbrains: { air: { version: 1, sessionFailure } } } };
   }
   if (name === 'refusal') return { stopReason: 'refusal' };
+  if (name === 'spent') Object.assign(spent, JSON.parse(argument));
+  if (name === 'completed') {
+    await client.notify('_x.ai/session_notification', {
+      sessionId,
+      update: { sessionUpdate: 'turn_completed', stop_reason: 'end_turn', usage: JSON.parse(argument) },
+    });
+  }
   if (name === 'answer') return 'answered';
   // A hold keeps the turn running for the milliseconds its spec names, the time that spec stages something else in.
   if (name === 'hold') await new Promise((resolve) => setTimeout(resolve, Number(argument)));
@@ -545,6 +553,7 @@ const app = agent({ name: 'adapter-double' })
     log({ method: 'session/prompt', params, text });
     prompting.add(params.sessionId);
     turning.add(params.sessionId);
+    spent = {};
     try {
       const steps = directives(text);
       for (const line of steps.length === 0 ? ['@say ok'] : steps) {
@@ -557,7 +566,7 @@ const app = agent({ name: 'adapter-double' })
         if (outcome !== undefined) return outcome;
       }
       await turnEnded(client, params.sessionId);
-      return { stopReason: 'end_turn' };
+      return { stopReason: 'end_turn', ...spent };
     } finally {
       prompting.delete(params.sessionId);
     }

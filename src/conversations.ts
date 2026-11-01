@@ -24,7 +24,7 @@ import { inspectedFile, linkedPaths, storeRefusal, uploaded, type Address, type 
 import { agentBase } from './home.ts';
 import type { Call, Calls, Result } from './calls.ts';
 import { instructions } from './instructions.ts';
-import { Parts, type Context, type Operation, type Part } from './parts.ts';
+import { addedTokens, Parts, type Context, type Operation, type Part, type Tokens } from './parts.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { killMarked, Scope } from './scope.ts';
@@ -81,6 +81,9 @@ const NOT_SIGNED_IN = "the Agent's CLI is not signed in; sign it in on the Agent
 const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
 
 const UNSTEERED = "the Agent's CLI did not take the message into its running turn";
+
+// A reader tells a working run from a stopped one by the minute, and House keeps no finer figure, so a run reports no oftener.
+const ACTIVITY_REPORT_MS = 60_000;
 
 class NotStarted extends Error {}
 
@@ -185,6 +188,7 @@ class Turn {
   steered = false;
   taken: (() => void) | null = null;
   ended = false;
+  quietUntil = Infinity;
   images = 0;
   readonly uploads: Promise<unknown>[] = [];
 
@@ -232,6 +236,7 @@ class Conversation {
   exitUntold = false;
   afk = false;
   context: Context | null = null;
+  tokens: Tokens | null = null;
   readonly leftovers = new Set<Scope>();
   readonly waiting: Waiting[] = [];
   done = false;
@@ -908,10 +913,10 @@ export class Conversations {
     this.kit.send({ type: 'options', conversation_id: conversation.id, options });
   }
 
-  private deliver(conversation: Conversation, turn: Turn, event: string, body: unknown): Promise<unknown> {
+  private deliver(conversation: Conversation, turn: Turn, event: string, body: unknown, current?: () => boolean): Promise<unknown> {
     this.reporting++;
     const delivered = conversation.reports.then(async () =>
-      this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/${event}`, await body),
+      this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/${event}`, await body, current),
     );
     conversation.reports = delivered
       .catch(() => undefined)
@@ -935,7 +940,11 @@ export class Conversations {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
     conversation.turns.add(turn);
     conversation.running?.adapter.turn(true);
-    void this.deliver(conversation, turn, 'started', {}).catch(logged);
+    void this.deliver(conversation, turn, 'started', {})
+      .then((answer) => {
+        if ((answer as { run?: boolean }).run === true) turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
+      })
+      .catch(logged);
     conversation.turn = turn;
     if (conversation.context !== null) turn.parts.measure(conversation.context);
     for (const part of conversation.held.splice(0)) turn.parts.start(part);
@@ -954,9 +963,12 @@ export class Conversations {
     conversation.turns.delete(turn);
     conversation.running?.adapter.turn(conversation.turns.size > 0);
     if (conversation.turn === turn) conversation.turn = null;
+    const tokens = conversation.tokens;
+    conversation.tokens = null;
     const body = Promise.allSettled(turn.uploads).then(() => ({
       parts: turn.parts.saved(),
       context: turn.parts.context,
+      ...(tokens === null ? {} : { tokens }),
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
     void this.deliver(conversation, turn, 'ended', body).catch(logged);
@@ -1064,6 +1076,18 @@ export class Conversations {
 
   private read(conversation: Conversation, reader: Reader, message: Message): void {
     for (const event of reader.read(message)) this.event(conversation, event);
+    this.reportActivity(conversation);
+  }
+
+  private reportActivity(conversation: Conversation): void {
+    const turn = conversation.turn;
+    if (turn === null || Date.now() < turn.quietUntil) return;
+    turn.quietUntil = Infinity;
+    void this.deliver(conversation, turn, 'activity', {}, () => false)
+      .catch(logged)
+      .finally(() => {
+        turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
+      });
   }
 
   private event(conversation: Conversation, event: Event): void {
@@ -1083,6 +1107,9 @@ export class Conversations {
       case 'context':
         conversation.context = { used: event.used, window: event.window };
         conversation.turn?.parts.measure(conversation.context);
+        return;
+      case 'tokens':
+        conversation.tokens = addedTokens(conversation.tokens, event.tokens);
         return;
       case 'subagent-done':
         this.subagentDone(conversation, event.id, event.result);

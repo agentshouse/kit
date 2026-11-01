@@ -10,6 +10,23 @@ export interface Context {
   window: number;
 }
 
+export interface Tokens {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+export function addedTokens(sum: Tokens | null, tokens: Tokens): Tokens {
+  if (sum === null) return tokens;
+  return {
+    input: sum.input + tokens.input,
+    output: sum.output + tokens.output,
+    cache_read: sum.cache_read + tokens.cache_read,
+    cache_write: sum.cache_write + tokens.cache_write,
+  };
+}
+
 export interface Subagent {
   type: 'subagent';
   description: string;

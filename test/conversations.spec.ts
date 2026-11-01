@@ -10,6 +10,8 @@ import { settle, until } from './double.ts';
 import { conversationCredential, hostKit, installHeld, lastCall, outcome, userBin, type Hosted } from './environment.ts';
 import { alive, placeHostKey, temporaryHome } from './kit.ts';
 
+const FAST_REPORTS = fileURLToPath(new URL('./fast-reports.ts', import.meta.url));
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])("leaves %s on its own default model and effort when the Profile names neither", async (kind) => {
@@ -1641,4 +1643,115 @@ it('reads the CLI again only after the conversation it opens has had two quiet s
   await until(async () => (await sessions()) === before + 1);
   await until(async () => (await sessions()) === before + 2);
   expect(Date.now() - opening).toBeGreaterThanOrEqual(2_000);
+});
+
+function reported(hosted: Hosted): string[] {
+  return hosted.turns.map((turn) => turn.path.split('/').at(-1)!);
+}
+
+function fastReports(): { environment: Record<string, string> } {
+  return { environment: { NODE_OPTIONS: `--import=${FAST_REPORTS}` } };
+}
+
+it.each([false, true])('reports a working run at most once a period, watched %s, between its start and its end', async (watched) => {
+  const hosted = await hostKit([{}], fastReports());
+  hosted.watch(watched);
+  hosted.starts.push({ run: true });
+  const arrivals: number[] = [];
+  hosted.activity = () => {
+    arrivals.push(Date.now());
+    return { body: {} };
+  };
+  const working = Array.from({ length: 40 }, (_, index) => `@say ${index}\n@hold 50`).join('\n');
+
+  hosted.call({ kind: 'message', text: working, first: true });
+
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await settle();
+  const order = reported(hosted);
+  expect(arrivals.length).toBeGreaterThanOrEqual(2);
+  for (const [index, arrival] of arrivals.entries()) {
+    if (index > 0) expect(arrival - arrivals[index - 1]!).toBeGreaterThanOrEqual(300);
+  }
+  expect(order[0]).toBe('started');
+  expect(order.at(-1)).toBe('ended');
+  expect(order.filter((event) => event === 'activity')).toHaveLength(arrivals.length);
+});
+
+it('reports a run only when its CLI did something, so a run that stopped is reported no more', async () => {
+  const hosted = await hostKit([{}], fastReports());
+  hosted.starts.push({ run: true });
+
+  hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@hold 1500\n@say two\n@hold 500', first: true });
+
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await settle();
+  expect(reported(hosted)).toEqual(['started', 'activity', 'activity', 'ended']);
+});
+
+it('reports nothing of a conversation House does not name a run, as a House that predates the report never does', async () => {
+  const hosted = await hostKit([{}], fastReports());
+
+  hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@hold 500\n@say two\n@hold 500\n@say three', first: true });
+
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await settle();
+  expect(reported(hosted)).toEqual(['started', 'ended']);
+});
+
+it('stops reporting with the run, so a later turn of its conversation is not reported', async () => {
+  const hosted = await hostKit([{}], fastReports());
+  hosted.starts.push({ run: true });
+  hosted.call({ kind: 'message', text: '@hold 500\n@say one', first: true });
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+
+  hosted.call({ kind: 'message', text: '@hold 500\n@say two\n@hold 500\n@say three', first: false });
+
+  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/ended')).length === 2);
+  await settle();
+  expect(reported(hosted)).toEqual(['started', 'activity', 'ended', 'started', 'ended']);
+});
+
+it('never lets a report overtake the end of its turn', async () => {
+  const hosted = await hostKit([{}], fastReports());
+  hosted.starts.push({ run: true });
+  const { promise: answered, resolve: answer } = Promise.withResolvers<void>();
+  hosted.activity = async () => {
+    await answered;
+    return { body: {} };
+  };
+
+  hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@say two', first: true });
+
+  await until(() => reported(hosted).includes('activity'));
+  await settle();
+  expect(reported(hosted)).toEqual(['started', 'activity']);
+  answer();
+  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(reported(hosted)).toEqual(['started', 'activity', 'ended']);
+});
+
+it('lets a question behind a report House does not take reach House while the turn runs', async () => {
+  const hosted = await hostKit([{}], fastReports());
+  hosted.starts.push({ run: true });
+  hosted.activity = () => ({ status: 404, body: { message: 'Not Found' } });
+
+  hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@ask', first: true });
+
+  await until(() => hosted.interactions[0]);
+  expect(reported(hosted)).toEqual(['started', 'activity']);
+});
+
+it.each([
+  ['retryable', { status: 503, body: { error: { code: 'unavailable', retryable: true } } }],
+  ['unknown to House', { status: 404, body: { message: 'Not Found' } }],
+])('still ends a turn whose report House answered as %s', async (_, refused) => {
+  const hosted = await hostKit([{}], fastReports());
+  hosted.starts.push({ run: true });
+  hosted.activity = () => refused;
+
+  hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@say done', first: true });
+
+  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  expect(outcome(ended.body)).toEqual({ text: 'onedone' });
 });

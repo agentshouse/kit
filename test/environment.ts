@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
-import { certificate, startHouse, until, type House, type KitConnection, type Received } from './double.ts';
+import { type Answer, certificate, startHouse, until, type House, type KitConnection, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './adapters.ts';
 import { serveKitFiles } from './building.ts';
@@ -161,6 +161,8 @@ export interface Hosted {
   workingDirectory: string;
   results: Received[];
   turns: Received[];
+  starts: Record<string, unknown>[];
+  activity: () => Answer | Promise<Answer>;
   interactions: Received[];
   images: Received[];
   finishes: Received[];
@@ -261,12 +263,18 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     results.push(request);
     return { body: {} };
   });
-  for (const event of ['started', 'ended']) {
-    house.route('POST', `/kit/conversations/:conversation/turns/:turn/${event}`, (request) => {
-      turns.push(request);
-      return { body: {} };
-    });
-  }
+  house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', (request) => {
+    turns.push(request);
+    return { body: hosted.starts.shift() ?? {} };
+  });
+  house.route('POST', '/kit/conversations/:conversation/turns/:turn/ended', (request) => {
+    turns.push(request);
+    return { body: {} };
+  });
+  house.route('POST', '/kit/conversations/:conversation/turns/:turn/activity', (request) => {
+    turns.push(request);
+    return hosted.activity();
+  });
   house.route('POST', '/kit/conversations/:conversation/turns/:turn/interactions', (request) => {
     interactions.push(request);
     return { body: {} };
@@ -320,6 +328,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     mcp,
     tools,
     reports,
+    starts: [],
+    activity: () => ({ body: {} }),
     watch: (watching) => house.connections.at(-1)!.send({ type: 'watching', watching }),
     restart: async () => {
       const opened = house.connections.length;
