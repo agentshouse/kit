@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { isUtf8 } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import type { Writable } from 'node:stream';
 import { workspaceRoot } from './home.ts';
 import { childEnvironment } from './relay.ts';
 
@@ -19,12 +20,14 @@ export interface Ran {
   stderr: string;
 }
 
+type ImportedFile = readonly [string, string | null];
+
 export interface Imported {
   message: string;
   from: string | null;
   merge?: string;
   replaces?: boolean;
-  files: ReadonlyMap<string, string | null>;
+  files: Iterable<ImportedFile> | AsyncIterable<ImportedFile>;
 }
 
 export function run(cwd: string, args: string[], input?: string | Buffer, env: NodeJS.ProcessEnv = {}): Promise<Ran> {
@@ -96,22 +99,58 @@ function data(text: string): Buffer[] {
   return [Buffer.from(`data ${bytes.length}\n`), bytes, Buffer.from('\n')];
 }
 
-export async function importCommits(repository: string, commits: readonly Imported[]): Promise<string> {
-  const stream: Buffer[] = [];
+function written(stream: Writable, bytes: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    stream.write(bytes, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function imported(stream: Writable, commits: readonly Imported[]): Promise<void> {
+  await written(stream, Buffer.from('feature done\n'));
   for (const [index, commit] of commits.entries()) {
-    stream.push(
-      Buffer.from(`commit ${HOUSE_REF}\nmark :${index + 1}\ncommitter ${COMMITTER} ${Math.floor(Date.now() / 1000)} +0000\n`),
-      ...data(commit.message),
-      ...(commit.from === null ? [] : [Buffer.from(`from ${commit.from}\n`)]),
-      ...(commit.merge === undefined ? [] : [Buffer.from(`merge ${commit.merge}\n`)]),
-      ...(commit.replaces === true ? [Buffer.from('deleteall\n')] : []),
+    await written(
+      stream,
+      Buffer.concat([
+        Buffer.from(`commit ${HOUSE_REF}\nmark :${index + 1}\ncommitter ${COMMITTER} ${Math.floor(Date.now() / 1000)} +0000\n`),
+        ...data(commit.message),
+        ...(commit.from === null ? [] : [Buffer.from(`from ${commit.from}\n`)]),
+        ...(commit.merge === undefined ? [] : [Buffer.from(`merge ${commit.merge}\n`)]),
+        ...(commit.replaces === true ? [Buffer.from('deleteall\n')] : []),
+      ]),
     );
-    for (const [path, content] of commit.files) {
-      if (content === null) stream.push(Buffer.from(`D ${quoted(path)}\n`));
-      else stream.push(Buffer.from(`M 100644 inline ${quoted(path)}\n`), ...data(content));
+    for await (const [path, content] of commit.files) {
+      await written(
+        stream,
+        content === null
+          ? Buffer.from(`D ${quoted(path)}\n`)
+          : Buffer.concat([Buffer.from(`M 100644 inline ${quoted(path)}\n`), ...data(content)]),
+      );
     }
-    stream.push(Buffer.from('\n'));
+    await written(stream, Buffer.from('\n'));
   }
-  await git(repository, ['fast-import', '--quiet', '--force'], Buffer.concat(stream));
+  await written(stream, Buffer.from('done\n'));
+}
+
+export async function importCommits(repository: string, commits: readonly Imported[]): Promise<string> {
+  const child = spawn('git', ['fast-import', '--quiet', '--force'], { cwd: repository, env: childEnvironment() });
+  let stderr = '';
+  child.stdout.resume();
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString('utf8');
+  });
+  child.stdin.on('error', () => undefined);
+  const closed = new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', resolve);
+  });
+  try {
+    await imported(child.stdin, commits);
+    child.stdin.end();
+  } catch (error) {
+    child.stdin.destroy();
+    await closed;
+    throw (error as NodeJS.ErrnoException).code === 'EPIPE' ? new Error(`git fast-import failed: ${stderr.trim()}`) : error;
+  }
+  if ((await closed) !== 0) throw new Error(`git fast-import failed: ${stderr.trim()}`);
   return revision(repository, HOUSE_REF);
 }

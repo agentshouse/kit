@@ -31,6 +31,9 @@ export interface Store {
   origin: string;
   requests: StoreRequest[];
   objects: Map<string, Buffer>;
+  reading: number;
+  holdReads(): () => void;
+  refuseReads(count: number): void;
   address(method: 'GET' | 'PUT', key: string, fields?: Record<string, string>, expired?: boolean): string;
   cut(part: number): void;
   declare(declared: { bytes: number; sha256: string; path: string }, partBytes: number): UploadAnswer;
@@ -60,6 +63,9 @@ export async function startStore(tls?: Certificate): Promise<Store> {
   const requests: StoreRequest[] = [];
   const cuts = new Set<number>();
   let revisions = 0;
+  let held: Promise<void> | null = null;
+  let reading = 0;
+  let refused = 0;
   const signature = (method: string, address: URL, checksum: string) =>
     createHmac('sha256', secret)
       .update(JSON.stringify([method, address.pathname, [...address.searchParams].filter(([name]) => name !== 'signature').sort(), checksum]))
@@ -80,6 +86,13 @@ export async function startStore(tls?: Certificate): Promise<Store> {
     if (request.method === 'GET') {
       const object = objects.get(key);
       if (object === undefined) return answer(404);
+      if (refused > 0) {
+        refused--;
+        return answer(500);
+      }
+      reading++;
+      await held;
+      reading--;
       return answer(200, object.length, object);
     }
     const upload = uploads.get(address.searchParams.get('upload') ?? '');
@@ -131,6 +144,22 @@ export async function startStore(tls?: Certificate): Promise<Store> {
     origin,
     requests,
     objects,
+    get reading() {
+      return reading;
+    },
+    refuseReads: (count) => {
+      refused = count;
+    },
+    holdReads: () => {
+      let release = () => {};
+      held = new Promise((resolve) => {
+        release = () => {
+          held = null;
+          resolve();
+        };
+      });
+      return release;
+    },
     address: (method, key, fields = {}, expired = false) => signed(method, key, fields, expired, ''),
     cut: (part) => cuts.add(part),
     declare: (declared, partBytes) => {

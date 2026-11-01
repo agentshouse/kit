@@ -62,7 +62,7 @@ export function inspectedFile(answer: string): InspectedFile | null {
   };
 }
 
-function paused(milliseconds: number): Promise<void> {
+export function paused(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
@@ -178,5 +178,5 @@ export async function downloaded(
 
 export async function fetched(url: string, signal: AbortSignal): Promise<Answered> {
   const answer = await fetch(relayed(url), { signal });
-  return { status: answer.status, body: answer.body ?? Readable.from([]) };
+  return { status: answer.status, body: answer.body === null ? Readable.from([]) : Readable.fromWeb(answer.body) };
 }

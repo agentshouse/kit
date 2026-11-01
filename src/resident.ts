@@ -129,6 +129,7 @@ export async function resident(): Promise<void> {
   const copies = new LocalCopies(house);
   await copies.load();
   await serveOwner(copies);
+  await copies.swept();
   await started().catch((error: unknown) => {
     report(error);
     process.exit(1);

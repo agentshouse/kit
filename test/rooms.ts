@@ -9,10 +9,13 @@ import { stringify } from 'yaml';
 import type { Answer, Received } from './double.ts';
 import { GIT_IDENTITY, type Hosted, type ToolResult } from './environment.ts';
 import { stop } from './kit.ts';
+import type { Store } from './store.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 export const COPIES = '/agents/house/local-copies';
 const LOG_EPOCH = '0192f0e4-1c2d-7000-8000-000000000001';
+const CHUNK_BYTES = 1024 * 1024;
+const BODY_BYTES = 4 * 1024 * 1024;
 
 interface Stored {
   content: string;
@@ -61,6 +64,24 @@ function covers(path: string, prefix: string): boolean {
   return prefix === '' || path === prefix || path.startsWith(`${prefix}/`);
 }
 
+function packed(entries: readonly object[]): Buffer[] {
+  const chunks: Buffer[] = [];
+  let held: Buffer[] = [];
+  let bytes = 0;
+  for (const entry of entries) {
+    const line = Buffer.from(`${JSON.stringify(entry)}\n`);
+    if (bytes > 0 && bytes + line.length > CHUNK_BYTES) {
+      chunks.push(Buffer.concat(held));
+      held = [];
+      bytes = 0;
+    }
+    held.push(line);
+    bytes += line.length;
+  }
+  if (held.length > 0) chunks.push(Buffer.concat(held));
+  return chunks;
+}
+
 export class Room {
   readonly ref = `r_${randomBytes(5).toString('hex')}.x`;
   handle: string;
@@ -72,8 +93,11 @@ export class Room {
   readonly binaries = new Map<string, Binary>();
   readonly history = new Map<string, string>();
   readonly binaryHistory = new Map<string, Binary & { path: string }>();
+  readonly folders = new Set<string>();
   readonly log: { position: number; paths: string[] }[] = [];
   readonly batches: EditChange[][] = [];
+  models: Record<string, unknown>[] = [];
+  private built: { position: number; entries: object[] } | null = null;
 
   constructor(handle: string) {
     this.handle = handle;
@@ -143,51 +167,83 @@ export class Room {
     };
   }
 
-  bundle(): Record<string, unknown> {
-    const paths = [...this.files.keys()].sort();
+  entries(): object[] {
+    const text = [...this.files].map(([path, file]) => ({
+      path,
+      revision: file.revision,
+      sha256: 'unused',
+      bytes: Buffer.byteLength(file.content),
+      lines: file.content.split('\n').length - 1,
+      ...(file.provenance === undefined ? {} : { provenance: file.provenance }),
+      content: file.content,
+    }));
+    const binary = [...this.binaries].map(([path, file]) => ({
+      path,
+      revision: file.revision,
+      sha256: createHash('sha256').update(file.bytes).digest('hex'),
+      bytes: file.bytes.length,
+      media_type: 'image/jpeg',
+    }));
+    const folders = [...this.folders].map((folder) => ({ folder }));
+    const key = (entry: object) => ('folder' in entry ? `${String(entry.folder)}/` : (entry as { path: string }).path);
+    return [...text, ...binary, ...folders].sort((left, right) => (key(left) < key(right) ? -1 : 1));
+  }
+
+  build(): void {
+    this.built = { position: this.position, entries: this.entries() };
+  }
+
+  chunkList(store: Store, expires: () => boolean, shape: { damagesChunks: boolean; unparsedChunks: boolean }): Record<string, unknown> {
+    const { position, entries } = this.built ?? { position: this.position, entries: this.entries() };
     return {
-      manifest: {
-        version: 'local-copy/1',
-        scope: 'room',
-        anchor: this.ref,
-        path: this.root,
-        room_handle: this.handle,
-        position: String(this.position),
-        log_epoch: this.logEpoch,
-        files: paths.map((path) => {
-          const file = this.files.get(path)!;
-          return {
-            path,
-            revision: file.revision,
-            sha256: 'unused',
-            writable: this.writable(path),
-            ...(file.provenance === undefined ? {} : { provenance: file.provenance }),
-          };
-        }),
-      },
-      contents: paths.map((path) => ({ path, content: this.files.get(path)!.content })),
-      originals: [],
+      room_ref: this.ref,
+      ready: true,
+      position: String(position),
+      log_epoch: this.logEpoch,
+      chunks: packed(entries).map((body) => {
+        const served = shape.unparsedChunks ? Buffer.concat([body, Buffer.from('{not a line\n')]) : body;
+        const hash = createHash('sha256').update(served).digest('hex');
+        const key = `room-chunks/${this.ref}/${hash}`;
+        store.objects.set(key, shape.damagesChunks ? Buffer.concat([served, Buffer.from([0])]) : served);
+        return { hash, bytes: body.length, download: store.address('GET', key, {}, expires()) };
+      }),
+      authors: [],
+      models: this.models,
     };
   }
 
-  enumerated(after: number, pass: number): Record<string, unknown> {
+  changedSince(after: number): number {
+    return new Set(this.log.filter((entry) => entry.position > after).flatMap((entry) => entry.paths)).size;
+  }
+
+  enumerated(after: number, pass: number, bodyBytes: number): Record<string, unknown> {
     const entries = this.log.filter((entry) => entry.position > after).slice(0, pass);
     const paths = [...new Set(entries.flatMap((entry) => entry.paths))].sort();
+    const position = String(entries.at(-1)?.position ?? this.position);
+    const changes: Record<string, unknown>[] = [];
+    let spent = 0;
+    for (const path of paths) {
+      if (spent >= bodyBytes) break;
+      const file = this.files.get(path);
+      spent += Buffer.byteLength(file?.content ?? '');
+      changes.push(
+        file === undefined
+          ? { path, removed: true }
+          : {
+              path,
+              content: file.content,
+              revision: file.revision,
+              sha256: 'unused',
+              ...(file.provenance === undefined ? {} : { provenance: file.provenance }),
+            },
+      );
+    }
     return {
       authority: this.ref,
-      position: String(entries.at(-1)?.position ?? this.position),
+      position,
       log_epoch: this.logEpoch,
-      changes: paths.map((path) => {
-        const file = this.files.get(path);
-        if (file === undefined) return { path, removed: true };
-        return {
-          path,
-          content: file.content,
-          revision: file.revision,
-          sha256: 'unused',
-          ...(file.provenance === undefined ? {} : { provenance: file.provenance }),
-        };
-      }),
+      changes,
+      ...(changes.length < paths.length ? { next: { after: String(after), through: position, read: changes.length } } : {}),
       originals: [],
     };
   }
@@ -289,6 +345,11 @@ export interface Rooms {
   expiring: number;
   authoredFileBytes: number;
   maxPrefixes: number;
+  carriedDocuments: number;
+  notReady: Map<string, number>;
+  expiringChunks: number;
+  damagesChunks: boolean;
+  unparsedChunks: boolean;
   edits(): Received[];
 }
 
@@ -323,6 +384,11 @@ export function serveRooms(hosted: Hosted): Rooms {
     expiring: 0,
     authoredFileBytes: 1_000_000,
     maxPrefixes: 256,
+    carriedDocuments: 1_000,
+    notReady: new Map(),
+    expiringChunks: 0,
+    damagesChunks: false,
+    unparsedChunks: false,
     room: (handle) => {
       const room = new Room(handle);
       rooms.push(room);
@@ -369,30 +435,52 @@ export function serveRooms(hosted: Hosted): Rooms {
       },
     };
   });
-  hosted.house.route('POST', '/kit/door/bootstrap', (request) => {
+  hosted.house.route('POST', '/kit/door/room-chunks/list', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
+    if (prefixes.length > state.maxPrefixes) return INVALID;
     const read = prefixed(rooms, prefixes);
     if (read.some((room) => state.unreadable.has(room.ref))) {
       return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
     }
-    return { body: { scopes: read.map((room) => room.bundle()) } };
+    const expires = () => {
+      if (state.expiringChunks === 0) return false;
+      state.expiringChunks--;
+      return true;
+    };
+    return {
+      body: {
+        rooms: read.map((room) => {
+          const waits = state.notReady.get(room.ref) ?? 0;
+          if (waits === 0) return room.chunkList(hosted.store, expires, state);
+          state.notReady.set(room.ref, waits - 1);
+          return { room_ref: room.ref, ready: false };
+        }),
+      },
+    };
   });
   hosted.house.route('POST', '/kit/door/enumerate', (request) => {
     const { prefixes, positions } = request.body as {
       prefixes: string[];
-      positions: { authority: string; position: string; log_epoch: string }[];
+      positions: { authority: string; position: string; log_epoch: string; page?: { through: string; read: number } }[];
     };
     if (prefixes.length > state.maxPrefixes || positions.length > state.maxPrefixes) return INVALID;
     if (state.reads.shift() === false) return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
     const known = positions.map((position) => ({ ...position, room: rooms.find((candidate) => candidate.ref === position.authority)! }));
-    const expired = known.find(({ room, log_epoch }) => state.expired.has(room.ref) || log_epoch !== room.logEpoch);
+    if (known.some(({ room }) => state.unreadable.has(room.ref))) {
+      return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
+    }
+    const expired = known.find(
+      ({ room, position, log_epoch }) =>
+        state.expired.has(room.ref) || log_epoch !== room.logEpoch || room.changedSince(Number(position)) > state.carriedDocuments,
+    );
     if (expired !== undefined) {
       state.expired.delete(expired.room.ref);
       const { authority, position } = expired;
       return { status: 409, body: { error: { code: 'expired', authority, position, retryable: false } } };
     }
     const answered = known.filter(({ room }) => !state.omitted.has(room.ref));
-    return { body: { authorities: answered.map(({ room, position }) => room.enumerated(Number(position), state.pass)) } };
+    const bound = answered.some(({ page }) => page !== undefined) ? BODY_BYTES : Infinity;
+    return { body: { authorities: answered.map(({ room, position }) => room.enumerated(Number(position), state.pass, bound)) } };
   });
   hosted.house.route('POST', '/kit/door/revisions', (request) => {
     const { path, revision } = request.body as { path: string; revision: string };

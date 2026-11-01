@@ -1,8 +1,9 @@
 import { parse } from '@agentshouse/mdmodel';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
+import { chunkTexts, stagedChunks, type Chunk, type Text } from './chunks.ts';
 import {
   blobId,
   blobText,
@@ -10,21 +11,29 @@ import {
   isText,
   HOUSE_REF,
   importCommits,
+  type Imported,
   localCopies,
   revision,
   run,
   succeeded,
   tree,
 } from './git.ts';
+import { paused } from './files.ts';
 import { kitHome } from './home.ts';
 import { operationId } from './operation.ts';
 import { refusalOf, type Refusal } from './refusals.ts';
 import { changed, type Edit } from './translate.ts';
-import { relayed } from './relay.ts';
 
 const BRANCH = 'main';
 const PROVENANCE = '_provenance';
 const IDENTITY = { GIT_COMMITTER_NAME: 'Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
+const ROOMS = 'rooms/';
+const ENUMERATE = '/kit/door/enumerate';
+const NOT_READY = 'not ready yet; Kit copies it once House has built it';
+const STAGED_CHUNKS = 'house-chunks';
+
+// A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
+const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
 
 interface Manifest {
   parent: string | null;
@@ -95,29 +104,50 @@ interface Discovery {
   authorities: Authority[];
 }
 
-interface Bundle {
-  scopes: {
-    manifest: {
-      anchor: string;
-      position: string;
-      log_epoch: string;
-      files: { path: string; revision: string; writable: boolean; provenance?: string }[];
-    };
-    contents: { path: string; content: string }[];
-  }[];
-}
+type Change = Text | { path: string; removed: true };
 
-type Change = { path: string; content: string; revision: string; provenance?: string } | { path: string; removed: true };
-
-interface Read {
-  anchor: string;
+interface Enumerated {
+  authority: string;
   position: string;
   log_epoch: string;
+  changes: Change[];
+  next?: unknown;
+}
+
+type Listed =
+  | { room_ref: string; ready: false }
+  | { room_ref: string; ready: true; position: string; log_epoch: string; chunks: Chunk[]; models: Text[] };
+
+interface Whole {
+  position: string;
+  log_epoch: string;
+  texts: Iterable<Text> | AsyncIterable<Text>;
+}
+
+interface Wanted {
+  key: string;
+  handle: string;
+  authority: Authority;
+}
+
+interface Scope {
   write: string[];
   protected: string[];
-  writable: Map<string, string>;
-  revisions: Record<string, string>;
-  readOnly: Map<string, string>;
+}
+
+interface ReadOnlyFiles {
+  remove(path: string): Promise<void>;
+  place(path: string, content: string): Promise<void>;
+  held(): string[];
+}
+
+class NotReady extends Error {
+  readonly rooms: readonly string[];
+
+  constructor(rooms: readonly string[]) {
+    super(NOT_READY);
+    this.rooms = rooms;
+  }
 }
 
 export type Submitted = { accepted: Written[] } | { refused: Refusal };
@@ -214,6 +244,10 @@ function recordOf(key: string): string {
   return join(kitHome(), 'local-copies', `${key}.json`);
 }
 
+function stagingPrefix(): string {
+  return `.${createHash('sha256').update(kitHome()).digest('hex').slice(0, 16)}-`;
+}
+
 function rootOf(handle: string): string {
   return `/rooms/${handle}`;
 }
@@ -222,7 +256,7 @@ function relative(path: string): string {
   return path.replace(/^\/rooms\/[^/]+\//, '');
 }
 
-function declaredWritable(path: string, copy: { write: string[]; protected: string[] }): boolean {
+function declaredWritable(path: string, copy: Scope): boolean {
   const deepest = (scopes: string[]) =>
     Math.max(-1, ...scopes.filter((scope) => covers(path, scope)).map((scope) => scope.length));
   return deepest(copy.write) > deepest(copy.protected);
@@ -251,36 +285,69 @@ async function removeFile(repository: string, path: string): Promise<void> {
   }
 }
 
+async function readOnlyFiles(repository: string, held: readonly string[]): Promise<ReadOnlyFiles> {
+  const tracked = new Set((await git(repository, ['ls-files', '-z'])).split('\0'));
+  const holding = new Set(held);
+  return {
+    remove: async (path) => {
+      if (!holding.has(path)) return;
+      if (!tracked.has(path)) await removeFile(repository, path);
+      holding.delete(path);
+    },
+    place: async (path, content) => {
+      if (tracked.has(path)) return;
+      if (!holding.has(path) && (await exists(join(repository, path)))) return;
+      await writeText(join(repository, path), content);
+      holding.add(path);
+    },
+    held: () => [...holding].sort(),
+  };
+}
+
 async function readOnlyPlaced(
   repository: string,
   held: readonly string[],
   written: ReadonlyMap<string, string>,
   removed: readonly string[],
 ): Promise<string[]> {
-  const tracked = new Set((await git(repository, ['ls-files', '-z'])).split('\0'));
-  const holding = new Set(held);
-  for (const path of removed) {
-    if (!holding.has(path)) continue;
-    if (!tracked.has(path)) await removeFile(repository, path);
-    holding.delete(path);
+  const files = await readOnlyFiles(repository, held);
+  for (const path of removed) await files.remove(path);
+  for (const [path, content] of written) await files.place(path, content);
+  return files.held();
+}
+
+async function importedWhole(
+  repository: string,
+  scope: Scope,
+  texts: Whole['texts'],
+  commit: Pick<Imported, 'message' | 'from' | 'replaces'>,
+  readOnly: ReadOnlyFiles,
+): Promise<{ house: string; revisions: Record<string, string> }> {
+  const revisions: Record<string, string> = {};
+  async function* tracked(): AsyncGenerator<readonly [string, string]> {
+    for await (const { path, content, revision: held, provenance } of texts) {
+      if (declaredWritable(path, scope)) {
+        revisions[path] = held;
+        yield [path, content];
+      } else {
+        await readOnly.place(path, content);
+      }
+      if (provenance !== undefined) await readOnly.place(sidecar(path), provenance);
+    }
   }
-  for (const [path, content] of written) {
-    if (tracked.has(path)) continue;
-    if (!holding.has(path) && (await exists(join(repository, path)))) continue;
-    await writeText(join(repository, path), content);
-    holding.add(path);
-  }
-  return [...holding].sort();
+  return { house: await importCommits(repository, [{ ...commit, files: tracked() }]), revisions };
 }
 
 async function ruled(path: string, rules: string): Promise<void> {
   if ((await readFile(path, 'utf8').catch(() => null)) !== rules) await writeFile(path, rules);
 }
 
-async function ignoreRules(repository: string, writable: readonly string[], copy: Copy | Read): Promise<void> {
-  const readOnly = ('read_only' in copy ? copy.read_only : [...copy.readOnly.keys()]).filter(
-    (path) => !path.split('/').includes(PROVENANCE),
-  );
+async function ignoreRules(
+  repository: string,
+  writable: readonly string[],
+  copy: Pick<Copy, 'read_only' | 'protected'>,
+): Promise<void> {
+  const readOnly = copy.read_only.filter((path) => !path.split('/').includes(PROVENANCE));
   const protectedPath = (path: string) => copy.protected.some((prefix) => prefix !== '' && covers(path, prefix));
   const whole = copy.protected.filter((prefix) => prefix !== '' && !writable.some((path) => covers(path, prefix)));
   const house = [
@@ -354,6 +421,7 @@ export class LocalCopies {
   private readonly house: House;
   private readonly copies = new Map<string, Copy>();
   private readonly queues = new Map<string, Promise<unknown>>();
+  private readonly waiting = new Set<string>();
   private answering: Promise<unknown> = Promise.resolve();
 
   constructor(house: House) {
@@ -384,6 +452,13 @@ export class LocalCopies {
       if (text === null) continue;
       const copy = JSON.parse(text) as Copy;
       this.copies.set(copy.key, copy);
+    }
+  }
+
+  async swept(): Promise<void> {
+    const rooms = join(localCopies(), 'rooms');
+    for (const name of await readdir(rooms).catch(() => [])) {
+      if (name.startsWith(stagingPrefix())) await rm(join(rooms, name), { recursive: true, force: true });
     }
   }
 
@@ -422,8 +497,8 @@ export class LocalCopies {
     const { local_copy: answer } = await this.house.post<{
       local_copy: { rooms: { room_ref: string; room_handle: string }[] };
     }>('/kit/local-copy/selection', rooms === undefined ? {} : { rooms });
-    const synced = new Map(answer.rooms.map((room) => [`rooms/${room.room_ref}`, room.room_handle]));
-    const named = rooms === undefined ? null : new Set(rooms.map((room) => `rooms/${room}`));
+    const synced = new Map(answer.rooms.map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
+    const named = rooms === undefined ? null : new Set(rooms.map((room) => `${ROOMS}${room}`));
     const held = () => [...this.copies.values()].filter((copy) => named === null || named.has(copy.key));
     return this.holding([...new Set([...held().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
       const said: string[] = [];
@@ -435,11 +510,12 @@ export class LocalCopies {
         if (refreshing) said.push(`${rootOf(copy.room_handle)}: no longer followed; kept as it is`);
       }
       const current: Copy[] = [];
+      const wanted = new Map<string, string>();
       for (const [key, handle] of synced) {
         try {
           const held = this.copies.get(key);
           if (held === undefined || !(await exists(held.repository))) {
-            said.push(await this.materialize(key, handle));
+            wanted.set(key, handle);
             continue;
           }
           const { unfollowed, ...followed } = held;
@@ -451,16 +527,56 @@ export class LocalCopies {
           said.push(`${rootOf(handle)}: ${causeOf(error)}`);
         }
       }
-      if (refreshing && current.length > 0) {
-        const failed = await this.refreshed(current).then(() => null, houseCause);
-        for (const copy of current) said.push(...moved(copy, this.copies.get(copy.key)!));
+      const unready: string[] = [];
+      const unsettled: string[] = [];
+      if (wanted.size > 0) {
+        const { authorities } = await this.discovered([...wanted.values()]);
+        for (const [key, handle] of wanted) {
+          const authority = authorities.find((entry) => `${ROOMS}${entry.room_ref}` === key);
+          try {
+            if (authority === undefined) throw new Error('House serves nothing of it to copy');
+            said.push(await this.copied({ key, handle, authority }));
+          } catch (error) {
+            if (error instanceof NotReady) {
+              unready.push(...error.rooms);
+              said.push(`${rootOf(handle)}: ${NOT_READY}`);
+            } else {
+              refused = true;
+              unsettled.push(key.slice(ROOMS.length));
+              said.push(`${rootOf(handle)}: ${causeOf(error)}`);
+            }
+          }
+        }
+      }
+      const reading = refreshing ? current : current.filter((copy) => this.waiting.has(copy.room_ref));
+      if (reading.length > 0) {
+        const failed = await this.refreshed(reading, unready).then(() => null, houseCause);
+        for (const copy of reading) {
+          said.push(...(unready.includes(copy.room_ref) ? [`${rootOf(copy.room_handle)}: ${NOT_READY}`] : moved(copy, this.copies.get(copy.key)!)));
+        }
         if (failed !== null) {
           refused = true;
+          unsettled.push(...reading.map((copy) => copy.room_ref));
           said.push(failed);
         }
       }
+      for (const room of rooms ?? [...this.waiting]) {
+        if (!unready.includes(room) && !unsettled.includes(room)) this.waiting.delete(room);
+      }
+      const due = unready.filter((room) => !this.waiting.has(room));
+      for (const room of due) this.waiting.add(room);
+      if (due.length > 0) void this.askedAgain(due);
       return { refused, text: said.length === 0 ? 'Nothing new from House.' : said.join('\n') };
     });
+  }
+
+  private async askedAgain(rooms: readonly string[]): Promise<void> {
+    let asking = rooms;
+    for (let step = 0; asking.length > 0; step++) {
+      await paused(ASKED_AGAIN_MS[Math.min(step, ASKED_AGAIN_MS.length - 1)]!);
+      await this.selected().catch(logged);
+      asking = asking.filter((room) => this.waiting.has(room));
+    }
   }
 
   async observed(report: Observed): Promise<void> {
@@ -527,106 +643,133 @@ export class LocalCopies {
     return copy;
   }
 
-  private async read(handle: string): Promise<Read | null> {
-    const prefixes = [rootOf(handle)];
-    const discovery = await this.house.post<Discovery>('/kit/door/discover', { prefixes });
-    let bundle = await this.house.post<Bundle | { transfer: { url: string } }>('/kit/door/bootstrap', { prefixes });
-    if ('transfer' in bundle) bundle = (await (await fetch(relayed(bundle.transfer.url))).json()) as Bundle;
-    const [view] = bundle.scopes;
-    if (view === undefined) return null;
-    const authority = discovery.authorities.find((entry) => entry.room_ref === view.manifest.anchor)!;
-    const contents = new Map(view.contents.map((entry) => [entry.path, entry.content]));
-    const read: Read = {
-      anchor: view.manifest.anchor,
-      position: view.manifest.position,
-      log_epoch: view.manifest.log_epoch,
-      write: authority.operations.write,
-      protected: authority.protected_paths,
-      writable: new Map(),
-      revisions: {},
-      readOnly: new Map(),
-    };
-    for (const file of view.manifest.files) {
-      const content = contents.get(file.path)!;
-      if (file.writable) {
-        read.writable.set(file.path, content);
-        read.revisions[file.path] = file.revision;
-      } else {
-        read.readOnly.set(file.path, content);
-      }
-      if (file.provenance !== undefined) read.readOnly.set(sidecar(file.path), file.provenance);
-    }
-    return read;
+  private async discovered(handles: readonly string[]): Promise<Discovery> {
+    const discover = (group: readonly string[]) =>
+      this.house.post<Discovery>('/kit/door/discover', { prefixes: group.map(rootOf) });
+    const [first, ...rest] = handles;
+    const { bounds, authorities } = await discover([first!]);
+    for (const group of grouped(rest, bounds.max_prefixes)) authorities.push(...(await discover(group)).authorities);
+    return { bounds, authorities };
   }
 
-  private async materialize(key: string, handle: string): Promise<string> {
-    const read = await this.read(handle);
-    if (read === null) throw new Error('House serves nothing of it to copy');
-    const repository = join(localCopies(), 'rooms', read.anchor);
+  private async chunked(root: string, room: string, directory: string): Promise<Whole> {
+    await mkdir(directory, { recursive: true });
+    for (let renewed = false; ; renewed = true) {
+      const { rooms } = await this.house.post<{ rooms: Listed[] }>('/kit/door/room-chunks/list', { prefixes: [root] });
+      const list = rooms.find((entry) => entry.room_ref === room);
+      if (list === undefined) throw new Error('House serves nothing of it to copy');
+      if (!list.ready) throw new NotReady([room]);
+      const held = new Set(await readdir(directory));
+      const failure = await stagedChunks(directory, list.chunks.filter(({ hash }) => !held.has(hash)));
+      if (failure === undefined) {
+        return { position: list.position, log_epoch: list.log_epoch, texts: chunkTexts(directory, list.chunks, list.models) };
+      }
+      if (renewed && (await readdir(directory)).length === held.size) throw failure;
+    }
+  }
+
+  private async materialized({ key, handle, authority }: Wanted, whole: (staging: string) => Promise<Whole>): Promise<Copy> {
+    const repository = join(localCopies(), 'rooms', authority.room_ref);
     if (await exists(repository)) throw new Error(`${repository} already exists and Kit leaves it as it is`);
-    const staging = join(dirname(repository), `.${randomUUID()}`);
+    const staging = join(dirname(repository), `${stagingPrefix()}${randomUUID()}`);
+    const scope = { write: authority.operations.write, protected: authority.protected_paths };
     await mkdir(staging, { recursive: true });
-    let house: string;
-    let readOnly: string[];
+    let copy: Copy;
     try {
       await git(staging, ['init', '-q', '-b', BRANCH]);
-      house = await importCommits(staging, [
-        { message: `House ${rootOf(handle)}`, from: null, files: read.writable },
-      ]);
+      const read = await whole(join(staging, '.git', STAGED_CHUNKS));
+      const readOnly = await readOnlyFiles(staging, []);
+      const { house, revisions } = await importedWhole(staging, scope, read.texts, { message: `House ${rootOf(handle)}`, from: null }, readOnly);
       await git(staging, ['update-ref', `refs/heads/${BRANCH}`, house]);
       await git(staging, ['reset', '-q', '--hard']);
-      readOnly = await readOnlyPlaced(staging, [], read.readOnly, []);
-      await ignoreRules(staging, [...read.writable.keys()], read);
+      copy = {
+        key,
+        room_ref: authority.room_ref,
+        room_handle: handle,
+        repository,
+        house,
+        position: read.position,
+        log_epoch: read.log_epoch,
+        ...scope,
+        read_only: readOnly.held(),
+        manifests: { [house]: { parent: null, files: revisions } },
+        moves: [],
+      };
+      await ignoreRules(staging, Object.keys(revisions), copy);
+      await rm(join(staging, '.git', STAGED_CHUNKS), { recursive: true, force: true });
       await rename(staging, repository);
     } catch (error) {
       await rm(staging, { recursive: true, force: true });
       throw error;
     }
-    await this.save({
-      key,
-      room_ref: read.anchor,
-      room_handle: handle,
-      repository,
-      house,
-      position: read.position,
-      log_epoch: read.log_epoch,
-      write: read.write,
-      protected: read.protected,
-      read_only: readOnly,
-      manifests: { [house]: { parent: null, files: read.revisions } },
-      moves: [],
-    });
-    return `${rootOf(handle)}: copied to ${repository}`;
+    return this.save(copy);
   }
 
-  private async received(copy: Copy): Promise<Copy> {
-    const read = await this.read(copy.room_handle);
-    if (read === null) return copy;
-    const house = await importCommits(copy.repository, [
-      { message: `House ${rootOf(copy.room_handle)} at position ${read.position}`, from: copy.house, replaces: true, files: read.writable },
-    ]);
-    const removed = copy.read_only.filter((path) => !read.readOnly.has(path));
-    const readOnly = await readOnlyPlaced(copy.repository, copy.read_only, read.readOnly, removed);
-    const next: Copy = {
-      ...copy,
-      house,
-      position: read.position,
-      log_epoch: read.log_epoch,
-      write: read.write,
-      protected: read.protected,
-      read_only: readOnly,
-      manifests: { ...copy.manifests, [house]: { parent: null, files: read.revisions } },
-    };
-    await ignoreRules(copy.repository, [...read.writable.keys()], next);
-    return next;
+  private async copied(wanted: Wanted): Promise<string> {
+    const { handle, authority } = wanted;
+    const root = rootOf(handle);
+    let answer: { authorities: Enumerated[] } | null = null;
+    try {
+      if (!this.waiting.has(authority.room_ref)) {
+        answer = await this.house.post(ENUMERATE, {
+          prefixes: [root],
+          positions: [
+            { authority: authority.room_ref, position: '0', log_epoch: authority.log_epoch, page: { through: authority.position, read: 0 } },
+          ],
+        });
+      }
+    } catch (error) {
+      if (expiredAuthority(error) !== authority.room_ref) throw error;
+    }
+    const view = answer?.authorities.find((entry) => entry.authority === authority.room_ref);
+    if (answer !== null && view === undefined) throw new Error('House serves nothing of it to copy');
+    if (view !== undefined && view.next === undefined) {
+      const texts = view.changes.filter((change): change is Text => !('removed' in change));
+      const copy = await this.materialized(wanted, async () => ({ position: view.position, log_epoch: view.log_epoch, texts }));
+      return `${root}: copied to ${copy.repository}`;
+    }
+    const copy = await this.materialized(wanted, (directory) => this.chunked(root, authority.room_ref, directory));
+    const [caught] = await this.caughtUp([copy], true);
+    await succeeded(copy.repository, ['merge', '--ff-only', '-q', caught!.house]);
+    return `${root}: copied to ${copy.repository}`;
   }
 
-  private async refreshed(copies: readonly Copy[]): Promise<void> {
-    const discover = (group: readonly Copy[]) =>
-      this.house.post<Discovery>('/kit/door/discover', { prefixes: group.map((copy) => rootOf(copy.room_handle)) });
-    const [first, ...rest] = copies;
-    const { bounds, authorities } = await discover([first!]);
-    for (const group of grouped(rest, bounds.max_prefixes)) authorities.push(...(await discover(group)).authorities);
+  private async received(copy: Copy, authority: Authority): Promise<Copy> {
+    const root = rootOf(copy.room_handle);
+    const directory = join(copy.repository, '.git', STAGED_CHUNKS);
+    const scope = { write: authority.operations.write, protected: authority.protected_paths };
+    try {
+      const read = await this.chunked(root, copy.room_ref, directory);
+      const readOnly = await readOnlyFiles(copy.repository, copy.read_only);
+      for (const path of copy.read_only) await readOnly.remove(path);
+      const commit = { message: `House ${root} at position ${read.position}`, from: copy.house, replaces: true };
+      const { house, revisions } = await importedWhole(copy.repository, scope, read.texts, commit, readOnly);
+      const next: Copy = {
+        ...copy,
+        ...scope,
+        house,
+        position: read.position,
+        log_epoch: read.log_epoch,
+        read_only: readOnly.held(),
+        manifests: { ...copy.manifests, [house]: { parent: null, files: revisions } },
+      };
+      await ignoreRules(copy.repository, Object.keys(revisions), next);
+      return next;
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  private async reread(copy: Copy): Promise<Copy> {
+    const { authorities } = await this.discovered([copy.room_handle]);
+    const authority = authorities.find((entry) => entry.room_ref === copy.room_ref);
+    if (authority === undefined) throw new NotReady([copy.room_ref]);
+    return this.received(copy, authority);
+  }
+
+  private async refreshed(copies: readonly Copy[], unready: string[]): Promise<void> {
+    const { bounds, authorities } = await this.discovered(copies.map((copy) => copy.room_handle));
+    const read: Copy[] = [];
     const unchanged: Copy[] = [];
     for (const copy of copies) {
       const authority = authorities.find((entry) => entry.room_ref === copy.room_ref);
@@ -634,29 +777,49 @@ export class LocalCopies {
         authority !== undefined &&
         JSON.stringify([authority.operations.write, authority.protected_paths]) !== JSON.stringify([copy.write, copy.protected])
       ) {
-        await this.save(await this.received(copy));
+        try {
+          read.push(await this.save(await this.received(copy, authority)));
+        } catch (error) {
+          if (!(error instanceof NotReady)) throw error;
+          unready.push(...error.rooms);
+        }
       } else {
         unchanged.push(copy);
       }
     }
-    for (const group of grouped(unchanged, bounds.max_prefixes)) await this.caughtUp(group, false);
+    for (const group of grouped(unchanged, bounds.max_prefixes)) await this.caughtUp(group, false, unready);
+    for (const group of grouped(read, bounds.max_prefixes)) await this.caughtUp(group, true, unready);
   }
 
-  private async caughtUp(copies: readonly Copy[], whole: boolean): Promise<Copy[]> {
+  private async caughtUp(copies: readonly Copy[], whole: boolean, unready?: string[]): Promise<Copy[]> {
     const caught = new Map(copies.map((copy) => [copy.key, copy]));
+    const read = new Set<string>();
+    const waiting: string[] = unready ?? [];
     let asking = [...copies];
     while (asking.length > 0) {
-      let answer: { authorities: { authority: string; position: string; log_epoch: string; changes: Change[] }[] };
+      let answer: { authorities: Enumerated[] };
       try {
-        answer = await this.house.post('/kit/door/enumerate', {
+        answer = await this.house.post(ENUMERATE, {
           prefixes: asking.map((copy) => rootOf(copy.room_handle)),
           positions: asking.map((copy) => ({ authority: copy.room_ref, position: copy.position, log_epoch: copy.log_epoch })),
         });
       } catch (error) {
         const expired = asking.find((copy) => copy.room_ref === expiredAuthority(error));
         if (expired === undefined) throw error;
-        caught.set(expired.key, await this.save(await this.received(expired)));
         asking = asking.filter((copy) => copy !== expired);
+        if (read.has(expired.key)) {
+          waiting.push(expired.room_ref);
+          continue;
+        }
+        read.add(expired.key);
+        try {
+          const next = await this.save(await this.reread(expired));
+          caught.set(expired.key, next);
+          asking.push(next);
+        } catch (refused) {
+          if (!(refused instanceof NotReady)) throw refused;
+          waiting.push(expired.room_ref);
+        }
         continue;
       }
       const advanced: Copy[] = [];
@@ -667,8 +830,9 @@ export class LocalCopies {
         caught.set(copy.key, next);
         advanced.push(next);
       }
-      asking = whole ? advanced : [];
+      asking = advanced.filter((copy) => whole || read.has(copy.key));
     }
+    if (unready === undefined && waiting.length > 0) throw new NotReady(waiting);
     return copies.map((copy) => caught.get(copy.key)!);
   }
 

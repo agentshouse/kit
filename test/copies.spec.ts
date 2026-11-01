@@ -15,8 +15,23 @@ function tracked(room: Room): string[] {
   return git(room.repository, 'ls-files').trim().split('\n');
 }
 
+function zeroEnumerations(hosted: Hosted): string[][] {
+  return hosted.house.requests
+    .filter((request) => request.path === '/kit/door/enumerate')
+    .map((request) => request.body as { prefixes: string[]; positions: { position: string }[] })
+    .filter((body) => body.positions.every(({ position }) => position === '0'))
+    .map((body) => body.prefixes);
+}
+
 function enumerations(hosted: Hosted): unknown[] {
-  return hosted.house.requests.filter((request) => request.path === '/kit/door/enumerate').map((request) => request.body);
+  return hosted.house.requests
+    .filter((request) => request.path === '/kit/door/enumerate')
+    .map((request) => request.body as { positions: { position: string }[] })
+    .filter((body) => body.positions.every(({ position }) => position !== '0'));
+}
+
+function chunkLists(hosted: Hosted): unknown[] {
+  return hosted.house.requests.filter((request) => request.path === '/kit/door/room-chunks/list').map((request) => request.body);
 }
 
 function discovered(hosted: Hosted): string[][] {
@@ -119,12 +134,12 @@ it('copies every Room it may sync as soon as it connects, and a reconnect copies
   git(notes.repository, 'add', 'a.md');
   await writeFile(join(notes.repository, 'draft.md'), 'draft\n');
   const status = git(notes.repository, 'status', '--porcelain');
-  const bootstraps = hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap').length;
+  const copied = zeroEnumerations(hosted).length;
 
   await hosted.restart();
 
   expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap')).toHaveLength(bootstraps);
+  expect(zeroEnumerations(hosted)).toHaveLength(copied);
   expect(git(notes.repository, 'symbolic-ref', 'HEAD').trim()).toBe('refs/heads/main');
   expect(git(notes.repository, 'rev-parse', 'HEAD').trim()).toBe(unpushed);
   expect(git(notes.repository, 'status', '--porcelain')).toBe(status);
@@ -164,11 +179,7 @@ it('copies the other Rooms when House cannot serve one as it connects, and the n
 
   await hosted.restart();
 
-  await until(() =>
-    hosted.house.requests.some(
-      (request) => request.path === '/kit/door/bootstrap' && (request.body as { prefixes: string[] }).prefixes.includes(design.root),
-    ),
-  );
+  await until(() => zeroEnumerations(hosted).some((prefixes) => prefixes.includes(design.root)));
   await until(() => existsSync(join(hosted.home, 'local-copies/rooms', `${notes.ref}.json`)));
   expect(tracked(notes)).toEqual(['a.md']);
   expect(existsSync(design.repository)).toBe(false);
@@ -281,10 +292,7 @@ it('copies the Private Room at /rooms/private like any other Room', async () => 
 
   await rooms.fetch([shared, own]);
   expect(tracked(own)).toEqual(['diary.md']);
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap').map((request) => request.body)).toEqual([
-    { prefixes: ['/rooms/shared'] },
-    { prefixes: ['/rooms/private'] },
-  ]);
+  expect(zeroEnumerations(hosted)).toEqual([['/rooms/shared'], ['/rooms/private']]);
 });
 
 it('fetches every changed Room in one enumeration onto its House ref and read-only content, and leaves the branch, the index and working files alone', async () => {
@@ -401,8 +409,6 @@ it('reads a Room whole again when its grant changed or House no longer holds its
   const [notes, design, regranted, expired] = copied as [Room, Room, Room, Room];
   for (const room of copied) room.put('a.md', 'a\n');
   await rooms.fetch(copied);
-  const bootstraps = () => hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap').map((request) => request.body);
-  const bootstrapped = bootstraps().length;
   const positions = copied.map((room) => at(room));
   for (const room of copied) room.put('a.md', `a, from House to ${room.handle}\n`);
   regranted.protected = [...regranted.protected, 'archive'];
@@ -413,10 +419,12 @@ it('reads a Room whole again when its grant changed or House no longer holds its
   for (const room of copied) {
     expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe(`a, from House to ${room.handle}\n`);
   }
-  expect(bootstraps().slice(bootstrapped)).toEqual([{ prefixes: [regranted.root] }, { prefixes: [expired.root] }]);
+  expect(chunkLists(hosted)).toEqual([{ prefixes: [regranted.root] }, { prefixes: [expired.root] }]);
   expect(enumerations(hosted)).toEqual([
     { prefixes: [notes.root, design.root], positions: positions.slice(0, 2) },
     { prefixes: [expired.root], positions: positions.slice(3) },
+    { prefixes: [expired.root], positions: [at(expired)] },
+    { prefixes: [regranted.root], positions: [at(regranted)] },
   ]);
 });
 
@@ -606,7 +614,7 @@ it("sends a push from a Room it no longer follows to House, prints House's refus
     { operation_id: expect.any(String), changes: [expect.objectContaining({ path: `${notes.root}/a.md` })] },
   ]);
   expect(sent.map((request) => request.path)).not.toContain('/kit/door/enumerate');
-  expect(sent.map((request) => request.path)).not.toContain('/kit/door/bootstrap');
+  expect(sent.map((request) => request.path)).not.toContain('/kit/door/room-chunks/list');
   expect(git(notes.repository, 'rev-parse', 'HEAD').trim()).toBe(unpushed);
   expect(git(notes.repository, 'status', '--porcelain')).toBe(status);
   expect(git(notes.repository, 'for-each-ref')).toBe(refs);
@@ -614,19 +622,17 @@ it("sends a push from a Room it no longer follows to House, prints House's refus
   expect(notes.files.get('a.md')!.content).toBe('a\n');
 });
 
-it('catches a Room House answers again up on house fetch from the position it kept, with no fresh bootstrap, keeps its unpushed commits, and pushes them on its kept base', async () => {
+it('catches a Room House answers again up on house fetch from the position it kept, reading no chunk, keeps its unpushed commits, and pushes them on its kept base', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const { notes, design, unpushed, status, house: kept } = await unfollowed(rooms);
   const position = at(notes);
   notes.put('b.md', 'b, from House\n');
-  const bootstraps = () => hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap').length;
-  const bootstrapped = bootstraps();
   const enumerated = enumerations(hosted).length;
 
   expect(await rooms.fetch([notes, design])).toMatchObject({ status: 0, stdout: expect.stringMatching(movedLines(notes)) });
 
-  expect(bootstraps()).toBe(bootstrapped);
+  expect(chunkLists(hosted)).toEqual([]);
   expect(enumerations(hosted).slice(enumerated)).toEqual([{ prefixes: [notes.root, design.root], positions: [position, at(design)] }]);
   expect(git(notes.repository, 'rev-parse', 'refs/house/received^').trim()).toBe(kept);
   expect(git(notes.repository, 'show', 'refs/house/received:b.md')).toBe('b, from House\n');
@@ -669,21 +675,6 @@ it('reads the Room whole again when House no longer holds the copy position, and
 
   expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, much later\n');
   expect(git(other.repository, 'show', 'refs/house/received:brief.md')).toBe('Brief, later\n');
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/door/bootstrap')).toHaveLength(3);
+  expect(chunkLists(hosted)).toEqual([{ prefixes: [room.root] }]);
   expect(enumerations(hosted)).toHaveLength(2);
-});
-
-it('reads a bundle House hands over through a transfer address', async () => {
-  const hosted = await hostKit();
-  const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
-  room.put('a.md', 'a\n');
-  hosted.house.route('POST', '/kit/door/bootstrap', () => ({
-    body: { transfer: { act: 'local_copy_bundle', method: 'GET', url: `${hosted.house.origin}/files/bundle-1` } },
-  }));
-  hosted.house.route('GET', '/files/:grant', () => ({ body: { scopes: [room.bundle()] } }));
-
-  await rooms.fetch([room]);
-
-  expect(tracked(room)).toEqual(['a.md']);
 });
