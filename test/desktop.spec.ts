@@ -610,9 +610,9 @@ it("runs a second Building's Kit in a container of its own beside the native Kit
   expect(host.calls('systemctl')).toEqual([]);
   await host.forget();
 
-  expect(host.run([...HOUSE, '--container', 'house', 'list_rooms'])).toMatchObject({ status: 0, stderr: '' });
+  expect(host.run([...HOUSE, '--container', 'house', 'rooms_list'])).toMatchObject({ status: 0, stderr: '' });
   expect(host.calls('docker').filter((call) => call.startsWith('exec '))).toEqual([
-    expect.stringMatching(/^exec -i --workdir \/agents\/house house-kit-agents\.house house list_rooms$/),
+    expect.stringMatching(/^exec -i --workdir \/agents\/house house-kit-agents\.house house rooms_list$/),
   ]);
 });
 
@@ -993,11 +993,11 @@ it('passes the Kit relay to a command forwarded into the running Linux container
   expect(host.run(['--container'])).toMatchObject({ status: 0 });
   await host.forget();
 
-  const ran = host.run(['--container', 'house', 'list_environments']);
+  const ran = host.run(['--container', 'house', 'environments/list']);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(host.calls('docker').filter((call) => call.startsWith('exec '))).toEqual([
-    expect.stringMatching(new RegExp(`^exec -i --workdir \\S+ --env HOUSE_KIT_RELAY=${relay} house-kit house list_environments$`)),
+    expect.stringMatching(new RegExp(`^exec -i --workdir \\S+ --env HOUSE_KIT_RELAY=${relay} house-kit house environments/list$`)),
   ]);
 });
 

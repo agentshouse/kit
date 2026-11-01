@@ -403,7 +403,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       state.answered = answer;
       return house(hosted, '/', 'fetch');
     },
-    edits: () => hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'edit'),
+    edits: () => hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'files_batch'),
   };
   const roomOf = (path: string) => rooms.find((room) => path === room.root || path.startsWith(`${room.root}/`))!;
   const edited = (room: Room, changes: EditChange[]) => {
@@ -420,12 +420,12 @@ export function serveRooms(hosted: Hosted): Rooms {
       })),
     };
   };
-  hosted.house.route('POST', '/kit/local-copy/selection', (request) => {
+  hosted.house.route('POST', '/kit/local-copies/selection/read', (request) => {
     const { rooms: named } = request.body as { rooms?: string[] };
     const answered = state.answered.filter((room) => named === undefined || named.includes(room.ref));
     return { body: { local_copy: { rooms: answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) } } };
   });
-  hosted.house.route('POST', '/kit/door/discover', (request) => {
+  hosted.house.route('POST', '/kit/door/rooms/discover', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
     if (prefixes.length > state.maxPrefixes) return INVALID;
     return {
@@ -458,7 +458,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       },
     };
   });
-  hosted.house.route('POST', '/kit/door/enumerate', (request) => {
+  hosted.house.route('POST', '/kit/door/changes/enumerate', (request) => {
     const { prefixes, positions } = request.body as {
       prefixes: string[];
       positions: { authority: string; position: string; log_epoch: string; page?: { through: string; read: number } }[];
@@ -482,12 +482,12 @@ export function serveRooms(hosted: Hosted): Rooms {
     const bound = answered.some(({ page }) => page !== undefined) ? BODY_BYTES : Infinity;
     return { body: { authorities: answered.map(({ room, position }) => room.enumerated(Number(position), state.pass, bound)) } };
   });
-  hosted.house.route('POST', '/kit/door/revisions', (request) => {
+  hosted.house.route('POST', '/kit/door/files/revisions/list', (request) => {
     const { path, revision } = request.body as { path: string; revision: string };
     const room = roomOf(path);
     return { body: { path, revisions: [{ revision, content: room.history.get(revision) }], next_before: null } };
   });
-  hosted.house.route('POST', '/kit/door/batch', (request) => {
+  hosted.house.route('POST', '/kit/door/files/batch', (request) => {
     const refused = state.refusesBatches.shift();
     if (refused !== undefined) return refused;
     const { operation_id: operation, changes } = request.body as { operation_id: string; changes: EditChange[] };
@@ -535,6 +535,7 @@ export function serveRooms(hosted: Hosted): Rooms {
   const grants = new Map<string, { operation: string; staged?: string }>();
   const staged = new Map<string, Buffer>();
   hosted.tools.run_command = (args) => {
+    if (args.command !== 'files/batch-upload') return { isError: true, content: [{ type: 'text', text: `command_not_found: ${String(args.command)}\n` }] };
     state.prepared.push(args.arguments);
     const grant = `edit-${grants.size + 1}`;
     const operation = randomUUID();
@@ -554,7 +555,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     staged.set(url, bytes);
     return { body: { transfer: { method: 'POST', url, operation: randomUUID() } } };
   });
-  hosted.tools.edit = (args, request) => {
+  hosted.tools.files_batch = (args, request) => {
     const bearer = request.headers.authorization!;
     if (state.denied.has(bearer)) {
       return { isError: true, content: [{ type: 'text', text: 'operation_denied: you may not write here; the Room owner grants Room access, your User widens an Agent at /agents\n' }] };

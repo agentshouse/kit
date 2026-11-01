@@ -4,7 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { until, type Received } from './double.ts';
+import { idOf, until, type Received } from './double.ts';
 import { temporaryHome } from './kit.ts';
 import {
   appRemote,
@@ -41,12 +41,12 @@ it("reaches House with each process's own conversation credential and never show
     one: `Bearer ${conversationCredential('conversation-1')}`,
     two: `Bearer ${conversationCredential('conversation-2')}`,
   });
-  const asked = hosted.house.requests.filter((received) => received.path.endsWith('/credential'));
-  expect(asked.map((received) => [received.params.conversation, received.headers.authorization])).toEqual([
+  const asked = hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue');
+  expect(asked.map((received) => [idOf(received, 'conversation'), received.headers.authorization])).toEqual([
     ['conversation-1', 'Bearer ahk_held'],
     ['conversation-2', 'Bearer ahk_held'],
   ]);
-  const seen = JSON.stringify([await hosted.adapterLog(), hosted.connection.notifications]);
+  const seen = JSON.stringify([await hosted.adapterLog(), hosted.connection.oneWayCalls]);
   expect(seen).not.toContain(conversationCredential('conversation-1'));
   expect(seen).not.toContain(conversationCredential('conversation-2'));
 });
@@ -110,7 +110,7 @@ it("names the Kit's wire in a header on every call a conversation's bridge relay
 
   await runs(hosted, 2);
   expect(hosted.mcp.length).toBeGreaterThan(1);
-  expect(hosted.mcp.map((received) => received.headers['x-house-kit-wire'])).toEqual(hosted.mcp.map(() => '4'));
+  expect(hosted.mcp.map((received) => received.headers['x-house-kit-wire'])).toEqual(hosted.mcp.map(() => '5'));
 });
 
 it('attaches a fresh operation id to every Tool call, a read included, and never asks House which Tools write', async () => {
@@ -118,11 +118,11 @@ it('attaches a fresh operation id to every Tool call, a read included, and never
   await opened(hosted);
   const record = '{"room_ref":"r_room","source_ref":"s_source","body":"hello"}';
 
-  const command = '{"command":"create_room","arguments":{"name":"Notes"}}';
+  const command = '{"command":"rooms/create","arguments":{"name":"Notes"}}';
 
   directed(
     hosted,
-    `@house append_record ${record}\n@house append_record ${record}\n@house run_command ${command}\n@house search {"query":"hello"}`,
+    `@house records_append ${record}\n@house records_append ${record}\n@house run_command ${command}\n@house search {"query":"hello"}`,
   );
 
   await runs(hosted, 4);
@@ -136,7 +136,7 @@ it('resends a write House answers pending, and one whose answer is lost, as the 
   const hosted = await hostKit();
   await opened(hosted);
   let calls = 0;
-  hosted.tools.append_record = (_args, request) => {
+  hosted.tools.records_append = (_args, request) => {
     calls++;
     if (calls === 1) {
       const operation = called(request).params._meta[OPERATION];
@@ -145,7 +145,7 @@ it('resends a write House answers pending, and one whose answer is lost, as the 
     return calls === 2 ? null : { content: [{ type: 'text', text: 'record: ep_1' }] };
   };
 
-  directed(hosted, '@house append_record {"room_ref":"r_room","source_ref":"s_source","body":"hello"}');
+  directed(hosted, '@house records_append {"room_ref":"r_room","source_ref":"s_source","body":"hello"}');
 
   expect((await runs(hosted, 1))[0]).toMatchObject({ status: 0, stdout: 'record: ep_1\n', stderr: '' });
   expect(hosted.mcp).toHaveLength(3);
@@ -191,7 +191,7 @@ it("prints House's own line for a refused call, and no route, status or body", a
   await writeFile(join(hosted.workingDirectory, 'report.txt'), 'numbers\n');
   hosted.tools.search = () => ({
     isError: true,
-    content: [{ type: 'text', text: 'room_not_found: you have no Room with that room_ref; pass an r_… ref from list_rooms, not a handle\n' }],
+    content: [{ type: 'text', text: 'room_not_found: you have no Room with that room_ref; pass an r_… ref from rooms_list, not a handle\n' }],
   });
   await opened(hosted);
   hosted.house.route('POST', '/', (request) => {
@@ -216,7 +216,7 @@ it("prints House's own line for a refused call, and no route, status or body", a
   directed(hosted, '@house search {"query":"one"}\n@house inspect {"path":"/rooms/private"}');
 
   expect((await runs(hosted, 2)).map((ran) => [ran.status, ran.stderr])).toEqual([
-    [1, 'house: room_not_found: you have no Room with that room_ref; pass an r_… ref from list_rooms, not a handle\n'],
+    [1, 'house: room_not_found: you have no Room with that room_ref; pass an r_… ref from rooms_list, not a handle\n'],
     [1, 'house: internal_error: House failed on this call; call again once\n'],
   ]);
 });
@@ -252,7 +252,7 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
       '@house upload {"path":"report.txt","room_ref":"r_room"}',
       '@house upload {"file":"absent.txt","room_ref":"r_room","path":"absent.txt"}',
       '@house upload {"file":".","room_ref":"r_room","path":"folder"}',
-      '@house list_agents --help',
+      '@house agents/list --help',
     ].join('\n'),
   );
 
@@ -264,7 +264,7 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
     'house: upload needs "file", a local file\n',
     'house: absent.txt is not a readable file\n',
     'house: . is a folder; upload one file at a time\n',
-    `house: list_agents is no Tool; house find_command '{"query":"list_agents"}' finds Commands\n`,
+    `house: agents/list is no Tool; house find_command '{"query":"agents/list"}' finds Commands\n`,
   ]);
   expect(hosted.mcp.filter((received) => called(received).method === 'tools/call')).toEqual([]);
 });

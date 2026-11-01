@@ -6,7 +6,7 @@ import { agentInstructions } from '@agentshouse/skills';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
 import { attached, bridgeSockets, inspected } from './attachments.ts';
-import { settle, until } from './double.ts';
+import { idOf, settle, until, without } from './double.ts';
 import { conversationCredential, hostKit, installHeld, lastCall, outcome, userBin, type Hosted } from './environment.ts';
 import { alive, placeHostKey, temporaryHome } from './kit.ts';
 
@@ -41,7 +41,7 @@ it('opens the provider session in the launch directory with the route settings a
     { sessionId: opened.sessionId, configId: 'reasoning_effort', value: 'high' },
   ]);
   expect(new Set(log.map((entry) => entry.pid)).size).toBe(1);
-  expect(hosted.connection.notifications).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
+  expect(hosted.connection.oneWayCalls).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
 });
 
 it("opens the session in the mode the route names, and Codex runs each `house` on the conversation's PATH outside its sandbox whenever its shell starts it", async () => {
@@ -113,7 +113,7 @@ it("refuses the open in the Kit's words when the CLI does not take the route's e
   hosted.call({ kind: 'open' });
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI refused the Agent's model, mode or effort" });
-  expect(hosted.connection.notifications.filter((notification) => notification.type === 'process')).toEqual([]);
+  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([]);
   expect(hosted.kit.stderr()).toContain('Unknown config option: thought_level');
 });
 
@@ -128,7 +128,7 @@ it('opens a conversation of an Agent House added after the Kit read its Agents',
     model: 'route-model',
     effort: null,
   };
-  hosted.house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['codex-acp'], routes: [added] } }));
+  hosted.house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: ['codex-acp'], routes: [added] } }));
 
   hosted.call({ kind: 'open', agent_id: 'agent-2' });
 
@@ -163,7 +163,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
     model: 'route-model',
     effort: null,
   };
-  hosted.house.route('POST', '/kit/agents/desired', () => ({
+  hosted.house.route('POST', '/kit/agents/desired/list', () => ({
     body: { agents: ['codex-acp', 'grok-build'], routes: [route] },
   }));
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
@@ -171,7 +171,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
   const open = lastCall();
   await until(async () => (await stat(directory).catch(() => null))?.isDirectory());
   let moved = false;
-  hosted.house.route('POST', '/kit/agents/desired', () => {
+  hosted.house.route('POST', '/kit/agents/desired/list', () => {
     moved = true;
     return { body: { agents: ['codex-acp'], routes: [{ ...route, kind: 'codex-acp' }] } };
   });
@@ -195,7 +195,7 @@ it('opens a conversation with the launch settings House changed while the Kit wa
     model: 'changed-model',
     effort: null,
   };
-  hosted.house.route('POST', '/kit/agents/desired', async () => {
+  hosted.house.route('POST', '/kit/agents/desired/list', async () => {
     // House answers the read half a second late, so the open arrives while the Kit is still reading.
     await new Promise((resolve) => setTimeout(resolve, 500));
     return { body: { agents: ['codex-acp'], routes: [changed] } };
@@ -253,7 +253,7 @@ it('opens a conversation with the launch settings House changed while the Kit wa
     model: 'changed-model',
     effort: null,
   };
-  hosted.house.route('POST', '/kit/agents/desired', () => ({ body: { agents: ['codex-acp'], routes: [changed] } }));
+  hosted.house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: ['codex-acp'], routes: [changed] } }));
 
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
   hosted.call({ kind: 'open' });
@@ -360,14 +360,14 @@ it.each([
 it('reports the start-up step of a message whose session takes over a second to open, and its end before the turn starts', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const starting = () => hosted.connection.notifications.filter((notification) => notification.type === 'starting');
+  const starting = () => hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'starting');
 
   hosted.call({ kind: 'message', text: '@say Hello', first: true });
 
   await until(() => starting().length > 0);
   expect(starting()).toEqual([{ type: 'starting', conversation_id: 'conversation-1', step: 'session' }]);
   await rm(join(hosted.home, 'hold-new'));
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect(starting()).toEqual([
     { type: 'starting', conversation_id: 'conversation-1', step: 'session' },
     { type: 'starting', conversation_id: 'conversation-1', step: null },
@@ -378,7 +378,7 @@ it('writes a start-up step that changed while its Kit connection was closed once
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
   const starting = (connection = hosted.house.connections.at(-1)!) =>
-    connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+    connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'starting').map((oneWayCall) => oneWayCall.step);
   hosted.call({ kind: 'open' });
   await until(() => starting().length > 0);
 
@@ -397,7 +397,7 @@ it('writes the start-up step it is still in on a Kit connection that reopens', a
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
   const starting = (connection = hosted.house.connections.at(-1)!) =>
-    connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+    connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'starting').map((oneWayCall) => oneWayCall.step);
   hosted.call({ kind: 'open' });
   await until(() => starting().length > 0);
 
@@ -432,7 +432,7 @@ it("prepares a new conversation's first message, reading what it links and House
     [...agentInstructions('refs/house/received', []), '', 'Be useful.'].join('\n'),
     text,
   ]);
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/conversation-1/credential')).toHaveLength(1);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue')).toHaveLength(1);
 });
 
 it("prompts a first message with House's instructions through the CLI it starts itself when its open's start failed while it read them", async () => {
@@ -450,9 +450,9 @@ it("prompts a first message with House's instructions through the CLI it starts 
     return { body: { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: '' }] } } };
   });
   let credentials = 0;
-  hosted.house.route('POST', '/kit/conversations/:conversation/credential', async (request) => {
+  hosted.house.route('POST', '/kit/conversations/credentials/issue', async (request) => {
     if (credentials++ === 1) await released;
-    return { body: { credential: conversationCredential(request.params.conversation!) } };
+    return { body: { credential: conversationCredential(idOf(request, 'conversation')) } };
   });
 
   hosted.call({ kind: 'open' });
@@ -476,9 +476,9 @@ it("writes a running process's facts, its latest commands and options included, 
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
   hosted.call({ kind: 'message', text: '@commands\n@config', first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   const facts = (connection: (typeof hosted.house.connections)[number]) =>
-    connection.notifications.filter((notification) => ['process', 'commands', 'options'].includes(String(notification.type)));
+    connection.oneWayCalls.filter((oneWayCall) => ['process', 'commands', 'options'].includes(String(oneWayCall.type)));
   const before = facts(hosted.house.connections[0]!);
 
   hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
@@ -487,8 +487,8 @@ it("writes a running process's facts, its latest commands and options included, 
   await until(() => facts(reopened).length === 3);
   expect(facts(reopened)).toEqual([
     { type: 'process', conversation_id: 'conversation-1', running: true },
-    before.findLast((notification) => notification.type === 'commands'),
-    before.findLast((notification) => notification.type === 'options'),
+    before.findLast((oneWayCall) => oneWayCall.type === 'commands'),
+    before.findLast((oneWayCall) => oneWayCall.type === 'options'),
   ]);
   expect(
     (facts(reopened)[2]!.options as { id: string; currentValue: string }[]).find((option) => option.id === 'reasoning_effort')!
@@ -501,14 +501,14 @@ it('writes the exit of a process a closed Kit connection did not take once the c
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
   hosted.call({ kind: 'message', text: '@gate exit-now\n@exit 1', first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   const processes = (connection: (typeof hosted.house.connections)[number]) =>
-    connection.notifications.filter((notification) => notification.type === 'process');
+    connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process');
 
   hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
   await settle();
   await writeFile(join(hosted.home, 'exit-now'), '');
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   const reopened = await until(() => hosted.house.connections[1]);
 
   await until(() => processes(reopened).length > 0);
@@ -519,7 +519,7 @@ it('writes the exit of a process a closed Kit connection did not take once the c
 it('keeps the start-up step of the message being started while a later one arrives', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
-  const starting = () => hosted.connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  const starting = () => hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'starting').map((oneWayCall) => oneWayCall.step);
   hosted.call({ kind: 'message', text: '@say first', first: true });
   await until(() => starting().length > 0);
 
@@ -528,18 +528,18 @@ it('keeps the start-up step of the message being started while a later one arriv
   expect(starting()).toEqual(['session']);
 
   await rm(join(hosted.home, 'hold-new'));
-  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/ended')).length === 2);
+  await until(() => hosted.turns.filter((turn) => turn.path === '/kit/turns/end').length === 2);
   expect(starting()).toEqual(['session', null]);
 });
 
 it('returns the result of a message it prompted before a restart lost its result once House sends it again, and prompts it no second time', async () => {
   const hosted = await hostKit();
-  hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
+  hosted.house.route('POST', '/kit/kit-calls/results/return', () => ({ drop: true }));
   hosted.call({ kind: 'message', text: '@say once', first: true });
   const sent = lastCall();
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   await hosted.restart();
-  hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
+  hosted.house.route('POST', '/kit/kit-calls/results/return', (request) => {
     hosted.results.push(request);
     return { body: {} };
   });
@@ -553,12 +553,12 @@ it('returns the result of a message it prompted before a restart lost its result
 
 it('prompts no second time a message whose CLI asked a question about it before a restart lost its result', async () => {
   const hosted = await hostKit();
-  hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
+  hosted.house.route('POST', '/kit/kit-calls/results/return', () => ({ drop: true }));
   hosted.call({ kind: 'message', text: '@ask', first: true });
   const sent = lastCall();
   await until(() => hosted.interactions[0]);
   await hosted.restart();
-  hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
+  hosted.house.route('POST', '/kit/kit-calls/results/return', (request) => {
     hosted.results.push(request);
     return { body: {} };
   });
@@ -572,12 +572,12 @@ it('prompts no second time a message whose CLI asked a question about it before 
 
 it('prompts again a message House sends again after a restart when its CLI showed nothing of it before the restart', async () => {
   const hosted = await hostKit();
-  hosted.house.route('POST', '/kit/inputs/:input/ack', () => ({ drop: true }));
+  hosted.house.route('POST', '/kit/kit-calls/results/return', () => ({ drop: true }));
   hosted.call({ kind: 'message', text: '@gate never-opened', first: true });
   const sent = lastCall();
   await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   await hosted.restart();
-  hosted.house.route('POST', '/kit/inputs/:input/ack', (request) => {
+  hosted.house.route('POST', '/kit/kit-calls/results/return', (request) => {
     hosted.results.push(request);
     return { body: {} };
   });
@@ -585,7 +585,7 @@ it('prompts again a message House sends again after a restart when its CLI showe
   hosted.call({ kind: 'message', input_id: sent, text: '@say again', first: true });
 
   expect(await hosted.result(sent)).toEqual({ provider_session_id: expect.any(String) });
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect(outcome(ended.body)).toEqual({ text: 'again' });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(2);
 });
@@ -607,7 +607,7 @@ it.each(['a Kit restart', 'a kill'])(
 
     const { provider_session_id: opened } = (await hosted.result(lastCall())) as { provider_session_id: string };
     expect(opened).not.toBe(stored);
-    const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+    const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
     expect(outcome(ended.body)).toEqual({ text: 'started' });
     expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt')!.params).toMatchObject({ sessionId: opened });
     expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ opens a new session: the Agent's CLI could not resume this conversation: Resource not found/m);
@@ -623,7 +623,7 @@ it.each(['codex-acp', 'grok-build'])('resumes the session %s wrote when the conv
   hosted.call({ kind: 'message', provider_session_id: stored, text: '@say resumed', first: true });
 
   expect(await hosted.result(lastCall())).toEqual({});
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect(outcome(ended.body)).toEqual({ text: 'resumed' });
   const log = await hosted.adapterLog();
   expect(log.filter((entry) => entry.method === 'session/new')).toHaveLength(1);
@@ -650,7 +650,7 @@ it('refuses a first message whose session this Kit already prompted when the CLI
   hosted.call({ kind: 'open' });
   const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   hosted.call({ kind: 'message', provider_session_id: stored, text: '@say one', first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   hosted.call({ kind: 'kill' });
   await hosted.result(lastCall());
   await writeFile(join(hosted.home, 'refuse-resume'), '');
@@ -735,10 +735,10 @@ it("refuses a conversation whose connection cannot open in the Kit's words, and 
 it('opens a conversation whose credential House refused as retryable while it restarted, once House answers it', async () => {
   const hosted = await hostKit();
   let refusals = 2;
-  hosted.house.route('POST', '/kit/conversations/:conversation/credential', (request) =>
+  hosted.house.route('POST', '/kit/conversations/credentials/issue', (request) =>
     refusals-- > 0
       ? { status: 503, body: { error: { code: 'house_overloaded', retryable: true } } }
-      : { body: { credential: conversationCredential(request.params.conversation!) } },
+      : { body: { credential: conversationCredential(idOf(request, 'conversation')) } },
   );
 
   hosted.call({ kind: 'open' });
@@ -747,7 +747,7 @@ it('opens a conversation whose credential House refused as retryable while it re
   expect(result).toEqual({ provider_session_id: expect.any(String) });
   const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
   expect(result).toEqual({ provider_session_id: opened.sessionId });
-  expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(3);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue')).toHaveLength(3);
 });
 
 it.each([
@@ -755,7 +755,7 @@ it.each([
   [409, 'conversation_historical', "this conversation's Agent is retired, so it cannot start"],
 ])('refuses a conversation House answers %s %s for in its own words, without asking again', async (status, code, refused) => {
   const hosted = await hostKit();
-  hosted.house.route('POST', '/kit/conversations/:conversation/credential', () => ({
+  hosted.house.route('POST', '/kit/conversations/credentials/issue', () => ({
     status,
     body: { error: { code, retryable: false } },
   }));
@@ -763,7 +763,7 @@ it.each([
   hosted.call({ kind: 'open' });
 
   expect(await hosted.result(lastCall())).toEqual({ refused });
-  expect(hosted.house.requests.filter((received) => received.path.endsWith('/credential'))).toHaveLength(1);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue')).toHaveLength(1);
 });
 
 const KINDS = ['codex-acp', 'claude-agent-acp', 'grok-build'];
@@ -801,7 +801,7 @@ it('relays Grok plan approval with its recorded request and the owner response',
 
 async function ends(hosted: Hosted, count: number, timeoutMs?: number): Promise<unknown[]> {
   const ended = await until(() => {
-    const reported = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+    const reported = hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
     return reported.length === count ? reported : undefined;
   }, timeoutMs);
   return ended.map((turn) => outcome(turn.body));
@@ -812,7 +812,7 @@ async function prompts(hosted: Hosted): Promise<string[]> {
 }
 
 function operations(hosted: Hosted, connection = hosted.house.connections.at(-1)!): Record<string, unknown>[] {
-  return connection.notifications.filter((notification) => notification.type === 'turn');
+  return connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'turn');
 }
 
 function gated(hosted: Hosted, gate: string): () => Promise<void> {
@@ -825,27 +825,26 @@ it.each(KINDS)("holds a message that reaches %s mid-turn until that turn ends, t
 
   hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
   const first = lastCall();
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   hosted.call({ kind: 'message', text: '@say second', first: false });
   const second = lastCall();
   await hosted.result(first);
   await settle();
 
   expect(await prompts(hosted)).toEqual(['@gate first\n@say first']);
-  expect(hosted.results.map((result) => result.params.input)).not.toContain(second);
+  expect(hosted.results.map((result) => idOf(result, 'call'))).not.toContain(second);
   await release();
   expect(await ends(hosted, 2)).toEqual([{ text: 'first' }, { text: 'second' }]);
   expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say second']);
   expect(await hosted.result(second)).toEqual({});
-  const [startedFirst, endedFirst, startedSecond] = hosted.turns.map((turn) => turn.path.split('/').at(-1));
-  expect([startedFirst, endedFirst, startedSecond]).toEqual(['started', 'ended', 'started']);
+  expect(hosted.turns.slice(0, 3).map((turn) => turn.path)).toEqual(['/kit/turns/start', '/kit/turns/end', '/kit/turns/start']);
 });
 
 it('sends two messages that arrived mid-turn as two turns in the order they arrived', async () => {
   const hosted = await opened();
   const release = gated(hosted, 'first');
   hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
 
   hosted.call({ kind: 'message', text: '@say second', first: false });
   hosted.call({ kind: 'message', text: '@say third', first: false });
@@ -854,11 +853,11 @@ it('sends two messages that arrived mid-turn as two turns in the order they arri
 
   expect(await ends(hosted, 3)).toEqual([{ text: 'first' }, { text: 'second' }, { text: 'third' }]);
   expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say second', '@say third']);
-  expect(new Set(hosted.turns.map((turn) => turn.params.turn)).size).toBe(3);
+  expect(new Set(hosted.turns.map((turn) => idOf(turn, 'turn'))).size).toBe(3);
 });
 
 function processes(hosted: Hosted): unknown[] {
-  return hosted.connection.notifications.filter((notification) => notification.type === 'process').map((notification) => notification.running);
+  return hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process').map((oneWayCall) => oneWayCall.running);
 }
 
 async function sessionsOpened(hosted: Hosted): Promise<Record<string, unknown>[]> {
@@ -869,7 +868,7 @@ it.each(['codex-acp', 'claude-agent-acp'])('steers an at-once message into the t
   const hosted = await opened(kind);
   const release = gated(hosted, 'first');
   hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
 
   hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
 
@@ -881,7 +880,7 @@ it.each(['codex-acp', 'claude-agent-acp'])('steers an at-once message into the t
   expect(log.filter((entry) => entry.method === 'session/cancel')).toEqual([]);
   expect(await prompts(hosted)).toEqual(['@gate first\n@say first']);
   await settle();
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
 });
 
 it('steers an at-once message into a turn whose question waits, and the question waits on for its answer', async () => {
@@ -901,7 +900,7 @@ it('steers an at-once message into a turn whose question waits, and the question
 it('interrupts the turn of a CLI that takes no message during a turn for at-once messages, which run in the order they arrived as the next turns before the message that waited', async () => {
   const hosted = await opened('grok-build');
   hosted.call({ kind: 'message', text: '@wait 1500', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   hosted.call({ kind: 'message', text: '@say waited', first: false });
   const waited = lastCall();
 
@@ -923,7 +922,7 @@ it.each([
   const hosted = await opened(kind);
   const release = gated(hosted, 'self');
   hosted.call({ kind: 'message', text: '@itself 100 @gate self', first: false });
-  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started')).length === 2);
+  await until(() => hosted.turns.filter((turn) => turn.path === '/kit/turns/start').length === 2);
 
   hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
 
@@ -940,7 +939,7 @@ it('lands an at-once message as the turn Codex starts for it when Codex has alre
   const hosted = await opened();
   const release = gated(hosted, 'first');
   hosted.call({ kind: 'message', text: '@ended\n@gate first', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   await settle();
 
   hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
@@ -957,7 +956,7 @@ it("refuses an at-once message in the Kit's words when the CLI refuses to take i
   const hosted = await opened();
   const release = gated(hosted, 'first');
   hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   await writeFile(join(hosted.home, 'refuse-steering'), '');
 
   hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
@@ -986,11 +985,11 @@ const HELD = fileURLToPath(new URL('./fixtures/events/claude-held.jsonl', import
 const HOLDING = `@play ${HELD} 0 21\n@gate held\n@play ${HELD} 21`;
 
 function endedTurns(hosted: Hosted): Hosted['turns'] {
-  return hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+  return hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 }
 
 function subagents(hosted: Hosted): unknown[] {
-  return hosted.connection.notifications.filter((notification) => notification.type === 'subagents');
+  return hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'subagents');
 }
 
 function claudeResult(fields: Record<string, unknown>): string {
@@ -1044,14 +1043,14 @@ it('ends a Claude Code turn whose sub-agent runs on refused at its result, and a
 
   const release = gated(hosted, 'refused');
   hosted.call({ kind: 'message', text: `${refusal}\n@ended\n@say I cannot help with that\n@gate refused\n@refusal`, first: false });
-  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started')).length === 2);
+  await until(() => hosted.turns.filter((turn) => turn.path === '/kit/turns/start').length === 2);
   await settle();
   expect(endedTurns(hosted)).toHaveLength(1);
   await release();
 
   expect(await ends(hosted, 2)).toEqual([{ failed: 'refused' }, { failed: 'refused' }]);
   expect((endedTurns(hosted)[1]!.body as { parts: unknown[] }).parts).toContainEqual({ type: 'text', text: 'I cannot help with that' });
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(2);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(2);
 });
 
 it.each([
@@ -1062,7 +1061,7 @@ it.each([
   const release = gated(hosted, 'held');
   const steer = gated(hosted, 'steer');
   hosted.call({ kind: 'message', text: [`@play ${HELD} 0 13`, '@gate steer', ...result, `@play ${HELD} 20 21`, '@gate held'].join('\n'), first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   if (steering) {
     hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
     expect(await hosted.result(lastCall())).toEqual({});
@@ -1084,7 +1083,7 @@ it.each([
   hosted.call({ kind: 'message', text: [result, '@ended', after].join('\n'), first: false });
 
   expect(await ends(hosted, 1)).toEqual([expected]);
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
 });
 
 it('tells a Kit connection that opens which sub-agents run, none when they finished while no connection was open', async () => {
@@ -1100,7 +1099,7 @@ it('tells a Kit connection that opens which sub-agents run, none when they finis
   admit();
 
   const reopened = await until(() => hosted.house.connections[1]);
-  const told = () => reopened.notifications.filter((notification) => notification.type === 'subagents');
+  const told = () => reopened.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'subagents');
   expect(await until(() => told()[0])).toEqual({ type: 'subagents', conversation_id: 'conversation-1', subagents: [] });
 });
 
@@ -1118,7 +1117,7 @@ it('tells House no sub-agent runs once the process that ran one is killed', asyn
 it.each(['codex-acp', 'claude-agent-acp'])('cancels a turn %s reported ended before it answered its prompt when the owner interrupts it', async (kind) => {
   const hosted = await opened(kind);
   hosted.call({ kind: 'message', text: '@ended\n@wait', first: false });
-  const turn = (await until(() => hosted.turns.find((reported) => reported.path.endsWith('/started')))).params.turn!;
+  const turn = idOf(await until(() => hosted.turns.find((reported) => reported.path === '/kit/turns/start')), 'turn');
   await settle();
 
   hosted.call({ kind: 'interrupt', turn_id: turn });
@@ -1144,7 +1143,7 @@ it('ends the running process and its bridge for an open, opens a new session in 
   expect(alive(before!.pid as number)).toBe(false);
   expect(alive(sessions[1]!.pid as number)).toBe(true);
   expect(processes(hosted)).toEqual([true, false, true]);
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/conversations/conversation-1/credential')).toHaveLength(2);
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/conversations/credentials/issue')).toHaveLength(2);
   hosted.call({ kind: 'message', provider_session_id: old, text: '@say after\n@exit 3', first: false });
   await ends(hosted, 2);
   hosted.call({ kind: 'message', provider_session_id: old, text: '@say again', first: false });
@@ -1163,7 +1162,7 @@ it('answers a done at once and ends the process only once the running turn has e
   const [cli] = await sessionsOpened(hosted);
   const release = gated(hosted, 'first');
   hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   hosted.call({ kind: 'message', text: '@say second', first: false });
 
   hosted.call({ kind: 'done' });
@@ -1207,7 +1206,7 @@ it('answers a done for a conversation with no process and starts nothing', async
   expect(await hosted.result(lastCall())).toEqual({});
   await settle();
   expect(await sessionsOpened(hosted)).toEqual([]);
-  expect(hosted.house.requests.filter((request) => request.path.endsWith('/credential'))).toEqual([]);
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/conversations/credentials/issue')).toEqual([]);
   expect(processes(hosted)).toEqual([]);
 });
 
@@ -1216,7 +1215,7 @@ it('resumes the provider session for a message that waited while the process cra
   const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
   const release = gated(hosted, 'crash');
   hosted.call({ kind: 'message', text: '@gate crash\n@exit 3', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   hosted.call({ kind: 'message', text: '@say after', first: false });
   await settle();
 
@@ -1234,9 +1233,9 @@ it('keeps output a crashed Conversation process leaves behind out of the process
   const release = gated(hosted, 'replaced');
   hosted.call({ kind: 'message', text: '@linger late stale\n@exit 3', first: false });
   const lingering = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.lingering !== undefined))).lingering as number;
-  await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+  await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
   hosted.call({ kind: 'message', text: '@gate replaced\n@say fresh', first: false });
-  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/started'))[1]);
+  await until(() => hosted.turns.filter((turn) => turn.path === '/kit/turns/start')[1]);
 
   await late();
   await until(() => !alive(lingering));
@@ -1245,18 +1244,18 @@ it('keeps output a crashed Conversation process leaves behind out of the process
 
   expect(await ends(hosted, 2)).toEqual([{ failed: 'exited' }, { text: 'fresh' }]);
   await settle();
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(2);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(2);
 });
 
 it("does not return a result for a waiting message, so a restarted Kit process receives it again when its connection opens and sends it as the next turn", async () => {
   const hosted = await opened();
   const session = ((await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId) as string;
   hosted.call({ kind: 'message', text: '@wait', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   hosted.call({ kind: 'message', text: '@say again', first: false });
   const waiting = lastCall();
   await settle();
-  expect(hosted.results.map((result) => result.params.input)).not.toContain(waiting);
+  expect(hosted.results.map((result) => idOf(result, 'call'))).not.toContain(waiting);
 
   await hosted.restart();
   hosted.house.connections.at(-1)!.send({
@@ -1272,7 +1271,7 @@ it("does not return a result for a waiting message, so a restarted Kit process r
   });
 
   expect(await hosted.result(waiting)).toEqual({});
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect(outcome(ended.body)).toEqual({ text: 'again' });
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/resume').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ sessionId: session }),
@@ -1284,12 +1283,12 @@ it('reports a turn start and end once each under the turn id Kit gave it', async
 
   hosted.call({ kind: 'message', text: '@say Hello', first: true });
 
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  const started = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
+  const started = hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
   expect(started).toHaveLength(1);
-  expect(started[0]!.params).toEqual({ conversation: 'conversation-1', turn: expect.stringMatching(UUID) });
-  expect(ended.params.turn).toBe(started[0]!.params.turn);
-  expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'Hello' }], context: null });
+  expect(started[0]!.body).toEqual({ conversation: 'conversation-1', turn: expect.stringMatching(UUID) });
+  expect(idOf(ended, 'turn')).toBe(idOf(started[0]!, 'turn'));
+  expect(without(ended, 'conversation', 'turn')).toEqual({ parts: [{ type: 'text', text: 'Hello' }], context: null });
 });
 
 it('ends a turn failed as exited when its process exits during it, with the parts it had, and logs the exit only on its computer', async () => {
@@ -1297,10 +1296,10 @@ it('ends a turn failed as exited when its process exits during it, with the part
 
   hosted.call({ kind: 'message', text: '@say partial\n@exit 3', first: true });
 
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'exited' });
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
+  expect(without(ended, 'conversation', 'turn')).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'exited' });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: the CLI exited with 3/m);
-  await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+  await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
 });
 
 const FAST_SILENCE = fileURLToPath(new URL('./fast-silence.ts', import.meta.url));
@@ -1344,7 +1343,7 @@ it('ends a turn the CLI started itself and then went silent in as failed silent,
   hosted.call({ kind: 'message', text: '@say ok\n@itself 100 @gate never-opened', first: false });
 
   expect(await ends(hosted, 2, SILENCE_SEEN_MS)).toEqual([{ text: 'ok' }, { failed: 'silent' }]);
-  await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+  await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
 });
 
 it("keeps a turn whose CLI waits on the owner's answer to its question past the silence bound, and ends it with the answer", async () => {
@@ -1356,7 +1355,7 @@ it("keeps a turn whose CLI waits on the owner's answer to its question past the 
   await new Promise((resolve) => setTimeout(resolve, PAST_SILENCE_MS));
 
   expect(alive(asking)).toBe(true);
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended'))).toEqual([]);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/end')).toEqual([]);
   const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
   hosted.call({ kind: 'answer', interaction_id: (question.body as { interaction_id: string }).interaction_id, response });
   expect(await ends(hosted, 1)).toEqual([{ text: JSON.stringify(response) }]);
@@ -1401,7 +1400,7 @@ it.each(['codex-acp', 'claude-agent-acp'])(
     hosted.call({ kind: 'message', text: '@fail The agent process exited unexpectedly', first: true });
 
     expect(await ends(hosted, 1)).toEqual([{ failed: 'error' }]);
-    await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+    await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
     hosted.call({ kind: 'message', text: '@say back', first: false, provider_session_id: session });
     expect(await ends(hosted, 2)).toEqual([{ failed: 'error' }, { text: 'back' }]);
     const log = await hosted.adapterLog();
@@ -1414,7 +1413,7 @@ it('sends a message that waited on a prompt the CLI failed to a fresh process th
   const hosted = await opened();
   const release = gated(hosted, 'failing');
   hosted.call({ kind: 'message', text: '@gate failing\n@fail provider request failed', first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   hosted.call({ kind: 'message', text: '@say next', first: false });
   await settle();
 
@@ -1431,11 +1430,11 @@ it.each(KINDS)('ends a turn failed as an error when %s fails the prompt after it
   // The prompt fails a tenth of a second after the CLI ends its turn, so the failure arrives after the end.
   hosted.call({ kind: 'message', text: '@say partial\n@ended\n@hold 100\n@fail provider request failed', first: true });
 
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect(outcome(ended.body)).toEqual({ failed: 'error' });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: provider request failed/m);
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started')).map((turn) => turn.params.turn)).toEqual([
-    ended.params.turn,
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start').map((turn) => idOf(turn, 'turn'))).toEqual([
+    idOf(ended, 'turn'),
   ]);
 });
 
@@ -1445,8 +1444,8 @@ it('ends a turn failed as a limit when Claude answers its prompt with an exhaust
 
   hosted.call({ kind: 'message', text: `@sessionfailure ${limit}`, first: true });
 
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(ended.body).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: 'limit' });
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
+  expect(without(ended, 'conversation', 'turn')).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: 'limit' });
   hosted.call({ kind: 'message', text: '@say back', first: false });
   expect(await ends(hosted, 2)).toEqual([{ failed: 'limit' }, { text: 'back' }]);
   const log = await hosted.adapterLog();
@@ -1460,7 +1459,7 @@ it.each(KINDS)('ends a turn failed when %s refuses its prompt, with the explanat
   hosted.call({ kind: 'message', text: '@say I cannot help with that.\n@refusal', first: false });
 
   await ends(hosted, 2);
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/ended')).map((turn) => turn.body)).toEqual([
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/end').map((turn) => without(turn, 'conversation', 'turn'))).toEqual([
     { parts: [], context: null, failed: 'refused' },
     { parts: [{ type: 'text', text: 'I cannot help with that.' }], context: null, failed: 'refused' },
   ]);
@@ -1471,8 +1470,8 @@ it.each(KINDS)('ends a turn failed as signed out when %s answers its prompt that
 
   hosted.call({ kind: 'message', text: '@say partial\n@signedout', first: true });
 
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(ended.body).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'signed_out' });
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
+  expect(without(ended, 'conversation', 'turn')).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'signed_out' });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: Authentication required/m);
 });
 
@@ -1491,9 +1490,9 @@ it.each(KINDS)('reports a turn the CLI starts by itself like any other and ends 
   hosted.call({ kind: 'message', text: '@later 500 by itself', first: true });
 
   expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: 'by itself' }]);
-  const starts = hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-  const finished = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-  expect(starts.map((turn) => turn.params.turn)).toEqual(finished.map((turn) => turn.params.turn));
+  const starts = hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
+  const finished = hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
+  expect(starts.map((turn) => idOf(turn, 'turn'))).toEqual(finished.map((turn) => idOf(turn, 'turn')));
 });
 
 it.each(KINDS)('reports a turn %s starts by itself when it starts it, before it writes any text', async (kind) => {
@@ -1516,13 +1515,13 @@ it('writes no part operation while nobody watches, and still reports the turn st
     response: { outcome: { outcome: 'selected', optionId: 'allow' } },
   });
 
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect((ended.body as { parts: unknown[] }).parts).toEqual([
     { type: 'text', text: 'Hello' },
     { type: 'commands', count: 1 },
     { type: 'text', text: expect.stringContaining('selected') },
   ]);
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
   expect(operations(hosted)).toEqual([]);
 });
 
@@ -1531,7 +1530,7 @@ it('writes the operations so far once when the owner becomes watched mid-turn, t
   const release = gated(hosted, 'second');
   const stopAgain = gated(hosted, 'third');
   hosted.call({ kind: 'message', text: '@say one\n@tool Read it\n@gate second\n@say two\n@gate third\n@say three', first: true });
-  const turn = (await until(() => hosted.turns.find((report) => report.path.endsWith('/started')))).params.turn;
+  const turn = idOf(await until(() => hosted.turns.find((report) => report.path === '/kit/turns/start')), 'turn');
   await settle();
   expect(operations(hosted)).toEqual([]);
 
@@ -1583,7 +1582,7 @@ it("writes each operation of a turn as it happens, before House answers the turn
     admit = resolve;
   });
   onTestFinished(admit);
-  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', async (request) => {
+  hosted.house.route('POST', '/kit/turns/start', async (request) => {
     await admitted;
     hosted.turns.push(request);
     return { body: {} };
@@ -1595,7 +1594,7 @@ it("writes each operation of a turn as it happens, before House answers the turn
   admit();
 
   expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
-  const turn = hosted.turns[0]!.params.turn;
+  const turn = idOf(hosted.turns[0]!, 'turn');
   expect(operations(hosted)).toEqual([
     { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 0, part: { type: 'text', text: 'one' } },
     {
@@ -1620,8 +1619,8 @@ it('calls restarted before it opens its Kit connection', async () => {
   const hosted = await hostKit();
 
   const order = hosted.house.requests.map((request) => request.path);
-  expect(order.indexOf('/kit/restarted')).toBeGreaterThanOrEqual(0);
-  expect(order.indexOf('/kit/restarted')).toBeLessThan(order.indexOf('/kit/stream'));
+  expect(order.indexOf('/kit/kits/report-restart')).toBeGreaterThanOrEqual(0);
+  expect(order.indexOf('/kit/kits/report-restart')).toBeLessThan(order.indexOf('/kit/stream'));
 });
 
 it('reads the CLI again only after the conversation it opens has had two quiet seconds', async () => {
@@ -1666,16 +1665,16 @@ it.each([false, true])('reports a working run at most once a period, watched %s,
 
   hosted.call({ kind: 'message', text: working, first: true });
 
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   await settle();
   const order = reported(hosted);
   expect(arrivals.length).toBeGreaterThanOrEqual(2);
   for (const [index, arrival] of arrivals.entries()) {
     if (index > 0) expect(arrival - arrivals[index - 1]!).toBeGreaterThanOrEqual(300);
   }
-  expect(order[0]).toBe('started');
-  expect(order.at(-1)).toBe('ended');
-  expect(order.filter((event) => event === 'activity')).toHaveLength(arrivals.length);
+  expect(order[0]).toBe('start');
+  expect(order.at(-1)).toBe('end');
+  expect(order.filter((event) => event === 'report')).toHaveLength(arrivals.length);
 });
 
 it('reports a run only when its CLI did something, so a run that stopped is reported no more', async () => {
@@ -1684,9 +1683,9 @@ it('reports a run only when its CLI did something, so a run that stopped is repo
 
   hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@hold 1500\n@say two\n@hold 500', first: true });
 
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   await settle();
-  expect(reported(hosted)).toEqual(['started', 'activity', 'activity', 'ended']);
+  expect(reported(hosted)).toEqual(['start', 'report', 'report', 'end']);
 });
 
 it('reports nothing of a conversation House does not name a run, as a House that predates the report never does', async () => {
@@ -1694,22 +1693,22 @@ it('reports nothing of a conversation House does not name a run, as a House that
 
   hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@hold 500\n@say two\n@hold 500\n@say three', first: true });
 
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   await settle();
-  expect(reported(hosted)).toEqual(['started', 'ended']);
+  expect(reported(hosted)).toEqual(['start', 'end']);
 });
 
 it('stops reporting with the run, so a later turn of its conversation is not reported', async () => {
   const hosted = await hostKit([{}], fastReports());
   hosted.starts.push({ run: true });
   hosted.call({ kind: 'message', text: '@hold 500\n@say one', first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
 
   hosted.call({ kind: 'message', text: '@hold 500\n@say two\n@hold 500\n@say three', first: false });
 
-  await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/ended')).length === 2);
+  await until(() => hosted.turns.filter((turn) => turn.path === '/kit/turns/end').length === 2);
   await settle();
-  expect(reported(hosted)).toEqual(['started', 'activity', 'ended', 'started', 'ended']);
+  expect(reported(hosted)).toEqual(['start', 'report', 'end', 'start', 'end']);
 });
 
 it('never lets a report overtake the end of its turn', async () => {
@@ -1723,12 +1722,12 @@ it('never lets a report overtake the end of its turn', async () => {
 
   hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@say two', first: true });
 
-  await until(() => reported(hosted).includes('activity'));
+  await until(() => reported(hosted).includes('report'));
   await settle();
-  expect(reported(hosted)).toEqual(['started', 'activity']);
+  expect(reported(hosted)).toEqual(['start', 'report']);
   answer();
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
-  expect(reported(hosted)).toEqual(['started', 'activity', 'ended']);
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
+  expect(reported(hosted)).toEqual(['start', 'report', 'end']);
 });
 
 it('lets a question behind a report House does not take reach House while the turn runs', async () => {
@@ -1739,7 +1738,7 @@ it('lets a question behind a report House does not take reach House while the tu
   hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@ask', first: true });
 
   await until(() => hosted.interactions[0]);
-  expect(reported(hosted)).toEqual(['started', 'activity']);
+  expect(reported(hosted)).toEqual(['start', 'report']);
 });
 
 it.each([
@@ -1752,6 +1751,6 @@ it.each([
 
   hosted.call({ kind: 'message', text: '@hold 500\n@say one\n@say done', first: true });
 
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect(outcome(ended.body)).toEqual({ text: 'onedone' });
 });

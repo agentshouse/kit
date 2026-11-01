@@ -116,7 +116,7 @@ export class Calls {
     return carried
       .then(async ({ result, returned, release }) => {
         try {
-          await this.house.deliver(`/kit/inputs/${callId}/ack`, result);
+          await this.house.deliver('/kit/kit-calls/results/return', { call: callId, ...result });
         } finally {
           this.returned.add(callId);
           if (this.results.delete(callId)) this.save();

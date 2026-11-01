@@ -68,7 +68,7 @@ it("names the Kit's wire in a header on its call to House's MCP door", async () 
 
   await runHouse(home, ['search', '{"query":"invoice"}']);
 
-  expect(house.requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(['4']);
+  expect(house.requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(['5']);
 });
 
 function zeros(size: number): string {
@@ -319,7 +319,7 @@ it('says a write may have taken effect when House answers with no result, and to
   const home = await connected(house, true);
   house.route('POST', '/', () => ({ status: 502, bytes: { type: 'text/html', content: '<html>Bad Gateway</html>' } }));
 
-  const ran = await runHouse(home, ['edit', '{"changes":[]}']);
+  const ran = await runHouse(home, ['files_batch', '{"changes":[]}']);
 
   expect(ran).toEqual({
     status: 1,
@@ -362,13 +362,13 @@ it("refuses a Tool call in one line naming kit login while Kit holds no connecti
 it("refuses a Tool call naming kit login once kit logout has ended the User's own agent's connection with the Kit's", async () => {
   const house = await startHouse();
   const home = await connected(house, true);
-  house.route('POST', '/kit/logout', () => ({ body: {} }));
+  house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
 
   expect(await runKit(['logout'], { HOUSE_KIT_HOME: home }).exited).toBe(0);
   const ran = await runHouse(home, ['search', '{"query":"invoice"}']);
 
   expect(house.requests.map(({ path, headers, body }) => ({ path, authorization: headers.authorization, body }))).toEqual([
-    { path: '/kit/logout', authorization: 'Bearer ahk_kit', body: {} },
+    { path: '/kit/kits/log-out', authorization: 'Bearer ahk_kit', body: {} },
   ]);
   await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(ran.status).toBe(1);
@@ -378,7 +378,7 @@ it("refuses a Tool call naming kit login once kit logout has ended the User's ow
 it("stops acting as the User when House had already disconnected the computer", async () => {
   const house = await startHouse();
   const home = await connected(house, true);
-  house.route('POST', '/kit/logout', () => ({ status: 401, body: { error: { code: 'kit_credential_rejected' } } }));
+  house.route('POST', '/kit/kits/log-out', () => ({ status: 401, body: { error: { code: 'kit_credential_rejected' } } }));
 
   const logout = runKit(['logout'], { HOUSE_KIT_HOME: home });
 
@@ -445,8 +445,8 @@ it('prints the same help for house help as for house --help, listing help, push,
 });
 
 it.each([
-  [['edit', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
-  [['list_rooms', '{}', '--bogus'], '--bogus'],
+  [['files_batch', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
+  [['rooms_list', '{}', '--bogus'], '--bogus'],
   [['--version'], '--version'],
 ])('refuses house %j with its usage before it calls House', async (argv, unexpected) => {
   const house = await startHouse();

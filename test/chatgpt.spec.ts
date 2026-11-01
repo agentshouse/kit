@@ -81,7 +81,7 @@ it('keeps a key House accepts in the default Kit home and a plain house then cal
   expect(await entriesUnder(container.ran)).toEqual(['log']);
   expect(calls(house)).toEqual([[`Bearer ${KEY}`, 'tools/list']]);
 
-  expect(await inContainer(container, 'house list_rooms')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
+  expect(await inContainer(container, 'house rooms_list')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
   expect(calls(house)).toEqual([
     [`Bearer ${KEY}`, 'tools/list'],
     [`Bearer ${KEY}`, 'tools/call'],
@@ -120,13 +120,13 @@ it('records the relay kit chatgpt ran through beside the key, so a plain house c
   expect(await kit.exited).toBe(0);
   expect(await ownAgent(container.kitHome)).toEqual({ house: house.origin, relay: relay.origin, credential: KEY });
 
-  expect(await inContainer(container, 'house list_rooms')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
+  expect(await inContainer(container, 'house rooms_list')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
   expect(calls(relay)).toEqual([
     [`Bearer ${KEY}`, 'tools/list'],
     [`Bearer ${KEY}`, 'tools/call'],
   ]);
 
-  expect(await inContainer(container, `HOUSE_KIT_RELAY=${other.origin} house list_rooms`)).toEqual({
+  expect(await inContainer(container, `HOUSE_KIT_RELAY=${other.origin} house rooms_list`)).toEqual({
     status: 0,
     stdout: 'room_ref: r_one\n',
     stderr: '',
@@ -152,7 +152,7 @@ it('keeps the key in a Kit home of its own under the temporary directory when th
   expect((await stat(kitHome)).mode & 0o777).toBe(0o700);
   expect(await ownAgent(kitHome)).toEqual({ house: house.origin, credential: KEY });
 
-  expect(await inContainer(container, 'house list_rooms')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
+  expect(await inContainer(container, 'house rooms_list')).toEqual({ status: 0, stdout: 'room_ref: r_one\n', stderr: '' });
   expect(calls(house)).toEqual([
     [`Bearer ${KEY}`, 'tools/list'],
     [`Bearer ${KEY}`, 'tools/call'],

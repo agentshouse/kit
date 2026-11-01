@@ -7,17 +7,17 @@ import { relayed } from './relay.ts';
 import { Silence } from './silence.ts';
 import { endUnserved, KIT_WIRE, unserved } from './wire.ts';
 
-export type Notification = { type: string } & Record<string, unknown>;
+export type OneWayCall = { type: string } & Record<string, unknown>;
 
 export interface ConnectionHandlers {
   opened(): void;
   closed(): void;
   call(call: Call): void;
-  notification(notification: Notification): void;
+  oneWayCall(oneWayCall: OneWayCall): void;
 }
 
 export interface Connection {
-  send(notification: Notification): boolean;
+  send(oneWayCall: OneWayCall): boolean;
 }
 
 interface Answered {
@@ -101,9 +101,9 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
     };
     opening.onmessage = (event) => {
       silence?.heard();
-      const arrived = JSON.parse(String(event.data)) as Notification;
+      const arrived = JSON.parse(String(event.data)) as OneWayCall;
       if (arrived.type === 'input') handlers.call(arrived as unknown as Call);
-      else if (arrived.type !== 'beat') handlers.notification(arrived);
+      else if (arrived.type !== 'beat') handlers.oneWayCall(arrived);
     };
     opening.onerror = () => undefined;
     opening.onclose = closed;
@@ -111,9 +111,9 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
 
   void connect();
   return {
-    send(notification) {
+    send(oneWayCall) {
       if (connection === null || connection.readyState !== WebSocket.OPEN) return false;
-      connection.send(JSON.stringify(notification));
+      connection.send(JSON.stringify(oneWayCall));
       return true;
     },
   };

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { settle, until, type Received } from './double.ts';
+import { idOf, settle, until, without, type Received } from './double.ts';
 import { hostKit, lastCall, type Hosted, type RouteOverrides } from './environment.ts';
 
 const KINDS: Record<string, string> = { claude: 'claude-agent-acp', codex: 'codex-acp', grok: 'grok-build' };
@@ -50,7 +50,7 @@ async function replayed(fixture: string, count = 1, recording: Recording = {}): 
   }
   hosted.watch(true);
   hosted.call({ kind: 'message', text: `@gate admitted\n@replay ${fixture}`, first: false });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   await writeFile(join(hosted.home, 'admitted'), '');
   for (let index = 0; index < (recording.questions ?? 0); index++) {
     const { interaction_id, request } = (await until(() => hosted.interactions[index])).body as {
@@ -63,12 +63,12 @@ async function replayed(fixture: string, count = 1, recording: Recording = {}): 
     hosted.call({ kind: 'answer', interaction_id, response });
   }
   const ended = await until(() => {
-    const found = hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+    const found = hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
     return found.length === count ? found : undefined;
   });
-  const order = hosted.turns.filter((turn) => turn.path.endsWith('/started')).map((turn) => turn.params.turn);
-  const byTurn = new Map(ended.map((turn): [string | undefined, Received] => [turn.params.turn, turn]));
-  return { hosted, turns: order.map((turn) => byTurn.get(turn)!.body as Ended) };
+  const order = hosted.turns.filter((turn) => turn.path === '/kit/turns/start').map((turn) => idOf(turn, 'turn'));
+  const byTurn = new Map(ended.map((turn): [string | undefined, Received] => [idOf(turn, 'turn'), turn]));
+  return { hosted, turns: order.map((turn) => without(byTurn.get(turn)!, 'conversation', 'turn') as Ended) };
 }
 
 function written(turns: Ended[]): string {
@@ -97,7 +97,7 @@ function emittedImage(): string {
 }
 
 function streamed(hosted: Hosted, type: string): boolean {
-  return hosted.connection.notifications.some((notification) => notification.type === 'turn' && notification.op === 'start' && (notification.part as { type: string }).type === type);
+  return hosted.connection.oneWayCalls.some((oneWayCall) => oneWayCall.type === 'turn' && oneWayCall.op === 'start' && (oneWayCall.part as { type: string }).type === type);
 }
 
 function kinds(turn: Ended): string[] {
@@ -110,7 +110,7 @@ it('maps recorded Claude Code tool calls: commands fold into counts, a House Age
   expect(turns[0]!.parts).toEqual([
     { type: 'commands', count: 4 },
     { type: 'text', text: expect.stringContaining('TodoWrite') },
-    { type: 'message', command: 'send_agent_function_request', target: 'digest' },
+    { type: 'message', command: 'agent-functions/send', target: 'digest' },
     { type: 'commands', count: 1 },
     { type: 'subagent', description: 'Count files', status: 'running', result: null },
     { type: 'text', text: expect.stringContaining('still running') },
@@ -152,7 +152,7 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
   ]);
   expect(parts.find((part) => part.type === 'message')).toEqual({
     type: 'message',
-    command: 'send_agent_function_request',
+    command: 'agent-functions/send',
     target: 'digest',
   });
   expect(parts.find((part) => part.type === 'subagent')).toEqual({
@@ -164,7 +164,7 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
   expect(JSON.stringify(parts)).not.toContain('inspect only the current directory');
   expect(written(turns)).toBe(chunks('codex-tools'));
   expect(parts.find((part) => part.type === 'image')).toEqual({ type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' });
-  expect(hosted.images.map((image) => image.body)).toEqual([
+  expect(hosted.images.map((image) => without(image, 'conversation', 'turn'))).toEqual([
     { name: 'image-1.png', media_type: 'image/png', bytes: 69, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
   ]);
   expect(hosted.store.requests.map((request) => [request.method, request.part, request.bytes, request.status])).toEqual([
@@ -209,7 +209,7 @@ it('maps recorded Grok Build tool calls, its plan and its sub-agent, whose own s
   });
   expect(parts.filter((part) => part.type === 'commands').every((part) => part.count === 1)).toBe(true);
   expect(written(turns)).toBe(chunks('grok-tools'));
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
   expect(turns[0]!.context).toEqual({ used: 24106, window: 256000 });
 });
 
@@ -351,7 +351,7 @@ it("marks an image House did not save with House's refusal in place of its image
   await hosted.result(lastCall());
 
   hosted.call({ kind: 'message', text: emittedImage(), first: false });
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
 
   expect((ended.body as Ended).parts).toEqual([
     { type: 'marker', marker: 'retry', text: 'image-1.png was not saved: upload_expired: this upload is gone; run the same command again to start a new one' },
@@ -361,7 +361,7 @@ it("marks an image House did not save with House's refusal in place of its image
 it('streams the text after an image and declares the next image while the first one uploads, and saves every image where its CLI produced it', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   const declared = new Map<string, string>();
-  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/images', (request) => {
+  hosted.house.route('POST', '/kit/turns/images/declare', (request) => {
     hosted.images.push(request);
     const { bytes, sha256 } = request.body as { bytes: number; sha256: string };
     const answer = hosted.store.declare({ bytes, sha256, path: `version-${hosted.images.length}` }, 1024);
@@ -380,7 +380,7 @@ it('streams the text after an image and declares the next image while the first 
   hosted.call({ kind: 'message', text: `${emittedImage()}\n${emittedImage()}\n@say Done.\n@gate streamed`, first: false });
   await until(() => streamed(hosted, 'image'));
   await writeFile(join(hosted.home, 'streamed'), '');
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
 
   expect((ended.body as Ended).parts).toEqual([
     { type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' },
@@ -403,7 +403,7 @@ it('keeps writing the text an image was saved in the middle of, and saves the im
   hosted.call({ kind: 'message', text: `${emittedImage()}\n@say All nine\n@gate saved\n@say  steps completed.`, first: false });
   await until(() => streamed(hosted, 'image'));
   await writeFile(join(hosted.home, 'saved'), '');
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
 
   expect((ended.body as Ended).parts).toEqual([
     { type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' },
@@ -432,7 +432,7 @@ it('marks every model switch Claude Code makes after the Kit asked for a model, 
   await hosted.result(lastCall());
 
   hosted.call({ kind: 'message', text: `${switched('haiku')}\n${switched('sonnet')}`, first: false });
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
 
   expect((ended.body as Ended).parts).toEqual([
     { type: 'marker', marker: 'model', text: 'haiku' },
@@ -449,7 +449,7 @@ it('marks a model switch Claude Code makes to a model the Kit asked for and the 
   await hosted.result(lastCall());
 
   hosted.call({ kind: 'message', text: switched('opus'), first: false });
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
 
   expect((ended.body as Ended).parts).toEqual([{ type: 'marker', marker: 'model', text: 'opus' }]);
 });
@@ -485,7 +485,7 @@ it('counts a recorded Codex MCP call when it starts', async () => {
   const started = events.find((event) => event.params.update?.sessionUpdate === 'tool_call' && event.params.update.rawInput?.server === 'echo')!;
 
   hosted.call({ kind: 'message', text: `@emit ${JSON.stringify(started).split(own).join('$SESSION')}\n@say after`, first: false });
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
 
   expect((ended.body as Ended).parts).toEqual([
     { type: 'commands', count: 1 },
@@ -496,7 +496,7 @@ it('counts a recorded Codex MCP call when it starts', async () => {
 it("marks a recorded Codex background terminal's start in its turn and its end, which came after that turn, first in the next", async () => {
   const { hosted, turns } = await replayed('codex-terminal');
   hosted.call({ kind: 'message', text: '@say ok', first: false });
-  const next = await until(() => hosted.turns.filter((turn) => turn.path.endsWith('/ended'))[1]);
+  const next = await until(() => hosted.turns.filter((turn) => turn.path === '/kit/turns/end')[1]);
 
   expect(turns[0]!.parts.filter((part) => part.type === 'marker')).toEqual([
     { type: 'marker', marker: 'job', text: 'sleep 25: running' },
@@ -505,13 +505,13 @@ it("marks a recorded Codex background terminal's start in its turn and its end, 
 });
 
 it.each(['claude-agent-functions', 'codex-agent-functions'])(
-  "shows the recorded send_agent_function_request and cancel_agent_function_request of %s as one part each, naming the Agent function's card and the request they target",
+  "shows the recorded agent-functions/send and agent-functions/cancel of %s as one part each, naming the Agent function's card and the request they target",
   async (fixture) => {
     const { turns } = await replayed(fixture);
 
     expect(turns[0]!.parts.filter((part) => part.type === 'message')).toEqual([
-      { type: 'message', command: 'send_agent_function_request', target: 'digest' },
-      { type: 'message', command: 'cancel_agent_function_request', target: 'rr_456' },
+      { type: 'message', command: 'agent-functions/send', target: 'digest' },
+      { type: 'message', command: 'agent-functions/cancel', target: 'rr_456' },
     ]);
   },
 );
@@ -534,13 +534,13 @@ function emitted(fixture: string, rewrites: [string, string][] = [], call?: stri
 }
 
 const SEARCHED = `house search '{"query":"alpha"}'`;
-const AGENT_FUNCTION_SENT = '{"command":"send_agent_function_request","arguments":{"room_ref":null,"agent_function":"digest","payload":"hi"}}';
-const AGENT_FUNCTION_CANCELLED = '{"command":"cancel_agent_function_request","arguments":{"room_ref":null,"request":"rr_456"}}';
-const MAILED = '{"command":"send_mail","arguments":{"text":"Here is the summary.","request":"rr_789"}}';
-const ANSWERED = '{"command":"send_mail","arguments":{"text":"Done."}}';
-const LISTED = `house run_command '{"command":"list_conversations","arguments":{}}'`;
-const AGENT_ASKED = '{"command":"send_agent_function_request","arguments":{"room_ref":null,"agent":"ag_321","payload":"Sum up the week."}}';
-const CONVERSATION_MAILED = '{"command":"send_mail","arguments":{"text":"Over to you.","conversation":"cv_654"}}';
+const AGENT_FUNCTION_SENT = '{"command":"agent-functions/send","arguments":{"room_ref":null,"agent_function":"digest","payload":"hi"}}';
+const AGENT_FUNCTION_CANCELLED = '{"command":"agent-functions/cancel","arguments":{"room_ref":null,"request":"rr_456"}}';
+const MAILED = '{"command":"agent-functions/mail/send","arguments":{"text":"Here is the summary.","request":"rr_789"}}';
+const ANSWERED = '{"command":"agent-functions/mail/send","arguments":{"text":"Done."}}';
+const LISTED = `house run_command '{"command":"conversations/active/list","arguments":{}}'`;
+const AGENT_ASKED = '{"command":"agent-functions/send","arguments":{"room_ref":null,"agent":"ag_321","payload":"Sum up the week."}}';
+const CONVERSATION_MAILED = '{"command":"agent-functions/mail/send","arguments":{"text":"Over to you.","conversation":"cv_654"}}';
 
 async function shown(cli: string, text: string): Promise<Record<string, unknown>[]> {
   const hosted = await hostKit([{ kind: KINDS[cli]! }]);
@@ -548,12 +548,12 @@ async function shown(cli: string, text: string): Promise<Record<string, unknown>
   await hosted.result(lastCall());
   hosted.watch(true);
   hosted.call({ kind: 'message', text, first: false });
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   return (ended.body as Ended).parts.filter((part) => part.type === 'commands' || part.type === 'message');
 }
 
 it.each(['claude', 'codex'])(
-  "shows %s's house send_mail as one part naming the request it names, or no target when it names none, and still counts the house call beside it",
+  "shows %s's house agent-functions/mail/send as one part naming the request it names, or no target when it names none, and still counts the house call beside it",
   async (cli) => {
     const searched = emitted(`${cli}-tools`, [], "house search '");
     const mailed = emitted(`${cli}-agent-functions`, [
@@ -563,14 +563,14 @@ it.each(['claude', 'codex'])(
 
     expect(await shown(cli, `${searched}\n${mailed}`)).toEqual([
       { type: 'commands', count: 1 },
-      { type: 'message', command: 'send_mail', target: 'rr_789' },
-      { type: 'message', command: 'send_mail', target: null },
+      { type: 'message', command: 'agent-functions/mail/send', target: 'rr_789' },
+      { type: 'message', command: 'agent-functions/mail/send', target: null },
     ]);
   },
 );
 
 it.each(['claude', 'codex'])(
-  "shows %s's house send_agent_function_request naming an Agent and send_mail naming a conversation as one part each naming it, and counts its list_conversations as a command",
+  "shows %s's house agent-functions/send naming an Agent and agent-functions/mail/send naming a conversation as one part each naming it, and counts its conversations/active/list as a command",
   async (cli) => {
     const listed = emitted(`${cli}-tools`, [[SEARCHED, LISTED]], "house search '");
     const sent = emitted(`${cli}-agent-functions`, [
@@ -580,8 +580,8 @@ it.each(['claude', 'codex'])(
 
     expect(await shown(cli, `${listed}\n${sent}`)).toEqual([
       { type: 'commands', count: 1 },
-      { type: 'message', command: 'send_agent_function_request', target: 'ag_321' },
-      { type: 'message', command: 'send_mail', target: 'cv_654' },
+      { type: 'message', command: 'agent-functions/send', target: 'ag_321' },
+      { type: 'message', command: 'agent-functions/mail/send', target: 'cv_654' },
     ]);
   },
 );
@@ -599,12 +599,12 @@ it('counts a house run_command naming a key every object inherits, or carrying n
   expect(parts.reduce((total, part) => total + Number(part.count), 0)).toBe(3);
 });
 
-it("shows Grok Build's recorded send_agent_function_request as one part and marks the retries its usage limit cut short", async () => {
+it("shows Grok Build's recorded agent-functions/send as one part and marks the retries its usage limit cut short", async () => {
   const { turns } = await replayed('grok-agent-functions');
 
   const parts = turns[0]!.parts;
   expect(parts.filter((part) => part.type === 'message')).toEqual([
-    { type: 'message', command: 'send_agent_function_request', target: 'digest' },
+    { type: 'message', command: 'agent-functions/send', target: 'digest' },
   ]);
   const retries = parts.filter((part) => part.type === 'marker');
   expect(retries.length).toBeGreaterThan(0);
@@ -623,7 +623,7 @@ it("marks Grok Build's model switch, reads the context window of the model it sw
     ],
     context: { used: 3120, window: 2000000 },
   });
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
 });
 
 it.each(['claude-tools', 'codex-tools', 'grok-tools'])(
@@ -631,7 +631,7 @@ it.each(['claude-tools', 'codex-tools', 'grok-tools'])(
   async (fixture) => {
     const { hosted, turns } = await replayed(fixture, fixture === 'claude-tools' ? 2 : 1);
 
-    const operations = hosted.connection.notifications.filter((notification) => notification.type === 'turn').map((notification) => notification.op);
+    const operations = hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'turn').map((oneWayCall) => oneWayCall.op);
     expect(operations).toEqual(expect.arrayContaining(['start', 'append', 'context']));
     expect(operations.every((op) => ['start', 'append', 'count', 'status', 'plan', 'context'].includes(String(op)))).toBe(true);
     for (const turn of turns) {
@@ -648,7 +648,7 @@ it.each(['claude-tools', 'codex-tools', 'grok-tools'])(
 async function spent(kind: string, usage: Record<string, unknown>): Promise<Ended> {
   const hosted = await hostKit([{ kind }]);
   hosted.call({ kind: 'message', text: `@spent ${JSON.stringify(usage)}\n@say ok`, first: true });
-  const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+  const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   return ended.body as Ended;
 }
 
@@ -707,7 +707,7 @@ it.each([
   async (usage) => {
     const hosted = await hostKit([{ kind: 'grok-build' }]);
     hosted.call({ kind: 'message', text: `@say ok\n@completed ${JSON.stringify(usage)}`, first: true });
-    const ended = await until(() => hosted.turns.find((turn) => turn.path.endsWith('/ended')));
+    const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
     expect(ended.body).not.toHaveProperty('tokens');
     expect(kinds(ended.body as Ended)).toContain('text');
   },

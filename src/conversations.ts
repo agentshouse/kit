@@ -29,7 +29,7 @@ import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { killMarked, Scope } from './scope.ts';
 import { holdSecretInput, type Step } from './secret-input.ts';
-import type { Notification } from './connection.ts';
+import type { OneWayCall } from './connection.ts';
 import { transcribe } from './transcription.ts';
 import { workFor, type Work } from './work.ts';
 
@@ -38,7 +38,7 @@ export interface Kit {
   agents: Agents;
   copies: LocalCopies;
   calls: Calls;
-  send(notification: Notification): boolean;
+  send(oneWayCall: OneWayCall): boolean;
   changed(): void;
 }
 
@@ -102,6 +102,8 @@ function unopened(reason: string): (error: unknown) => string {
 }
 
 type Starting = 'transcription' | 'session';
+
+type TurnAct = 'turns/start' | 'turns/activity/report' | 'turns/end' | 'turns/images/declare' | 'conversations/interaction/ask';
 
 // A start-up step is shown only once it has lasted a second, so a quick start shows none of them.
 const STARTING_SHOWN_AFTER_MS = 1_000;
@@ -638,8 +640,13 @@ export class Conversations {
           if (address === null) throw new Error(`${path} is no longer an audio file`);
           return address;
         }, signal);
-        const transcript = `/kit/conversations/${conversation.id}/messages/${messageId}/transcripts`;
-        await step(unbridged, unlessAborted(this.kit.house.deliver(transcript, { path, text: said }, () => !signal.aborted), signal));
+        await step(
+          unbridged,
+          unlessAborted(
+            this.kit.house.deliver('/kit/transcripts/keep', { conversation: conversation.id, message: messageId, path, text: said }, () => !signal.aborted),
+            signal,
+          ),
+        );
         blocks.push({ type: 'text', text: `${path}\nTranscript: ${said}` });
       }
     } catch (error) {
@@ -913,10 +920,10 @@ export class Conversations {
     this.kit.send({ type: 'options', conversation_id: conversation.id, options });
   }
 
-  private deliver(conversation: Conversation, turn: Turn, event: string, body: unknown, current?: () => boolean): Promise<unknown> {
+  private deliver(conversation: Conversation, turn: Turn, act: TurnAct, body: object | Promise<object>, current?: () => boolean): Promise<unknown> {
     this.reporting++;
     const delivered = conversation.reports.then(async () =>
-      this.kit.house.deliver(`/kit/conversations/${conversation.id}/turns/${turn.id}/${event}`, await body, current),
+      this.kit.house.deliver(`/kit/${act}`, { conversation: conversation.id, turn: turn.id, ...(await body) }, current),
     );
     conversation.reports = delivered
       .catch(() => undefined)
@@ -940,7 +947,7 @@ export class Conversations {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
     conversation.turns.add(turn);
     conversation.running?.adapter.turn(true);
-    void this.deliver(conversation, turn, 'started', {})
+    void this.deliver(conversation, turn, 'turns/start', {})
       .then((answer) => {
         if ((answer as { run?: boolean }).run === true) turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
       })
@@ -971,7 +978,7 @@ export class Conversations {
       ...(tokens === null ? {} : { tokens }),
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
-    void this.deliver(conversation, turn, 'ended', body).catch(logged);
+    void this.deliver(conversation, turn, 'turns/end', body).catch(logged);
     this.next(conversation);
     this.kit.changed();
   }
@@ -1040,7 +1047,7 @@ export class Conversations {
     const answered = new Promise<Response | null>((answer, fail) => {
       this.questions.set(interactionId, { conversation, answer: (response) => answer(response as Response) });
       signal.addEventListener('abort', () => answer(null), { once: true });
-      this.deliver(conversation, turn, 'interactions', {
+      this.deliver(conversation, turn, 'conversations/interaction/ask', {
         interaction_id: interactionId,
         request: { method, params },
         secret,
@@ -1083,7 +1090,7 @@ export class Conversations {
     const turn = conversation.turn;
     if (turn === null || Date.now() < turn.quietUntil) return;
     turn.quietUntil = Infinity;
-    void this.deliver(conversation, turn, 'activity', {}, () => false)
+    void this.deliver(conversation, turn, 'turns/activity/report', {}, () => false)
       .catch(logged)
       .finally(() => {
         turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
@@ -1189,7 +1196,7 @@ export class Conversations {
     const name = `image-${++turn.images}.${mediaType.split('/')[1]}`;
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     try {
-      const declared = (await this.deliver(conversation, turn, 'images', {
+      const declared = (await this.deliver(conversation, turn, 'turns/images/declare', {
         name,
         media_type: mediaType,
         bytes: bytes.length,

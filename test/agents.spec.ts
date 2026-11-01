@@ -32,7 +32,7 @@ beforeEach(async () => {
   );
   reports.length = 0;
   serveKitFiles(house, home);
-  house.route('POST', '/kit/agents/desired', () => ({ body: { agents: desired, routes: [] } }));
+  house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: desired, routes: [] } }));
   house.route('POST', '/kit/agents/report', ({ body }) => {
     reports.push(body as Record<string, unknown>);
     return { body: {} };
@@ -124,7 +124,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
     os: expect.stringMatching(/\S/),
     ...('form' in report ? { form: expect.stringMatching(/^(laptop|desktop|server)$/) } : {}),
     kit_release: KIT_PACKAGE.version,
-    wire: 4,
+    wire: 5,
     agent_base: '/agents/house/agents',
     agents: [
       {
@@ -219,7 +219,7 @@ it('installs a chosen CLI the login shell does not find though its profile print
   expect(await logged('curl.log')).toEqual(['https://claude.ai/install.sh']);
 });
 
-it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work_available notification", async () => {
+it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work_available One-way call", async () => {
   desired = ['codex-acp', 'claude-agent-acp'];
   await start(async () => {
     await rm(join(userBin(home), 'claude'));

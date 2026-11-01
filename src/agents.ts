@@ -244,7 +244,7 @@ export class Agents {
     this.refreshing++;
     this.changed();
     const reading = this.read().then(async () => {
-      this.desired = await this.house.deliver<Desired>('/kit/agents/desired', {});
+      this.desired = await this.house.deliver<Desired>('/kit/agents/desired/list', {});
       return this.desired;
     });
     this.reading = reading;

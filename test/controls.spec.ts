@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
-import { until, type Answer } from './double.ts';
+import { idOf, until, without, type Answer } from './double.ts';
 import { hostKit, installHeld, lastCall, outcome, type Hosted } from './environment.ts';
 import { alive, filesUnder } from './kit.ts';
 
-const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
-const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/started'));
+const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
+const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
 
 async function opened(hosted: Hosted): Promise<string> {
   hosted.call({ kind: 'open' });
@@ -18,12 +18,12 @@ it('cancels the running turn on interrupt and keeps the process and session', as
   const hosted = await hostKit();
   const session = await opened(hosted);
   hosted.call({ kind: 'message', text: '@wait', first: true });
-  const turn = (await until(() => started(hosted)[0])).params.turn!;
+  const turn = idOf(await until(() => started(hosted)[0]), 'turn');
 
   hosted.call({ kind: 'interrupt', turn_id: turn });
 
   const interrupted = await until(() => ended(hosted)[0]);
-  expect(interrupted.params.turn).toBe(turn);
+  expect(idOf(interrupted, 'turn')).toBe(turn);
   expect(outcome(interrupted.body)).toEqual({ text: '' });
   hosted.call({ kind: 'interrupt', turn_id: turn });
   await hosted.result(lastCall());
@@ -36,7 +36,7 @@ it('cancels the running turn on interrupt and keeps the process and session', as
     session,
     session,
   ]);
-  expect(hosted.connection.notifications.filter((notification) => notification.type === 'process')).toEqual([
+  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([
     { type: 'process', conversation_id: 'conversation-1', running: true },
   ]);
 });
@@ -55,7 +55,7 @@ it('kills the process and every process it started, and the next message resumes
   expect(alive(adapter)).toBe(false);
   await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
   expect(await until(() => ended(hosted)[0])).toMatchObject({ body: { failed: 'killed' } });
-  await until(() => hosted.connection.notifications.find((notification) => notification.type === 'process' && notification.running === false));
+  await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
 
   hosted.call({ kind: 'message', provider_session_id: session, text: 'after', first: false });
   await hosted.result(lastCall());
@@ -127,10 +127,10 @@ it('refuses an open and returns the result of the kill at once while House holds
     release = resolve;
   });
   onTestFinished(() => release({ status: 503, body: {} }));
-  hosted.house.route('POST', '/kit/conversations/:conversation/credential', () => held);
+  hosted.house.route('POST', '/kit/conversations/credentials/issue', () => held);
   hosted.call({ kind: 'open' });
   const open = lastCall();
-  await until(() => hosted.house.requests.find((request) => request.path === '/kit/conversations/conversation-1/credential'));
+  await until(() => hosted.house.requests.find((request) => request.path === '/kit/conversations/credentials/issue'));
 
   hosted.call({ kind: 'kill' });
 
@@ -179,8 +179,8 @@ it('kills a background job its crashed process left behind when SIGTERM stops it
 it('sets an option on the running process and relays the commands and options the CLI sends', async () => {
   const hosted = await hostKit();
   await opened(hosted);
-  const options = (notification: Record<string, unknown>) => notification.type === 'options';
-  await until(() => hosted.connection.notifications.find(options));
+  const options = (oneWayCall: Record<string, unknown>) => oneWayCall.type === 'options';
+  await until(() => hosted.connection.oneWayCalls.find(options));
 
   hosted.call({ kind: 'option', option: 'model', value: 'other-model' });
   await hosted.result(lastCall());
@@ -192,14 +192,14 @@ it('sets an option on the running process and relays the commands and options th
     configId: 'model',
     value: 'other-model',
   });
-  const current = (notification: Record<string, unknown>) =>
-    Object.fromEntries((notification.options as { id: string; currentValue: string }[]).map((option) => [option.id, option.currentValue]));
-  expect(hosted.connection.notifications.filter(options).map(current)).toEqual([
+  const current = (oneWayCall: Record<string, unknown>) =>
+    Object.fromEntries((oneWayCall.options as { id: string; currentValue: string }[]).map((option) => [option.id, option.currentValue]));
+  expect(hosted.connection.oneWayCalls.filter(options).map(current)).toEqual([
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'route-model', reasoning_effort: 'route-effort' },
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'route-effort' },
     { mode: 'agent-full-access', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'from-cli' },
   ]);
-  expect(hosted.connection.notifications.filter((notification) => notification.type === 'commands')).toEqual([
+  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'commands')).toEqual([
     {
       type: 'commands',
       conversation_id: 'conversation-1',
@@ -214,9 +214,9 @@ it('reports a question with the CLI request unchanged and passes the answer back
   hosted.call({ kind: 'message', text: '@ask', first: true });
 
   const question = await until(() => hosted.interactions[0]);
-  const turn = started(hosted)[0]!.params.turn;
-  expect(question.params).toEqual({ conversation: 'conversation-1', turn });
-  expect(question.body).toEqual({
+  const turn = idOf(started(hosted)[0]!, 'turn');
+  expect({ conversation: idOf(question, 'conversation'), turn: idOf(question, 'turn') }).toEqual({ conversation: 'conversation-1', turn });
+  expect(without(question, 'conversation', 'turn')).toEqual({
     interaction_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
     request: {
       method: 'session/request_permission',
@@ -276,7 +276,7 @@ it.each([0, 2500])(
   'drops a question the CLI stops waiting on, its report %i ms on its way, so the turn no longer counts as waiting and its answer goes to the CLI as a new message',
   async (delay) => {
     const hosted = await hostKit();
-    hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/interactions', async (request) => {
+    hosted.house.route('POST', '/kit/conversations/interaction/ask', async (request) => {
       // House takes the report as late as the case names.
       await new Promise((resolve) => setTimeout(resolve, delay));
       hosted.interactions.push(request);
@@ -311,8 +311,8 @@ it('passes a secret from the held secret-input request to the CLI and keeps it n
   const hosted = await hostKit();
   const secret = 's3cret-value-for-the-cli';
   const holds: Record<string, unknown>[] = [];
-  hosted.house.route('POST', '/kit/secret-input/:subject', (request) => {
-    holds.push({ subject: request.params.subject, body: request.body });
+  hosted.house.route('POST', '/kit/secret-inputs/await', (request) => {
+    holds.push({ subject: idOf(request, 'subject'), body: without(request, 'subject') });
     return holds.length === 1
       ? { body: { outcome: 'released', release: 'held' } }
       : { body: { outcome: 'collected', content: { token: secret } } };
@@ -336,5 +336,5 @@ it('passes a secret from the held secret-input request to the CLI and keeps it n
     expect(await readFile(file, 'utf8')).not.toContain(secret);
   }
   expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(secret);
-  expect(JSON.stringify(hosted.connection.notifications)).not.toContain(secret);
+  expect(JSON.stringify(hosted.connection.oneWayCalls)).not.toContain(secret);
 });

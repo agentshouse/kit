@@ -8,7 +8,7 @@ async function enrolled(house: House): Promise<string> {
   const home = await temporaryHome();
   await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_kit' }));
   await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_own' }));
-  house.route('POST', '/kit/logout', () => ({ body: {} }));
+  house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
   return home;
 }
 

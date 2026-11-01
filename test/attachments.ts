@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises';
 import { vi } from 'vitest';
 import { stringify } from 'yaml';
 import { socketDirectory } from '../src/home.ts';
-import type { Received } from './double.ts';
+import { idOf, without, type Received } from './double.ts';
 import type { Hosted, McpCall } from './environment.ts';
 
 export interface Attachment {
@@ -71,5 +71,5 @@ export async function bridgeSockets(hosted: Hosted): Promise<string[]> {
 }
 
 export function posted(hosted: Hosted): unknown[] {
-  return hosted.transcripts.map((received) => [received.params.conversation, received.params.message, received.body]);
+  return hosted.transcripts.map((received) => [idOf(received, 'conversation'), idOf(received, 'message'), without(received, 'conversation', 'message')]);
 }

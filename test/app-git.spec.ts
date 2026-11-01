@@ -95,7 +95,7 @@ it("registers git's helper for House's App sources naming no Kit home, so anothe
 
 it("leaves the default Kit home's git signing in when another Kit home logs out", async () => {
   const { house, user, second, credentials } = await twoHomes();
-  house.route('POST', '/kit/logout', () => ({ body: {} }));
+  house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
 
   expect(await runKit(['logout'], { HOUSE_KIT_HOME: second, HOME: user }).exited).toBe(0);
   const plain = await gitOf(user, null, 'ls-remote', `${house.origin}/app/a_app.git`);
@@ -106,7 +106,7 @@ it("leaves the default Kit home's git signing in when another Kit home logs out"
 
 it("stops answering for git once kit logout disconnects the computer, says this Kit home is not signed in, and leaves the User's other helpers", async () => {
   const { house, home, credentials } = await loggedIn();
-  house.route('POST', '/kit/logout', () => ({ body: {} }));
+  house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
 
   expect(await runKit(['logout'], { HOUSE_KIT_HOME: home }).exited).toBe(0);
   const listed = await gitOf(home, home, 'ls-remote', `${house.origin}/app/a_app.git`);

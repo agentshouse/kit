@@ -54,7 +54,7 @@ function copyState(hosted: Hosted, room: Room): Promise<string[]> {
 }
 
 function batches(hosted: Hosted): unknown[] {
-  return hosted.house.requests.filter((request) => request.path === '/kit/door/batch').map((request) => request.body);
+  return hosted.house.requests.filter((request) => request.path === '/kit/door/files/batch').map((request) => request.body);
 }
 
 function storeCalls(hosted: Hosted): unknown[][] {
@@ -301,7 +301,7 @@ it("refuses a push in House's words when its discovery does not answer the cap, 
   const { hosted, room } = await copied();
   await writeFile(join(room.repository, 'plan.md'), 'one\ntwo\n');
   commitAll(room.repository, 'text');
-  hosted.house.route('POST', '/kit/door/discover', () => ({
+  hosted.house.route('POST', '/kit/door/rooms/discover', () => ({
     status: 503,
     body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; push again shortly', retryable: true } },
   }));
@@ -341,7 +341,7 @@ it('appends a record as text linking a file it uploaded, and passes an attachmen
   const uploads = uploadTool(hosted.store, 5);
   hosted.tools.upload = (args) => uploads.answer(args);
   const refusal = 'invalid_arguments: attachments is not an argument here; correct the arguments';
-  hosted.tools.append_record = (args) =>
+  hosted.tools.records_append = (args) =>
     'attachments' in args
       ? { isError: true, content: [{ type: 'text', text: `${refusal}\n` }] }
       : { content: [{ type: 'text', text: 'record: rec_1' }] };
@@ -349,10 +349,10 @@ it('appends a record as text linking a file it uploaded, and passes an attachmen
 
   const stored = await ran(hosted, '@house upload {"file":"photo.jpg","room_ref":"r_notes","path":"scans/photo.jpg"}');
   const linked = { room_ref: 'r_notes', source_ref: 's_mail', body: 'See [the scan](/rooms/notes/scans/photo.jpg).' };
-  const appended = await ran(hosted, `@house append_record ${JSON.stringify(linked)}`);
+  const appended = await ran(hosted, `@house records_append ${JSON.stringify(linked)}`);
   const attached = await ran(
     hosted,
-    '@house append_record {"room_ref":"r_notes","source_ref":"s_mail","body":"scan","attachments":["missing.pdf"]}',
+    '@house records_append {"room_ref":"r_notes","source_ref":"s_mail","body":"scan","attachments":["missing.pdf"]}',
   );
 
   expect(stored).toMatchObject({ status: 0, stderr: '' });
@@ -360,7 +360,7 @@ it('appends a record as text linking a file it uploaded, and passes an attachmen
   expect(attached).toMatchObject({ status: 1, stdout: '', stderr: `house: ${refusal}\n` });
   expect(
     hosted.mcp
-      .filter((received) => called(received).name === 'append_record')
+      .filter((received) => called(received).name === 'records_append')
       .map((received) => called(received).arguments),
   ).toEqual([linked, { room_ref: 'r_notes', source_ref: 's_mail', body: 'scan', attachments: ['missing.pdf'] }]);
 });

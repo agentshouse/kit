@@ -9,7 +9,7 @@ import { agentInstructions } from '@agentshouse/skills';
 import { beforeAll, expect, it, onTestFinished } from 'vitest';
 import { attached, bridgeSockets, inspected, posted } from './attachments.ts';
 import { KIT_FILE_CORRUPT, KIT_FILE_DROPPED_ONCE, KIT_FILE_OVERSIZE, KIT_FILE_STALL, cacheArtifacts, kitFileRequests, pinnedArtifacts } from './building.ts';
-import { until, type Answer } from './double.ts';
+import { idOf, until, type Answer } from './double.ts';
 import { ENGINES, type TranscriptionReport } from '../src/transcription.ts';
 import { hostKit, hostMac, lastCall, lastMessage, opened, type Hosted, type Hosting } from './environment.ts';
 import { alive, stop } from './kit.ts';
@@ -26,8 +26,8 @@ const NOT_DOWNLOADED = 'an audio file this message links could not be downloaded
 const UNDECODABLE = 'an audio file this message links could not be decoded';
 const UNTRANSCRIBED = 'an audio file this message links could not be transcribed';
 const INTERRUPTED = 'the conversation was interrupted';
-const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/started'));
-const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
+const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
 beforeAll(() => {
   cacheArtifacts();
@@ -103,11 +103,11 @@ async function transcribing(hosting: Hosting = {}): Promise<Hosted> {
 }
 
 function desiredReads(hosted: Hosted): number {
-  return hosted.house.requests.filter((request) => request.path === '/kit/agents/desired').length;
+  return hosted.house.requests.filter((request) => request.path === '/kit/agents/desired/list').length;
 }
 
 function starting(hosted: Hosted): unknown[] {
-  return hosted.connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  return hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'starting').map((oneWayCall) => oneWayCall.step);
 }
 
 function audioReads(hosted: Hosted): number {
@@ -141,7 +141,7 @@ it("posts the transcript of each audio file a message links in the order it link
   const [note, voice] = files;
   const text = linked('listen to these:', files);
   const first = held();
-  hosted.house.route('POST', '/kit/conversations/:conversation/messages/:message/transcripts', async (request) => {
+  hosted.house.route('POST', '/kit/transcripts/keep', async (request) => {
     hosted.transcripts.push(request);
     return hosted.transcripts.length === 1 ? first.answer : { body: {} };
   });
@@ -214,7 +214,7 @@ it("sends the transcription step while it transcribes a message's audio, then th
   const hosted = await transcribing();
   const [file] = attached(hosted, [{ name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') }]);
   const post = held();
-  hosted.house.route('POST', '/kit/conversations/:conversation/messages/:message/transcripts', () => post.answer);
+  hosted.house.route('POST', '/kit/transcripts/keep', () => post.answer);
   await writeFile(join(hosted.home, 'hold-new'), '');
 
   hosted.call({ kind: 'message', text: linked('listen', [file!]), first: true });
@@ -321,7 +321,7 @@ it('sends no report when a read of the setting changes neither whether the engin
   hosted.transcribe(true);
 
   await until(() => desiredReads(hosted) > reads);
-  // Half a second outlasts the Kit sending a change Notification, so one not sent by then is not coming.
+  // Half a second outlasts the Kit sending a change One-way call, so one not sent by then is not coming.
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(hosted.reports).toHaveLength(reports);
   expect(await downloads(hosted)).toHaveLength(3);
@@ -517,7 +517,7 @@ it('reports no idle while a transcription runs and reports idle once it has ende
 
   await hosted.result(message);
   const idled = hosted.house.requests.indexOf(await until(() => hosted.idles[2]));
-  expect(idled).toBeGreaterThan(hosted.house.requests.findIndex((request) => request.path === `/kit/inputs/${message}/ack`));
+  expect(idled).toBeGreaterThan(hosted.house.requests.findIndex((request) => request.path === '/kit/kit-calls/results/return' && idOf(request, 'call') === message));
 });
 
 it(
@@ -547,7 +547,7 @@ it(
     const secondCall = lastCall();
 
     try {
-      const returned = (call: string) => hosted.results.some((result) => result.params.input === call);
+      const returned = (call: string) => hosted.results.some((result) => idOf(result, 'call') === call);
       // A minute covers transcribing both samples one after the other.
       await until(() => returned(firstCall) && returned(secondCall), 60_000);
     } finally {
@@ -565,7 +565,7 @@ it('ends a running transcription on an interrupt, refuses its message and writes
   const hosted = await transcribing();
   await opened(hosted);
   hosted.call({ kind: 'message', text: '@wait', first: false });
-  const turn = (await until(() => started(hosted)[0])).params.turn!;
+  const turn = idOf(await until(() => started(hosted)[0]), 'turn');
   const [file] = attached(hosted, [{ name: 'long.wav', media_type: 'audio/wav', content: speech(240) }]);
   hosted.call({ kind: 'message', text: linked('@say heard', [file!]), first: false });
   const message = lastCall();
@@ -604,7 +604,7 @@ it('transcribes the next audio file after an interrupt whose cancel could not re
   const hosted = await transcribing();
   await opened(hosted);
   hosted.call({ kind: 'message', text: '@deaf\n@gate exit\n@exit 0', first: false });
-  const turn = (await until(() => started(hosted)[0])).params.turn!;
+  const turn = idOf(await until(() => started(hosted)[0]), 'turn');
   await until(async () => (await hosted.adapterLog()).some((entry) => entry.deaf === true));
   hosted.call({ kind: 'interrupt', turn_id: turn });
   await hosted.result(lastCall());

@@ -6,7 +6,7 @@ import { hostKit, lastCall, outcome, type Hosted } from './environment.ts';
 
 const NOBODY_THERE = 'Nobody is there to answer. Decide for yourself and go on.';
 
-const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
 async function opened(kind: string, afk = true): Promise<Hosted> {
   const hosted = await hostKit([{ kind }]);
@@ -28,7 +28,7 @@ async function asked(kind: string, fixture: string, afk = true): Promise<{ hoste
 }
 
 function reachedHouse(hosted: Hosted): string[] {
-  return hosted.house.requests.flatMap((request) => (/\/interactions$|\/kit\/secret-input/.test(request.path) ? [request.path] : []));
+  return hosted.house.requests.flatMap((request) => (/\/kit\/conversations\/interaction\/ask$|\/kit\/secret-inputs\/await$/.test(request.path) ? [request.path] : []));
 }
 
 it.each([

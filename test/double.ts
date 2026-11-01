@@ -30,12 +30,20 @@ export interface Answer {
 
 export type Route = (request: Received) => Answer | Promise<Answer>;
 
+export function idOf(received: Received, field: string): string {
+  return (received.body as Record<string, string>)[field]!;
+}
+
+export function without(received: Received, ...fields: string[]): unknown {
+  return Object.fromEntries(Object.entries(received.body as Record<string, unknown>).filter(([key]) => !fields.includes(key)));
+}
+
 export interface KitConnection {
   headers: IncomingHttpHeaders;
   protocol: string;
-  notifications: Record<string, unknown>[];
+  oneWayCalls: Record<string, unknown>[];
   transport: WebSocket;
-  send(notification: Record<string, unknown>): void;
+  send(oneWayCall: Record<string, unknown>): void;
   close(code: number, reason: string): void;
 }
 
@@ -211,12 +219,12 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
       const connection: KitConnection = {
         headers: request.headers,
         protocol: transport.protocol,
-        notifications: [],
+        oneWayCalls: [],
         transport,
-        send: (notification) => transport.send(JSON.stringify(notification)),
+        send: (oneWayCall) => transport.send(JSON.stringify(oneWayCall)),
         close: (code, reason) => transport.close(code, reason),
       };
-      transport.on('message', (data) => connection.notifications.push(JSON.parse(String(data)) as Record<string, unknown>));
+      transport.on('message', (data) => connection.oneWayCalls.push(JSON.parse(String(data)) as Record<string, unknown>));
       connections.push(connection);
     });
   });

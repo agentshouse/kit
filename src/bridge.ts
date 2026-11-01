@@ -111,7 +111,7 @@ export async function openBridge(
   const path = [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter);
   const origin = (await readEnrolment())!.house;
   const { credential } = await retrying(
-    () => house.post<{ credential: string }>(`/kit/conversations/${conversationId}/credential`, {}, signal),
+    () => house.post<{ credential: string }>('/kit/conversations/credentials/issue', { conversation: conversationId }, signal),
     signal,
   );
 
@@ -141,7 +141,7 @@ export async function openBridge(
     const prepared = answered(
       await send(
         call('run_command', {
-          command: 'prepare_edit_upload',
+          command: 'files/batch-upload',
           arguments: { paths: changedPaths(changes), bytes: bytes.length, sha256 },
         }),
         operation,
@@ -178,7 +178,7 @@ export async function openBridge(
   const caller: Caller = {
     key: `conversation:${conversationId}`,
     submit: async (operation, changes, held, retain) => {
-      const inline = call('edit', { changes });
+      const inline = call('files_batch', { changes });
       let upload = held;
       if (upload === undefined && Buffer.byteLength(mcpBody(inline, operation)) > MCP_REQUEST_BYTES) {
         const prepared = await staged(operation, changes);
@@ -187,7 +187,7 @@ export async function openBridge(
         await retain(upload);
       }
       return editAnswer(
-        await send(upload === undefined ? inline : call('edit', { paths: changedPaths(changes), upload }), operation),
+        await send(upload === undefined ? inline : call('files_batch', { paths: changedPaths(changes), upload }), operation),
       );
     },
   };

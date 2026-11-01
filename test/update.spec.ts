@@ -42,7 +42,7 @@ function adapterOf(hosted: Hosted, release: string, kind: string): string {
   return spawnSync(adapter, { encoding: 'utf8' }).stdout;
 }
 
-const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
 async function opened(hosted: Hosted): Promise<void> {
   hosted.call({ kind: 'open' });
@@ -70,7 +70,7 @@ it('keeps running a turn open when it placed the release, refuses to place anoth
   await serveRelease(hosted, await released(PLACED));
   await opened(hosted);
   hosted.call({ kind: 'message', text: '@gate go\n@say done', first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
 
   callUpdate(hosted, 'update-busy', PLACED);
   expect(await hosted.result('update-busy')).toEqual({});
@@ -153,7 +153,7 @@ it('places the release House names when it refuses its Kit connection as too old
   await serveRelease(hosted, await released(PLACED));
   await opened(hosted);
   hosted.call({ kind: 'message', text: '@gate go\n@say done', first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   hosted.house.route('UPGRADE', '/kit/stream', () => unserved('kit_update_required', PLACED));
 
   hosted.connection.close(1012, 'deploy');
@@ -170,7 +170,7 @@ it('places the older release House names when it refuses any of its calls as new
   const hosted = await hostKit();
   await serveRelease(hosted, await released(OLDER));
   await opened(hosted);
-  hosted.house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', () => unserved('kit_newer_than_house', OLDER));
+  hosted.house.route('POST', '/kit/turns/start', () => unserved('kit_newer_than_house', OLDER));
 
   hosted.call({ kind: 'message', text: '@gate go\n@say done', first: true });
 

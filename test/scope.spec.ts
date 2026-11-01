@@ -8,7 +8,7 @@ import { settle, until } from './double.ts';
 import { hostKit, lastCall, userBin, type Hosted } from './environment.ts';
 import { alive, stop } from './kit.ts';
 
-const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
 async function spawned(hosted: Hosted): Promise<{ spawned: number; clean: number }> {
   return (await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned))) as unknown as {

@@ -29,7 +29,7 @@ function listed(hosted: Hosted): unknown[] {
 }
 
 function enumerated(hosted: Hosted): unknown[] {
-  return hosted.house.requests.filter((request) => request.path === '/kit/door/enumerate').map((request) => request.body);
+  return hosted.house.requests.filter((request) => request.path === '/kit/door/changes/enumerate').map((request) => request.body);
 }
 
 function chunkReads(hosted: Hosted): string[] {
@@ -292,7 +292,7 @@ it('stops asking a Room answered not ready once it leaves the selection', async 
   room.put('a.md', 'a\n');
   rooms.carriedDocuments = 0;
   rooms.notReady.set(room.ref, Infinity);
-  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection').length;
+  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read').length;
 
   await rooms.fetch([room]);
   await until(() => listed(hosted).length >= 3);

@@ -18,7 +18,7 @@ import { removeInputs, Scripts } from './scripts.ts';
 import { quoted } from './shell.ts';
 import { SignIns } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
-import { holdConnection, type Connection, type Notification } from './connection.ts';
+import { holdConnection, type Connection, type OneWayCall } from './connection.ts';
 import { KitUpdate } from './update.ts';
 import { takeUnservedRelease } from './wire.ts';
 import { codexLauncher } from './work.ts';
@@ -146,7 +146,7 @@ export async function resident(): Promise<void> {
       restart(`Kit ${update.placedRelease()} is placed; its supervisor starts it`);
     } else if (!reported) {
       reported = true;
-      logged(house.deliver('/kit/idle', {}, idle));
+      logged(house.deliver('/kit/kits/report-idle', {}, idle));
     }
   };
   const calls = new Calls(house, changed);
@@ -155,14 +155,14 @@ export async function resident(): Promise<void> {
     agents,
     copies,
     calls,
-    send: (notification) => connection?.send(notification) ?? false,
+    send: (oneWayCall) => connection?.send(oneWayCall) ?? false,
     changed,
   });
   const signIns = new SignIns(house, agents, calls);
   const update = new KitUpdate(calls);
   if (process.env.HOUSE_KIT_SANDBOX !== '1') takeUnservedRelease((release) => logged(update.takeRefused(release)));
   removeInputs();
-  const scripts = new Scripts(calls, (notification) => connection?.send(notification) ?? false);
+  const scripts = new Scripts(calls, (oneWayCall) => connection?.send(oneWayCall) ?? false);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
       killDescendants();
@@ -171,7 +171,7 @@ export async function resident(): Promise<void> {
     });
   }
 
-  await house.deliver('/kit/restarted', {}).catch(report);
+  await house.deliver('/kit/kits/report-restart', {}).catch(report);
   logged(agents.refresh());
   agents.keepCurrent();
   connection = holdConnection({
@@ -191,11 +191,11 @@ export async function resident(): Promise<void> {
         void calls.carry(call.input_id, async () => ({ result: refused }));
       }
     },
-    notification: (notification: Notification) => {
-      if (notification.type === 'watching') conversations.watching(notification.watching === true);
-      if (notification.type === 'authority_changed') logged(copies.changed(notification.rooms as string[]));
-      if (notification.type === 'work_available' && notification.subject === 'agents') logged(agents.refresh());
-      scripts.notified(notification);
+    oneWayCall: (oneWayCall: OneWayCall) => {
+      if (oneWayCall.type === 'watching') conversations.watching(oneWayCall.watching === true);
+      if (oneWayCall.type === 'authority_changed') logged(copies.changed(oneWayCall.rooms as string[]));
+      if (oneWayCall.type === 'work_available' && oneWayCall.subject === 'agents') logged(agents.refresh());
+      scripts.notified(oneWayCall);
     },
   });
 }

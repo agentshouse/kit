@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { BINS, RELEASES, linkUserCli, placeUserCli, updatesRun } from './cli.ts';
 import { LOCATIONS } from './curl.ts';
-import { settle, until } from './double.ts';
+import { idOf, settle, until } from './double.ts';
 import { hostKit, lastCall, outcome, userBin, type Hosted } from './environment.ts';
 import { alive } from './kit.ts';
 
@@ -37,7 +37,7 @@ async function answer(hosted: Hosted, conversation: string, text: string): Promi
   const ended = await until(() =>
     hosted.turns
       .slice(before)
-      .find((turn) => turn.path.endsWith('/ended') && turn.params.conversation === conversation),
+      .find((turn) => turn.path === '/kit/turns/end' && idOf(turn, 'conversation') === conversation),
   );
   return (outcome(ended.body) as { text: string }).text;
 }
@@ -265,7 +265,7 @@ it.each(KINDS)("runs a %s whose link its update command moved at the new version
   expect(await answer(hosted, 'conversation-2', '@version')).toBe(`${cli} ${NEXT[kind]}`);
   expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
   expect(alive(hosted.kit.pid)).toBe(true);
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/restarted')).toHaveLength(1);
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/kits/report-restart')).toHaveLength(1);
 });
 
 it("runs each chosen CLI's own update command once when Kit starts, through the CLI its login shell finds, before it first reports idle", async () => {
@@ -296,11 +296,11 @@ it("runs each chosen CLI's update command again at its interval while a turn run
   const before = hosted.turns.length;
   // The turn holds six seconds, outlasting the second after which a test-only Kit runs the update command again.
   hosted.call({ kind: 'message', text: '@hold 6000\n@say done', first: false });
-  await until(() => hosted.turns.slice(before).find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.slice(before).find((turn) => turn.path === '/kit/turns/start'));
   const ran = updatesRun(hosted.home).length;
 
   await until(() => updatesRun(hosted.home).length > ran);
-  expect(hosted.turns.slice(before).filter((turn) => turn.path.endsWith('/ended'))).toEqual([]);
+  expect(hosted.turns.slice(before).filter((turn) => turn.path === '/kit/turns/end')).toEqual([]);
   expect(updatesRun(hosted.home).every((update) => update.kind === 'claude-agent-acp' && update.path === join(userBin(hosted.home), 'claude'))).toBe(true);
 });
 

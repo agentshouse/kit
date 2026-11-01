@@ -39,7 +39,7 @@ it.each([
     hosted.house.requests.filter((received) => received.path === path).map((received) => proxy.carried(received));
   expect({
     stream: reached('/kit/stream'),
-    credential: reached('/kit/conversations/conversation-1/credential'),
+    credential: reached('/kit/conversations/credentials/issue'),
     transfer: hosted.store.requests.map((request) => proxy.carried(request)),
     git: reached('/app/a_app.git/info/refs'),
   }).toEqual({ stream: [proxied, proxied], credential: [proxied], transfer: [proxied], git: [proxied] });

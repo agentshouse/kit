@@ -17,7 +17,7 @@ function tracked(room: Room): string[] {
 
 function zeroEnumerations(hosted: Hosted): string[][] {
   return hosted.house.requests
-    .filter((request) => request.path === '/kit/door/enumerate')
+    .filter((request) => request.path === '/kit/door/changes/enumerate')
     .map((request) => request.body as { prefixes: string[]; positions: { position: string }[] })
     .filter((body) => body.positions.every(({ position }) => position === '0'))
     .map((body) => body.prefixes);
@@ -25,7 +25,7 @@ function zeroEnumerations(hosted: Hosted): string[][] {
 
 function enumerations(hosted: Hosted): unknown[] {
   return hosted.house.requests
-    .filter((request) => request.path === '/kit/door/enumerate')
+    .filter((request) => request.path === '/kit/door/changes/enumerate')
     .map((request) => request.body as { positions: { position: string }[] })
     .filter((body) => body.positions.every(({ position }) => position !== '0'));
 }
@@ -36,7 +36,7 @@ function chunkLists(hosted: Hosted): unknown[] {
 
 function discovered(hosted: Hosted): string[][] {
   return hosted.house.requests
-    .filter((request) => request.path === '/kit/door/discover')
+    .filter((request) => request.path === '/kit/door/rooms/discover')
     .map((request) => (request.body as { prefixes: string[] }).prefixes);
 }
 
@@ -52,7 +52,7 @@ function movedLines(...rooms: Room[]): RegExp {
   return new RegExp(`^${rooms.map((room) => `${room.root}: refs/house/received is at [0-9a-f]{12}\n`).join('')}$`);
 }
 
-it('changes no Local copy on a Kit connection notification, and still takes the agents notification and Kit calls', async () => {
+it('changes no Local copy on a Kit connection One-way call, and still takes the agents One-way call and Kit calls', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -68,11 +68,11 @@ it('changes no Local copy on a Kit connection notification, and still takes the 
   hosted.call({ kind: 'open' });
 
   expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
-  expect(hosted.house.requests.slice(asked).some((request) => request.path === '/kit/agents/desired')).toBe(true);
+  expect(hosted.house.requests.slice(asked).some((request) => request.path === '/kit/agents/desired/list')).toBe(true);
   expect(
     hosted.house.requests
       .slice(asked)
-      .filter((request) => request.path === '/kit/local-copy/selection' || request.path.startsWith('/kit/door/')),
+      .filter((request) => request.path === '/kit/local-copies/selection/read' || request.path.startsWith('/kit/door/')),
   ).toEqual([]);
   expect(received(room)).toBe(before);
 });
@@ -88,7 +88,7 @@ it('reads the selection of only the Rooms an authority change names on the open 
   design.put('brief.md', 'Brief\n');
   await rooms.fetch([notes, plans]);
   const record = (room: Room) => join(hosted.home, 'local-copies/rooms', `${room.ref}.json`);
-  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection');
+  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read');
   const asked = selections().length;
   const connections = hosted.house.connections.length;
   const notesHouse = received(notes);
@@ -586,7 +586,7 @@ it('keeps a Room House no longer answers as it connects, and the next house fetc
   await rooms.fetch([notes, design]);
   await writeFile(join(notes.repository, 'a.md'), 'a, local\n');
   const unpushed = commitAll(notes.repository, 'local');
-  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection').length;
+  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read').length;
   const asked = selections();
   rooms.answered = [design];
 
@@ -610,10 +610,10 @@ it("sends a push from a Room it no longer follows to House, prints House's refus
   expect(await house(hosted, notes.repository, 'push', '--owner')).toMatchObject({ status: 1, stderr: `house: ${DENIED}\n` });
 
   const sent = hosted.house.requests.slice(asked);
-  expect(sent.filter((request) => request.path === '/kit/door/batch').map((request) => request.body)).toEqual([
+  expect(sent.filter((request) => request.path === '/kit/door/files/batch').map((request) => request.body)).toEqual([
     { operation_id: expect.any(String), changes: [expect.objectContaining({ path: `${notes.root}/a.md` })] },
   ]);
-  expect(sent.map((request) => request.path)).not.toContain('/kit/door/enumerate');
+  expect(sent.map((request) => request.path)).not.toContain('/kit/door/changes/enumerate');
   expect(sent.map((request) => request.path)).not.toContain('/kit/door/room-chunks/list');
   expect(git(notes.repository, 'rev-parse', 'HEAD').trim()).toBe(unpushed);
   expect(git(notes.repository, 'status', '--porcelain')).toBe(status);

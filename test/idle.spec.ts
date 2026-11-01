@@ -12,7 +12,7 @@ import { MODELS } from './fixtures/clis/session-options.ts';
 import { alive, stop } from './kit.ts';
 import { callUpdate, released, serveRelease } from './release.ts';
 
-const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
 const FAST_SILENCE = fileURLToPath(new URL('./fast-silence.ts', import.meta.url));
 
@@ -40,7 +40,7 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
 
   // The turn holds a second and a half, outlasting the half second the spec watches for an idle report.
   hosted.call({ kind: 'message', text: '@hold 1500\n@say done', first: true });
-  await until(() => hosted.turns.find((turn) => turn.path.endsWith('/started')));
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   await settle();
   expect(hosted.idles).toHaveLength(2);
 
@@ -93,7 +93,7 @@ it('does not report idle while a CLI House asks for installs, and reports it onc
   await until(() => hosted.idles[1]);
 
   const paths = hosted.house.requests.map((request) => request.path);
-  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.lastIndexOf('/kit/agents/report'));
+  expect(paths.lastIndexOf('/kit/kits/report-idle')).toBeGreaterThan(paths.lastIndexOf('/kit/agents/report'));
   expect(hosted.reports.at(-1)!.agents).toContainEqual(expect.objectContaining({ kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'] }));
 });
 
@@ -105,7 +105,7 @@ it('reports idle again once it has loaded the agents House asked it to refresh a
 
   await until(() => hosted.idles[1]);
   const paths = hosted.house.requests.map((request) => request.path);
-  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.lastIndexOf('/kit/agents/desired'));
+  expect(paths.lastIndexOf('/kit/kits/report-idle')).toBeGreaterThan(paths.lastIndexOf('/kit/agents/desired/list'));
 });
 
 it('does not report idle while the update command its interval started runs, and reports idle once that command ends', async () => {
@@ -126,7 +126,7 @@ it('does not report idle while the update command its interval started runs, and
 it('reports idle only after it returns the result of the Kit call it carried out', async () => {
   const hosted = await hostKit();
   await until(() => hosted.idles[0]);
-  hosted.house.route('POST', '/kit/inputs/:input/ack', async (request) => {
+  hosted.house.route('POST', '/kit/kit-calls/results/return', async (request) => {
     // The result takes three tenths of a second to return, so an idle report sent before it would show.
     await new Promise((resolve) => setTimeout(resolve, 300));
     hosted.results.push(request);
@@ -137,8 +137,8 @@ it('reports idle only after it returns the result of the Kit call it carried out
 
   await hosted.result(lastCall());
   const paths = (await until(() => hosted.idles[1] && hosted.house.requests)).map((request) => request.path);
-  expect(paths.lastIndexOf('/kit/idle')).toBeGreaterThan(paths.indexOf(`/kit/inputs/${lastCall()}/ack`));
-  expect(paths.filter((path) => path === '/kit/idle')).toHaveLength(2);
+  expect(paths.lastIndexOf('/kit/kits/report-idle')).toBeGreaterThan(paths.indexOf('/kit/kit-calls/results/return'));
+  expect(paths.filter((path) => path === '/kit/kits/report-idle')).toHaveLength(2);
 });
 
 it('counts a turn waiting on a non-secret question as idle', async () => {
@@ -188,7 +188,7 @@ it(`holds the exit of a placed Kit release while a Conversation process its turn
 
 it('does not count a turn waiting on a secret question as idle', async () => {
   const hosted = await hostKit();
-  hosted.house.route('POST', '/kit/secret-input/:subject', async () => {
+  hosted.house.route('POST', '/kit/secret-inputs/await', async () => {
     // House holds the secret question two tenths of a second each time, so the Kit keeps holding it.
     await new Promise((resolve) => setTimeout(resolve, 200));
     return { body: { outcome: 'released', release: 'held' } };
@@ -227,7 +227,7 @@ it('drops an idle report House did not take once the CLI reports a running backg
   const hosted = await hostKit();
   await until(() => hosted.idles[0]);
   const endedAtReport: number[] = [];
-  hosted.house.route('POST', '/kit/idle', (request) => {
+  hosted.house.route('POST', '/kit/kits/report-idle', (request) => {
     endedAtReport.push(ended(hosted).length);
     if (endedAtReport.length === 1) return { status: 503, body: { error: { code: 'house_unavailable', retryable: true } } };
     hosted.idles.push(request);

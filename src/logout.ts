@@ -5,7 +5,7 @@ export async function logout(): Promise<void> {
   const enrolled = await readEnrolment();
   if (enrolled !== null) {
     try {
-      await post(enrolled.house, '/kit/logout', {}, enrolled.credential);
+      await post(enrolled.house, '/kit/kits/log-out', {}, enrolled.credential);
     } catch (error) {
       if (!(error instanceof HouseRefusal && error.status === 401)) throw error;
     }

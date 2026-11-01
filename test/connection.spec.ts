@@ -29,7 +29,7 @@ function fire(timer: Timer): void {
   if (!timer.cleared) timer.callback();
 }
 
-it('drops the Kit connection only after two missed House beats, and each received notification restarts that deadline', () => {
+it('drops the Kit connection only after two missed House beats, and each received One-way call restarts that deadline', () => {
   const fake = clock();
   let dropped = 0;
   const silence = new Silence(

@@ -24,7 +24,7 @@ function run(hosted: Hosted, script: string): string {
 
 function output(hosted: Hosted, wizard: string): string {
   return hosted.house.connections
-    .flatMap((connection) => connection.notifications)
+    .flatMap((connection) => connection.oneWayCalls)
     .filter((frame) => frame.type === 'wizard_output' && frame.wizard === wizard)
     .map((frame) => frame.data as string)
     .join('');

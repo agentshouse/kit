@@ -54,9 +54,9 @@ const HIDDEN: Decision = { shown: 'hidden' };
 const FINISHED = new Set(['completed', 'failed']);
 export const RUNNING_JOB = new Set(['running', 'paused']);
 const MESSAGE_TARGETS = new Map([
-  ['send_agent_function_request', ['agent_function', 'agent']],
-  ['cancel_agent_function_request', ['request']],
-  ['send_mail', ['conversation', 'request']],
+  ['agent-functions/send', ['agent_function', 'agent']],
+  ['agent-functions/cancel', ['request']],
+  ['agent-functions/mail/send', ['conversation', 'request']],
 ]);
 
 function counted(reports: Tokens[]): Event[] {

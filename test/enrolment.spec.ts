@@ -60,7 +60,7 @@ it('accepts a stored credential House answers with it', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   await enrolled(house, home, 'ahk_valid');
-  house.route('POST', '/kit/agents/desired', () => ({ body: { clis: [] } }));
+  house.route('POST', '/kit/agents/desired/list', () => ({ body: { clis: [] } }));
 
   expect(await entry('authority-main.ts', [], home)).toEqual({ status: 0, output: '' });
   expect(house.requests.at(-1)?.headers.authorization).toBe('Bearer ahk_valid');
@@ -70,7 +70,7 @@ it('refuses a stored credential House rejects, with its cause', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   await enrolled(house, home, 'ahk_revoked');
-  house.route('POST', '/kit/agents/desired', () => ({ status: 401, body: { error: { code: 'token_rejected', retryable: false } } }));
+  house.route('POST', '/kit/agents/desired/list', () => ({ status: 401, body: { error: { code: 'token_rejected', retryable: false } } }));
 
   const refused = await entry('authority-main.ts', [], home);
 
@@ -91,7 +91,7 @@ it.each([
   const house = await startHouse();
   const home = await temporaryHome();
   await enrolled(house, home, 'ahk_valid');
-  house.route('POST', '/kit/agents/desired', () => ({ status: 426, body: { error } }));
+  house.route('POST', '/kit/agents/desired/list', () => ({ status: 426, body: { error } }));
 
   const refused = await entry('authority-main.ts', [], home);
 

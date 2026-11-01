@@ -15,7 +15,7 @@ export async function holdSecretInput(
 ): Promise<Record<string, string> | null> {
   for (let failures = 0; waiting(); ) {
     try {
-      const held = await house.post<Held>(`/kit/secret-input/${subject}`, { steps });
+      const held = await house.post<Held>('/kit/secret-inputs/await', { subject, steps });
       if (held.outcome === 'collected') return held.content;
       if (held.release !== 'held') return null;
       failures = 0;

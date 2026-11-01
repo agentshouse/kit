@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { attached, inspected, link } from './attachments.ts';
-import { until } from './double.ts';
+import { idOf, until } from './double.ts';
 import { hostKit, lastCall, opened, type Hosted } from './environment.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
@@ -23,7 +23,7 @@ function held(): { held: Promise<void>; release(): void } {
 }
 
 function starting(hosted: Hosted): unknown[] {
-  return hosted.connection.notifications.filter((notification) => notification.type === 'starting').map((notification) => notification.step);
+  return hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'starting').map((oneWayCall) => oneWayCall.step);
 }
 
 it('keeps a link to an image or a document in the text, reading only what inspect answers of each, downloading nothing and placing nothing in the working directory', async () => {
@@ -82,7 +82,7 @@ it("reads a message's links through an interrupt of the running turn and writes 
   const hosted = await hostKit();
   await opened(hosted);
   hosted.call({ kind: 'message', text: '@wait', first: false });
-  const turn = (await until(() => hosted.turns.find((posted) => posted.path.endsWith('/started')))).params.turn!;
+  const turn = idOf(await until(() => hosted.turns.find((posted) => posted.path === '/kit/turns/start')), 'turn');
   const [photo] = attached(hosted, [{ name: 'photo.jpg', media_type: 'image/jpeg', content: JPEG }]);
   const read = hosted.tools.inspect!;
   const reading = held();

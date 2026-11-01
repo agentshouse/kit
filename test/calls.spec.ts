@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import type { House } from '../src/api.ts';
 import { Calls } from '../src/calls.ts';
-import { settle, until } from './double.ts';
+import { idOf, settle, until, without } from './double.ts';
 import { hostKit, lastCall } from './environment.ts';
 import { temporaryHome } from './kit.ts';
 
@@ -29,8 +29,8 @@ it('refuses a Kit call whose method it does not know, naming the method, and ret
 
   expect(await hosted.result(lastCall())).toEqual({ refused: 'This Kit does not know rewind; install it again.' });
   await settle();
-  expect(hosted.results.map((result) => result.params.input)).toEqual([lastCall()]);
-  expect(hosted.connection.notifications.filter((notification) => notification.type === 'process')).toEqual([]);
+  expect(hosted.results.map((result) => idOf(result, 'call'))).toEqual([lastCall()]);
+  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([]);
 });
 
 it('refuses a Kit call whose method it does not know with the install command its bootstrap recorded, which updates it', async () => {
@@ -64,7 +64,7 @@ it('opens no second session for an open its reopened connection sends after it r
 
   await until(() => hosted.results[1]);
   await settle();
-  expect(hosted.results.map((result) => [result.params.input, result.body])).toEqual([
+  expect(hosted.results.map((result) => [idOf(result, 'call'), without(result, 'call')])).toEqual([
     [call, answer],
     [call, answer],
   ]);

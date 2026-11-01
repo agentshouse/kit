@@ -40,7 +40,7 @@ async function copied(): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
 
 function batches(hosted: Hosted): { operation_id: string; changes: Record<string, unknown>[] }[] {
   return hosted.house.requests
-    .filter((request) => request.path === '/kit/door/batch')
+    .filter((request) => request.path === '/kit/door/files/batch')
     .map((request) => request.body as { operation_id: string; changes: Record<string, unknown>[] });
 }
 
@@ -495,7 +495,7 @@ it('finishes a push whose operation expired when House holds its component chang
   room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
+  hosted.house.route('POST', '/kit/door/files/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
 
   const recovered = await house(hosted, room.repository, 'push', '--owner');
 
@@ -515,7 +515,7 @@ it('keeps newer House text on the House ref when it finishes a push whose answer
   room.put('docs/plan.md', 'one\ntwo\nmine\nlater\n');
   expect((await house(hosted, '/', 'fetch')).status).toBe(0);
   expect(git(room.repository, 'show', 'refs/house/received:docs/plan.md')).toBe('one\ntwo\nmine\nlater\n');
-  hosted.house.route('POST', '/kit/door/enumerate', () => ({ status: 503, body: { error: { code: 'house_unavailable', retryable: true } } }));
+  hosted.house.route('POST', '/kit/door/changes/enumerate', () => ({ status: 503, body: { error: { code: 'house_unavailable', retryable: true } } }));
 
   const recovered = await house(hosted, room.repository, 'push', '--owner');
 
@@ -531,7 +531,7 @@ it('keeps a pushed operation whose outcome it could not yet read and finishes it
   const pushedCommit = commitAll(room.repository, 'three');
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
+  hosted.house.route('POST', '/kit/door/files/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
   rooms.reads = [false];
 
   const unread = await house(hosted, room.repository, 'push', '--owner');

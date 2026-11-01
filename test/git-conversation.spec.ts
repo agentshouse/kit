@@ -69,7 +69,7 @@ it("pushes from a Conversation process under that conversation's own credential 
     `Bearer ${conversationCredential('conversation-1')}`,
     `Bearer ${conversationCredential('conversation-2')}`,
   ]);
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/door/batch')).toEqual([]);
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/door/files/batch')).toEqual([]);
   expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
 });
 
@@ -152,7 +152,7 @@ it("names each Local copy, house fetch before work and house push after in a con
 
 it("leaves a Room an authority change drops out of a conversation's first prompt, which then names no Local copy", async () => {
   const { hosted, rooms, room } = await copied();
-  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copy/selection').length;
+  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read').length;
   const asked = selections();
   rooms.answered = [];
 
@@ -189,7 +189,7 @@ it(
       uploaded[0],
     ]);
     const operations = hosted.mcp
-      .filter((received) => ['run_command', 'edit'].includes(String((received.body as { params: { name?: string } }).params.name)))
+      .filter((received) => ['run_command', 'files_batch'].includes(String((received.body as { params: { name?: string } }).params.name)))
       .map(
         (received) =>
           (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation'],
@@ -252,7 +252,7 @@ function refusingFirstEdit(hosted: Hosted, status: number, error: { message: str
   hosted.house.route('POST', '/', (request) => {
     hosted.mcp.push(request);
     const message = request.body as { id: string; params: { name: string; arguments: Record<string, unknown> } };
-    if (!refused && message.params.name === 'edit') {
+    if (!refused && message.params.name === 'files_batch') {
       refused = true;
       return { status, body: { jsonrpc: '2.0', id: message.id, error: { code: -32000, ...error } } };
     }
@@ -262,7 +262,7 @@ function refusingFirstEdit(hosted: Hosted, status: number, error: { message: str
 
 function editOperations(hosted: Hosted): string[] {
   return hosted.mcp
-    .filter((received) => (received.body as { params: { name?: string } }).params.name === 'edit')
+    .filter((received) => (received.body as { params: { name?: string } }).params.name === 'files_batch')
     .map((received) => (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation']!);
 }
 
@@ -301,7 +301,7 @@ it("answers the CLI House's own words for a push refusal it does not mark retrya
 it('drops an expired rename House never applied when another writer took both of its paths', async () => {
   const { hosted, room } = await copied();
   let calls = 0;
-  hosted.tools.edit = () => {
+  hosted.tools.files_batch = () => {
     if (++calls > 1) return { isError: true, content: [{ type: 'text', text: EXPIRED }] };
     room.remove('a.md');
     room.put('b.md', 'Another writer\n');
@@ -319,9 +319,9 @@ it('drops an expired rename House never applied when another writer took both of
 it("brings House's reference rewrites home when it finishes an expired rename House applied", async () => {
   const { hosted, rooms, room } = await copied();
   rooms.dropsEdits = 1;
-  const edit = hosted.tools.edit!;
+  const edit = hosted.tools.files_batch!;
   let calls = 0;
-  hosted.tools.edit = (args, request) =>
+  hosted.tools.files_batch = (args, request) =>
     ++calls === 1 ? edit(args, request) : { isError: true, content: [{ type: 'text', text: EXPIRED }] };
 
   const finished = await shell(hosted, `cd ${room.repository} && git mv a.md b.md && git commit -qm move && house push`);

@@ -28,7 +28,7 @@ const BRANCH = 'main';
 const PROVENANCE = '_provenance';
 const IDENTITY = { GIT_COMMITTER_NAME: 'Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
 const ROOMS = 'rooms/';
-const ENUMERATE = '/kit/door/enumerate';
+const ENUMERATE = '/kit/door/changes/enumerate';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
 const STAGED_CHUNKS = 'house-chunks';
 
@@ -431,7 +431,7 @@ export class LocalCopies {
       submit: async (operation, changes) => {
         try {
           const outcome = await retrying(() =>
-            house.post<{ contents: Written[] }>('/kit/door/batch', { operation_id: operation, changes }),
+            house.post<{ contents: Written[] }>('/kit/door/files/batch', { operation_id: operation, changes }),
           );
           return { accepted: outcome.contents };
         } catch (error) {
@@ -496,7 +496,7 @@ export class LocalCopies {
   private async fetched(refreshing: boolean, rooms?: readonly string[]): Promise<Pushed> {
     const { local_copy: answer } = await this.house.post<{
       local_copy: { rooms: { room_ref: string; room_handle: string }[] };
-    }>('/kit/local-copy/selection', rooms === undefined ? {} : { rooms });
+    }>('/kit/local-copies/selection/read', rooms === undefined ? {} : { rooms });
     const synced = new Map(answer.rooms.map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
     const named = rooms === undefined ? null : new Set(rooms.map((room) => `${ROOMS}${room}`));
     const held = () => [...this.copies.values()].filter((copy) => named === null || named.has(copy.key));
@@ -645,7 +645,7 @@ export class LocalCopies {
 
   private async discovered(handles: readonly string[]): Promise<Discovery> {
     const discover = (group: readonly string[]) =>
-      this.house.post<Discovery>('/kit/door/discover', { prefixes: group.map(rootOf) });
+      this.house.post<Discovery>('/kit/door/rooms/discover', { prefixes: group.map(rootOf) });
     const [first, ...rest] = handles;
     const { bounds, authorities } = await discover([first!]);
     for (const group of grouped(rest, bounds.max_prefixes)) authorities.push(...(await discover(group)).authorities);
@@ -933,7 +933,7 @@ export class LocalCopies {
     const arrived = new Set(moved.values());
     const arriving = [...after].filter(([path, entry]) => before.get(path) !== entry);
     if (arriving.length > 0) {
-      const { bounds } = await this.house.post<Discovery>('/kit/door/discover', { prefixes: [root] });
+      const { bounds } = await this.house.post<Discovery>('/kit/door/rooms/discover', { prefixes: [root] });
       const binary: string[] = [];
       for (const [path, entry] of arriving) {
         if (!(await isText(copy.repository, entry, bounds.max_authored_file_bytes))) binary.push(path);
@@ -1142,7 +1142,7 @@ export class LocalCopies {
   }
 
   private async revisionText(path: string, wanted: string): Promise<string> {
-    const page = await this.house.post<{ revisions: { revision: string; content?: string }[] }>('/kit/door/revisions', {
+    const page = await this.house.post<{ revisions: { revision: string; content?: string }[] }>('/kit/door/files/revisions/list', {
       path,
       revision: wanted,
     });

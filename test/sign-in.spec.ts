@@ -3,7 +3,7 @@ import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { DEVICE_LOGINS } from './device-login.ts';
-import { settle, until } from './double.ts';
+import { idOf, settle, until, without } from './double.ts';
 import { hostKit, lastCall, userBin, type Hosted } from './environment.ts';
 import { alive, filesUnder, temporaryHome } from './kit.ts';
 
@@ -22,8 +22,8 @@ async function signingIn(
 ) {
   const hosted = await hostKit([{ kind }], home === undefined ? {} : { home });
   const holds: Hold[] = [];
-  hosted.house.route('POST', '/kit/secret-input/:subject', async (request) => {
-    holds.push({ subject: request.params.subject!, body: request.body });
+  hosted.house.route('POST', '/kit/secret-inputs/await', async (request) => {
+    holds.push({ subject: idOf(request, 'subject'), body: without(request, 'subject') });
     // House holds the page a tenth of a second each time, so the ceremony is seen holding.
     await new Promise((resolve) => setTimeout(resolve, 100));
     return { status, body: answer(holds.length) };
@@ -37,13 +37,13 @@ async function finish(hosted: Hosted, kind: string, refusal = ''): Promise<void>
   await writeFile(join(hosted.home, 'device-login', kind), refusal);
 }
 
-function at(hosted: Hosted, path: string): number {
-  return hosted.house.requests.findIndex((request) => request.path === path);
+function returned(hosted: Hosted, call: string): number {
+  return hosted.house.requests.findIndex((request) => request.path === '/kit/kit-calls/results/return' && idOf(request, 'call') === call);
 }
 
 function reportBeforeResult(hosted: Hosted, call: string): unknown {
   return hosted.house.requests
-    .slice(0, at(hosted, `/kit/inputs/${call}/ack`))
+    .slice(0, returned(hosted, call))
     .filter((request) => request.path === '/kit/agents/report')
     .at(-1)?.body;
 }
@@ -117,7 +117,7 @@ it('signs Claude Code in with the code the page collects and keeps the code nowh
     expect(await readFile(file, 'utf8')).not.toContain(code);
   }
   expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(code);
-  expect(JSON.stringify(hosted.connection.notifications)).not.toContain(code);
+  expect(JSON.stringify(hosted.connection.oneWayCalls)).not.toContain(code);
   expect(JSON.stringify(hosted.house.requests)).not.toContain(code);
 });
 
@@ -175,7 +175,7 @@ it('holds the page again after House answers its hold with a refusal it marks re
     { body: { outcome: 'released', release: 'withdrawn' } },
   ];
   let holds = 0;
-  hosted.house.route('POST', '/kit/secret-input/:subject', () => answers[holds++] ?? { body: HELD });
+  hosted.house.route('POST', '/kit/secret-inputs/await', () => answers[holds++] ?? { body: HELD });
   hosted.call({ kind: 'sign_in', conversation_id: null, cli: 'grok-build', ends_in: 600 });
 
   expect(await hosted.result(lastCall())).toEqual({});
@@ -220,7 +220,7 @@ it('starts no second login for a sign-in call sent again while it runs, and retu
   await until(() => hosted.results[1]);
   await settle();
   expect(await logins(hosted)).toHaveLength(1);
-  expect(hosted.results.map((result) => [result.params.input, result.body])).toEqual([
+  expect(hosted.results.map((result) => [idOf(result, 'call'), without(result, 'call')])).toEqual([
     [call, {}],
     [call, {}],
   ]);
@@ -240,7 +240,7 @@ it('starts no second login for a sign-in its reopened Kit connection sends after
   await until(() => hosted.results[1]);
   await settle();
   expect(await logins(hosted)).toHaveLength(1);
-  expect(hosted.results.map((result) => [result.params.input, result.body])).toEqual([
+  expect(hosted.results.map((result) => [idOf(result, 'call'), without(result, 'call')])).toEqual([
     [call, {}],
     [call, {}],
   ]);
@@ -256,7 +256,7 @@ it('reports no idle while a sign-in runs and reports idle after its result', asy
 
   await until(() => hosted.idles[1]);
   const idled = hosted.house.requests.lastIndexOf(hosted.idles[1]!);
-  expect(idled).toBeGreaterThan(at(hosted, `/kit/inputs/${call}/ack`));
+  expect(idled).toBeGreaterThan(returned(hosted, call));
 });
 
 it('ends a login that never prints its link when the time House gave the sign-in runs out, and returns its result', async () => {
@@ -285,7 +285,7 @@ it('reports a CLI its sign-in installs as installing until the install ends, the
   const before = hosted.reports.length;
   await rm(join(userBin(hosted.home), 'codex'));
   const holds: unknown[] = [];
-  hosted.house.route('POST', '/kit/secret-input/:subject', async (request) => {
+  hosted.house.route('POST', '/kit/secret-inputs/await', async (request) => {
     holds.push(request.body);
     // House holds the page a tenth of a second each time, so the ceremony is seen holding.
     await new Promise((resolve) => setTimeout(resolve, 100));

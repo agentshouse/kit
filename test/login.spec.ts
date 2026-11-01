@@ -241,15 +241,15 @@ it('records the login-code relay and the resident uses it without an ambient var
   });
   expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_code_credential', relay: relay.origin });
 
-  relay.route('POST', `${prefix}/kit/restarted`, () => ({ body: {} }));
-  relay.route('POST', `${prefix}/kit/agents/desired`, () => ({
+  relay.route('POST', `${prefix}/kit/kits/report-restart`, () => ({ body: {} }));
+  relay.route('POST', `${prefix}/kit/agents/desired/list`, () => ({
     body: { agents: [], routes: [], transcribe: false },
   }));
   runKit(['resident'], { HOUSE_KIT_HOME: home, NODE_EXTRA_CA_CERTS: tls.path });
 
   const connection = await until(() => relay.connections[0]);
   expect(connection.headers.authorization).toBe('Bearer ahk_code_credential');
-  expect(relay.requests.map((request) => request.path)).toContain(`${prefix}/kit/restarted`);
+  expect(relay.requests.map((request) => request.path)).toContain(`${prefix}/kit/kits/report-restart`);
   expect(relay.requests.map((request) => request.path)).toContain(`${prefix}/kit/stream`);
   expect(house.requests).toEqual([]);
 });
@@ -716,14 +716,14 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   await logIn(house, home);
   const resident = runKit(['resident'], { HOUSE_KIT_HOME: home });
   await until(() => house.connections[0]);
-  house.route('POST', '/kit/logout', () => ({ body: {} }));
+  house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
   house.requests.length = 0;
 
   const logout = runKit(['logout'], { HOUSE_KIT_HOME: home });
 
   expect(await logout.exited).toBe(0);
   expect(logout.stdout()).toBe('Environment environment-one is disconnected; kit login reconnects it.\n');
-  expect(house.requests.filter((request) => request.path === '/kit/logout').map((request) => request.headers.authorization)).toEqual([
+  expect(house.requests.filter((request) => request.path === '/kit/kits/log-out').map((request) => request.headers.authorization)).toEqual([
     'Bearer ahk_first',
   ]);
   await expect(access(join(home, 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -752,7 +752,7 @@ it('logs out and connects this computer as a new Environment of the other accoun
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
   await logIn(house, home);
-  house.route('POST', '/kit/logout', () => ({ body: {} }));
+  house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
   expect(await runKit(['logout'], { HOUSE_KIT_HOME: home }).exited).toBe(0);
   serveLogin(house, 'environment-two', 'ahk_second', { user: 'user-two' });
 

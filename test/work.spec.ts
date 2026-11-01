@@ -8,7 +8,7 @@ import { hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
 
 type Recorded = { method: string; params: Record<string, any> };
 
-const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path.endsWith('/ended'));
+const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
 function fixture(name: string): string {
   return fileURLToPath(new URL(`./fixtures/work/${name}.jsonl`, import.meta.url));
@@ -319,5 +319,5 @@ it('names a new Codex session itself before its first prompt and outside any tur
   const renamed = log.findIndex((entry) => entry.renamed !== undefined);
   expect(log[renamed]!.renamed).toBe('conversation-1');
   expect(renamed).toBeLessThan(log.findIndex((entry) => entry.method === 'session/prompt'));
-  expect(hosted.turns.filter((turn) => turn.path.endsWith('/started'))).toHaveLength(1);
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
 });

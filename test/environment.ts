@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
-import { type Answer, certificate, startHouse, until, type House, type KitConnection, type Received } from './double.ts';
+import { type Answer, certificate, idOf, startHouse, until, without, type House, type KitConnection, type Received } from './double.ts';
 import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './adapters.ts';
 import { serveKitFiles } from './building.ts';
@@ -83,11 +83,11 @@ export const LISTING: Listed[] = [
     inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
   },
   {
-    name: 'edit',
+    name: 'files_batch',
     inputSchema: { type: 'object', properties: { changes: { type: 'array' } } },
   },
   {
-    name: 'append_record',
+    name: 'records_append',
     description: 'Add a record to a Room, stored as given.',
     inputSchema: { type: 'object', properties: { room_ref: { type: 'string' }, body: { type: 'string' } } },
   },
@@ -105,7 +105,7 @@ export const LISTING: Listed[] = [
     },
   },
   {
-    name: 'list_rooms',
+    name: 'rooms_list',
     description: 'Your Rooms and what you may do in each.',
     inputSchema: { type: 'object', properties: {} },
   },
@@ -247,39 +247,39 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });
   serveKitFiles(house, home);
-  house.route('POST', '/kit/conversations/:conversation/credential', (request) => ({
-    body: { credential: conversationCredential(request.params.conversation!) },
+  house.route('POST', '/kit/conversations/credentials/issue', (request) => ({
+    body: { credential: conversationCredential(idOf(request, 'conversation')) },
   }));
-  house.route('POST', '/kit/restarted', () => ({ body: {} }));
-  house.route('POST', '/kit/local-copy/selection', () => ({ body: { local_copy: { rooms: [] } } }));
+  house.route('POST', '/kit/kits/report-restart', () => ({ body: {} }));
+  house.route('POST', '/kit/local-copies/selection/read', () => ({ body: { local_copy: { rooms: [] } } }));
   let transcribe = hosting.transcribe ?? false;
   const reports: Record<string, unknown>[] = [];
-  house.route('POST', '/kit/agents/desired', () => ({ body: { agents: kinds, routes: resolved, transcribe } }));
+  house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: kinds, routes: resolved, transcribe } }));
   house.route('POST', '/kit/agents/report', (request) => {
     reports.push(request.body as Record<string, unknown>);
     return { body: {} };
   });
-  house.route('POST', '/kit/inputs/:input/ack', (request) => {
+  house.route('POST', '/kit/kit-calls/results/return', (request) => {
     results.push(request);
     return { body: {} };
   });
-  house.route('POST', '/kit/conversations/:conversation/turns/:turn/started', (request) => {
+  house.route('POST', '/kit/turns/start', (request) => {
     turns.push(request);
     return { body: hosted.starts.shift() ?? {} };
   });
-  house.route('POST', '/kit/conversations/:conversation/turns/:turn/ended', (request) => {
+  house.route('POST', '/kit/turns/end', (request) => {
     turns.push(request);
     return { body: {} };
   });
-  house.route('POST', '/kit/conversations/:conversation/turns/:turn/activity', (request) => {
+  house.route('POST', '/kit/turns/activity/report', (request) => {
     turns.push(request);
     return hosted.activity();
   });
-  house.route('POST', '/kit/conversations/:conversation/turns/:turn/interactions', (request) => {
+  house.route('POST', '/kit/conversations/interaction/ask', (request) => {
     interactions.push(request);
     return { body: {} };
   });
-  house.route('POST', '/kit/conversations/:conversation/turns/:turn/images', (request) => {
+  house.route('POST', '/kit/turns/images/declare', (request) => {
     images.push(request);
     const { bytes, sha256 } = request.body as { bytes: number; sha256: string };
     return { body: store.declare({ bytes, sha256, path: `version-${images.length}` }, IMAGE_PART_BYTES) };
@@ -291,11 +291,11 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     if ('mismatch' in finished) return { status: 409, body: { error: { code: 'upload_mismatch', message: MISMATCH, retryable: false } } };
     return { body: finished };
   });
-  house.route('POST', '/kit/conversations/:conversation/messages/:message/transcripts', (request) => {
+  house.route('POST', '/kit/transcripts/keep', (request) => {
     transcripts.push(request);
     return { body: {} };
   });
-  house.route('POST', '/kit/idle', (request) => {
+  house.route('POST', '/kit/kits/report-idle', (request) => {
     idles.push(request);
     return { body: {} };
   });
@@ -310,7 +310,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   };
   const kit = runKit(['resident'], environment, hosting.node);
   const connection = await until(() => house.connections[0]);
-  await until(() => house.requests.find((request) => request.path === '/kit/local-copy/selection'));
+  await until(() => house.requests.find((request) => request.path === '/kit/local-copies/selection/read'));
   const hosted: Hosted = {
     house,
     home,
@@ -357,13 +357,14 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
       });
     },
     result: async (callId) =>
-      (
+      without(
         await until(
-          () => results.find((result) => result.params.input === callId),
+          () => results.find((result) => idOf(result, 'call') === callId),
           // The result follows local transcription and can exceed thirty seconds under constrained CPU.
           45_000,
-        )
-      ).body,
+        ),
+        'call',
+      ),
     adapterLog: async () => {
       try {
         const log = await readFile(join(home, 'adapter.log'), 'utf8');
@@ -425,7 +426,7 @@ export async function installHeld(hosted: Hosted): Promise<string> {
     model: 'route-model',
     effort: null,
   };
-  hosted.house.route('POST', '/kit/agents/desired', () => ({
+  hosted.house.route('POST', '/kit/agents/desired/list', () => ({
     body: { agents: ['codex-acp', 'claude-agent-acp'], routes: [added] },
   }));
   hosted.connection.send({ type: 'work_available', subject: 'agents' });

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
-import { settle, until } from './double.ts';
+import { idOf, settle, until, without } from './double.ts';
 import { hostKit, lastCall, type Hosted } from './environment.ts';
 import { alive, filesUnder, stop } from './kit.ts';
 
@@ -45,7 +45,7 @@ async function ended(hosted: Hosted, id: string): Promise<Ran> {
 
 function frames(hosted: Hosted, id: string): string {
   return hosted.house.connections
-    .flatMap((connection) => connection.notifications)
+    .flatMap((connection) => connection.oneWayCalls)
     .filter((frame) => frame.type === 'wizard_output' && frame.wizard === id)
     .map((frame) => frame.data as string)
     .join('');
@@ -242,7 +242,7 @@ it('starts a run id once however often House delivers it, answering each deliver
     provider_session_id: null,
     ...call(`echo ran >> ${directory}/runs; echo once`),
   };
-  const answered = () => hosted.results.filter((result) => result.params.input === 'run-delivered-again');
+  const answered = () => hosted.results.filter((result) => idOf(result, 'call') === 'run-delivered-again');
 
   send(hosted, frame);
   send(hosted, frame);
@@ -250,6 +250,6 @@ it('starts a run id once however often House delivers it, answering each deliver
   send(hosted, frame);
   await settle();
 
-  expect(answered().map((result) => result.body)).toEqual(Array(2).fill({ exit_code: 0, output: 'once\n', cut: false }));
+  expect(answered().map((result) => without(result, 'call'))).toEqual(Array(2).fill({ exit_code: 0, output: 'once\n', cut: false }));
   expect(await readFile(join(directory, 'runs'), 'utf8')).toBe('ran\n');
 });

@@ -9,7 +9,7 @@ import type { Readable } from 'node:stream';
 import type { IPty } from '@lydell/node-pty';
 import type { Call, Calls, Carried, Result } from './calls.ts';
 import { loginPath, onLoginPath } from './clis.ts';
-import type { Notification } from './connection.ts';
+import type { OneWayCall } from './connection.ts';
 import { kitHome } from './home.ts';
 import { childEnvironment } from './relay.ts';
 import { killTree } from './scope.ts';
@@ -168,10 +168,10 @@ class KeptOutput {
 
 export class Scripts {
   private readonly calls: Calls;
-  private readonly send: (notification: Notification) => boolean;
+  private readonly send: (oneWayCall: OneWayCall) => boolean;
   private readonly runs = new Map<string, Run>();
 
-  constructor(calls: Calls, send: (notification: Notification) => boolean) {
+  constructor(calls: Calls, send: (oneWayCall: OneWayCall) => boolean) {
     this.calls = calls;
     this.send = send;
   }
@@ -180,12 +180,12 @@ export class Scripts {
     void this.calls.carry(call.input_id, () => this.run(call.input_id, planned(call)));
   }
 
-  notified(notification: Notification): void {
-    const run = this.runs.get(String(notification.wizard));
+  notified(oneWayCall: OneWayCall): void {
+    const run = this.runs.get(String(oneWayCall.wizard));
     if (run === undefined) return;
-    if (notification.type === 'wizard_input') this.typed(run, String(notification.data));
-    if (notification.type === 'wizard_size') this.resized(run, { cols: Number(notification.cols), rows: Number(notification.rows) });
-    if (notification.type === 'wizard_end' && run.plan.terminal === 'page') this.end(run, {});
+    if (oneWayCall.type === 'wizard_input') this.typed(run, String(oneWayCall.data));
+    if (oneWayCall.type === 'wizard_size') this.resized(run, { cols: Number(oneWayCall.cols), rows: Number(oneWayCall.rows) });
+    if (oneWayCall.type === 'wizard_end' && run.plan.terminal === 'page') this.end(run, {});
   }
 
   disconnected(): void {
