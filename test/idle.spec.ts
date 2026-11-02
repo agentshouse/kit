@@ -21,6 +21,9 @@ const FAST_UPDATES = fileURLToPath(new URL('./fast-updates.ts', import.meta.url)
 // A model read waits two quiet seconds and its silent CLI ends five seconds later under fast-silence, so twenty seconds see the idle report on a loaded runner.
 const SILENT_READ_ENDED_MS = 20_000;
 
+// The fast interval starts an update every second, so two seconds with none show the interval held it back.
+const TIMED_UPDATES_PASSED_MS = 2_000;
+
 async function opened(hosted: Hosted): Promise<void> {
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
@@ -121,6 +124,21 @@ it('does not report idle while the update command its interval started runs, and
   await rm(join(hosted.home, 'update-hold'));
 
   await until(() => hosted.idles.length > idled);
+});
+
+it("starts no timed update on a Sandbox while its idle report stands, and starts one again once a turn takes that report back", async () => {
+  const hosted = await hostKit([{}], { environment: { HOUSE_KIT_SANDBOX: '1', NODE_OPTIONS: `--import=${FAST_UPDATES}` } });
+  await until(() => hosted.idles[0]);
+  await until(() => updatesRun(hosted.home).length > 0);
+
+  const run = updatesRun(hosted.home).length;
+  await new Promise((resolve) => setTimeout(resolve, TIMED_UPDATES_PASSED_MS));
+  expect(updatesRun(hosted.home)).toHaveLength(run);
+
+  await opened(hosted);
+  hosted.call({ kind: 'message', text: '@gate finish', first: true });
+  await until(() => updatesRun(hosted.home).length > run);
+  await writeFile(join(hosted.home, 'finish'), '');
 });
 
 it('reports idle only after it returns the result of the Kit call it carried out', async () => {

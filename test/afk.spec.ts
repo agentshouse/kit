@@ -118,9 +118,86 @@ it('goes by the word of the latest call, so a message without the field asks aga
   expect(ended(hosted)).toHaveLength(1);
 });
 
-it('leaves a Grok question unserved, as a Kit without the field always has, while no call marks the conversation', async () => {
-  const { hosted, answer } = await asked('grok-build', 'grok-question', false);
+async function answeredByOwner(fixture: string, response: object): Promise<{ question: unknown; answer: unknown }> {
+  const hosted = await opened('grok-build', false);
+  hosted.call({ kind: 'message', text: `@asked ${fixture}\n@say went on`, first: true });
+  const { body } = await until(() => hosted.interactions[0]);
+  expect(ended(hosted)).toEqual([]);
+  hosted.call({ kind: 'answer', interaction_id: (body as { interaction_id: string }).interaction_id, response });
+  await until(() => ended(hosted)[0]);
+  return { question: body, answer: (await answersOf(hosted))[0] };
+}
 
-  expect(answer).toEqual({ code: -32601 });
-  expect(reachedHouse(hosted)).toEqual([]);
+it.each([
+  [
+    'an answer',
+    { action: 'accept', content: { 'Which colour?': 'Red', 'Which size?': ['S', 'L'] } },
+    { outcome: 'accepted', answers: { 'Which colour?': 'Red', 'Which size?': 'S, L' } },
+  ],
+  ['a decline', { action: 'decline' }, { outcome: 'cancelled' }],
+])("asks a Grok question in a form with the CLI's own options while no call marks the conversation, and gives Grok %s in its own words", async (_, response, told) => {
+  const { question, answer } = await answeredByOwner('grok-question', response);
+
+  expect(question).toMatchObject({
+    secret: false,
+    request: {
+      method: 'elicitation/create',
+      params: {
+        mode: 'form',
+        message: 'Which colour?\n\nWhich size?',
+        requestedSchema: {
+          properties: {
+            'Which colour?': {
+              type: 'string',
+              title: 'Which colour?',
+              oneOf: [
+                { const: 'Red', title: 'Red', description: 'The red one' },
+                { const: 'Blue', title: 'Blue', description: 'The blue one' },
+              ],
+            },
+            'Which size?': {
+              type: 'array',
+              title: 'Which size?',
+              items: {
+                anyOf: [
+                  { const: 'S', title: 'S', description: 'small' },
+                  { const: 'L', title: 'L', description: 'large' },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  expect(answer).toEqual(told);
+});
+
+it.each([
+  ['approved', { action: 'accept', content: { plan: 'approved' } }, 'approved'],
+  ['abandoned', { action: 'accept', content: { plan: 'abandoned' } }, 'abandoned'],
+  ['declined', { action: 'decline' }, 'abandoned'],
+])('asks for a Grok plan in a form naming the plan while no call marks the conversation, and gives Grok a plan %s in its own words', async (_, response, told) => {
+  const { question, answer } = await answeredByOwner('grok-plan-exit', response);
+
+  expect(question).toMatchObject({
+    secret: false,
+    request: {
+      method: 'elicitation/create',
+      params: {
+        message: 'create hello.txt containing hi\n',
+        requestedSchema: {
+          properties: {
+            plan: {
+              oneOf: [
+                { const: 'approved', title: 'Approve' },
+                { const: 'abandoned', title: 'Abandon' },
+              ],
+            },
+          },
+        },
+      },
+    },
+  });
+  expect(answer).toEqual({ outcome: told });
 });

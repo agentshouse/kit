@@ -173,7 +173,7 @@ export async function resident(): Promise<void> {
 
   await house.deliver('/kit/kits/report-restart', {}).catch(report);
   logged(agents.refresh());
-  agents.keepCurrent();
+  agents.keepCurrent(() => process.env.HOUSE_KIT_SANDBOX === '1' && reported);
   connection = holdConnection({
     opened: () => {
       conversations.opened();

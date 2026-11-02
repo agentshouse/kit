@@ -5,14 +5,11 @@ import type {
   RequestPermissionResponse,
 } from '@agentclientprotocol/sdk';
 import { CLIS } from './clis.ts';
+import type { GrokQuestions } from './grok.ts';
 
 const NOBODY_THERE = 'Nobody is there to answer. Decide for yourself and go on.';
 
 export const PLAN_APPROVED = { outcome: 'approved' };
-
-export interface GrokQuestions {
-  questions: { question: string }[];
-}
 
 function told(fields: string[]): Record<string, string> {
   return Object.fromEntries(fields.map((field) => [field, NOBODY_THERE]));

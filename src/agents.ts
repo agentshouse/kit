@@ -267,9 +267,11 @@ export class Agents {
     return reading.then(() => undefined);
   }
 
-  keepCurrent(): void {
+  keepCurrent(stopping: () => boolean): void {
     this.updateAll(this.loaded);
-    setInterval(() => this.updateAll(Promise.resolve()), CLI_UPDATE_MS);
+    setInterval(() => {
+      if (!stopping()) this.updateAll(Promise.resolve());
+    }, CLI_UPDATE_MS);
   }
 
   cli(kind: string): Promise<string> {

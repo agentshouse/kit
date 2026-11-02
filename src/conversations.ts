@@ -1,9 +1,9 @@
 import {
   client,
-  RequestError,
   type AvailableCommand,
   type ContentBlock,
   type CreateElicitationRequest,
+  type CreateElicitationResponse,
   type NewSessionResponse,
   type ResumeSessionRequest,
   type SessionConfigOption,
@@ -13,7 +13,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
-import { formAnswered, grokQuestionAnswered, permissionAllowed, PLAN_APPROVED, type GrokQuestions } from './afk.ts';
+import { formAnswered, grokQuestionAnswered, permissionAllowed, PLAN_APPROVED } from './afk.ts';
 import type { Agents, Route } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
@@ -21,6 +21,7 @@ import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
 import { answeredFailure, readerFor, type Event, type Message, type Reader, type Stop } from './events.ts';
 import { inspectedFile, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
+import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, type GrokPlan, type GrokQuestions } from './grok.ts';
 import { agentBase } from './home.ts';
 import type { Call, Calls, Result } from './calls.ts';
 import { instructions } from './instructions.ts';
@@ -112,12 +113,9 @@ function unbridged(error: unknown): string {
   return (finalRefusal(error) ? ENDED[refusalOf(error.text)?.code ?? ''] : undefined) ?? NO_CONNECTION;
 }
 
-const EXIT_PLAN_MODE = {
-  parse(value: unknown): Record<string, unknown> {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      throw new Error('_x.ai/exit_plan_mode needs an object');
-    }
-    return value as Record<string, unknown>;
+const GROK_PLAN = {
+  parse(value: unknown): GrokPlan {
+    return value as GrokPlan;
   },
 };
 
@@ -753,13 +751,12 @@ export class Conversations {
       .onRequest('elicitation/create', ({ params, signal }) =>
         conversation.afk ? formAnswered(route.kind, params) : this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       )
-      .onRequest('_x.ai/exit_plan_mode', EXIT_PLAN_MODE, ({ params, signal }) =>
-        conversation.afk ? PLAN_APPROVED : this.ask(conversation, '_x.ai/exit_plan_mode', params, false, signal),
+      .onRequest('_x.ai/exit_plan_mode', GROK_PLAN, async ({ params, signal }) =>
+        conversation.afk ? PLAN_APPROVED : grokPlanAnswer(await this.askForm(conversation, grokPlanForm(params), signal)),
       )
-      .onRequest('_x.ai/ask_user_question', GROK_QUESTION, ({ params }) => {
-        if (!conversation.afk) throw RequestError.methodNotFound('_x.ai/ask_user_question');
-        return grokQuestionAnswered(params);
-      });
+      .onRequest('_x.ai/ask_user_question', GROK_QUESTION, async ({ params, signal }) =>
+        conversation.afk ? grokQuestionAnswered(params) : grokQuestionAnswer(await this.askForm(conversation, grokQuestionForm(params), signal)),
+      );
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridging = this.bridged(conversation);
     const bridge = await step(unbridged, bridging);
@@ -1033,6 +1030,10 @@ export class Conversations {
     for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
     conversation.turn = null;
     this.kit.changed();
+  }
+
+  private askForm(conversation: Conversation, form: CreateElicitationRequest, signal: AbortSignal): Promise<CreateElicitationResponse> {
+    return this.ask(conversation, 'elicitation/create', form, false, signal);
   }
 
   private async ask<Response>(
