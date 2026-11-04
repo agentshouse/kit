@@ -150,8 +150,8 @@ function blocksText(content: unknown): string {
     .join('\n');
 }
 
-function lineCount(text: string): number {
-  return text === '' ? 0 : text.replace(/\n$/, '').split('\n').length;
+function linesOf(text: string): string[] {
+  return text === '' ? [] : text.replace(/\n$/, '').split('\n');
 }
 
 function count(value: unknown): number | null {
@@ -183,19 +183,15 @@ function fileChange(path: string, diff: string): FileChange {
 }
 
 function wholeFile(path: string, sign: '+' | '-', text: string): FileChange {
-  const lines = text.replace(/\n$/, '').split('\n');
+  const lines = linesOf(text);
   const range = sign === '+' ? `-0,0 +1,${lines.length}` : `-1,${lines.length} +0,0`;
-  return fileChange(path, `@@ ${range} @@\n${lines.map((line) => `${sign}${line}`).join('\n')}\n`);
+  return fileChange(path, lines.length === 0 ? '' : `@@ ${range} @@\n${lines.map((line) => `${sign}${line}\n`).join('')}`);
 }
 
 function hunks(patch: Fields[]): string {
   return patch
     .map((hunk) => `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n${(hunk.lines as string[]).join('\n')}\n`)
     .join('');
-}
-
-function linesOf(text: string): string[] {
-  return text === '' ? [] : text.replace(/\n$/, '').split('\n');
 }
 
 function replacement(site: Fields): { added: number; removed: number; diff: string } {
@@ -915,7 +911,7 @@ class CodexReader extends Reader {
       case 'execute':
         return call(held, lineOf(held.rawInput?.command) ?? title, { kind: 'command' }, took);
       case 'read':
-        return call(held, title, { kind: 'read', returned: typeof item?.aggregatedOutput === 'string' ? lineCount(item.aggregatedOutput) : null }, took);
+        return call(held, title, { kind: 'read', returned: typeof item?.aggregatedOutput === 'string' ? linesOf(item.aggregatedOutput).length : null }, took);
       case 'search':
         return call(held, title, this.searched(held, item), took);
       case 'edit':
@@ -926,7 +922,7 @@ class CodexReader extends Reader {
   }
 
   private searched(held: Call, item: Fields | undefined): Detail {
-    if (item?.type !== 'webSearch') return { kind: 'search', returned: typeof held.rawOutput === 'string' ? lineCount(held.rawOutput) : null };
+    if (item?.type !== 'webSearch') return { kind: 'search', returned: typeof held.rawOutput === 'string' ? linesOf(held.rawOutput).length : null };
     const results = Array.isArray(item.results) ? (item.results as Fields[]) : null;
     if (item.action?.type === 'openPage' || item.action?.type === 'findInPage') {
       return { kind: 'fetch', output: (results ?? []).map((found) => found.snippet ?? found.title ?? '').join('\n') };
@@ -1041,7 +1037,7 @@ class GrokReader extends Reader {
       case 'subagent_spawned': {
         const linked = [...this.children.values()];
         const unlinked = [...this.calls.values()].filter((candidate) => candidate.shown === 'subagent' && !linked.includes(candidate.id));
-        const held = unlinked.find((candidate) => candidate.rawInput?.description === update.description) ?? unlinked[0];
+        const held = unlinked.find((candidate) => candidate.rawInput?.description === update.description);
         this.children.set(update.child_session_id, held?.id ?? null);
         return held === undefined ? [] : this.figured(held.id, { name: update.subagent_type ?? null });
       }

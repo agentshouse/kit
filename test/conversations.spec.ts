@@ -984,6 +984,59 @@ it.each(KINDS)("keeps a call a script's @emit reports to %s with its output as a
   );
 });
 
+function emitted(method: string, params: Record<string, unknown>, session = '$SESSION'): string {
+  return `@emit ${JSON.stringify({ method, params: { sessionId: session, ...params } })}`;
+}
+
+it("links a sub-agent Grok Build spawns for no task it started to none, so its steps, report and end land on no sub-agent", async () => {
+  const hosted = await opened('grok-build');
+  const child = '$SESSION-child';
+  const _meta = { 'x.ai/tool': { name: 'spawn_subagent', kind: 'task' } };
+  const script = [
+    emitted('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-task', title: 'Find the failing specs', status: 'pending', rawInput: { description: 'Find the failing specs' }, _meta } }),
+    emitted('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_spawned', child_session_id: child, description: 'Fix the failing specs', subagent_type: 'general' } }),
+    emitted('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-step', title: 'Read the specs', kind: 'read', status: 'pending' } }, child),
+    emitted('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-step', status: 'completed' } }, child),
+    emitted('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_finished', child_session_id: child, status: 'completed', output: 'Two specs fail' } }),
+    emitted('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-task', status: 'completed', _meta } }),
+  ].join('\n');
+  hosted.call({ kind: 'message', text: script, first: false });
+  await ends(hosted, 1);
+
+  const parts = partsOf(endedTurns(hosted)[0]!);
+  expect(parts.filter((part) => part.type === 'subagent')).toEqual([
+    { type: 'subagent', parent: null, kind: 'agent', name: null, task: 'Find the failing specs', status: 'running', step: null, report: null, tokens: null, calls: null, duration: null },
+  ]);
+  expect(parts.filter((part) => part.parent !== null)).toEqual([]);
+});
+
+it('keeps an empty file Claude Code writes as an edit of no lines with an empty diff', async () => {
+  const hosted = await opened('claude-agent-acp');
+  const path = '/work/empty.txt';
+  const result = { type: 'tool_result', tool_use_id: 'call-write', content: `File created successfully at: ${path}` };
+  const script = [
+    emitted('session/update', {
+      update: { sessionUpdate: 'tool_call', toolCallId: 'call-write', title: `Write ${path}`, kind: 'edit', status: 'pending', rawInput: { file_path: path, content: '' }, _meta: { claudeCode: { toolName: 'Write' } } },
+    }),
+    emitted('_claude/sdkMessage', {
+      message: {
+        type: 'user',
+        message: { role: 'user', content: [result] },
+        parent_tool_use_id: null,
+        timestamp: '2026-11-04T16:24:02.279Z',
+        tool_use_result: { type: 'create', filePath: path, content: '', structuredPatch: [], originalFile: null },
+      },
+    }),
+    emitted('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-write', status: 'completed' } }),
+  ].join('\n');
+  hosted.call({ kind: 'message', text: script, first: false });
+  await ends(hosted, 1);
+
+  expect(partsOf(endedTurns(hosted)[0]!)).toContainEqual(
+    expect.objectContaining({ type: 'call', parent: null, kind: 'edit', status: 'done', files: [{ path, added: 0, removed: 0, diff: '' }] }),
+  );
+});
+
 it.each(KINDS)("sends the session state of a conversation %s runs once it opens, and last the state its turn ended with", async (kind) => {
   const hosted = await opened(kind);
   expect(states(hosted.connection)).not.toHaveLength(0);
