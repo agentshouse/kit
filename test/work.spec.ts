@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { settle, until } from './double.ts';
-import { hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
+import { emit, hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
 
 type Recorded = { method: string; params: Record<string, any> };
 
@@ -177,7 +177,7 @@ it('stays busy while a goal is active', async () => {
 
   await stays(hosted, `@play ${fixture('claude-goal')}`, false);
 
-  await stays(hosted, `@emit ${JSON.stringify({ method: 'session/update', params: { sessionId: '$SESSION', update: cleared } })}`, true);
+  await stays(hosted, emit('session/update', { update: cleared }), true);
 });
 
 it('stays busy while a Codex background terminal is open after its turn ends', async () => {
@@ -197,7 +197,7 @@ it('stays busy while a Codex sub-agent’s thread runs, also after the adapter r
   const failed = { sessionUpdate: 'subagent_state_update', subagentSessionId: child, state: 'failed' };
 
   await stays(hosted, `@stream ${fixture('codex-subagent')} 0 ${childIdle}`, false);
-  await stays(hosted, `@emit ${JSON.stringify({ method: 'session/update', params: { sessionId: '$SESSION', update: failed } })}`, false);
+  await stays(hosted, emit('session/update', { update: failed }), false);
 
   await stays(hosted, `@stream ${fixture('codex-subagent')} ${childIdle}`, true);
 });
@@ -283,14 +283,15 @@ it('keeps work whose end never arrives busy until the Conversation process exits
   await until(() => hosted.idles[2]);
 });
 
-it('names a new Claude Code session itself and passes the CLI’s background reports through', async () => {
+it('leaves a new Claude Code session to generate its own title and passes the CLI’s background reports through', async () => {
   const hosted = await opened('claude-agent-acp');
 
   const created = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
+  expect((created.params as { _meta: { claudeCode: { options: object } } })._meta.claudeCode.options).not.toHaveProperty('title');
   expect(created.params).toMatchObject({
     _meta: {
       claudeCode: {
-        options: { title: 'conversation-1', includeHookEvents: true },
+        options: { includeHookEvents: true },
         emitRawSDKMessages: [
           ...[
             'background_tasks_changed',
@@ -313,15 +314,13 @@ it('names a new Claude Code session itself and passes the CLI’s background rep
   });
 });
 
-it('names a new Codex session itself before its first prompt and outside any turn', async () => {
-  const hosted = await opened('codex-acp');
+it.each(['codex-acp', 'claude-agent-acp'])('sends a new %s session no prompt but the one its message carries, so the CLI names the session itself', async (kind) => {
+  const hosted = await opened(kind);
 
   hosted.call({ kind: 'message', text: '@say first', first: false });
   await until(() => ended(hosted)[0]);
 
-  const log = await hosted.adapterLog();
-  const renamed = log.findIndex((entry) => entry.renamed !== undefined);
-  expect(log[renamed]!.renamed).toBe('conversation-1');
-  expect(renamed).toBeLessThan(log.findIndex((entry) => entry.method === 'session/prompt'));
+  const prompts = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
+  expect(prompts.map((entry) => entry.text)).toEqual(['@say first']);
   expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
 });

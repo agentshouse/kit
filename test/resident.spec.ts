@@ -44,7 +44,7 @@ it('holds the Kit connection with its credential and opens a new connection afte
 
   const first = await until(() => house.connections[0]);
   expect(first.headers.authorization).toBe('Bearer ahk_held');
-  expect(first.protocol).toBe('house.kit.stream.5');
+  expect(first.protocol).toBe('house.kit.stream.6');
 
   first.close(1008, 'heartbeat_missed');
   const second = await until(() => house.connections[1]);
@@ -367,10 +367,10 @@ it('names its wire in its stream subprotocol and in a header on every other /kit
   const house = await startHouse();
   await resident(house);
 
-  expect((await until(() => house.connections[0])).protocol).toBe('house.kit.stream.5');
+  expect((await until(() => house.connections[0])).protocol).toBe('house.kit.stream.6');
   const requests = house.requests.filter((request) => request.method === 'POST' && request.path.startsWith('/kit/'));
   expect(requests.map((request) => request.path)).toContain('/kit/kits/report-restart');
-  expect(requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(requests.map(() => '5'));
+  expect(requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(requests.map(() => '6'));
 });
 
 it("ends a Sandbox's Kit, left stopped and placing nothing, saying it must be installed again, when House refuses its Kit connection opening as too old", async () => {
@@ -388,9 +388,9 @@ const KIT_RELEASE = (JSON.parse(await readFile(new URL('../package.json', import
 
 const NEWER = { status: 426, body: { error: { code: 'kit_newer_than_house', retryable: false, release: '0.2.0-c0ffee000001', commands: COMMANDS } } };
 
-it("ends a Sandbox's Kit, left stopped and placing nothing, naming its version, the Building's Kit release and the Linux install command House named, when House refuses any of its calls as newer than the Building", async () => {
+it("ends a Sandbox's Kit, left stopped and placing nothing, naming its version, the Building's Kit release and the Linux install command House named, when a House at the previous wire refuses its calls as newer than the Building", async () => {
   const house = await startHouse();
-  house.route('POST', '/kit/kits/report-restart', () => NEWER);
+  house.route('POST', '/kit/kits/report-restart', (request) => (request.headers['x-house-kit-wire'] === '5' ? { body: {} } : NEWER));
   const kit = await resident(house, undefined, SANDBOX);
 
   expect(await ended(kit)).toBe(0);

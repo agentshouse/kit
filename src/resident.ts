@@ -113,11 +113,6 @@ function connected(): Promise<void> {
 
 async function started(): Promise<void> {
   await connected();
-  watch(kitHome(), () => {
-    if (enrolled()) return;
-    killDescendants();
-    process.exit(1);
-  });
   await placeSkillSet((await readEnrolment())!.house);
   await mkdir(agentBase(), { recursive: true });
   await installShim(join(kitHome(), 'shim', 'git'), 'git-main');
@@ -138,12 +133,22 @@ export async function resident(): Promise<void> {
   const agents = new Agents(house, () => changed());
   let connection: Connection | null = null;
   let reported = false;
+  let stopping = false;
+  const stop = async (then: () => void): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
+    conversations.stopped();
+    killDescendants();
+    await connection?.close();
+    then();
+  };
   const idle = () => calls.idle() && conversations.idle() && agents.idle();
   const changed = () => {
     if (!idle()) {
       reported = false;
     } else if (update.placedRelease() !== null && conversations.quiet()) {
-      restart(`Kit ${update.placedRelease()} is placed; its supervisor starts it`);
+      const placed = update.placedRelease();
+      void stop(() => restart(`Kit ${placed} is placed; its supervisor starts it`));
     } else if (!reported) {
       reported = true;
       logged(house.deliver('/kit/kits/report-idle', {}, idle));
@@ -165,11 +170,17 @@ export async function resident(): Promise<void> {
   const scripts = new Scripts(calls, (oneWayCall) => connection?.send(oneWayCall) ?? false);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
-      killDescendants();
-      removeInputs();
-      process.kill(process.pid, signal);
+      void stop(() => {
+        removeInputs();
+        process.kill(process.pid, signal);
+      });
     });
   }
+  const unenrolled = () => {
+    if (!enrolled()) void stop(() => process.exit(1));
+  };
+  watch(kitHome(), unenrolled);
+  unenrolled();
 
   await house.deliver('/kit/kits/report-restart', {}).catch(report);
   logged(agents.refresh());

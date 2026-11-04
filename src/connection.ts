@@ -1,4 +1,5 @@
 import { subscribe } from 'node:diagnostics_channel';
+import { setTimeout as delay } from 'node:timers/promises';
 import { HouseRefusal, retryDelay } from './api.ts';
 import type { Call } from './calls.ts';
 import { end, REPLACED, signInAgain } from './end.ts';
@@ -18,6 +19,7 @@ export interface ConnectionHandlers {
 
 export interface Connection {
   send(oneWayCall: OneWayCall): boolean;
+  close(): Promise<void>;
 }
 
 interface Answered {
@@ -30,6 +32,8 @@ const SUBPROTOCOL = `house.kit.stream.${KIT_WIRE}`;
 const REFUSAL_HEADER = 'x-house-refusal';
 // House beats each Kit connection every thirty seconds, so two silent beats mean this Kit process cannot hear House.
 export const CONNECTION_SILENCE_MS = 60_000;
+// A stopping Kit waits up to two seconds for House to answer its close, so what it sent last reaches House and a House that does not answer holds no stop.
+const CLOSE_ANSWER_MS = 2_000;
 
 function connectionUrl(house: string): URL {
   const url = new URL(PATH, house);
@@ -56,10 +60,11 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
   let connection: WebSocket | null = null;
   let socket: WebSocket | null = null;
   let failures = 0;
+  let stopping = false;
 
   const connect = async () => {
     const { house, credential } = (await readEnrolment())!;
-    if (socket !== null || unserved()) return;
+    if (socket !== null || unserved() || stopping) return;
     refused = null;
     const opening = new WebSocket(relayed(connectionUrl(house)), {
       protocols: [SUBPROTOCOL],
@@ -75,6 +80,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       if (connection === opening) connection = null;
       handlers.closed();
       process.stderr.write(`kit: connection closed ${event.code} ${event.reason}\n`);
+      if (stopping) return;
       if (event.reason === 'replaced') end(REPLACED);
       if (event.reason === 'credential_rejected' || refused?.status === 401) {
         void signInAgain(credential);
@@ -115,6 +121,14 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       if (connection === null || connection.readyState !== WebSocket.OPEN) return false;
       connection.send(JSON.stringify(oneWayCall));
       return true;
+    },
+    close() {
+      stopping = true;
+      const open = socket;
+      if (open === null) return Promise.resolve();
+      const answered = new Promise<void>((resolve) => open.addEventListener('close', () => resolve(), { once: true }));
+      open.close();
+      return Promise.race([answered, delay(CLOSE_ANSWER_MS)]);
     },
   };
 }

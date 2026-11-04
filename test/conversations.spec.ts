@@ -3,13 +3,14 @@ import { readFileSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isState, isTurn, type Operation, type Part, type SessionState, type Turn } from '@agentshouse/session-content';
 import { agentInstructions } from '@agentshouse/skills';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
 import { attached, bridgeSockets, inspected } from './attachments.ts';
-import { idOf, settle, until, without } from './double.ts';
-import { conversationCredential, hostKit, installHeld, lastCall, outcome, userBin, type Hosted } from './environment.ts';
-import { alive, placeHostKey, temporaryHome } from './kit.ts';
+import { idOf, settle, until, without, type Received } from './double.ts';
+import { conversationCredential, emit, hostKit, installHeld, lastCall, lastMessage, outcome, userBin, type Hosted } from './environment.ts';
+import { alive, placeHostKey, runKit, temporaryHome } from './kit.ts';
 
 const FAST_REPORTS = fileURLToPath(new URL('./fast-reports.ts', import.meta.url));
 
@@ -538,6 +539,65 @@ it('writes the exit of a process a closed Kit connection did not take once the c
   expect(processes(reopened)).toEqual([{ type: 'process', conversation_id: 'conversation-1', running: false }]);
 });
 
+it.each([
+  ['SIGTERM stops it', null, (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGTERM')],
+  ['SIGINT stops it', null, (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGINT')],
+  [
+    'kit logout disconnects its computer',
+    1,
+    async (hosted: Hosted) => {
+      hosted.house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
+      await runKit(['logout'], { HOUSE_KIT_HOME: hosted.home }).exited;
+    },
+  ],
+])("tells House that the process of each conversation it runs is not running when %s, before it exits as it did", async (_stop, status, stop) => {
+  const hosted = await hostKit();
+  for (const conversation_id of ['conversation-1', 'conversation-2']) {
+    hosted.call({ kind: 'open', conversation_id });
+    await hosted.result(lastCall());
+  }
+
+  await stop(hosted);
+
+  expect(await hosted.kit.exited).toBe(status);
+  expect(hosted.kit.stderr()).not.toContain('Error');
+  expect(hosted.house.connections).toHaveLength(1);
+  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([
+    { type: 'process', conversation_id: 'conversation-1', running: true },
+    { type: 'process', conversation_id: 'conversation-2', running: true },
+    { type: 'process', conversation_id: 'conversation-1', running: false },
+    { type: 'process', conversation_id: 'conversation-2', running: false },
+  ]);
+});
+
+it('starts no CLI once it stops while House has not answered its close, neither for the message that waited behind the turn it killed, which stays with House for the next Kit process, nor for a conversation whose start was under way', async () => {
+  const hosted = await hostKit();
+  hosted.call({ kind: 'message', text: '@wait', first: true });
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
+  hosted.call({ kind: 'message', text: '@say waited', first: false });
+  const waiting = lastCall();
+  const listing = () => hosted.house.requests.filter((request) => request.path === '/kit/agents/desired/list').length;
+  const listed = listing();
+  const { promise: answered, resolve: answer } = Promise.withResolvers<void>();
+  const route = { kind: 'codex-acp', base_instructions: 'Be useful.', working_directory: hosted.workingDirectory, model: 'route-model', effort: 'route-effort', mode: null };
+  hosted.house.route('POST', '/kit/agents/desired/list', async () => {
+    await answered;
+    return { body: { agents: ['codex-acp'], routes: [{ agent_id: 'agent-1', ...route }, { agent_id: 'agent-2', ...route }] } };
+  });
+  hosted.call({ kind: 'open', conversation_id: 'conversation-2', agent_id: 'agent-2' });
+  await until(() => listing() > listed);
+  hosted.connection.transport.pause();
+
+  process.kill(hosted.kit.pid, 'SIGTERM');
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
+  answer();
+
+  expect(await hosted.kit.exited).toBe(null);
+  expect(await prompts(hosted)).toHaveLength(1);
+  expect(new Set((await hosted.adapterLog()).map((entry) => entry.pid)).size).toBe(1);
+  expect(hosted.results.map((result) => idOf(result, 'call'))).not.toContain(waiting);
+});
+
 it('keeps the start-up step of the message being started while a later one arrives', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
@@ -612,10 +672,14 @@ it('prompts again a message House sends again after a restart when its CLI showe
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toHaveLength(2);
 });
 
-it.each(['a Kit restart', 'a kill'])(
-  'starts the first message of a Claude Code conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
-  async (ending) => {
-    const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+it.each([
+  ['claude-agent-acp', 'a Kit restart', 'Resource not found'],
+  ['claude-agent-acp', 'a kill', 'Resource not found'],
+  ['codex-acp', 'a Kit restart', 'Internal error'],
+])(
+  'starts the first message of a %s conversation in a new session it names when the CLI wrote nothing of the opened one before %s',
+  async (kind, ending, refused) => {
+    const hosted = await hostKit([{ kind }]);
     hosted.call({ kind: 'open' });
     const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
     if (ending === 'a kill') {
@@ -632,12 +696,12 @@ it.each(['a Kit restart', 'a kill'])(
     const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
     expect(outcome(ended.body)).toEqual({ text: 'started' });
     expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt')!.params).toMatchObject({ sessionId: opened });
-    expect(hosted.kit.stderr()).toMatch(/^kit: conversation .+ opens a new session: the Agent's CLI could not resume this conversation: Resource not found/m);
+    expect(hosted.kit.stderr()).toContain(`opens a new session: the Agent's CLI could not resume this conversation: ${refused}`);
   },
 );
 
-it.each(['codex-acp', 'grok-build'])('resumes the session %s wrote when the conversation opened for its first message after a Kit restart', async (kind) => {
-  const hosted = await hostKit([{ kind }]);
+it('resumes the session Grok Build wrote when the conversation opened for its first message after a Kit restart', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }]);
   hosted.call({ kind: 'open' });
   const { provider_session_id: stored } = (await hosted.result(lastCall())) as { provider_session_id: string };
   await hosted.restart();
@@ -813,6 +877,10 @@ function operations(hosted: Hosted, connection = hosted.house.connections.at(-1)
   return connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'turn');
 }
 
+function written(turn: unknown, operation: Operation): Record<string, unknown> {
+  return { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, operation };
+}
+
 function gated(hosted: Hosted, gate: string): () => Promise<void> {
   return () => writeFile(join(hosted.home, gate), '');
 }
@@ -852,6 +920,127 @@ it('sends two messages that arrived mid-turn as two turns in the order they arri
   expect(await ends(hosted, 3)).toEqual([{ text: 'first' }, { text: 'second' }, { text: 'third' }]);
   expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say second', '@say third']);
   expect(new Set(hosted.turns.map((turn) => idOf(turn, 'turn'))).size).toBe(3);
+});
+
+it.each(KINDS)("takes a waiting message out of the queue for %s, which then never starts, and answers that it started one it already has", async (kind) => {
+  const hosted = await opened(kind);
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  const started = lastMessage();
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
+  hosted.call({ kind: 'message', text: '@say second', first: false });
+  const second = lastCall();
+  const waiting = lastMessage();
+  hosted.call({ kind: 'message', text: '@say third', first: false });
+
+  hosted.call({ kind: 'take_out', message_id: waiting });
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(await hosted.result(second)).toEqual({ refused: 'the message was taken out before it started' });
+  hosted.call({ kind: 'take_out', message_id: started });
+  expect(await hosted.result(lastCall())).toEqual({ started: true });
+  await release();
+
+  expect(await ends(hosted, 2)).toEqual([{ text: 'first' }, { text: 'third' }]);
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say third']);
+});
+
+it.each([
+  ['codex-acp', null, 'Read the specs'],
+  ['claude-agent-acp', 'general-purpose', 'Read the specs'],
+  ['grok-build', 'general', null],
+])("shows the sub-agent a script's @subagent starts in %s as its own part, its task, the step its CLI reports and its end", async (kind, name, step) => {
+  const hosted = await opened(kind);
+  hosted.call({ kind: 'message', text: '@subagent Find the failing specs\n@say found', first: false });
+  await ends(hosted, 1);
+
+  expect(partsOf(endedTurns(hosted)[0]!)).toContainEqual({
+    type: 'subagent',
+    parent: null,
+    kind: 'agent',
+    name,
+    task: 'Find the failing specs',
+    status: 'done',
+    step,
+    report: 'Two specs fail',
+    tokens: null,
+    calls: null,
+    duration: null,
+  });
+});
+
+it.each(KINDS)("keeps a call a script's @emit reports to %s with its output as an other call carrying that output", async (kind) => {
+  const hosted = await opened(kind);
+  const asked = (update: Record<string, unknown>) => emit('session/update', { update: { toolCallId: 'call-asked', ...update } });
+  const script = [
+    asked({ sessionUpdate: 'tool_call', title: 'Ask the docs', kind: 'other', status: 'pending' }),
+    asked({ sessionUpdate: 'tool_call_update', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'Two specs fail' } }] }),
+  ].join('\n');
+  hosted.call({ kind: 'message', text: script, first: false });
+  await ends(hosted, 1);
+
+  expect(partsOf(endedTurns(hosted)[0]!)).toContainEqual(
+    expect.objectContaining({ type: 'call', parent: null, kind: 'other', line: 'Ask the docs', status: 'done', output: 'Two specs fail' }),
+  );
+});
+
+it("links a sub-agent Grok Build spawns for no task it started to none, so its steps, report and end land on no sub-agent", async () => {
+  const hosted = await opened('grok-build');
+  const child = '$SESSION-child';
+  const _meta = { 'x.ai/tool': { name: 'spawn_subagent', kind: 'task' } };
+  const script = [
+    emit('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-task', title: 'Find the failing specs', status: 'pending', rawInput: { description: 'Find the failing specs' }, _meta } }),
+    emit('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_spawned', child_session_id: child, description: 'Fix the failing specs', subagent_type: 'general' } }),
+    emit('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-step', title: 'Read the specs', kind: 'read', status: 'pending' } }, child),
+    emit('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-step', status: 'completed' } }, child),
+    emit('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_finished', child_session_id: child, status: 'completed', output: 'Two specs fail' } }),
+    emit('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-task', status: 'completed', _meta } }),
+  ].join('\n');
+  hosted.call({ kind: 'message', text: script, first: false });
+  await ends(hosted, 1);
+
+  const parts = partsOf(endedTurns(hosted)[0]!);
+  expect(parts.filter((part) => part.type === 'subagent')).toEqual([
+    { type: 'subagent', parent: null, kind: 'agent', name: null, task: 'Find the failing specs', status: 'running', step: null, report: null, tokens: null, calls: null, duration: null },
+  ]);
+  expect(parts.filter((part) => part.parent !== null)).toEqual([]);
+});
+
+it('keeps an empty file Claude Code writes as an edit of no lines with an empty diff', async () => {
+  const hosted = await opened('claude-agent-acp');
+  const path = '/work/empty.txt';
+  const result = { type: 'tool_result', tool_use_id: 'call-write', content: `File created successfully at: ${path}` };
+  const script = [
+    emit('session/update', {
+      update: { sessionUpdate: 'tool_call', toolCallId: 'call-write', title: `Write ${path}`, kind: 'edit', status: 'pending', rawInput: { file_path: path, content: '' }, _meta: { claudeCode: { toolName: 'Write' } } },
+    }),
+    emit('_claude/sdkMessage', {
+      message: {
+        type: 'user',
+        message: { role: 'user', content: [result] },
+        parent_tool_use_id: null,
+        timestamp: '2026-11-04T16:24:02.279Z',
+        tool_use_result: { type: 'create', filePath: path, content: '', structuredPatch: [], originalFile: null },
+      },
+    }),
+    emit('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-write', status: 'completed' } }),
+  ].join('\n');
+  hosted.call({ kind: 'message', text: script, first: false });
+  await ends(hosted, 1);
+
+  expect(partsOf(endedTurns(hosted)[0]!)).toContainEqual(
+    expect.objectContaining({ type: 'call', parent: null, kind: 'edit', status: 'done', files: [{ path, added: 0, removed: 0, diff: '' }] }),
+  );
+});
+
+it.each(KINDS)("sends the session state of a conversation %s runs once it opens, and last the state its turn ended with", async (kind) => {
+  const hosted = await opened(kind);
+  expect(states(hosted.connection)).not.toHaveLength(0);
+  hosted.call({ kind: 'message', text: '@say hi', first: false });
+  await ends(hosted, 1);
+
+  const sent = states(hosted.connection);
+  expect(sent.every(isState)).toBe(true);
+  expect(sent.at(-1)).toEqual((endedTurns(hosted)[0]!.body as { content: Turn }).content.state);
 });
 
 function processes(hosted: Hosted): unknown[] {
@@ -992,13 +1181,28 @@ function endedTurns(hosted: Hosted): Hosted['turns'] {
   return hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 }
 
-function subagents(hosted: Hosted): unknown[] {
-  return hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'subagents');
+function states(connection: Hosted['connection']): SessionState[] {
+  return connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'state').map((oneWayCall) => oneWayCall.state as SessionState);
+}
+
+function running(hosted: Hosted): SessionState['running'][] {
+  return states(hosted.connection)
+    .map((state) => state.running)
+    .filter((now, index, all) => index === 0 || JSON.stringify(now) !== JSON.stringify(all[index - 1]));
+}
+
+function partsOf(received: Received): readonly Part[] {
+  return (received.body as { content: Turn }).content.parts;
+}
+
+function saved(received: Received): { parts: readonly Part[]; failed?: string } {
+  const { content, failed } = received.body as { content: Turn; failed?: string };
+  return { parts: content.parts, ...(failed === undefined ? {} : { failed }) };
 }
 
 function claudeResult(fields: Record<string, unknown>): string {
   const message = { type: 'result', origin: { kind: 'human' }, ...fields };
-  return `@emit ${JSON.stringify({ method: '_claude/sdkMessage', params: { sessionId: '$SESSION', message } })}`;
+  return emit('_claude/sdkMessage', { message });
 }
 
 it('ends a recorded Claude Code turn at its result while the sub-agent it started runs on in the background, sends a message that arrives then at once, and shows the follow-up as a turn the CLI started', async () => {
@@ -1007,35 +1211,30 @@ it('ends a recorded Claude Code turn at its result while the sub-agent it starte
   hosted.call({ kind: 'message', text: HOLDING, first: false });
 
   expect(await ends(hosted, 1)).toEqual([{ text: 'launched' }]);
-  expect((endedTurns(hosted)[0]!.body as { parts: unknown[] }).parts).toContainEqual({ type: 'subagent', description: 'Sleep twice', status: 'running', result: null });
+  expect(partsOf(endedTurns(hosted)[0]!)).toContainEqual(expect.objectContaining({ type: 'subagent', task: 'Sleep twice', status: 'running', report: null }));
   hosted.call({ kind: 'message', text: '@say next', first: false });
   expect(await ends(hosted, 2)).toEqual([{ text: 'launched' }, { text: 'next' }]);
   await release();
 
   const turns = await ends(hosted, 3);
   expect(turns[2]).toEqual({ text: 'The background agent finished and replied "slept".' });
-  expect((endedTurns(hosted)[2]!.body as { parts: unknown[] }).parts[0]).toEqual({ type: 'subagent', description: 'Sleep twice', status: 'done', result: 'slept' });
+  expect(partsOf(endedTurns(hosted)[2]!)[0]).toEqual(expect.objectContaining({ type: 'subagent', task: 'Sleep twice', status: 'done', report: 'slept' }));
   expect(await prompts(hosted)).toEqual([HOLDING, '@say next']);
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
 });
 
-it('relays what a background Claude Code sub-agent is doing while it runs, and that none runs once it ends', async () => {
+it("relays what a background Claude Code sub-agent is doing while it runs in the session's state, and that none runs once it ends", async () => {
   const hosted = await opened('claude-agent-acp');
   const release = gated(hosted, 'held');
   hosted.call({ kind: 'message', text: HOLDING, first: false });
   await ends(hosted, 1);
 
-  const subagent = (activity: string | null) => ({ type: 'subagents', conversation_id: 'conversation-1', subagents: [{ description: 'Sleep twice', activity }] });
-  expect(subagents(hosted)).toEqual([subagent(null)]);
+  const subagent = (progress: string | null) => [{ kind: 'subagent', label: 'Sleep twice', progress, next: null }];
+  expect(running(hosted)).toEqual([[], subagent(null)]);
   await release();
 
   await ends(hosted, 2);
-  expect(subagents(hosted)).toEqual([
-    subagent(null),
-    subagent('Running First sleep'),
-    subagent('Running Second sleep'),
-    { type: 'subagents', conversation_id: 'conversation-1', subagents: [] },
-  ]);
+  expect(running(hosted)).toEqual([[], subagent(null), subagent('Running First sleep'), subagent('Running Second sleep'), []]);
 });
 
 it('ends a Claude Code turn whose sub-agent runs on refused at its result, and a refused one with none at its answer with the explanation the adapter sent after its result', async () => {
@@ -1053,7 +1252,7 @@ it('ends a Claude Code turn whose sub-agent runs on refused at its result, and a
   await release();
 
   expect(await ends(hosted, 2)).toEqual([{ failed: 'refused' }, { failed: 'refused' }]);
-  expect((endedTurns(hosted)[1]!.body as { parts: unknown[] }).parts).toContainEqual({ type: 'text', text: 'I cannot help with that' });
+  expect(partsOf(endedTurns(hosted)[1]!)).toContainEqual({ type: 'text', parent: null, text: 'I cannot help with that' });
   expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(2);
 });
 
@@ -1090,7 +1289,7 @@ it.each([
   expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
 });
 
-it('tells a Kit connection that opens which sub-agents run, none when they finished while no connection was open', async () => {
+it("tells a Kit connection that opens the session's state whole, no sub-agent running when they finished while no connection was open", async () => {
   const hosted = await opened('claude-agent-acp');
   const release = gated(hosted, 'held');
   hosted.call({ kind: 'message', text: HOLDING, first: false });
@@ -1103,11 +1302,13 @@ it('tells a Kit connection that opens which sub-agents run, none when they finis
   admit();
 
   const reopened = await until(() => hosted.house.connections[1]);
-  const told = () => reopened.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'subagents');
-  expect(await until(() => told()[0])).toEqual({ type: 'subagents', conversation_id: 'conversation-1', subagents: [] });
+  const told = await until(() => reopened.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'state'));
+  expect(Object.keys(told).sort()).toEqual(['conversation_id', 'state', 'type']);
+  expect(isState(told.state)).toBe(true);
+  expect((told.state as SessionState).running).toEqual([]);
 });
 
-it('tells House no sub-agent runs once the process that ran one is killed', async () => {
+it("tells House in the session's state that no sub-agent runs once the process that ran one is killed", async () => {
   const hosted = await opened('claude-agent-acp');
   onTestFinished(gated(hosted, 'held'));
   hosted.call({ kind: 'message', text: HOLDING, first: false });
@@ -1115,7 +1316,7 @@ it('tells House no sub-agent runs once the process that ran one is killed', asyn
 
   hosted.call({ kind: 'kill' });
 
-  await until(() => (subagents(hosted).at(-1) as { subagents: unknown[] }).subagents.length === 0);
+  await until(() => running(hosted).length > 2 && running(hosted).at(-1)!.length === 0);
 });
 
 it.each(['codex-acp', 'claude-agent-acp'])('cancels a turn %s reported ended before it answered its prompt when the owner interrupts it', async (kind) => {
@@ -1292,7 +1493,9 @@ it('reports a turn start and end once each under the turn id Kit gave it', async
   expect(started).toHaveLength(1);
   expect(started[0]!.body).toEqual({ conversation: 'conversation-1', turn: expect.stringMatching(UUID) });
   expect(idOf(ended, 'turn')).toBe(idOf(started[0]!, 'turn'));
-  expect(without(ended, 'conversation', 'turn')).toEqual({ parts: [{ type: 'text', text: 'Hello' }], context: null });
+  expect(Object.keys(without(ended, 'conversation', 'turn') as object)).toEqual(['content']);
+  expect(isTurn((ended.body as { content: unknown }).content)).toBe(true);
+  expect(saved(ended)).toEqual({ parts: [{ type: 'text', parent: null, text: 'Hello' }] });
 });
 
 it('ends a turn failed as exited when its process exits during it, with the parts it had, and logs the exit only on its computer', async () => {
@@ -1301,7 +1504,7 @@ it('ends a turn failed as exited when its process exits during it, with the part
   hosted.call({ kind: 'message', text: '@say partial\n@exit 3', first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
-  expect(without(ended, 'conversation', 'turn')).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'exited' });
+  expect(saved(ended)).toEqual({ parts: [{ type: 'text', parent: null, text: 'partial' }], failed: 'exited' });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: the CLI exited with 3/m);
   await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
 });
@@ -1390,7 +1593,7 @@ it('ends a CLI that never answers an option the owner changed once the silence b
   )!.pid as number;
   await until(() => !alive(held));
   await rm(join(hosted.home, 'hold-option'));
-  hosted.call({ kind: 'message', text: '@say next', first: false });
+  hosted.call({ kind: 'message', text: '@say next', first: true });
   expect(await ends(hosted, 1)).toEqual([{ text: 'next' }]);
   expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt')!.pid).not.toBe(held);
 });
@@ -1442,14 +1645,14 @@ it.each(KINDS)('ends a turn failed as an error when %s fails the prompt after it
   ]);
 });
 
-it('ends a turn failed as a limit when Claude answers its prompt with an exhausted limit, shows its words as an error marker and keeps the process', async () => {
+it("ends a turn failed as a limit when Claude answers its prompt with an exhausted limit, keeps the CLI's words as an error notice and keeps the process", async () => {
   const hosted = await opened('claude-agent-acp');
   const limit = "You've hit your weekly limit · resets 11am (UTC)";
 
   hosted.call({ kind: 'message', text: `@sessionfailure ${limit}`, first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
-  expect(without(ended, 'conversation', 'turn')).toEqual({ parts: [{ type: 'marker', marker: 'retry', text: limit }], context: null, failed: 'limit' });
+  expect(saved(ended)).toEqual({ parts: [{ type: 'notice', parent: null, kind: 'error', text: limit }], failed: 'limit' });
   hosted.call({ kind: 'message', text: '@say back', first: false });
   expect(await ends(hosted, 2)).toEqual([{ failed: 'limit' }, { text: 'back' }]);
   const log = await hosted.adapterLog();
@@ -1463,19 +1666,25 @@ it.each(KINDS)('ends a turn failed when %s refuses its prompt, with the explanat
   hosted.call({ kind: 'message', text: '@say I cannot help with that.\n@refusal', first: false });
 
   await ends(hosted, 2);
-  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/end').map((turn) => without(turn, 'conversation', 'turn'))).toEqual([
-    { parts: [], context: null, failed: 'refused' },
-    { parts: [{ type: 'text', text: 'I cannot help with that.' }], context: null, failed: 'refused' },
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/end').map(saved)).toEqual([
+    { parts: [], failed: 'refused' },
+    { parts: [{ type: 'text', parent: null, text: 'I cannot help with that.' }], failed: 'refused' },
   ]);
 });
 
-it.each(KINDS)('ends a turn failed as signed out when %s answers its prompt that it needs a sign-in, its answer only in the Kit log', async (kind) => {
+it.each(KINDS)("ends a turn failed as signed out when %s answers its prompt that it needs a sign-in, its words as the turn's error notice", async (kind) => {
   const hosted = await opened(kind);
 
   hosted.call({ kind: 'message', text: '@say partial\n@signedout', first: true });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
-  expect(without(ended, 'conversation', 'turn')).toEqual({ parts: [{ type: 'text', text: 'partial' }], context: null, failed: 'signed_out' });
+  expect(saved(ended)).toEqual({
+    parts: [
+      { type: 'text', parent: null, text: 'partial' },
+      { type: 'notice', parent: null, kind: 'error', text: 'Authentication required' },
+    ],
+    failed: 'signed_out',
+  });
   expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: Authentication required/m);
 });
 
@@ -1520,10 +1729,10 @@ it('writes no part operation while nobody watches, and still reports the turn st
   });
 
   const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
-  expect((ended.body as { parts: unknown[] }).parts).toEqual([
-    { type: 'text', text: 'Hello' },
-    { type: 'commands', count: 1 },
-    { type: 'text', text: expect.stringContaining('selected') },
+  expect(partsOf(ended)).toEqual([
+    { type: 'text', parent: null, text: 'Hello' },
+    { type: 'call', parent: null, kind: 'read', line: 'Read the file', status: 'done', returned: null, duration: null },
+    { type: 'text', parent: null, text: expect.stringContaining('selected') },
   ]);
   expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
   expect(operations(hosted)).toEqual([]);
@@ -1548,9 +1757,9 @@ it('writes the operations so far once when the owner becomes watched mid-turn, t
 
   expect(await ends(hosted, 1)).toEqual([{ text: 'onetwothree' }]);
   expect(operations(hosted)).toEqual([
-    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 0, part: { type: 'text', text: 'one' } },
-    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 1, part: { type: 'commands', count: 1 } },
-    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 2, part: { type: 'text', text: 'two' } },
+    written(turn, { op: 'start', index: 0, part: { type: 'text', parent: null, text: 'one' } }),
+    written(turn, { op: 'start', index: 1, part: { type: 'call', parent: null, kind: 'read', line: 'Read it', status: 'done', returned: null, duration: null } }),
+    written(turn, { op: 'start', index: 2, part: { type: 'text', parent: null, text: 'two' } }),
   ]);
 });
 
@@ -1573,8 +1782,8 @@ it("writes the running turn's operations so far once on a Kit connection that re
 
   expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
   expect(operations(hosted, watched)).toEqual([
-    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 0, part: { type: 'text', text: 'one' } },
-    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'append', index: 0, text: ' two' },
+    written(turn, { op: 'start', index: 0, part: { type: 'text', parent: null, text: 'one' } }),
+    written(turn, { op: 'append', index: 0, text: ' two' }),
   ]);
 });
 
@@ -1600,22 +1809,20 @@ it("writes each operation of a turn as it happens, before House answers the turn
   expect(await ends(hosted, 1)).toEqual([{ text: 'one two' }]);
   const turn = idOf(hosted.turns[0]!, 'turn');
   expect(operations(hosted)).toEqual([
-    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 0, part: { type: 'text', text: 'one' } },
-    {
-      type: 'turn',
-      conversation_id: 'conversation-1',
-      turn_id: turn,
+    written(turn, { op: 'start', index: 0, part: { type: 'text', parent: null, text: 'one' } }),
+    written(turn, {
       op: 'start',
       index: 1,
       part: {
         type: 'plan',
+        parent: null,
         entries: [
           { content: 'read', status: 'pending' },
           { content: 'fix', status: 'pending' },
         ],
       },
-    },
-    { type: 'turn', conversation_id: 'conversation-1', turn_id: turn, op: 'start', index: 2, part: { type: 'text', text: ' two' } },
+    }),
+    written(turn, { op: 'start', index: 2, part: { type: 'text', parent: null, text: ' two' } }),
   ]);
 });
 

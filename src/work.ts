@@ -176,6 +176,7 @@ class ClaudeWork extends Work {
 }
 
 class CodexWork extends Work {
+  private readonly tapped: (message: Message) => void;
   private readonly threads = new Map<string, boolean>();
   private readonly queues = new Map<string, number>();
   private readonly goals = new Set<string>();
@@ -192,6 +193,11 @@ class CodexWork extends Work {
   private heard = 0;
   private proving = -1;
   private proven = -1;
+
+  constructor(changed: () => void, tapped: (message: Message) => void) {
+    super(changed);
+    this.tapped = tapped;
+  }
 
   override async open(cli: string): Promise<Record<string, string>> {
     this.path = join(socketDirectory(), `${randomUUID()}.sock`);
@@ -279,6 +285,7 @@ class CodexWork extends Work {
 
   private stream(message: Message, socket: Socket): void {
     const params = message.params as Fields;
+    if (message.method !== undefined) this.tapped(message);
     switch (message.method) {
       case 'thread/status/changed':
         this.threads.set(params.threadId, params.status.type === 'active' && params.status.activeFlags.length === 0);
@@ -340,8 +347,8 @@ class GrokWork extends Work {
   }
 }
 
-export function workFor(kind: string, cwd: string, changed: () => void): Work {
+export function workFor(kind: string, cwd: string, changed: () => void, tapped: (message: Message) => void): Work {
   if (kind === 'claude-agent-acp') return new ClaudeWork(cwd, changed);
-  if (kind === 'codex-acp') return new CodexWork(changed);
+  if (kind === 'codex-acp') return new CodexWork(changed, tapped);
   return new GrokWork(changed);
 }
