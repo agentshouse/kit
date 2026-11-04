@@ -193,17 +193,36 @@ function hunks(patch: Fields[]): string {
     .join('');
 }
 
-function replaced(path: string, before: string, after: string): FileChange {
-  if (before === '') return wholeFile(path, '+', after);
-  const unmatched = new Map<string, number>();
-  for (const line of before.replace(/\n$/, '').split('\n')) unmatched.set(line, (unmatched.get(line) ?? 0) + 1);
-  let added = 0;
-  for (const line of after.replace(/\n$/, '').split('\n')) {
-    const held = unmatched.get(line) ?? 0;
-    if (held > 0) unmatched.set(line, held - 1);
-    else added++;
-  }
-  return { path, added, removed: [...unmatched.values()].reduce((sum, left) => sum + left, 0), diff: null };
+function linesOf(text: string): string[] {
+  return text === '' ? [] : text.replace(/\n$/, '').split('\n');
+}
+
+function replacement(site: Fields): { added: number; removed: number; diff: string } {
+  const before = linesOf(site.old_string ?? '');
+  const after = linesOf(site.new_string ?? '');
+  let head = 0;
+  while (head < before.length && head < after.length && before[head] === after[head]) head++;
+  let tail = 0;
+  while (tail < before.length - head && tail < after.length - head && before.at(-1 - tail) === after.at(-1 - tail)) tail++;
+  const removed = before.slice(head, before.length - tail);
+  const added = after.slice(head, after.length - tail);
+  const lines = [...removed.map((line) => `-${line}\n`), ...added.map((line) => `+${line}\n`)].join('');
+  const from = (line: number | undefined, kept: string[]) => (line ?? 1) + head - (kept.length === 0 ? 1 : 0);
+  const header = `@@ -${from(site.old_line, removed)},${removed.length} +${from(site.new_line, added)},${added.length} @@\n`;
+  return { added: added.length, removed: removed.length, diff: lines === '' ? '' : header + lines };
+}
+
+function replaced(entry: Fields): FileChange {
+  const sites: Fields[] = entry._meta?.details ?? [
+    { old_string: entry.oldText, new_string: entry.newText, old_line: entry._meta?.old_line, new_line: entry._meta?.new_line },
+  ];
+  const hunks = sites.map(replacement);
+  return {
+    path: entry.path,
+    added: hunks.reduce((sum, hunk) => sum + hunk.added, 0),
+    removed: hunks.reduce((sum, hunk) => sum + hunk.removed, 0),
+    diff: keptDiff(hunks.map((hunk) => hunk.diff).join('')),
+  };
 }
 
 function turnDiffFiles(diff: string): SessionState['files'] {
@@ -289,7 +308,7 @@ abstract class Reader {
 
   began(): Event[] {
     this.edits.clear();
-    return this.filesFromEdits() ? this.editedFiles() : [];
+    return this.editedFiles();
   }
 
   closeTurn(): Event[] {
@@ -1088,7 +1107,7 @@ class GrokReader extends Reader {
       case 'write':
       case 'edit': {
         const diffs = (held.content ?? []).filter((entry) => entry.type === 'diff');
-        return call(held, title, { kind: 'edit', files: diffs.map((entry) => replaced(entry.path, entry.oldText ?? '', entry.newText ?? '')) });
+        return call(held, title, { kind: 'edit', files: diffs.map(replaced) });
       }
       case 'fetch':
         return call(held, title, { kind: 'fetch', output });

@@ -163,6 +163,44 @@ async function tool(client: AgentContext, sessionId: string, title: string) {
   apiMessages++;
 }
 
+const SUBAGENT_STEP = 'Read the specs';
+const SUBAGENT_REPORT = 'Two specs fail';
+
+async function update(client: AgentContext, sessionId: string, update: Record<string, unknown>) {
+  await client.notify('session/update', { sessionId, update } as never);
+}
+
+async function subagent(client: AgentContext, sessionId: string, task: string) {
+  const id = `call-${++toolCalls}`;
+  const step = `call-${++toolCalls}`;
+  const child = `${sessionId}-${id}`;
+  const read = { toolCallId: step, title: SUBAGENT_STEP, kind: 'read' };
+  if (kind === 'codex-acp') {
+    await update(client, sessionId, { sessionUpdate: 'subagent_spawned', subagentSessionId: child, name: task, task: `Delegated task for ${task}`, capabilities: {} });
+    await update(client, child, { sessionUpdate: 'tool_call', ...read, status: 'pending' });
+    await update(client, child, { sessionUpdate: 'tool_call_update', toolCallId: step, status: 'completed' });
+    await update(client, child, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: SUBAGENT_REPORT }, messageId: `item-${child}` });
+    await update(client, sessionId, { sessionUpdate: 'subagent_state_update', subagentSessionId: child, state: 'completed' });
+  } else if (kind === 'claude-agent-acp') {
+    const _meta = { claudeCode: { toolName: 'Agent' } };
+    const rawInput = { description: task, prompt: task, subagent_type: 'general-purpose' };
+    await update(client, sessionId, { sessionUpdate: 'tool_call', toolCallId: id, title: task, kind: 'think', status: 'pending', rawInput, _meta });
+    await client.notify('_claude/sdkMessage', { sessionId, message: { type: 'system', subtype: 'task_progress', tool_use_id: id, description: SUBAGENT_STEP } });
+    const content = [{ type: 'content', content: { type: 'text', text: SUBAGENT_REPORT } }];
+    await update(client, sessionId, { sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed', content, _meta });
+  } else {
+    const _meta = { 'x.ai/tool': { name: 'spawn_subagent', kind: 'task' } };
+    const spawned = { sessionUpdate: 'subagent_spawned', child_session_id: child, description: task, subagent_type: 'general' };
+    await update(client, sessionId, { sessionUpdate: 'tool_call', toolCallId: id, title: task, status: 'pending', rawInput: { description: task }, _meta });
+    await client.notify('_x.ai/session_notification', { sessionId, update: spawned });
+    await update(client, child, { sessionUpdate: 'tool_call', ...read, status: 'pending' });
+    await update(client, child, { sessionUpdate: 'tool_call_update', toolCallId: step, status: 'completed' });
+    const finished = { sessionUpdate: 'subagent_finished', child_session_id: child, status: 'completed', output: SUBAGENT_REPORT };
+    await client.notify('_x.ai/session_notification', { sessionId, update: finished });
+    await update(client, sessionId, { sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed', _meta });
+  }
+}
+
 async function turnStarted(client: AgentContext, sessionId: string) {
   turning.add(sessionId);
   if (kind === 'grok-build') {
@@ -211,6 +249,7 @@ async function directive(
   if (name === 'version') await say(client, sessionId, `${cli.path} ${cli.release}`);
   if (name === 'note') await note(client, sessionId, argument);
   if (name === 'tool') await tool(client, sessionId, argument);
+  if (name === 'subagent') await subagent(client, sessionId, argument);
   if (name === 'think') {
     const messageId =
       kind === 'codex-acp' ? `item-reasoning-${++items}` : kind === 'claude-agent-acp' ? `msg_${apiMessages}` : undefined;

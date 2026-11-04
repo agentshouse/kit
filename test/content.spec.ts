@@ -312,6 +312,32 @@ it('keeps each recorded call with its kind: a web search with how much it found,
   expect(edited.state.files).toEqual([{ path: '/work/notes.txt', added: 1, removed: 1 }]);
 });
 
+it("keeps each recorded Grok Build edit of an existing file with its diff at the lines it changed, and a write over the whole file with what it replaced", async () => {
+  const edited = (await replayed('grok-edit')).turns[0]!.content;
+  const written = (await replayed('grok-write')).turns[0]!.content;
+  const edits = (content: Turn) => content.parts.filter((part) => part.type === 'call' && part.kind === 'edit').map(untimed);
+  const notes = (added: number, removed: number, diff: string) => [{ path: '/work/notes.txt', added, removed, diff }];
+
+  expect(edits(edited)).toEqual([
+    { type: 'call', parent: null, kind: 'edit', line: 'Edit `/work/notes.txt`', status: 'done', files: notes(1, 1, '@@ -2,1 +2,1 @@\n-two\n+TWO\n') },
+    { type: 'call', parent: null, kind: 'edit', line: 'Edit `/work/notes.txt`', status: 'done', files: notes(1, 1, '@@ -9,1 +9,1 @@\n-nine\n+NINE\n') },
+  ]);
+  expect(edited.state.files).toEqual([{ path: '/work/notes.txt', added: 2, removed: 2 }]);
+  const before = ['one', 'TWO', 'three', 'four', 'five', 'six', 'seven', 'eight', 'NINE', 'ten'].map((line) => `-${line}\n`).join('');
+  expect(edits(written)).toEqual([
+    { type: 'call', parent: null, kind: 'edit', line: 'Write `/work/notes.txt`', status: 'done', files: notes(2, 10, `@@ -1,10 +1,2 @@\n${before}+alpha\n+beta\n`) },
+  ]);
+});
+
+it.each(['claude-retry', 'codex-web', 'grok-edit'])("clears the last turn's files in the session's state when the turn after %s edits nothing", async (fixture) => {
+  const { hosted } = await replayed(fixture);
+  await until(() => states(hosted).at(-1)!.files.length > 0);
+
+  hosted.call({ kind: 'message', text: '@say done', first: false });
+  const next = await until(() => hosted.turns.filter((turn) => turn.path === '/kit/turns/end')[1]);
+  expect(endedOf(next).content.state.files).toEqual([]);
+});
+
 it("cuts a command's output to its last lines, a fetched page to its first part and an edit's diff beyond its size to its line counts", async () => {
   const output = Array.from({ length: OUTPUT_LINES + 10 }, (_, index) => `line ${index + 1}`).join('\n');
   const page = 'p'.repeat(FIRST_PART_CHARACTERS + 50);
@@ -382,9 +408,10 @@ it("reads a recorded Claude Code session's title, limits, cost and turn duration
 });
 
 it("reads a recorded Codex session's limits, its turn's duration and diff and its suggested next prompt into its state", async () => {
-  const { hosted, turns } = await replayed('codex-web');
+  const { hosted } = await replayed('codex-web');
 
-  expect(turns[0]!.content.state).toEqual(
+  await until(() => states(hosted).at(-1)?.duration === 22_836);
+  expect(states(hosted).at(-1)).toEqual(
     expect.objectContaining({
       limits: [
         { name: null, minutes: 300, percent: 14, resets: '2026-11-04T22:04:21.000Z' },

@@ -885,6 +885,41 @@ it.each(KINDS)("takes a waiting message out of the queue for %s, which then neve
   expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say third']);
 });
 
+it.each([
+  ['codex-acp', null, 'Read the specs'],
+  ['claude-agent-acp', 'general-purpose', 'Read the specs'],
+  ['grok-build', 'general', null],
+])("shows the sub-agent a script's @subagent starts in %s as its own part, its task, the step its CLI reports and its end", async (kind, name, step) => {
+  const hosted = await opened(kind);
+  hosted.call({ kind: 'message', text: '@subagent Find the failing specs\n@say found', first: false });
+  await ends(hosted, 1);
+
+  expect(partsOf(endedTurns(hosted)[0]!)).toContainEqual({
+    type: 'subagent',
+    parent: null,
+    kind: 'agent',
+    name,
+    task: 'Find the failing specs',
+    status: 'done',
+    step,
+    report: 'Two specs fail',
+    tokens: null,
+    calls: null,
+    duration: null,
+  });
+});
+
+it.each(KINDS)("sends the session state of a conversation %s runs once it opens, and last the state its turn ended with", async (kind) => {
+  const hosted = await opened(kind);
+  expect(states(hosted.connection)).not.toHaveLength(0);
+  hosted.call({ kind: 'message', text: '@say hi', first: false });
+  await ends(hosted, 1);
+
+  const sent = states(hosted.connection);
+  expect(sent.every(isState)).toBe(true);
+  expect(sent.at(-1)).toEqual((endedTurns(hosted)[0]!.body as { content: Turn }).content.state);
+});
+
 function processes(hosted: Hosted): unknown[] {
   return hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process').map((oneWayCall) => oneWayCall.running);
 }
