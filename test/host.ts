@@ -41,7 +41,7 @@ export interface Platform {
   macos?: string;
   osRelease?: string;
   systemd?: boolean;
-  glibc?: boolean;
+  glibc?: string | false;
   absent?: string[];
   shell?: string;
   environment?: Record<string, string>;
@@ -149,7 +149,7 @@ case "$1" in
     [ -z "$detached" ] || printf 'image=%s\\npolicy=%s\\nhome=%s\\nworkspace=%s\\nlabel=%s\\n' "$image" "$policy" "$home" "$workspace" "$label" > "$FAKE/container"
     if [ "$entrypoint" = bash ]; then
       while [ "$1" != - ]; do shift; done
-      exec env FAKE_SYSTEM=Linux FAKE_MACHINE=x86_64 FAKE_GLIBC=1 NODE_EXTRA_CA_CERTS="$home/certificates.pem" bash -s -- "$2" "$3" "$4" "$home\${5#/kit-home}"
+      exec env FAKE_SYSTEM=Linux FAKE_MACHINE=x86_64 FAKE_GLIBC=2.41 NODE_EXTRA_CA_CERTS="$home/certificates.pem" bash -s -- "$2" "$3" "$4" "$home\${5#/kit-home}"
     fi
     if [ -n "$login" ] && [ -z "$help" ]; then set -- "$home" "$replacing"; ${LOGIN.replaceAll('\n', '\n    ')}fi
     ;;
@@ -162,7 +162,7 @@ esac\n`,
   'apt-get': `${LOGGED}case "$*" in *docker-ce*) rm -f "$FAKE/docker-down" ;; esac\n`,
   'dpkg-query': ':\n',
   dpkg: 'case "$FAKE_MACHINE" in aarch64|arm64) echo arm64 ;; *) echo amd64 ;; esac\n',
-  getconf: '[ "$1" = GNU_LIBC_VERSION ] || exec /usr/bin/getconf "$@"\n[ "$FAKE_GLIBC" = 1 ] && echo \'glibc 2.41\'\n',
+  getconf: '[ "$1" = GNU_LIBC_VERSION ] || exec /usr/bin/getconf "$@"\n[ -n "$FAKE_GLIBC" ] && echo "glibc $FAKE_GLIBC"\n',
   security: `${LOGGED}printf -- '-----BEGIN CERTIFICATE-----\\nthe keychain authority\\n-----END CERTIFICATE-----\\n'\n`,
   id: 'case "$*" in -un|-nG|"-nG owner") echo owner ;; *) exec /usr/bin/id "$@" ;; esac\n',
   'xdg-open': `${LOGGED}[ ! -e "$FAKE/opener-fails" ]\n`,
@@ -256,7 +256,7 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     FAKE_MACHINE: platform.machine,
     FAKE_ARM64: platform.appleSilicon === false ? '0' : '1',
     FAKE_MACOS: platform.macos ?? '27.0.1',
-    FAKE_GLIBC: platform.glibc === false ? '0' : '1',
+    FAKE_GLIBC: platform.glibc === false ? '' : (platform.glibc ?? '2.41'),
     ...platform.environment,
   };
   const ran = (command: string, argv: string[], added: Record<string, string> = {}): Ran => {
