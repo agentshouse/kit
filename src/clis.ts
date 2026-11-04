@@ -16,9 +16,8 @@ export interface Cli {
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
   fullAccess: string | null;
-  sessionMeta(bridge: string, title: string): Record<string, unknown>;
+  sessionMeta(bridge: string): Record<string, unknown>;
   unknownSession(error: unknown): boolean;
-  renames: boolean;
   allowHouse(path: string): Promise<void>;
   questionFields(request: CreateElicitationRequest): string[];
   signedIn: { command: string[] } | { initializeMeta: string };
@@ -138,7 +137,6 @@ export const CLIS: Record<string, Cli> = {
       const { code, data } = answered(error);
       return code === -32603 && typeof data?.details === 'string' && data.details.startsWith('no rollout found');
     },
-    renames: true,
     allowHouse: allowHouseInCodex,
     questionFields: codexQuestionFields,
     signedIn: { command: ['login', 'status'] },
@@ -158,19 +156,17 @@ export const CLIS: Record<string, Cli> = {
     },
     args: [],
     fullAccess: 'bypassPermissions',
-    sessionMeta: (bridge, title) => ({
+    sessionMeta: (bridge) => ({
       claudeCode: {
         options: {
           allowedTools: ['Bash(house:*)'],
           includeHookEvents: true,
-          title,
           settings: { sandbox: { network: bridgeInClaudeSandbox(bridge) } },
         },
         emitRawSDKMessages: [...RAW_SUBTYPES.map((subtype) => ({ type: 'system', subtype })), ...RAW_TYPES.map((type) => ({ type }))],
       },
     }),
     unknownSession: (error) => answered(error).code === -32002,
-    renames: false,
     allowHouse: nothing,
     questionFields: claudeQuestionFields,
     signedIn: { command: ['auth', 'status'] },
@@ -187,7 +183,6 @@ export const CLIS: Record<string, Cli> = {
     fullAccess: null,
     sessionMeta: () => ({}),
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
-    renames: false,
     allowHouse: nothing,
     questionFields: () => [],
     signedIn: { initializeMeta: 'defaultAuthMethodId' },

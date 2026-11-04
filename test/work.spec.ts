@@ -283,14 +283,15 @@ it('keeps work whose end never arrives busy until the Conversation process exits
   await until(() => hosted.idles[2]);
 });
 
-it('names a new Claude Code session itself and passes the CLI’s background reports through', async () => {
+it('leaves a new Claude Code session to generate its own title and passes the CLI’s background reports through', async () => {
   const hosted = await opened('claude-agent-acp');
 
   const created = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
+  expect((created.params as { _meta: { claudeCode: { options: object } } })._meta.claudeCode.options).not.toHaveProperty('title');
   expect(created.params).toMatchObject({
     _meta: {
       claudeCode: {
-        options: { title: 'conversation-1', includeHookEvents: true },
+        options: { includeHookEvents: true },
         emitRawSDKMessages: [
           ...[
             'background_tasks_changed',
@@ -313,15 +314,13 @@ it('names a new Claude Code session itself and passes the CLI’s background rep
   });
 });
 
-it('names a new Codex session itself before its first prompt and outside any turn', async () => {
-  const hosted = await opened('codex-acp');
+it.each(['codex-acp', 'claude-agent-acp'])('sends a new %s session no prompt but the one its message carries, so the CLI names the session itself', async (kind) => {
+  const hosted = await opened(kind);
 
   hosted.call({ kind: 'message', text: '@say first', first: false });
   await until(() => ended(hosted)[0]);
 
-  const log = await hosted.adapterLog();
-  const renamed = log.findIndex((entry) => entry.renamed !== undefined);
-  expect(log[renamed]!.renamed).toBe('conversation-1');
-  expect(renamed).toBeLessThan(log.findIndex((entry) => entry.method === 'session/prompt'));
+  const prompts = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt');
+  expect(prompts.map((entry) => entry.text)).toEqual(['@say first']);
   expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
 });

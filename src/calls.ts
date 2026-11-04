@@ -9,6 +9,7 @@ export type Result =
   | { exit_code: number }
   | { exit_code: number; output: string; cut: boolean }
   | { timed_out: true; output: string; cut: boolean }
+  | { started: true }
   | Record<string, never>;
 
 export interface KitMethods {
@@ -19,6 +20,7 @@ export interface KitMethods {
     readonly params: { message_id: string; text: string; first: boolean; at_once?: true; recent?: string; afk?: true };
     readonly result: Result;
   };
+  readonly take_out: { readonly params: { message_id: string }; readonly result: Result };
   readonly interrupt: { readonly params: { turn_id: string }; readonly result: Result };
   readonly answer: {
     readonly params: { interaction_id: string; response: unknown; request: unknown };

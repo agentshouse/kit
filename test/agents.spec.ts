@@ -124,7 +124,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
     os: expect.stringMatching(/\S/),
     ...('form' in report ? { form: expect.stringMatching(/^(laptop|desktop|server)$/) } : {}),
     kit_release: KIT_PACKAGE.version,
-    wire: 5,
+    wire: 6,
     agent_base: '/agents/house/agents',
     agents: [
       {

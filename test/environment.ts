@@ -403,9 +403,9 @@ export async function hostMac(
 }
 
 export function outcome(body: unknown): { text: string } | { failed: string } {
-  const ended = body as { parts: { type: string; text?: string }[]; failed?: string };
+  const ended = body as { content: { parts: { type: string; text?: string }[] }; failed?: string };
   if (ended.failed !== undefined) return { failed: ended.failed };
-  return { text: ended.parts.flatMap((part) => (part.type === 'text' ? [part.text!] : [])).join('') };
+  return { text: ended.content.parts.flatMap((part) => (part.type === 'text' ? [part.text!] : [])).join('') };
 }
 
 export function lastCall(): string {

@@ -562,10 +562,6 @@ const app = agent({ name: 'adapter-double' })
     await replaying;
     const text = promptText(params.prompt);
     written(params.sessionId);
-    if (kind === 'codex-acp' && text.startsWith('/rename ')) {
-      log({ renamed: text.slice('/rename '.length), params });
-      return { stopReason: 'end_turn' };
-    }
     log({ method: 'session/prompt', params, text });
     prompting.add(params.sessionId);
     turning.add(params.sessionId);

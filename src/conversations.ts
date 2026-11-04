@@ -8,6 +8,7 @@ import {
   type ResumeSessionRequest,
   type SessionConfigOption,
 } from '@agentclientprotocol/sdk';
+import type { Operation, SessionState, Tokens } from '@agentshouse/session-content';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -19,13 +20,13 @@ import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
+import { Content, type Placed } from './content.ts';
 import { answeredFailure, readerFor, type Event, type Message, type Reader, type Stop } from './events.ts';
 import { inspectedFile, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, type GrokPlan, type GrokQuestions } from './grok.ts';
 import { agentBase } from './home.ts';
 import type { Call, Calls, Result } from './calls.ts';
 import { instructions } from './instructions.ts';
-import { addedTokens, Parts, type Context, type Operation, type Part, type Tokens } from './parts.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { killMarked, Scope } from './scope.ts';
@@ -43,7 +44,7 @@ export interface Kit {
   changed(): void;
 }
 
-export type ConversationMethod = 'open' | 'message' | 'interrupt' | 'kill' | 'done' | 'option' | 'answer';
+export type ConversationMethod = 'open' | 'message' | 'take_out' | 'interrupt' | 'kill' | 'done' | 'option' | 'answer';
 
 export type ConversationCall = Call<ConversationMethod> & { [field: string]: unknown };
 
@@ -82,6 +83,26 @@ const NOT_SIGNED_IN = "the Agent's CLI is not signed in; sign it in on the Agent
 const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
 
 const UNSTEERED = "the Agent's CLI did not take the message into its running turn";
+
+const TAKEN_OUT = 'the message was taken out before it started';
+
+const QUIET: SessionState = {
+  title: null,
+  context: null,
+  limits: [],
+  cost: null,
+  tokens: null,
+  duration: null,
+  files: [],
+  branch: null,
+  worktree: null,
+  pull: null,
+  model: null,
+  effort: null,
+  mode: null,
+  suggestion: null,
+  running: [],
+};
 
 // A reader tells a working run from a stopped one by the minute, and House keeps no finer figure, so a run reports no oftener.
 const ACTIVITY_REPORT_MS = 60_000;
@@ -125,7 +146,26 @@ const GROK_QUESTION = {
   },
 };
 
-export const CONVERSATION_METHODS: ReadonlySet<string> = new Set<ConversationMethod>(['open', 'message', 'interrupt', 'kill', 'done', 'option', 'answer']);
+export const CONVERSATION_METHODS: ReadonlySet<string> = new Set<ConversationMethod>(['open', 'message', 'take_out', 'interrupt', 'kill', 'done', 'option', 'answer']);
+
+function addedTokens(sum: Tokens | null, tokens: Tokens): Tokens {
+  if (sum === null) return tokens;
+  return {
+    input: sum.input + tokens.input,
+    output: sum.output + tokens.output,
+    cache_read: sum.cache_read + tokens.cache_read,
+    cache_write: sum.cache_write + tokens.cache_write,
+  };
+}
+
+function workRuns(part: Placed): boolean | null {
+  return part.type === 'subagent' || part.type === 'background' ? part.status === 'running' : null;
+}
+
+function cliSaid(error: unknown): string {
+  const details = (error as { data?: { details?: unknown } } | null)?.data?.details;
+  return typeof details === 'string' && details !== '' ? `${causeOf(error)}: ${details}` : causeOf(error);
+}
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -181,7 +221,7 @@ function steers(adapter: Adapter): boolean {
 
 class Turn {
   readonly id = randomUUID();
-  readonly parts: Parts;
+  readonly content: Content;
   questions = 0;
   secrets = 0;
   prompted = false;
@@ -193,8 +233,14 @@ class Turn {
   readonly uploads: Promise<unknown>[] = [];
 
   constructor(emit: (operation: Operation) => void) {
-    this.parts = new Parts(emit);
+    this.content = new Content(emit);
   }
+}
+
+interface Keyed {
+  key: string;
+  parent: string | null;
+  part: Placed;
 }
 
 interface Running {
@@ -235,14 +281,16 @@ class Conversation {
   options: SessionConfigOption[] | null = null;
   exitUntold = false;
   afk = false;
-  context: Context | null = null;
+  reader: Reader | null = null;
+  state: SessionState = QUIET;
+  sentState: string | null = null;
   tokens: Tokens | null = null;
   readonly leftovers = new Set<Scope>();
   readonly waiting: Waiting[] = [];
   done = false;
   sending: Promise<void> | null = null;
-  readonly subagents = new Map<string, { description: string; turn: Turn; index: number; activity: string | null }>();
-  readonly held: Part[] = [];
+  readonly work = new Map<string, Keyed>();
+  readonly held: Keyed[] = [];
   opening: Bridge | null = null;
   bridge: Promise<Bridge> | null = null;
   launch: Launch | null = null;
@@ -352,7 +400,7 @@ export class Conversations {
     for (const conversation of this.conversations.values()) {
       if (conversation.running !== null) {
         this.facts(conversation);
-        this.subagentsChanged(conversation);
+        this.stateChanged(conversation, true);
       } else if (conversation.exitUntold) this.process(conversation, false);
       if (conversation.untold || conversation.told !== null) this.retell(conversation);
     }
@@ -384,6 +432,7 @@ export class Conversations {
       this.next(conversation);
       return { result: Promise.resolve({}) };
     }
+    if (call.kind === 'take_out') return { result: Promise.resolve(this.takeOut(conversation, String(call.message_id))) };
     await this.launched(conversation);
     if (call.kind === 'interrupt') {
       if (--conversation.interrupts === 0) conversation.interrupted = new AbortController();
@@ -404,6 +453,14 @@ export class Conversations {
       question.answer(call.response);
     }
     return { result: Promise.resolve({}) };
+  }
+
+  private takeOut(conversation: Conversation, messageId: string): Result {
+    const index = conversation.waiting.findIndex((waiting) => waiting.call.message_id === messageId);
+    if (index === -1) return { started: true };
+    const [waiting] = conversation.waiting.splice(index, 1);
+    waiting!.settle({ refused: TAKEN_OUT });
+    return {};
   }
 
   private async open(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
@@ -744,6 +801,7 @@ export class Conversations {
     const route = await routed;
     const reader = readerFor(route.kind);
     reader.session = sessionId;
+    conversation.reader = reader;
     const app = client({ name: '@agentshouse/kit' })
       .onRequest('session/request_permission', ({ params, signal }) =>
         conversation.afk ? permissionAllowed(params) : this.ask(conversation, 'session/request_permission', params, false, signal),
@@ -765,7 +823,7 @@ export class Conversations {
       throw new Error(KILLED);
     }
     conversation.opening = bridge;
-    const work = workFor(route.kind, route.working_directory, () => this.kit.changed());
+    const work = workFor(route.kind, route.working_directory, () => this.kit.changed(), (message) => this.tapped(conversation, reader, message));
     const scope = new Scope(marker(bridge), randomUUID(), cli);
     let adapter: Adapter | null = null;
     try {
@@ -791,15 +849,12 @@ export class Conversations {
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
       const agent = adapter.connection.agent;
       const cwd = route.working_directory;
-      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, conversation.id);
+      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!);
       const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
       const opened =
         resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));
       reader.session = opened.sessionId;
-      if (opened.sessionId !== sessionId && CLIS[route.kind]!.renames) {
-        const prompt: ContentBlock[] = [{ type: 'text', text: `/rename ${conversation.id}` }];
-        await step(unopened(NO_SESSION), agent.request('session/prompt', { sessionId: opened.sessionId, prompt }));
-      }
+      if (opened.sessionId !== conversation.session) conversation.state = QUIET;
       const running: Running = { adapter, bridging, bridge, sessionId: opened.sessionId, killed: false, reader, work, scope };
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
       void work.settled().then(() => scope.record());
@@ -880,10 +935,8 @@ export class Conversations {
     conversation.running = null;
     conversation.commands = null;
     conversation.options = null;
-    if (conversation.subagents.size > 0) {
-      conversation.subagents.clear();
-      this.subagentsChanged(conversation);
-    }
+    conversation.work.clear();
+    this.stated(conversation, { running: [] });
     for (const [id, question] of this.questions) {
       if (question.conversation === conversation) this.questions.delete(id);
     }
@@ -900,9 +953,15 @@ export class Conversations {
     if (conversation.options !== null) this.options(conversation, conversation.options);
   }
 
-  private subagentsChanged(conversation: Conversation): void {
-    const subagents = [...conversation.subagents.values()].map(({ description, activity }) => ({ description, activity }));
-    this.kit.send({ type: 'subagents', conversation_id: conversation.id, subagents });
+  private stated(conversation: Conversation, change: Partial<SessionState>): void {
+    conversation.state = { ...conversation.state, ...change };
+    this.stateChanged(conversation, false);
+  }
+
+  private stateChanged(conversation: Conversation, again: boolean): void {
+    const state = JSON.stringify(conversation.state);
+    if (!again && state === conversation.sentState) return;
+    conversation.sentState = this.kit.send({ type: 'state', conversation_id: conversation.id, state: conversation.state }) ? state : null;
   }
 
   private commands(conversation: Conversation, commands: AvailableCommand[]): void {
@@ -915,6 +974,11 @@ export class Conversations {
     if (conversation.running === null) return;
     conversation.options = options;
     this.kit.send({ type: 'options', conversation_id: conversation.id, options });
+    const chosen = (category: string) => {
+      const value = options.find((option) => option.category === category)?.currentValue;
+      return value === undefined ? null : String(value);
+    };
+    this.stated(conversation, { model: chosen('model'), effort: chosen('thought_level'), mode: chosen('mode') });
   }
 
   private deliver(conversation: Conversation, turn: Turn, act: TurnAct, body: object | Promise<object>, current?: () => boolean): Promise<unknown> {
@@ -933,11 +997,11 @@ export class Conversations {
 
   private write(conversation: Conversation, turn: Turn, operation: Operation): void {
     if (turn.ended || !this.watched) return;
-    this.kit.send({ type: 'turn', conversation_id: conversation.id, turn_id: turn.id, ...operation });
+    this.kit.send({ type: 'turn', conversation_id: conversation.id, turn_id: turn.id, operation });
   }
 
   private replay(conversation: Conversation, turn: Turn): void {
-    for (const operation of turn.parts.operations()) this.write(conversation, turn, operation);
+    for (const operation of turn.content.operations()) this.write(conversation, turn, operation);
   }
 
   private begin(conversation: Conversation): Turn {
@@ -950,8 +1014,9 @@ export class Conversations {
       })
       .catch(logged);
     conversation.turn = turn;
-    if (conversation.context !== null) turn.parts.measure(conversation.context);
-    for (const part of conversation.held.splice(0)) turn.parts.start(part);
+    this.stated(conversation, { suggestion: null });
+    for (const event of conversation.reader?.began() ?? []) this.event(conversation, event);
+    for (const held of conversation.held.splice(0)) this.place(conversation, turn, held);
     this.kit.changed();
     return turn;
   }
@@ -960,19 +1025,18 @@ export class Conversations {
     if (turn.ended) return;
     if (failed !== null) logged(new Error(`conversation ${conversation.id} turn ${turn.id} failed: ${failed.cause}`));
     if (conversation.turn === turn) {
-      for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
+      for (const event of conversation.reader?.closeTurn() ?? []) this.event(conversation, event);
     }
-    if (notice !== null) turn.parts.start({ type: 'marker', marker: 'retry', text: notice });
+    if (notice !== null) turn.content.add(null, { type: 'notice', kind: 'error', text: notice });
     turn.ended = true;
     conversation.turns.delete(turn);
     conversation.running?.adapter.turn(conversation.turns.size > 0);
     if (conversation.turn === turn) conversation.turn = null;
     const tokens = conversation.tokens;
     conversation.tokens = null;
+    if (tokens !== null) this.stated(conversation, { tokens: addedTokens(conversation.state.tokens, tokens) });
     const body = Promise.allSettled(turn.uploads).then(() => ({
-      parts: turn.parts.saved(),
-      context: turn.parts.context,
-      ...(tokens === null ? {} : { tokens }),
+      content: { parts: turn.content.parts, tokens, state: conversation.state },
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
     void this.deliver(conversation, turn, 'turns/end', body).catch(logged);
@@ -1005,7 +1069,7 @@ export class Conversations {
             running.adapter.retire();
             this.detach(conversation, running);
           }
-          this.end(conversation, turn, answeredWith(error));
+          this.end(conversation, turn, answeredWith(error), cliSaid(error));
         }
       },
     );
@@ -1020,14 +1084,17 @@ export class Conversations {
   private ended(conversation: Conversation, stop: Stop | null): void {
     const turn = conversation.turn;
     if (turn === null) return;
-    const held = stop !== null && !turn.steered && [...conversation.subagents.values()].some((subagent) => subagent.turn === turn);
+    const held =
+      stop !== null &&
+      !turn.steered &&
+      [...conversation.work.values()].some((work) => work.part.type === 'subagent' && turn.content.index(work.key) !== undefined);
     if (!turn.prompted || held) {
       this.took(turn);
       this.end(conversation, turn, stop === 'refusal' ? { failure: 'refused', cause: REFUSED } : null);
       return;
     }
     if (stop !== null) return;
-    for (const event of conversation.running?.reader.closeTurn() ?? []) this.apply(conversation, turn, event);
+    for (const event of conversation.reader?.closeTurn() ?? []) this.event(conversation, event);
     conversation.turn = null;
     this.kit.changed();
   }
@@ -1087,6 +1154,10 @@ export class Conversations {
     this.reportActivity(conversation);
   }
 
+  private tapped(conversation: Conversation, reader: Reader, message: Message): void {
+    for (const event of reader.tap(message)) this.event(conversation, event);
+  }
+
   private reportActivity(conversation: Conversation): void {
     const turn = conversation.turn;
     if (turn === null || Date.now() < turn.quietUntil) return;
@@ -1112,24 +1183,23 @@ export class Conversations {
       case 'options':
         this.options(conversation, event.options);
         return;
-      case 'context':
-        conversation.context = { used: event.used, window: event.window };
-        conversation.turn?.parts.measure(conversation.context);
+      case 'state':
+        this.stated(conversation, event.state);
         return;
       case 'tokens':
         conversation.tokens = addedTokens(conversation.tokens, event.tokens);
         return;
-      case 'subagent-done':
-        this.subagentDone(conversation, event.id, event.result);
+      case 'part':
+        this.keyed(conversation, event);
         return;
-      case 'subagent-activity':
-        this.subagentActivity(conversation, event.id, event.activity);
-        return;
-      case 'marker':
+      case 'notice':
       case 'image':
-        if (conversation.turn !== null) break;
-        if (event.kind === 'marker' && event.marker === 'job') conversation.held.push({ type: 'marker', marker: 'job', text: event.text });
-        return;
+        if (conversation.turn === null) return;
+        break;
+      case 'text':
+      case 'reasoning':
+        if (event.parent !== null && conversation.turn === null) return;
+        break;
     }
     this.apply(conversation, this.started(conversation), event);
   }
@@ -1143,56 +1213,57 @@ export class Conversations {
   private apply(conversation: Conversation, turn: Turn, event: Event): void {
     switch (event.kind) {
       case 'text':
-      case 'reasoning':
-        turn.parts.write(event.kind, event.id, event.text);
-        return;
-      case 'command':
-        turn.parts.command();
-        return;
-      case 'subagent': {
-        const index = turn.parts.start({ type: 'subagent', description: event.description, status: 'running', result: null });
-        conversation.subagents.set(event.id, { description: event.description, turn, index, activity: null });
-        this.subagentsChanged(conversation);
+      case 'reasoning': {
+        const parent = this.parentIn(conversation, turn, event.parent);
+        if (parent !== undefined) turn.content.write(event.kind, event.id, parent, event.text);
         return;
       }
-      case 'message':
-        turn.parts.start({ type: 'message', command: event.command, target: event.target });
-        return;
-      case 'marker':
-        turn.parts.start({ type: 'marker', marker: event.marker, text: event.text });
+      case 'notice':
+        turn.content.add(null, { type: 'notice', kind: event.notice, text: event.text });
         return;
       case 'plan':
-        turn.parts.plan(event.entries);
+        turn.content.plan(event.entries);
         return;
       case 'image':
-        turn.uploads.push(this.image(conversation, turn, turn.parts.reserve(), event.data, event.mediaType));
+        turn.uploads.push(this.image(conversation, turn, event.parent, event.data, event.mediaType));
         this.kit.changed();
         return;
     }
   }
 
-  private subagentDone(conversation: Conversation, id: string, result: string | null): void {
-    const subagent = conversation.subagents.get(id);
-    if (subagent === undefined) return;
-    conversation.subagents.delete(id);
-    this.subagentsChanged(conversation);
-    if (subagent.turn === conversation.turn) {
-      subagent.turn.parts.done(subagent.index, result);
+  private keyed(conversation: Conversation, keyed: Keyed): void {
+    const running = workRuns(keyed.part);
+    const earlier = running !== null && conversation.work.has(keyed.key) && conversation.turn?.content.index(keyed.key) === undefined;
+    if (running === true) conversation.work.set(keyed.key, keyed);
+    if (running === false) conversation.work.delete(keyed.key);
+    const turn = conversation.turn;
+    if (earlier) {
+      if (running) return;
+      if (turn === null) conversation.held.push(keyed);
+      else this.place(conversation, turn, keyed);
       return;
     }
-    const part: Part = { type: 'subagent', description: subagent.description, status: 'done', result };
-    if (conversation.turn === null) conversation.held.push(part);
-    else conversation.turn.parts.start(part);
+    if (keyed.parent !== null && turn === null) return;
+    this.place(conversation, this.started(conversation), keyed);
   }
 
-  private subagentActivity(conversation: Conversation, id: string, activity: string): void {
-    const subagent = conversation.subagents.get(id);
-    if (subagent === undefined || subagent.activity === activity) return;
-    subagent.activity = activity;
-    this.subagentsChanged(conversation);
+  private place(conversation: Conversation, turn: Turn, keyed: Keyed): void {
+    const parent = this.parentIn(conversation, turn, keyed.parent);
+    if (parent === undefined && workRuns(keyed.part) === null) return;
+    turn.content.put(keyed.key, parent ?? null, keyed.part);
   }
 
-  private async image(conversation: Conversation, turn: Turn, reserved: number, data: string, mediaType: string): Promise<void> {
+  private parentIn(conversation: Conversation, turn: Turn, key: string | null): number | null | undefined {
+    if (key === null) return null;
+    const index = turn.content.index(key);
+    if (index !== undefined) return turn.content.parts[index]!.type === 'subagent' ? index : undefined;
+    const running = conversation.work.get(key);
+    if (running?.part.type !== 'subagent') return undefined;
+    const parent = this.parentIn(conversation, turn, running.parent);
+    return parent === undefined ? undefined : turn.content.put(key, parent, running.part);
+  }
+
+  private async image(conversation: Conversation, turn: Turn, parent: string | null, data: string, mediaType: string): Promise<void> {
     const bytes = Buffer.from(data, 'base64');
     const name = `image-${++turn.images}.${mediaType.split('/')[1]}`;
     const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -1212,10 +1283,10 @@ export class Conversations {
         finish: (upload, partSha256) =>
           this.kit.house.deliver<Finished<SavedImage>>('/kit/uploads/finish', { upload, part_sha256: partSha256 }),
       });
-      turn.parts.arrive({ type: 'image', file: saved.path, name, media_type: mediaType }, reserved);
+      turn.content.arrived(this.parentIn(conversation, turn, parent) ?? null, { type: 'image', file: saved.path, name, media_type: mediaType });
     } catch (error) {
       const cause = error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error);
-      turn.parts.arrive({ type: 'marker', marker: 'retry', text: `${name} was not saved: ${cause}` }, reserved);
+      turn.content.arrived(null, { type: 'notice', kind: 'error', text: `${name} was not saved: ${cause}` });
     }
   }
 }
