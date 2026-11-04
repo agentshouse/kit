@@ -77,6 +77,7 @@ const MESSAGE_TARGETS = new Map([
 const PLANNED: Record<string, PlanEntry['status']> = { pending: 'pending', in_progress: 'running', completed: 'done' };
 const ENDED: Record<string, Status> = { completed: 'done', failed: 'failed', stopped: 'stopped', killed: 'stopped', cancelled: 'stopped' };
 const NOTICES: Record<string, NoticeKind> = { info: 'info', warning: 'warning', error: 'error' };
+// Claude Code names its limit windows without their length, so the Kit holds the length each name stands for.
 const WINDOW_MINUTES: Record<string, number> = { five_hour: 300, seven_day: 10_080 };
 const WAKEUP = /Next wakeup scheduled for \d\d:\d\d:\d\d \(in (\d+)s\)/;
 const CHILD_UPDATES = new Set(['tool_call', 'tool_call_update', 'agent_message_chunk', 'agent_thought_chunk']);
@@ -837,6 +838,7 @@ class CodexReader extends Reader {
     const name = typeof limits!.limitName === 'string' ? limits!.limitName : null;
     const limited = windows.map((window) => ({
       name,
+      // Codex sends each window's length; a limit always carries one, so a window Codex sends without it has 0.
       minutes: count(window.windowDurationMins) ?? 0,
       percent: window.usedPercent,
       resets: typeof window.resetsAt === 'number' ? instant(window.resetsAt * 1000) : null,
