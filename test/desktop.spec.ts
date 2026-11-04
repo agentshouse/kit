@@ -13,6 +13,8 @@ const FEDORA_41 = 'ID=fedora\nVERSION_ID=41\nPRETTY_NAME="Fedora Linux 41 (Works
 const UBUNTU_24_04 = 'ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\nPRETTY_NAME="Ubuntu 24.04.3 LTS"\n';
 const UBUNTU_25_10 = 'ID=ubuntu\nVERSION_ID="25.10"\nVERSION_CODENAME=questing\nUBUNTU_CODENAME=questing\nPRETTY_NAME="Ubuntu 25.10"\n';
 const ALPINE = 'ID=alpine\nVERSION_ID=3.22.2\nPRETTY_NAME="Alpine Linux v3.22"\n';
+const UBUNTU_18_04 = 'ID=ubuntu\nVERSION_ID="18.04"\nVERSION_CODENAME=bionic\nUBUNTU_CODENAME=bionic\nPRETTY_NAME="Ubuntu 18.04.6 LTS"\n';
+const DEBIAN_10 = 'ID=debian\nVERSION_ID="10"\nVERSION_CODENAME=buster\nPRETTY_NAME="Debian GNU/Linux 10 (buster)"\n';
 
 function acts(host: Host): string[] {
   return [...host.calls('systemctl'), ...host.calls('launchctl')].filter((call) => !/^((--user )?(is-(active|enabled)|show)|print) /.test(call));
@@ -397,6 +399,8 @@ it.each([
   ['an older macOS on Apple silicon', { macos: '26.7.1', appleSilicon: true }, 'Warning: macOS 26.7.1 is outdated; update to macOS 27.', 'darwin-arm64'],
   ['an Intel Mac', { appleSilicon: false }, 'Warning: macOS 27.0.1 on an Intel chip is outdated; update to macOS 27 on Apple silicon.', 'darwin-x64'],
   ['an older Intel Mac', { macos: '15.7.1', appleSilicon: false }, 'Warning: macOS 15.7.1 on an Intel chip is outdated; update to macOS 27 on Apple silicon.', 'darwin-x64'],
+  ['macOS 13.5, the oldest its Node.js runs on,', { macos: '13.5', appleSilicon: true }, 'Warning: macOS 13.5 is outdated; update to macOS 27.', 'darwin-arm64'],
+  ['macOS 14.0', { macos: '14.0', appleSilicon: true }, 'Warning: macOS 14.0 is outdated; update to macOS 27.', 'darwin-arm64'],
 ] as const)('warns in one line on %s and installs', async (_name, mac, notice, node) => {
   const host = await fakeHost({ system: 'Darwin', machine: mac.appleSilicon ? 'arm64' : 'x86_64', ...mac });
 
@@ -418,6 +422,17 @@ it('says nothing about the system on the supported macOS release on Apple silico
 });
 
 it.each([
+  ['13.4.1 on Apple silicon', { macos: '13.4.1', appleSilicon: true }],
+  ['12.7.6 on an Intel chip', { macos: '12.7.6', appleSilicon: false }],
+] as const)('refuses the native desktop placement on macOS %s in one line naming it and macOS 13.5, with no word of the container, before touching the host', async (_name, mac) => {
+  const host = await fakeHost({ system: 'Darwin', machine: mac.appleSilicon ? 'arm64' : 'x86_64', ...mac });
+
+  expect(host.run()).toEqual({ status: 1, stdout: '', stderr: `kit_bootstrap_refused: this Mac has macOS ${mac.macos} and Kit needs macOS 13.5 or newer\n` });
+  expect([...host.calls('sudo'), ...host.calls('docker'), ...host.calls('curl'), ...host.calls('kit'), ...host.calls('launchctl')]).toEqual([]);
+  await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each([
   ['the native desktop placement', false, []],
   ['the container', false, ['--container']],
   ['native-host mode', true, ['--linux']],
@@ -429,10 +444,12 @@ it.each([
   await expect(access(join(host.home, '.local'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it.each([
+const CONTAINER_RERUNS = [
   ['the native desktop placement', false, [], 'rerun this bootstrap with --container to run Kit in a container'],
   ['native-host mode', true, ['--linux'], 'rerun this bootstrap with --container in place of --linux to run Kit in a container'],
-] as const)('refuses %s on a Linux without glibc, naming the container, before touching the host', async (_name, server, placement, rerun) => {
+] as const;
+
+it.each(CONTAINER_RERUNS)('refuses %s on a Linux without glibc, naming the container, before touching the host', async (_name, server, placement, rerun) => {
   const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server, osRelease: ALPINE, glibc: false });
 
   expect(host.run([...placement])).toEqual({
@@ -443,17 +460,44 @@ it.each([
   expect([...host.calls('sudo'), ...host.calls('docker'), ...host.calls('curl'), ...host.calls('kit')]).toEqual([]);
 });
 
-it('installs the container on a Linux without glibc', async () => {
-  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', osRelease: ALPINE, glibc: false });
+it.each(CONTAINER_RERUNS)(
+  'refuses %s on a Linux whose glibc is older than 2.28 in one line naming its glibc, 2.28 and the container, before touching the host',
+  async (_name, server, placement, rerun) => {
+    const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server, osRelease: UBUNTU_18_04, glibc: '2.27' });
+
+    expect(host.run([...placement])).toEqual({
+      status: 1,
+      stdout: '',
+      stderr: `kit_bootstrap_refused: this Linux has glibc 2.27 and Kit needs glibc 2.28 or newer to run natively; ${rerun}\n`,
+    });
+    expect([...host.calls('sudo'), ...host.calls('docker'), ...host.calls('curl'), ...host.calls('kit')]).toEqual([]);
+  },
+);
+
+it.each([
+  ['without glibc', ALPINE, false, 'Alpine Linux v3.22'],
+  ['whose glibc is older than 2.28', UBUNTU_18_04, '2.27', 'Ubuntu 18.04.6 LTS'],
+] as const)('installs the container on a Linux %s', async (_name, osRelease, glibc, found) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', osRelease, glibc });
 
   const ran = host.run(['--container']);
 
   expect(ran).toEqual({
     status: 0,
-    stdout: `Warning: Alpine Linux v3.22 is outdated; update to Ubuntu 26.04 LTS.\n${DOWNLOADING}${LINK_LINE}\nKit connected for Environment environment-one.\n`,
+    stdout: `Warning: ${found} is outdated; update to Ubuntu 26.04 LTS.\n${DOWNLOADING}${LINK_LINE}\nKit connected for Environment environment-one.\n`,
     stderr: '',
   });
   expect(host.calls('docker').filter((call) => call.startsWith('run -d '))).toHaveLength(1);
+});
+
+it.each(NATIVE_ROUTES)('warns in one line on a Linux whose glibc is 2.28, the oldest its Node.js runs on, in %s, then installs Kit and enrols', async (_route, server, placement) => {
+  const host = await fakeHost({ system: 'Linux', machine: 'x86_64', server, osRelease: DEBIAN_10, glibc: '2.28', systemd: true });
+
+  const ran = host.run([...placement]);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(notices(ran.stdout)).toEqual(['Warning: Debian GNU/Linux 10 (buster) is outdated; update to Ubuntu 26.04 LTS.']);
+  expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
 });
 
 it.each([
