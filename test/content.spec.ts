@@ -19,7 +19,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { idOf, settle, until, type Received } from './double.ts';
-import { hostKit, lastCall, type Hosted, type RouteOverrides } from './environment.ts';
+import { emit, hostKit, lastCall, type Hosted, type RouteOverrides } from './environment.ts';
 
 const KINDS: Record<string, string> = { claude: 'claude-agent-acp', codex: 'codex-acp', grok: 'grok-build' };
 
@@ -132,10 +132,6 @@ function streamed(hosted: Hosted, type: string): boolean {
 function emittedImage(): string {
   const image = recorded('claude-image').find((event) => event.params.update?.content?.type === 'image')!;
   return `@emit ${JSON.stringify(image).split('session-recorded').join('$SESSION')}`;
-}
-
-function emit(method: string, params: Record<string, unknown>): string {
-  return `@emit ${JSON.stringify({ method, params: { sessionId: '$SESSION', ...params } })}`;
 }
 
 function update(update: Record<string, unknown>): string {

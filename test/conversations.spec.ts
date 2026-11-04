@@ -9,7 +9,7 @@ import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
 import { attached, bridgeSockets, inspected } from './attachments.ts';
 import { idOf, settle, until, without, type Received } from './double.ts';
-import { conversationCredential, hostKit, installHeld, lastCall, lastMessage, outcome, userBin, type Hosted } from './environment.ts';
+import { conversationCredential, emit, hostKit, installHeld, lastCall, lastMessage, outcome, userBin, type Hosted } from './environment.ts';
 import { alive, placeHostKey, runKit, temporaryHome } from './kit.ts';
 
 const FAST_REPORTS = fileURLToPath(new URL('./fast-reports.ts', import.meta.url));
@@ -970,8 +970,7 @@ it.each([
 
 it.each(KINDS)("keeps a call a script's @emit reports to %s with its output as an other call carrying that output", async (kind) => {
   const hosted = await opened(kind);
-  const asked = (update: Record<string, unknown>) =>
-    `@emit ${JSON.stringify({ method: 'session/update', params: { sessionId: '$SESSION', update: { toolCallId: 'call-asked', ...update } } })}`;
+  const asked = (update: Record<string, unknown>) => emit('session/update', { update: { toolCallId: 'call-asked', ...update } });
   const script = [
     asked({ sessionUpdate: 'tool_call', title: 'Ask the docs', kind: 'other', status: 'pending' }),
     asked({ sessionUpdate: 'tool_call_update', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'Two specs fail' } }] }),
@@ -984,21 +983,17 @@ it.each(KINDS)("keeps a call a script's @emit reports to %s with its output as a
   );
 });
 
-function emitted(method: string, params: Record<string, unknown>, session = '$SESSION'): string {
-  return `@emit ${JSON.stringify({ method, params: { sessionId: session, ...params } })}`;
-}
-
 it("links a sub-agent Grok Build spawns for no task it started to none, so its steps, report and end land on no sub-agent", async () => {
   const hosted = await opened('grok-build');
   const child = '$SESSION-child';
   const _meta = { 'x.ai/tool': { name: 'spawn_subagent', kind: 'task' } };
   const script = [
-    emitted('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-task', title: 'Find the failing specs', status: 'pending', rawInput: { description: 'Find the failing specs' }, _meta } }),
-    emitted('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_spawned', child_session_id: child, description: 'Fix the failing specs', subagent_type: 'general' } }),
-    emitted('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-step', title: 'Read the specs', kind: 'read', status: 'pending' } }, child),
-    emitted('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-step', status: 'completed' } }, child),
-    emitted('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_finished', child_session_id: child, status: 'completed', output: 'Two specs fail' } }),
-    emitted('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-task', status: 'completed', _meta } }),
+    emit('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-task', title: 'Find the failing specs', status: 'pending', rawInput: { description: 'Find the failing specs' }, _meta } }),
+    emit('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_spawned', child_session_id: child, description: 'Fix the failing specs', subagent_type: 'general' } }),
+    emit('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-step', title: 'Read the specs', kind: 'read', status: 'pending' } }, child),
+    emit('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-step', status: 'completed' } }, child),
+    emit('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_finished', child_session_id: child, status: 'completed', output: 'Two specs fail' } }),
+    emit('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-task', status: 'completed', _meta } }),
   ].join('\n');
   hosted.call({ kind: 'message', text: script, first: false });
   await ends(hosted, 1);
@@ -1015,10 +1010,10 @@ it('keeps an empty file Claude Code writes as an edit of no lines with an empty 
   const path = '/work/empty.txt';
   const result = { type: 'tool_result', tool_use_id: 'call-write', content: `File created successfully at: ${path}` };
   const script = [
-    emitted('session/update', {
+    emit('session/update', {
       update: { sessionUpdate: 'tool_call', toolCallId: 'call-write', title: `Write ${path}`, kind: 'edit', status: 'pending', rawInput: { file_path: path, content: '' }, _meta: { claudeCode: { toolName: 'Write' } } },
     }),
-    emitted('_claude/sdkMessage', {
+    emit('_claude/sdkMessage', {
       message: {
         type: 'user',
         message: { role: 'user', content: [result] },
@@ -1027,7 +1022,7 @@ it('keeps an empty file Claude Code writes as an edit of no lines with an empty 
         tool_use_result: { type: 'create', filePath: path, content: '', structuredPatch: [], originalFile: null },
       },
     }),
-    emitted('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-write', status: 'completed' } }),
+    emit('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-write', status: 'completed' } }),
   ].join('\n');
   hosted.call({ kind: 'message', text: script, first: false });
   await ends(hosted, 1);
@@ -1207,7 +1202,7 @@ function saved(received: Received): { parts: readonly Part[]; failed?: string } 
 
 function claudeResult(fields: Record<string, unknown>): string {
   const message = { type: 'result', origin: { kind: 'human' }, ...fields };
-  return `@emit ${JSON.stringify({ method: '_claude/sdkMessage', params: { sessionId: '$SESSION', message } })}`;
+  return emit('_claude/sdkMessage', { message });
 }
 
 it('ends a recorded Claude Code turn at its result while the sub-agent it started runs on in the background, sends a message that arrives then at once, and shows the follow-up as a turn the CLI started', async () => {

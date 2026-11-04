@@ -408,6 +408,10 @@ export function outcome(body: unknown): { text: string } | { failed: string } {
   return { text: ended.content.parts.flatMap((part) => (part.type === 'text' ? [part.text!] : [])).join('') };
 }
 
+export function emit(method: string, params: Record<string, unknown>, session = '$SESSION'): string {
+  return `@emit ${JSON.stringify({ method, params: { sessionId: session, ...params } })}`;
+}
+
 export function lastCall(): string {
   return `call-${calls}`;
 }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { settle, until } from './double.ts';
-import { hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
+import { emit, hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
 
 type Recorded = { method: string; params: Record<string, any> };
 
@@ -177,7 +177,7 @@ it('stays busy while a goal is active', async () => {
 
   await stays(hosted, `@play ${fixture('claude-goal')}`, false);
 
-  await stays(hosted, `@emit ${JSON.stringify({ method: 'session/update', params: { sessionId: '$SESSION', update: cleared } })}`, true);
+  await stays(hosted, emit('session/update', { update: cleared }), true);
 });
 
 it('stays busy while a Codex background terminal is open after its turn ends', async () => {
@@ -197,7 +197,7 @@ it('stays busy while a Codex sub-agent’s thread runs, also after the adapter r
   const failed = { sessionUpdate: 'subagent_state_update', subagentSessionId: child, state: 'failed' };
 
   await stays(hosted, `@stream ${fixture('codex-subagent')} 0 ${childIdle}`, false);
-  await stays(hosted, `@emit ${JSON.stringify({ method: 'session/update', params: { sessionId: '$SESSION', update: failed } })}`, false);
+  await stays(hosted, emit('session/update', { update: failed }), false);
 
   await stays(hosted, `@stream ${fixture('codex-subagent')} ${childIdle}`, true);
 });
