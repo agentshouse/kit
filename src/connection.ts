@@ -127,7 +127,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       const open = socket;
       if (open === null) return Promise.resolve();
       const answered = new Promise<void>((resolve) => open.addEventListener('close', () => resolve(), { once: true }));
-      open.close(1001);
+      open.close();
       return Promise.race([answered, delay(CLOSE_ANSWER_MS)]);
     },
   };

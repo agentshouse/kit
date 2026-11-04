@@ -540,16 +540,17 @@ it('writes the exit of a process a closed Kit connection did not take once the c
 });
 
 it.each([
-  ['SIGTERM stops it', (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGTERM')],
-  ['SIGINT stops it', (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGINT')],
+  ['SIGTERM stops it', null, (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGTERM')],
+  ['SIGINT stops it', null, (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGINT')],
   [
     'kit logout disconnects its computer',
+    1,
     async (hosted: Hosted) => {
       hosted.house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
       await runKit(['logout'], { HOUSE_KIT_HOME: hosted.home }).exited;
     },
   ],
-])("tells House that the process of each conversation it runs is not running when %s", async (_stop, stop) => {
+])("tells House that the process of each conversation it runs is not running when %s, before it exits as it did", async (_stop, status, stop) => {
   const hosted = await hostKit();
   for (const conversation_id of ['conversation-1', 'conversation-2']) {
     hosted.call({ kind: 'open', conversation_id });
@@ -557,8 +558,9 @@ it.each([
   }
 
   await stop(hosted);
-  await hosted.kit.exited;
 
+  expect(await hosted.kit.exited).toBe(status);
+  expect(hosted.kit.stderr()).not.toContain('Error');
   expect(hosted.house.connections).toHaveLength(1);
   expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([
     { type: 'process', conversation_id: 'conversation-1', running: true },
