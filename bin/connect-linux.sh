@@ -48,6 +48,8 @@ NATIVE_RELEASE=26.04
 CONTRACT_CHIP=amd64
 CERTIFICATE_BUNDLES=(/etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem)
 NODE_VERSION=24.22.1
+NODE_MACOS=13.5
+NODE_GLIBC=2.28
 NODE_PLATFORM=linux-x64
 NODE_SHA256=eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c
 NODE_BYTES=58290700
@@ -357,8 +359,10 @@ service_manager() {
   [[ -d /run/systemd/system ]]
 }
 
-glibc() {
-  getconf GNU_LIBC_VERSION >/dev/null 2>&1
+at_least() {
+  local major=${1%%.*} minor=${1#*.}
+  minor=${minor%%.*}
+  ((major > ${2%%.*} || (major == ${2%%.*} && minor >= ${2#*.})))
 }
 
 in_container() {
@@ -582,12 +586,11 @@ connect_native() {
 }
 
 notice_host() {
-  local found=Linux contract version distribution='' release=''
+  local found=Linux contract distribution='' release=''
   if ((MACOS)); then
-    version=$(sw_vers -productVersion)
-    found="macOS $version"
+    found="macOS $MACOS_VERSION"
     contract="macOS $MACOS_RELEASE"
-    ((${version%%.*} < MACOS_RELEASE)) || [[ "$CHIP" != "$CONTRACT_CHIP" ]] || return 0
+    ((${MACOS_VERSION%%.*} < MACOS_RELEASE)) || [[ "$CHIP" != "$CONTRACT_CHIP" ]] || return 0
   else
     if [[ -r /etc/os-release ]]; then
       distribution=$(. /etc/os-release && printf '%s' "${ID:-}")
@@ -1000,7 +1003,7 @@ connect_kit() {
 }
 
 read_host() {
-  local adapter
+  local adapter glibc
   [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$KIT_SHA256" =~ ^[0-9a-f]{64}$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
     refuse 'this bootstrap has not been published with an immutable release'
   for adapter in $ADAPTERS; do
@@ -1020,11 +1023,17 @@ read_host() {
         *) refuse "unsupported Linux architecture $(uname -m)" ;;
       esac
       CHIP=$ARCH
-      ((CONTAINER)) || glibc || refuse "this Linux has no glibc, so Kit cannot run natively on it; $(in_container) to run Kit in a container"
+      if ((CONTAINER == 0)); then
+        glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null) || refuse "this Linux has no glibc, so Kit cannot run natively on it; $(in_container) to run Kit in a container"
+        glibc=${glibc##* }
+        at_least "$glibc" "$NODE_GLIBC" || refuse "this Linux has glibc $glibc and Kit needs glibc $NODE_GLIBC or newer to run natively; $(in_container) to run Kit in a container"
+      fi
       ;;
     Darwin)
       ((NATIVE == 0)) || refuse "--linux runs only on Linux, not macOS"
       MACOS=1
+      MACOS_VERSION=$(sw_vers -productVersion)
+      ((CONTAINER)) || at_least "$MACOS_VERSION" "$NODE_MACOS" || refuse "this Mac has macOS $MACOS_VERSION and Kit needs macOS $NODE_MACOS or newer"
       CONTRACT_CHIP='Apple silicon'
       PATH="$PATH:$DOCKER_APP/Contents/Resources/bin"
       RUNTIME='Docker Desktop'
