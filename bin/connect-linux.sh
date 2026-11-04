@@ -360,8 +360,7 @@ service_manager() {
 }
 
 at_least() {
-  local major=${1%%.*} minor=0
-  [[ "$1" != *.* ]] || minor=${1#*.}
+  local major=${1%%.*} minor=${1#*.}
   minor=${minor%%.*}
   ((major > ${2%%.*} || (major == ${2%%.*} && minor >= ${2#*.})))
 }
