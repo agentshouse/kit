@@ -57,6 +57,8 @@ const UNDECODABLE = 'an audio file this message links could not be decoded';
 
 const UNTRANSCRIBED = 'an audio file this message links could not be transcribed';
 
+const NO_ENGINE = 'there is no transcription engine for this computer';
+
 export interface TranscriptionReport {
   installed: boolean;
   failure: string | null;
@@ -114,7 +116,9 @@ function ready(): void {
 }
 
 function pinnedHere(): Engine {
-  return ENGINES[`${process.platform}-${process.arch}`]!;
+  const engine = ENGINES[`${process.platform}-${process.arch}`];
+  if (engine === undefined) throw new Error(NO_ENGINE);
+  return engine;
 }
 
 const DOWNLOADS = 3;

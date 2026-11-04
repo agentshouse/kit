@@ -25,6 +25,7 @@ const NOT_INSTALLED = "the speech engine is not installed on the Agent's Environ
 const NOT_DOWNLOADED = 'an audio file this message links could not be downloaded; send the message again';
 const UNDECODABLE = 'an audio file this message links could not be decoded';
 const UNTRANSCRIBED = 'an audio file this message links could not be transcribed';
+const NO_ENGINE = 'there is no transcription engine for this computer';
 const INTERRUPTED = 'the conversation was interrupted';
 const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
@@ -336,6 +337,14 @@ it('installs the engine and the decoder built for Apple silicon on a Mac', async
   const installed = await Promise.all((await readdir(directory)).map((name) => readFile(join(directory, name))));
   expect(installed).toHaveLength(3);
   expect(installed.filter((content) => content.subarray(0, 8).equals(MACH_O_ARM64))).toHaveLength(2);
+});
+
+it('reports that there is no transcription engine for an Intel Mac, downloading nothing', async () => {
+  const hosted = await hostMac({ transcribe: true, arch: 'x64' });
+
+  expect(await settled(hosted, (report) => report.failure !== null)).toEqual({ installed: false, failure: NO_ENGINE });
+  expect(await downloads(hosted)).toEqual([]);
+  expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
 });
 
 it('downloads an artifact again when the Building drops its first download, and installs the engine', async () => {
