@@ -133,22 +133,22 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
     'reasoning',
     'commands',
     'reasoning',
-    'reasoning',
-    'reasoning',
-    'text',
     'message',
     'commands',
-    'reasoning',
     'subagent',
     'reasoning',
+    'text',
+    'commands',
     'reasoning',
+    'commands',
     'image',
-    'reasoning',
     'text',
   ]);
   const parts = turns[0]!.parts;
   expect(parts.filter((part) => part.type === 'commands')).toEqual([
+    { type: 'commands', count: 1 },
     { type: 'commands', count: 3 },
+    { type: 'commands', count: 1 },
     { type: 'commands', count: 1 },
     { type: 'commands', count: 1 },
   ]);
@@ -161,9 +161,9 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
     type: 'subagent',
     description: 'Count files',
     status: 'done',
-    result: '`ls` shows **1 file** in the current working directory: `notes.txt`.',
+    result: '`ls` returned one file: `notes.txt`.',
   });
-  expect(JSON.stringify(parts)).not.toContain('inspect only the current directory');
+  expect(JSON.stringify(parts)).not.toContain('Delegated task for Count files');
   expect(written(turns)).toBe(chunks('codex-tools'));
   expect(parts.find((part) => part.type === 'image')).toEqual({ type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' });
   expect(hosted.images.map((image) => without(image, 'conversation', 'turn'))).toEqual([
@@ -177,7 +177,7 @@ it('maps recorded Codex tool calls, its sub-agent session and its image generati
   const image = Buffer.from(/"type":"image","data":"([^"]+)"/.exec(JSON.stringify(recorded('codex-tools')))![1]!, 'base64');
   const partSha256 = [image.subarray(0, 32), image.subarray(32, 64), image.subarray(64)].map((part) => createHash('sha256').update(part).digest('hex'));
   expect(hosted.finishes.map((finish) => finish.body)).toEqual(Array(2).fill({ upload: expect.any(String), part_sha256: partSha256 }));
-  expect(turns[0]!.context).toEqual({ used: 42323, window: 258400 });
+  expect(turns[0]!.context).toEqual({ used: 26443, window: 258400 });
 });
 
 it('maps recorded Grok Build tool calls, its plan and its sub-agent, whose own session opens and ends no turn', async () => {

@@ -439,11 +439,13 @@ interface Recorded {
   method?: string;
   params?: Record<string, unknown>;
   result?: PromptResponse;
+  tap?: unknown;
 }
 
 async function sent(client: AgentContext, entries: Recorded[]): Promise<void> {
-  for (const { request, method, params } of entries) {
-    if (request) {
+  for (const { request, method, params, tap } of entries) {
+    if (tap !== undefined) await codex({ messages: [tap] });
+    else if (request) {
       const answered = await client.request(method as 'session/request_permission', params as never).catch((error: RequestError) => ({ code: error.code }));
       log({ replayed: method, answered });
     } else await client.notify(method as 'session/update', params as never);
