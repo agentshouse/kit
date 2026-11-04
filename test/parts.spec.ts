@@ -184,17 +184,7 @@ it('maps recorded Grok Build tool calls, its plan and its sub-agent, whose own s
   const { hosted, turns } = await replayed('grok-tools');
   await settle();
 
-  expect(kinds(turns[0]!).filter((kind) => kind !== 'reasoning')).toEqual([
-    'text',
-    'commands',
-    'commands',
-    'commands',
-    'plan',
-    'message',
-    'commands',
-    'subagent',
-    'text',
-  ]);
+  expect(kinds(turns[0]!).filter((kind) => kind !== 'reasoning')).toEqual(['text', 'commands', 'plan', 'message', 'subagent', 'text']);
   const parts = turns[0]!.parts;
   expect(parts.find((part) => part.type === 'plan')).toEqual({
     type: 'plan',
@@ -207,12 +197,12 @@ it('maps recorded Grok Build tool calls, its plan and its sub-agent, whose own s
     type: 'subagent',
     description: 'Count files with ls',
     status: 'done',
-    result: 'There is **1** file in the current working directory:\n\n- `notes.txt`',
+    result: '1',
   });
-  expect(parts.filter((part) => part.type === 'commands').every((part) => part.count === 1)).toBe(true);
+  expect(parts.filter((part) => part.type === 'commands')).toEqual([{ type: 'commands', count: 3 }]);
   expect(written(turns)).toBe(chunks('grok-tools'));
   expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
-  expect(turns[0]!.context).toEqual({ used: 24106, window: 256000 });
+  expect(turns[0]!.context).toEqual({ used: 18244, window: 256000 });
 });
 
 it('shows a recorded Claude Code foreground sub-agent with its result and a background one whose end and result appear in the turn running then', async () => {
@@ -245,7 +235,7 @@ it("shows a recorded Grok Build background sub-agent running in its turn and don
     type: 'subagent',
     description: 'Sleep then list files',
     status: 'done',
-    result: 'The command finished successfully. The working directory contains one file: `notes.txt`.',
+    result: '`sleep 5; ls` finished successfully in the current working directory and listed one entry: **notes.txt**.',
   });
 });
 
@@ -309,6 +299,7 @@ it("marks Grok Build's recorded entry into plan mode and its exit", async () => 
     { type: 'marker', marker: 'mode', text: 'enter_plan_mode' },
     { type: 'marker', marker: 'mode', text: 'plan' },
     { type: 'marker', marker: 'mode', text: 'exit_plan_mode' },
+    { type: 'marker', marker: 'mode', text: 'default' },
   ]);
 });
 
@@ -699,7 +690,7 @@ it("carries Codex's tokens by kind, its reasoning already inside its output", as
 
 it("carries Grok's tokens by kind: its input holds its cache reads, its reasoning sits inside its output, and a sub-agent that finished within the turn is already in its parent's", async () => {
   const { turns } = await replayed('grok-tools');
-  expect(turns[0]!.tokens).toEqual({ input: 21345 + 20412, output: 2349 + 394, cache_read: 163072 + 2304, cache_write: 0 });
+  expect(turns[0]!.tokens).toEqual({ input: 147625 - 120448, output: 580, cache_read: 120448, cache_write: 0 });
 });
 
 it('leaves out a Grok sub-agent that outlives its turn, which its parent and the turn after it leave out too', async () => {
@@ -713,7 +704,7 @@ it('leaves out a Grok sub-agent that outlives its turn, which its parent and the
     }),
     { input: 0, output: 0, cache_read: 0, cache_write: 0 },
   );
-  expect(total).toEqual({ input: 275 + 326, output: 174 + 83, cache_read: 50432 + 25472, cache_write: 0 });
+  expect(total).toEqual({ input: 34955 - 18944 + (17878 - 17536), output: 89 + 70, cache_read: 18944 + 17536, cache_write: 0 });
 });
 
 it.each([
