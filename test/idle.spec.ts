@@ -286,7 +286,7 @@ function update(update: Record<string, unknown>): string {
 
 function recorded(fixture: string, kind: string): string {
   const lines = readFileSync(new URL(`./fixtures/events/${fixture}.jsonl`, import.meta.url), 'utf8').trim().split('\n');
-  const event = JSON.parse(lines.find((line) => JSON.parse(line).params.update?.sessionUpdate === kind)!);
+  const event = JSON.parse(lines.find((line) => JSON.parse(line).params?.update?.sessionUpdate === kind)!);
   return update(event.params.update);
 }
 

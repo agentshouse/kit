@@ -418,7 +418,7 @@ async function directive(
     await client.notify(method as 'session/update', params as never);
   }
   if (name === 'play') {
-    for (const { method, params } of lines(rest[0]!, rest[1], rest[2])) {
+    for (const { method, params } of lines(rest[0]!, rest[1], rest[2]).filter((line) => line.method !== undefined)) {
       await client.notify(method as 'session/update', { ...params, sessionId } as never);
     }
   }
@@ -429,28 +429,41 @@ async function directive(
     await once(appServer!, 'exit');
   }
   if (name === 'stream') await codex({ messages: lines(rest[0]!, rest[1], rest[2]) });
-  if (name === 'replay') {
-    await replay(client, sessionId, argument);
-    return 'answered';
-  }
+  if (name === 'replay') return (await replay(client, sessionId, argument)) ?? 'answered';
   if (name === 'asked') await replay(client, sessionId, argument);
   return undefined;
 }
 
-async function replay(client: AgentContext, sessionId: string, fixture: string): Promise<void> {
-  const lines = readFileSync(join(EVENTS, `${fixture}.jsonl`), 'utf8').trim().split('\n');
-  const recorded = lines.map((line) => JSON.parse(line) as { params: { sessionId?: string } }).find((entry) => entry.params.sessionId)!;
-  for (const line of lines) {
-    const { request, method, params } = JSON.parse(line.split(recorded.params.sessionId!).join(sessionId)) as {
-      request?: true;
-      method: string;
-      params: Record<string, unknown>;
-    };
-    if (request) {
+interface Recorded {
+  request?: true;
+  method?: string;
+  params?: Record<string, unknown>;
+  result?: PromptResponse;
+  tap?: unknown;
+}
+
+async function sent(client: AgentContext, entries: Recorded[]): Promise<void> {
+  for (const { request, method, params, tap } of entries) {
+    if (tap !== undefined) await codex({ messages: [tap] });
+    else if (request) {
       const answered = await client.request(method as 'session/request_permission', params as never).catch((error: RequestError) => ({ code: error.code }));
       log({ replayed: method, answered });
     } else await client.notify(method as 'session/update', params as never);
   }
+}
+
+async function replay(client: AgentContext, sessionId: string, fixture: string): Promise<PromptResponse | undefined> {
+  const lines = readFileSync(join(EVENTS, `${fixture}.jsonl`), 'utf8').trim().split('\n');
+  const recorded = lines.map((line) => JSON.parse(line) as Recorded).find((entry) => entry.params?.sessionId)!;
+  const entries = lines.map((line) => JSON.parse(line.split(recorded.params!.sessionId as string).join(sessionId)) as Recorded);
+  const answer = entries.findIndex((entry) => entry.result !== undefined);
+  if (answer === -1) {
+    await sent(client, entries);
+    return undefined;
+  }
+  await sent(client, entries.slice(0, answer));
+  setImmediate(() => void sent(client, entries.slice(answer + 1)));
+  return entries[answer]!.result;
 }
 
 const app = agent({ name: 'adapter-double' })

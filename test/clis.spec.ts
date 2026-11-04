@@ -9,7 +9,7 @@ import { hostKit, lastCall, outcome, userBin, type Hosted } from './environment.
 import { alive } from './kit.ts';
 
 const KINDS = Object.keys(BINS);
-const NEXT: Record<string, string> = { 'codex-acp': '0.162.0', 'claude-agent-acp': '2.1.305', 'grok-build': '1.0.48' };
+const NEXT: Record<string, string> = { 'codex-acp': '0.167.0', 'claude-agent-acp': '2.1.318', 'grok-build': '1.0.48' };
 const FAST_UPDATES = fileURLToPath(new URL('./fast-updates.ts', import.meta.url));
 const FAST_DEADLINES = fileURLToPath(new URL('./fast-deadlines.ts', import.meta.url));
 const EXECUTABLES: Record<string, string> = { 'codex-acp': 'HOUSE_KIT_CODEX', 'claude-agent-acp': 'CLAUDE_CODE_EXECUTABLE' };
@@ -135,7 +135,7 @@ it.each(KINDS)('gives a %s conversation its login shell PATH with Kit shims and 
 });
 
 it.each([
-  ['codex-acp', '0.162.0'],
+  ['codex-acp', '0.167.0'],
   ['grok-build', '1.0.48'],
 ])('runs a %s replaced between two conversations at its new version in the second while the first keeps its own', async (kind, next) => {
   const hosted = await hostKit([{ kind }]);
@@ -180,7 +180,7 @@ it("runs a conversation on a CLI below its minimum, reported with the minimum an
     },
   });
   const reported = await report(hosted, (agents) => agents.some((agent) => agent.kind === 'codex-acp'));
-  expect(reported.find((agent) => agent.kind === 'codex-acp')).toMatchObject({ kind: 'codex-acp', release: '0.150.0', minimum: '0.160.1', update: 'codex update', failure: null });
+  expect(reported.find((agent) => agent.kind === 'codex-acp')).toMatchObject({ kind: 'codex-acp', release: '0.150.0', minimum: '0.165.0', update: 'codex update', failure: null });
 
   expect(await open(hosted, 'conversation-1', 'agent-1')).toEqual({ provider_session_id: expect.any(String) });
   expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${join(userBin(hosted.home), 'codex')} 0.150.0`);
@@ -445,14 +445,14 @@ it('reports a model its CLI refuses to select, when it reads that CLI again, wit
       { id: 'sonnet', name: 'Sonnet', efforts: ['low'] },
     ]),
   );
-  placeUserCli(userBin(hosted.home), 'claude-agent-acp', '2.1.305');
+  placeUserCli(userBin(hosted.home), 'claude-agent-acp', '2.1.318');
 
   await open(hosted, 'conversation-1');
 
   await reportOf(hosted, [
     {
       kind: 'claude-agent-acp',
-      release: '2.1.305',
+      release: '2.1.318',
       failure: null,
       signed_in: true,
       models: [

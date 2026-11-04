@@ -185,7 +185,7 @@ it.each([
     request: {
       method: 'elicitation/create',
       params: {
-        message: 'create hello.txt containing hi\n',
+        message: '# Create hello.txt\n\n## Goal\nCreate a file named `hello.txt` in the workspace root whose entire contents are the word `hi`.\n\n## Steps\n1. Write `hello.txt` with the single word `hi` and no extra content.\n2. Read the file back to confirm the contents.\n',
         requestedSchema: {
           properties: {
             plan: {

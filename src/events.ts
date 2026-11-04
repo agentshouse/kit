@@ -151,6 +151,7 @@ abstract class Reader {
   private readonly requestedOptions = new Map<string, unknown>();
   private readonly compactions = new Set<string>();
   private readonly jobs = new Map<string, string>();
+  private readonly turns = new Set<string>();
   protected abstract readonly watchedOptions: Record<string, Marker>;
 
   read(message: Message): Event[] {
@@ -227,8 +228,16 @@ abstract class Reader {
         this.compactions.add(update.compactionId);
         return [{ kind: 'marker', marker: 'compaction', text: '' }];
       case 'async_task_spawned':
+        if (update.taskType === 'turn') {
+          this.turns.add(update.asyncTaskId);
+          return [];
+        }
         return this.job(update.asyncTaskId, update.name ?? update.description ?? '', 'running');
       case 'async_task_state_update':
+        if (this.turns.has(update.asyncTaskId)) {
+          if (!RUNNING_JOB.has(update.state)) this.turns.delete(update.asyncTaskId);
+          return [];
+        }
         return RUNNING_JOB.has(update.state) ? [] : this.job(update.asyncTaskId, null, update.state);
       default:
         return [];

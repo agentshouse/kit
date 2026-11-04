@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,6 +91,27 @@ it('opens a Claude Code session in bypass permissions with `house` allowed in ev
     expect.objectContaining({ configId: 'mode', value: 'bypassPermissions' }),
     expect.objectContaining({ configId: 'model', value: 'default' }),
   ]);
+});
+
+it.each([
+  ['codex-acp', ['asyncTasks', 'nativeSubagentSessions']],
+  ['claude-agent-acp', ['asyncTasks', 'sessionFailure']],
+  ['grok-build', ['asyncTasks']],
+])('asks %s for its command output as a JetBrains AIR client that runs none of its commands', async (kind, air) => {
+  const hosted = await hostKit([{ kind }]);
+
+  hosted.call({ kind: 'open' });
+
+  await hosted.result(lastCall());
+  expect((await hosted.adapterLog()).find((entry) => entry.method === 'initialize')!.params).toMatchObject({
+    clientCapabilities: {
+      fs: { readTextFile: false, writeTextFile: false },
+      terminal: false,
+      elicitation: { form: {} },
+      session: { compaction: {}, notices: {} },
+      _meta: { terminal_output: true, jetbrains: { air: { version: 1, capabilities: air } } },
+    },
+  });
 });
 
 it('starts Grok approving every tool, since it offers no mode', async () => {
@@ -957,8 +979,14 @@ it('sends an at-once message that arrives with no turn running as any message', 
 });
 
 const HELD = fileURLToPath(new URL('./fixtures/events/claude-held.jsonl', import.meta.url));
+const HELD_LINES = readFileSync(HELD, 'utf8')
+  .trim()
+  .split('\n')
+  .map((line) => JSON.parse(line) as { params?: Record<string, any> });
+const RESULT = HELD_LINES.findIndex((line) => line.params?.message?.type === 'result');
+const ENDED = HELD_LINES.findIndex((line, index) => index > RESULT && line.params?.update?._meta?.['_claude/origin'] !== undefined);
 
-const HOLDING = `@play ${HELD} 0 21\n@gate held\n@play ${HELD} 21`;
+const HOLDING = `@play ${HELD} 0 ${ENDED + 1}\n@gate held\n@play ${HELD} ${ENDED + 1}`;
 
 function endedTurns(hosted: Hosted): Hosted['turns'] {
   return hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
@@ -985,7 +1013,7 @@ it('ends a recorded Claude Code turn at its result while the sub-agent it starte
   await release();
 
   const turns = await ends(hosted, 3);
-  expect(turns[2]).toEqual({ text: 'The background agent "Sleep twice" has finished. It ran `sleep 4` twice and replied "slept".' });
+  expect(turns[2]).toEqual({ text: 'The background agent finished and replied "slept".' });
   expect((endedTurns(hosted)[2]!.body as { parts: unknown[] }).parts[0]).toEqual({ type: 'subagent', description: 'Sleep twice', status: 'done', result: 'slept' });
   expect(await prompts(hosted)).toEqual([HOLDING, '@say next']);
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
@@ -998,14 +1026,14 @@ it('relays what a background Claude Code sub-agent is doing while it runs, and t
   await ends(hosted, 1);
 
   const subagent = (activity: string | null) => ({ type: 'subagents', conversation_id: 'conversation-1', subagents: [{ description: 'Sleep twice', activity }] });
-  expect(subagents(hosted)).toEqual([subagent(null), subagent('Running Sleep 4 seconds (first run)')]);
+  expect(subagents(hosted)).toEqual([subagent(null)]);
   await release();
 
   await ends(hosted, 2);
   expect(subagents(hosted)).toEqual([
     subagent(null),
-    subagent('Running Sleep 4 seconds (first run)'),
-    subagent('Running Sleep 4 seconds (second run)'),
+    subagent('Running First sleep'),
+    subagent('Running Second sleep'),
     { type: 'subagents', conversation_id: 'conversation-1', subagents: [] },
   ]);
 });
@@ -1014,7 +1042,7 @@ it('ends a Claude Code turn whose sub-agent runs on refused at its result, and a
   const hosted = await opened('claude-agent-acp');
   onTestFinished(gated(hosted, 'held'));
   const refusal = claudeResult({ subtype: 'success', is_error: false, stop_reason: 'refusal' });
-  hosted.call({ kind: 'message', text: `@play ${HELD} 0 19\n${refusal}\n@play ${HELD} 20 21\n@gate held`, first: false });
+  hosted.call({ kind: 'message', text: `@play ${HELD} 0 ${RESULT}\n${refusal}\n@play ${HELD} ${ENDED} ${ENDED + 1}\n@gate held`, first: false });
   expect(await ends(hosted, 1)).toEqual([{ failed: 'refused' }]);
 
   const release = gated(hosted, 'refused');
@@ -1036,7 +1064,7 @@ it.each([
   const hosted = await opened('claude-agent-acp');
   const release = gated(hosted, 'held');
   const steer = gated(hosted, 'steer');
-  hosted.call({ kind: 'message', text: [`@play ${HELD} 0 13`, '@gate steer', ...result, `@play ${HELD} 20 21`, '@gate held'].join('\n'), first: false });
+  hosted.call({ kind: 'message', text: [`@play ${HELD} 0 ${RESULT}`, '@gate steer', ...result, `@play ${HELD} ${ENDED} ${ENDED + 1}`, '@gate held'].join('\n'), first: false });
   await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   if (steering) {
     hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });

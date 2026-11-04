@@ -146,7 +146,7 @@ export async function startAdapter(
         terminal: false,
         elicitation: { form: {} },
         session: { compaction: {}, notices: {} },
-        _meta: { jetbrains: { air: { version: 1, capabilities: CLIS[kind]!.air } } },
+        _meta: { terminal_output: true, jetbrains: { air: { version: 1, capabilities: CLIS[kind]!.air } } },
       },
       clientInfo: { name: '@agentshouse/kit', version: KIT_RELEASE },
     });

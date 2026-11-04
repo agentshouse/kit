@@ -123,7 +123,7 @@ ${direct(linux)}
 HOUSE=https://agents.house
 VERSION=0.2.1-alpha.1
 KIT_SHA256=${'1'.repeat(64)}
-ADAPTERS='codex-acp-2.2.2.tar.gz=${'2'.repeat(64)}'
+ADAPTERS='codex-acp-2.5.0.tar.gz=${'2'.repeat(64)}'
 NODE_VERSION=24.22.1
 NODE_PLATFORM=linux-x64
 NODE_SHA256=${'0'.repeat(64)}
@@ -146,7 +146,7 @@ place_release "$TMPDIR/prefix"`,
     `apt-get ${repeated} git`,
     `curl ${repeated} ${served}/kit-installer/node-v24.22.1-linux-x64.tar.gz`,
     `curl ${repeated} ${served}/kit-installer/kit-0.2.1-alpha.1.tar.gz`,
-    `curl ${repeated} ${served}/kit-installer/codex-acp-2.2.2.tar.gz`,
+    `curl ${repeated} ${served}/kit-installer/codex-acp-2.5.0.tar.gz`,
   ]);
 });
 
@@ -293,8 +293,8 @@ it('writes the release manifest naming every file Kit installs by name and sha25
     'connect-linux.sh': '#!/usr/bin/env bash\n',
     'connect-windows.ps1': "$ErrorActionPreference = 'Stop'\n",
     'kit-0.2.1.tar.gz': 'the Kit archive',
-    'codex-acp-2.2.2.tar.gz': 'the Codex adapter archive',
-    'claude-agent-acp-0.94.0.tar.gz': 'the Claude Code adapter archive',
+    'codex-acp-2.5.0.tar.gz': 'the Codex adapter archive',
+    'claude-agent-acp-0.100.0.tar.gz': 'the Claude Code adapter archive',
   };
   for (const [name, content] of Object.entries(own)) await writeFile(join(release, name), content);
   const image = `sha256:${'c'.repeat(64)}`;
