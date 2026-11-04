@@ -24,15 +24,15 @@
     "test": "tsc -p tsconfig.json && vitest run"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "2.0.1",
+    "@agentclientprotocol/sdk": "2.4.0",
     "@agentshouse/mdmodel": "0.1.0-c4f4d37bc9d6a",
     "@agentshouse/skills": "0.1.0-c3402d5699e50",
     "@lydell/node-pty": "1.2.0-beta.15",
     "yaml": "2.9.1"
   },
   "peerDependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.94.0",
-    "@agentclientprotocol/codex-acp": "2.2.2"
+    "@agentclientprotocol/claude-agent-acp": "0.100.0",
+    "@agentclientprotocol/codex-acp": "2.5.0"
   },
   "peerDependenciesMeta": {
     "@agentclientprotocol/claude-agent-acp": {

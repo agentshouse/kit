@@ -118,7 +118,7 @@ it('stays busy from a CronCreate until its CronDelete', async () => {
 });
 
 async function wakeup(hosted: Hosted, reported: string): Promise<{ path: string; runs: number[] }> {
-  const lines = recorded('claude-wakeup').map((line) => JSON.parse(JSON.stringify(line).replace('16:29:00 (in 102s)', reported)) as Recorded);
+  const lines = recorded('claude-wakeup').map((line) => JSON.parse(JSON.stringify(line).replace('16:36:00 (in 82s)', reported)) as Recorded);
   const runs = lines.flatMap((line, index) => (raw(line).state === 'running' ? [index] : []));
   return { path: await written(hosted, 'wakeup', lines), runs };
 }
@@ -130,7 +130,7 @@ function clocked(at: string): Hosting {
 }
 
 it.each([
-  ['as recorded', '2026-10-10T16:27:18Z', '16:29:00 (in 102s)'],
+  ['as recorded', '2026-11-04T16:34:38Z', '16:36:00 (in 82s)'],
   ['past midnight', '2026-10-10T23:59:00Z', '00:00:42 (in 102s)'],
   ['more than half a day ahead', '2026-10-10T17:00:00Z', '07:00:00 (in 50400s)'],
 ])('stays busy from a ScheduleWakeup through turns that start before the time it reports, %s', async (_, clock, reported) => {
@@ -303,6 +303,10 @@ it('names a new Claude Code session itself and passes the CLI’s background rep
             'hook_response',
           ].map((subtype) => ({ type: 'system', subtype })),
           { type: 'result' },
+          { type: 'user' },
+          { type: 'assistant' },
+          { type: 'rate_limit_event' },
+          { type: 'prompt_suggestion' },
         ],
       },
     },

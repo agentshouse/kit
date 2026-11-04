@@ -30,7 +30,8 @@ function recorded(fixture: string): { method: string; params: Record<string, any
   return readFileSync(new URL(`./fixtures/events/${fixture}.jsonl`, import.meta.url), 'utf8')
     .trim()
     .split('\n')
-    .map((line) => JSON.parse(line));
+    .map((line) => JSON.parse(line))
+    .filter((line) => line.method !== undefined);
 }
 
 interface Recording {
@@ -108,17 +109,18 @@ it('maps recorded Claude Code tool calls: commands fold into counts, a House Age
   const { turns } = await replayed('claude-tools', 2);
 
   expect(turns[0]!.parts).toEqual([
-    { type: 'commands', count: 4 },
+    { type: 'commands', count: 3 },
     { type: 'text', text: expect.stringContaining('TodoWrite') },
     { type: 'message', command: 'agent-functions/send', target: 'digest' },
     { type: 'commands', count: 1 },
     { type: 'subagent', description: 'Count files', status: 'running', result: null },
     { type: 'text', text: expect.stringContaining('still running') },
   ]);
-  expect(kinds(turns[1]!)).toEqual(['text']);
+  expect(turns[1]!.parts[0]).toEqual({ type: 'subagent', description: 'Count files', status: 'done', result: expect.any(String) });
+  expect(kinds(turns[1]!)).toEqual(['subagent', 'text']);
   expect(written(turns)).toBe(chunks('claude-tools'));
   expect(JSON.stringify(turns)).not.toContain('ls -la');
-  expect(turns[0]!.context).toEqual({ used: 41331, window: 1000000 });
+  expect(turns[0]!.context).toEqual({ used: 36058, window: 1000000 });
 });
 
 it('maps recorded Codex tool calls, its sub-agent session and its image generation', async () => {
@@ -217,7 +219,7 @@ it('shows a recorded Claude Code foreground sub-agent with its result and a back
   const { turns } = await replayed('claude-subagents', 2);
 
   expect(turns[0]!.parts).toEqual([
-    { type: 'subagent', description: 'Count files', status: 'done', result: '1 file. The `ls` output is:\n\n```\nnotes.txt\n```' },
+    { type: 'subagent', description: 'Count files', status: 'done', result: 'There is 1 file in the directory: `notes.txt`.' },
     { type: 'subagent', description: 'Sleep and list', status: 'running', result: null },
     { type: 'text', text: expect.any(String) },
   ]);
@@ -225,9 +227,9 @@ it('shows a recorded Claude Code foreground sub-agent with its result and a back
     type: 'subagent',
     description: 'Sleep and list',
     status: 'done',
-    result: expect.stringContaining('The directory contains a single file'),
+    result: '`sleep 5; ls` listed one file: `notes.txt`.',
   });
-  expect(JSON.stringify(turns)).not.toContain('Sleep 5 seconds then list');
+  expect(JSON.stringify(turns)).not.toContain('List files and count them');
 });
 
 it("shows a recorded Grok Build background sub-agent running in its turn and done with Grok's output in the next one", async () => {
@@ -256,6 +258,23 @@ it.each([
   expect(kinds(turns[0]!)).toContain('marker:job');
   expect(turns[0]!.parts.find((part) => part.type === 'marker')!.text).toMatch(/: running$/);
   expect(turns[1]!.parts[0]).toEqual({ type: 'marker', marker: 'job', text: expect.stringMatching(/: completed$/) });
+});
+
+it('marks no job for the turn Claude Code starts itself when its background job ends, which the turn already shows', async () => {
+  const { turns } = await replayed('claude-background', 2);
+
+  expect(turns.flatMap((turn) => turn.parts).filter((part) => part.type === 'marker')).toEqual([
+    { type: 'marker', marker: 'job', text: 'Sleep for 8 seconds in background: running' },
+    { type: 'marker', marker: 'job', text: 'Sleep for 8 seconds in background: completed' },
+  ]);
+});
+
+it("keeps the context table of a recorded Claude Code /context as the text it wrote, without the figures it reports beside it", async () => {
+  const { turns } = await replayed('claude-context');
+
+  expect(turns[0]!.parts.length).toBeGreaterThan(0);
+  for (const part of turns[0]!.parts) expect(part).toEqual({ type: 'text', text: expect.stringMatching(/^## Context Usage\n/) });
+  expect(JSON.stringify(turns)).not.toMatch(/raw_max_tokens|"categories"/);
 });
 
 it.each(['claude-compact', 'codex-compact', 'grok-compact'])('marks the compaction recorded in %s once', async (fixture) => {

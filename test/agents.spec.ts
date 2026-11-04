@@ -286,7 +286,7 @@ it("reports a CLI below its minimum with the version found, the minimum and the 
     {
       kind: 'codex-acp',
       release: '0.150.0',
-      minimum: '0.160.1',
+      minimum: '0.165.0',
       update: 'codex update',
       failure: null,
       signed_in: true,
@@ -320,7 +320,7 @@ it("reports the version a CLI's update command leaves, with the sign-in and mode
   const updated = await until(() => reports.find((report) => (report.agents as { release: string }[])[0]?.release === RELEASES['codex-acp']));
 
   const { minimum, update, ...read } = outdated;
-  expect({ minimum, update }).toEqual({ minimum: '0.160.1', update: 'codex update' });
+  expect({ minimum, update }).toEqual({ minimum: '0.165.0', update: 'codex update' });
   expect(updated.agents).toEqual([{ ...read, release: RELEASES['codex-acp'] }]);
   expect(await probes()).toBe(1);
 });

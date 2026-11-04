@@ -1,1 +1,1 @@
-{"request":true,"method":"elicitation/create","params":{"mode":"form","sessionId":"0768192f-fe50-4fbb-9420-984705cee674","message":"Name the project","requestedSchema":{"type":"object","properties":{"project":{"type":"string","title":"Project"}},"required":["project"]}}}
+{"request":true,"method":"elicitation/create","params":{"mode":"form","sessionId":"08264d46-2e0f-40f5-bb57-feb7c9f2e30d","message":"Name the project","requestedSchema":{"type":"object","properties":{"project":{"type":"string","title":"Project"}},"required":["project"]}}}

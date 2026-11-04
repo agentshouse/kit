@@ -43,6 +43,8 @@ const RAW_SUBTYPES = [
   'hook_response',
 ];
 
+const RAW_TYPES = ['result', 'user', 'assistant', 'rate_limit_event', 'prompt_suggestion'];
+
 async function executable(path: string): Promise<boolean> {
   try {
     await access(path, constants.X_OK);
@@ -120,7 +122,7 @@ function bridgeInClaudeSandbox(bridge: string): Record<string, unknown> {
 export const CLIS: Record<string, Cli> = {
   'codex-acp': {
     bin: 'codex',
-    minimum: '0.160.1',
+    minimum: '0.165.0',
     install: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
     update: 'codex update',
     adapter: {
@@ -145,7 +147,7 @@ export const CLIS: Record<string, Cli> = {
   },
   'claude-agent-acp': {
     bin: 'claude',
-    minimum: '2.1.303',
+    minimum: '2.1.316',
     install: 'curl -fsSL https://claude.ai/install.sh | bash',
     update: 'claude update',
     adapter: {
@@ -164,7 +166,7 @@ export const CLIS: Record<string, Cli> = {
           title,
           settings: { sandbox: { network: bridgeInClaudeSandbox(bridge) } },
         },
-        emitRawSDKMessages: [...RAW_SUBTYPES.map((subtype) => ({ type: 'system', subtype })), { type: 'result' }],
+        emitRawSDKMessages: [...RAW_SUBTYPES.map((subtype) => ({ type: 'system', subtype })), ...RAW_TYPES.map((type) => ({ type }))],
       },
     }),
     unknownSession: (error) => answered(error).code === -32002,
