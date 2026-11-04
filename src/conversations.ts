@@ -338,6 +338,7 @@ export class Conversations {
   private readonly questions = new Map<string, Question>();
   private reporting = 0;
   private watched = false;
+  private stopping = false;
 
   constructor(kit: Kit) {
     this.kit = kit;
@@ -396,6 +397,7 @@ export class Conversations {
   }
 
   stopped(): void {
+    this.stopping = true;
     for (const conversation of this.conversations.values()) {
       if (conversation.running !== null) this.process(conversation, false);
     }
@@ -594,7 +596,7 @@ export class Conversations {
   }
 
   private next(conversation: Conversation): void {
-    if (conversation.sending !== null || conversation.turns.size > 0) return;
+    if (this.stopping || conversation.sending !== null || conversation.turns.size > 0) return;
     const waiting = conversation.waiting.shift();
     if (waiting === undefined) {
       const step = conversation.preparing ?? (conversation.launch === null ? null : 'session');
@@ -836,6 +838,7 @@ export class Conversations {
       bridged(bridge);
       await CLIS[route.kind]!.allowHouse(bridge.env.PATH!);
       const streamed = await step(NO_CONNECTION, work.open(cli));
+      if (this.stopping) throw new Error(KILLED);
       adapter = await step(
         NO_START,
         startAdapter(

@@ -137,8 +137,8 @@ export async function resident(): Promise<void> {
   const stop = async (then: () => void): Promise<void> => {
     if (stopping) return;
     stopping = true;
-    killDescendants();
     conversations.stopped();
+    killDescendants();
     await connection?.close();
     then();
   };

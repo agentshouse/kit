@@ -570,6 +570,34 @@ it.each([
   ]);
 });
 
+it('starts no CLI once it stops while House has not answered its close, neither for the message that waited behind the turn it killed, which stays with House for the next Kit process, nor for a conversation whose start was under way', async () => {
+  const hosted = await hostKit();
+  hosted.call({ kind: 'message', text: '@wait', first: true });
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
+  hosted.call({ kind: 'message', text: '@say waited', first: false });
+  const waiting = lastCall();
+  const listing = () => hosted.house.requests.filter((request) => request.path === '/kit/agents/desired/list').length;
+  const listed = listing();
+  const { promise: answered, resolve: answer } = Promise.withResolvers<void>();
+  const route = { kind: 'codex-acp', base_instructions: 'Be useful.', working_directory: hosted.workingDirectory, model: 'route-model', effort: 'route-effort', mode: null };
+  hosted.house.route('POST', '/kit/agents/desired/list', async () => {
+    await answered;
+    return { body: { agents: ['codex-acp'], routes: [{ agent_id: 'agent-1', ...route }, { agent_id: 'agent-2', ...route }] } };
+  });
+  hosted.call({ kind: 'open', conversation_id: 'conversation-2', agent_id: 'agent-2' });
+  await until(() => listing() > listed);
+  hosted.connection.transport.pause();
+
+  process.kill(hosted.kit.pid, 'SIGTERM');
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
+  answer();
+
+  expect(await hosted.kit.exited).toBe(null);
+  expect(await prompts(hosted)).toHaveLength(1);
+  expect(new Set((await hosted.adapterLog()).map((entry) => entry.pid)).size).toBe(1);
+  expect(hosted.results.map((result) => idOf(result, 'call'))).not.toContain(waiting);
+});
+
 it('keeps the start-up step of the message being started while a later one arrives', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
