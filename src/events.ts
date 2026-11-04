@@ -198,8 +198,8 @@ function linesOf(text: string): string[] {
 }
 
 function replacement(site: Fields): { added: number; removed: number; diff: string } {
-  const before = linesOf(site.old_string ?? '');
-  const after = linesOf(site.new_string ?? '');
+  const before = linesOf((site.line_prefix ?? '') + (site.old_string ?? ''));
+  const after = linesOf((site.line_prefix ?? '') + (site.new_string ?? ''));
   let head = 0;
   while (head < before.length && head < after.length && before[head] === after[head]) head++;
   let tail = 0;

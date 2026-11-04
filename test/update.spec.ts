@@ -65,6 +65,20 @@ it('places the release House names with its adapters beside the one it runs, wri
   expect(await entriesUnder(join(prefix(hosted), 'releases', KIT_RELEASE))).toEqual(running);
 });
 
+it('tells House that the process of the conversation it runs is not running when it ends for the release it placed', async () => {
+  const hosted = await hostKit();
+  await serveRelease(hosted, await released(PLACED));
+  await opened(hosted);
+
+  callUpdate(hosted, 'update-1', PLACED);
+
+  expect(await hosted.kit.exited).toBe(1);
+  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([
+    { type: 'process', conversation_id: 'conversation-1', running: true },
+    { type: 'process', conversation_id: 'conversation-1', running: false },
+  ]);
+});
+
 it('keeps running a turn open when it placed the release, refuses to place another meanwhile, and ends once that turn ended', async () => {
   const hosted = await hostKit();
   await serveRelease(hosted, await released(PLACED));

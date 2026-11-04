@@ -395,6 +395,12 @@ export class Conversations {
     this.kit.changed();
   }
 
+  stopped(): void {
+    for (const conversation of this.conversations.values()) {
+      if (conversation.running !== null) this.process(conversation, false);
+    }
+  }
+
   opened(): void {
     this.watched = false;
     for (const conversation of this.conversations.values()) {

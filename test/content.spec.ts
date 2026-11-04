@@ -329,6 +329,21 @@ it("keeps each recorded Grok Build edit of an existing file with its diff at the
   ]);
 });
 
+it("starts a recorded Grok Build edit that begins inside a line at that line's start, the text before the edit included", async () => {
+  const { content } = (await replayed('grok-midline')).turns[0]!;
+
+  expect(content.parts.filter((part) => part.type === 'call' && part.kind === 'edit').map(untimed)).toEqual([
+    {
+      type: 'call',
+      parent: null,
+      kind: 'edit',
+      line: 'Edit `/work/notes.txt`',
+      status: 'done',
+      files: [{ path: '/work/notes.txt', added: 3, removed: 3, diff: '@@ -2,3 +2,3 @@\n-the TWO dogs\n-beta\n-nine\n+the TWO cats\n+gamma\n+ten\n' }],
+    },
+  ]);
+});
+
 it.each(['claude-retry', 'codex-web', 'grok-edit'])("clears the last turn's files in the session's state when the turn after %s edits nothing", async (fixture) => {
   const { hosted } = await replayed(fixture);
   await until(() => states(hosted).at(-1)!.files.length > 0);

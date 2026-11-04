@@ -10,7 +10,7 @@ import { socketDirectory } from '../src/home.ts';
 import { attached, bridgeSockets, inspected } from './attachments.ts';
 import { idOf, settle, until, without, type Received } from './double.ts';
 import { conversationCredential, hostKit, installHeld, lastCall, lastMessage, outcome, userBin, type Hosted } from './environment.ts';
-import { alive, placeHostKey, temporaryHome } from './kit.ts';
+import { alive, placeHostKey, runKit, temporaryHome } from './kit.ts';
 
 const FAST_REPORTS = fileURLToPath(new URL('./fast-reports.ts', import.meta.url));
 
@@ -539,6 +539,35 @@ it('writes the exit of a process a closed Kit connection did not take once the c
   expect(processes(reopened)).toEqual([{ type: 'process', conversation_id: 'conversation-1', running: false }]);
 });
 
+it.each([
+  ['SIGTERM stops it', (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGTERM')],
+  ['SIGINT stops it', (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGINT')],
+  [
+    'kit logout disconnects its computer',
+    async (hosted: Hosted) => {
+      hosted.house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
+      await runKit(['logout'], { HOUSE_KIT_HOME: hosted.home }).exited;
+    },
+  ],
+])("tells House that the process of each conversation it runs is not running when %s", async (_stop, stop) => {
+  const hosted = await hostKit();
+  for (const conversation_id of ['conversation-1', 'conversation-2']) {
+    hosted.call({ kind: 'open', conversation_id });
+    await hosted.result(lastCall());
+  }
+
+  await stop(hosted);
+  await hosted.kit.exited;
+
+  expect(hosted.house.connections).toHaveLength(1);
+  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([
+    { type: 'process', conversation_id: 'conversation-1', running: true },
+    { type: 'process', conversation_id: 'conversation-2', running: true },
+    { type: 'process', conversation_id: 'conversation-1', running: false },
+    { type: 'process', conversation_id: 'conversation-2', running: false },
+  ]);
+});
+
 it('keeps the start-up step of the message being started while a later one arrives', async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'hold-new'), '');
@@ -907,6 +936,22 @@ it.each([
     calls: null,
     duration: null,
   });
+});
+
+it.each(KINDS)("keeps a call a script's @emit reports to %s with its output as an other call carrying that output", async (kind) => {
+  const hosted = await opened(kind);
+  const asked = (update: Record<string, unknown>) =>
+    `@emit ${JSON.stringify({ method: 'session/update', params: { sessionId: '$SESSION', update: { toolCallId: 'call-asked', ...update } } })}`;
+  const script = [
+    asked({ sessionUpdate: 'tool_call', title: 'Ask the docs', kind: 'other', status: 'pending' }),
+    asked({ sessionUpdate: 'tool_call_update', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'Two specs fail' } }] }),
+  ].join('\n');
+  hosted.call({ kind: 'message', text: script, first: false });
+  await ends(hosted, 1);
+
+  expect(partsOf(endedTurns(hosted)[0]!)).toContainEqual(
+    expect.objectContaining({ type: 'call', parent: null, kind: 'other', line: 'Ask the docs', status: 'done', output: 'Two specs fail' }),
+  );
 });
 
 it.each(KINDS)("sends the session state of a conversation %s runs once it opens, and last the state its turn ended with", async (kind) => {
