@@ -452,6 +452,8 @@ async function sent(client: AgentContext, entries: Recorded[]): Promise<void> {
   }
 }
 
+let replaying: Promise<void> = Promise.resolve();
+
 async function replay(client: AgentContext, sessionId: string, fixture: string): Promise<PromptResponse | undefined> {
   const lines = readFileSync(join(EVENTS, `${fixture}.jsonl`), 'utf8').trim().split('\n');
   const recorded = lines.map((line) => JSON.parse(line) as Recorded).find((entry) => entry.params?.sessionId)!;
@@ -462,7 +464,7 @@ async function replay(client: AgentContext, sessionId: string, fixture: string):
     return undefined;
   }
   await sent(client, entries.slice(0, answer));
-  setImmediate(() => void sent(client, entries.slice(answer + 1)));
+  replaying = new Promise<void>((resolve) => setImmediate(() => resolve(sent(client, entries.slice(answer + 1)))));
   return entries[answer]!.result;
 }
 
@@ -557,6 +559,7 @@ const app = agent({ name: 'adapter-double' })
     return { outcome: 'startedNewTurn' };
   })
   .onRequest('session/prompt', async ({ params, client }) => {
+    await replaying;
     const text = promptText(params.prompt);
     written(params.sessionId);
     if (kind === 'codex-acp' && text.startsWith('/rename ')) {
