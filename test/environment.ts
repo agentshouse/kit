@@ -394,9 +394,12 @@ export async function macOS(home: string): Promise<Record<string, string>> {
   };
 }
 
-export async function hostMac(hosting: Pick<Hosting, 'transcribe'> = {}, routes: RouteOverrides[] = [{}]): Promise<Hosted> {
+export async function hostMac(
+  { transcribe, arch = 'arm64' }: Pick<Hosting, 'transcribe'> & { arch?: 'arm64' | 'x64' } = {},
+  routes: RouteOverrides[] = [{}],
+): Promise<Hosted> {
   const home = await temporaryHome();
-  return hostKit(routes, { ...hosting, home, skills: false, environment: await macOS(home) });
+  return hostKit(routes, { transcribe, home, skills: false, environment: { ...(await macOS(home)), KIT_TEST_ARCH: arch } });
 }
 
 export function outcome(body: unknown): { text: string } | { failed: string } {
