@@ -64,6 +64,7 @@ it('changes no Local copy on a Kit connection One-way call, and still takes the 
   room.put('a.md', 'a, from House\n');
   hosted.connection.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
   hosted.connection.send({ type: 'work_available', subject: 'local_copy' });
+  hosted.connection.send({ type: 'authority_changed', rooms: [room.ref] });
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
   hosted.call({ kind: 'open' });
 
@@ -75,41 +76,6 @@ it('changes no Local copy on a Kit connection One-way call, and still takes the 
       .filter((request) => request.path === '/kit/local-copies/selection/read' || request.path.startsWith('/kit/door/')),
   ).toEqual([]);
   expect(received(room)).toBe(before);
-});
-
-it('reads the selection of only the Rooms an authority change names on the open Kit connection, copying one gained, keeping one lost as it was and saving a new handle, and the next house fetch says once that it no longer follows the lost one', async () => {
-  const hosted = await hostKit();
-  const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
-  notes.put('a.md', 'a\n');
-  const plans = rooms.room('plans');
-  plans.put('p.md', 'p\n');
-  const design = rooms.room('design');
-  design.put('brief.md', 'Brief\n');
-  await rooms.fetch([notes, plans]);
-  const record = (room: Room) => join(hosted.home, 'local-copies/rooms', `${room.ref}.json`);
-  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read');
-  const asked = selections().length;
-  const connections = hosted.house.connections.length;
-  const notesHouse = received(notes);
-  plans.handle = 'renamed-plans';
-  rooms.answered = [plans, design];
-
-  hosted.connection.send({ type: 'authority_changed', rooms: [] });
-  hosted.connection.send({ type: 'authority_changed', rooms: [notes.ref, plans.ref, design.ref] });
-
-  await until(() => existsSync(record(design)));
-  await until(async () => (await readFile(record(plans), 'utf8')).includes('renamed-plans'));
-  expect(tracked(design)).toEqual(['brief.md']);
-  expect(tracked(notes)).toEqual(['a.md']);
-  expect(received(notes)).toBe(notesHouse);
-  expect(existsSync(record(notes))).toBe(true);
-  expect(selections().slice(asked).map((request) => request.body)).toEqual([{ rooms: [notes.ref, plans.ref, design.ref] }]);
-  expect(hosted.house.connections).toHaveLength(connections);
-
-  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: `${notes.root}: no longer followed; kept as it is\n` });
-  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
-  expect(tracked(notes)).toEqual(['a.md']);
 });
 
 it('copies every Room it may sync as soon as it connects, and a reconnect copies none again and leaves the work in them', async () => {

@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -140,6 +140,21 @@ it('connects from a read-only home with its Kit home under the temporary directo
     credential: 'ahk_code_credential',
   });
   expect(await ownAgent(kitHome)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_code_credential' });
+});
+
+it('refuses a Kit home under the temporary directory that is a symbolic link, asking House nothing and writing nothing through it', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const { temporary, kitHome } = await readOnlyHome(home);
+  const elsewhere = await temporaryHome();
+  await symlink(elsewhere, kitHome);
+
+  const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOME: home, TMPDIR: temporary, CODEX_HOME: '', ...LOGIN_SHELL });
+
+  expect(await login.exited).toBe(1);
+  expect(login.stderr()).toBe(`kit: ${kitHome} is a symbolic link\n`);
+  expect(house.requests).toEqual([]);
+  expect(await readdir(elsewhere)).toEqual([]);
 });
 
 async function placeHouse(directory: string): Promise<string> {

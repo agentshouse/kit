@@ -178,7 +178,7 @@ it("writes a first message as House's instructions, then the primer it carries, 
   hosted.call({ kind: 'message', text, recent, first: true });
 
   expect(await prompted(hosted, 0)).toEqual([
-    block([...agentInstructions('refs/house/received', []), '', 'Be useful.'].join('\n')),
+    block([...agentInstructions(), '', 'Be useful.'].join('\n')),
     block(recent),
     block(text),
     transcribed(note!.path, ENGLISH),

@@ -286,6 +286,27 @@ it('sends each part and reads each download at its store address through the Kit
   ]);
 });
 
+it("calls House through the relay the User's own agent's connection records, and HOUSE_KIT_RELAY still wins", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const recorded = await relay();
+  const named = await relay();
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, relay: recorded.origin, user: 'user-one', credential: 'ahp_own' }));
+  const through = await runHouse(home, ['search', '{"query":"invoice"}']);
+  const first = house.requests.length;
+
+  const ambient = await runHouse(home, ['search', '{"query":"plans"}'], undefined, [], { HOUSE_KIT_RELAY: named.origin });
+
+  expect([through, ambient]).toEqual([
+    { status: 0, stdout: 'found for invoice\n', stderr: '' },
+    { status: 0, stdout: 'found for plans\n', stderr: '' },
+  ]);
+  const posted = `POST ${new URL(house.origin).host}`;
+  expect(first).toBeGreaterThan(0);
+  expect(recorded.forwarded).toEqual(Array(first).fill(posted));
+  expect(named.forwarded).toEqual(Array(house.requests.length - first).fill(posted));
+});
+
 it('prints the revision House answers and posts no bytes when the path already holds the same file', async () => {
   const house = await startHouse();
   const home = await connected(house, true);
@@ -355,7 +376,7 @@ it("refuses a Tool call in one line naming kit login while Kit holds no connecti
 
   expect(ran.status).toBe(1);
   expect(ran.stdout).toBe('');
-  expect(ran.stderr).toMatch(/^house: [^\n]*kit login, or kit chatgpt --key <key>[^\n]*\n$/);
+  expect(ran.stderr).toMatch(/^house: [^\n]*; run kit login\n$/);
   expect(house.requests).toEqual([]);
 });
 
@@ -372,7 +393,20 @@ it("refuses a Tool call naming kit login once kit logout has ended the User's ow
   ]);
   await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toMatch(/^house: [^\n]*kit login, or kit chatgpt --key <key>[^\n]*\n$/);
+  expect(ran.stderr).toMatch(/^house: [^\n]*; run kit login\n$/);
+});
+
+it("refuses a Tool call in one line naming kit login once House no longer accepts the User's own agent's connection", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  house.route('POST', '/', () => ({ status: 401, body: {} }));
+
+  const ran = await runHouse(home, ['search', '{"query":"invoice"}']);
+
+  expect(ran.status).toBe(1);
+  expect(ran.stdout).toBe('');
+  expect(ran.stderr).toMatch(/^house: [^\n]*; run kit login\n$/);
+  expect(house.requests.map(({ path, headers }) => [path, headers.authorization])).toEqual([['/', 'Bearer ahp_own']]);
 });
 
 it("stops acting as the User when House had already disconnected the computer", async () => {

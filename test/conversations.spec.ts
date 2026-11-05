@@ -452,7 +452,7 @@ it("prepares a new conversation's first message, reading what it links and House
   await rm(join(hosted.home, 'hold-new'));
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
-    [...agentInstructions('refs/house/received', []), '', 'Be useful.'].join('\n'),
+    [...agentInstructions(), '', 'Be useful.'].join('\n'),
     text,
   ]);
   expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue')).toHaveLength(1);
@@ -489,7 +489,7 @@ it("prompts a first message with House's instructions through the CLI it starts 
   expect(await hosted.result(message)).toHaveProperty('provider_session_id');
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
-    [...agentInstructions('refs/house/received', []), '', 'Be useful.'].join('\n'),
+    [...agentInstructions(), '', 'Be useful.'].join('\n'),
     '@say hello',
   ]);
 });

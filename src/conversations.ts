@@ -519,9 +519,7 @@ export class Conversations {
   private instructed(conversation: Conversation, route: Route): Promise<string> | null {
     const bridge = conversation.running === null ? conversation.launch?.bridge : Promise.resolve(conversation.running.bridge);
     if (bridge === undefined) return null;
-    const read = Promise.all([bridge, this.kit.copies.mapping()]).then(([opened, copies]) =>
-      instructions(opened, route.base_instructions, copies),
-    );
+    const read = bridge.then((opened) => instructions(opened, route.base_instructions));
     read.catch(() => undefined);
     return read;
   }
