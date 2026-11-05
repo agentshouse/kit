@@ -10,7 +10,6 @@ import { commitAll, git, house, serveRooms, tryGit, type Room, type Rooms } from
 
 const MEMO = [
   '---',
-  'type: memo',
   'owner: ada',
   'status: draft',
   '---',
@@ -25,6 +24,67 @@ const MEMO = [
   'None yet.',
   '',
 ].join('\n');
+
+const SCHEMA = [
+  'memo:',
+  '  properties:',
+  '    name: { type: string }',
+  '    status: { enum: [draft, ready], title: Status }',
+  '    owner: { type: string, title: Owner }',
+  '    goals: { type: string, contentMediaType: text/markdown, title: Goals }',
+  '  required: [name, status]',
+  '',
+].join('\n');
+
+const LAUNCH = [
+  '---',
+  'type: memo',
+  '---',
+  '# Launch',
+  '',
+  '- **Status**: draft',
+  '- **Owner**: ada',
+  '',
+  'Opening words.',
+  '',
+  '## Goals',
+  '',
+  'Grow.',
+  '',
+  '## Risks',
+  '',
+  'None yet.',
+  '',
+].join('\n');
+
+const TICKET = [
+  '---',
+  'type: wayfinding-ticket',
+  '---',
+  '# Ship the Kit',
+  '',
+  '- **Status**: open',
+  '',
+  '## Question',
+  '',
+  'Which release?',
+  '',
+].join('\n');
+
+const TASK = ['---', 'type: task', '---', '# Write it', '', '- **Status**: open', '', 'Some words.', ''].join('\n');
+
+async function typed(write = ['']): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('plans');
+  room.write = write;
+  room.put('settings/schema.yaml', SCHEMA);
+  room.put('docs/launch.md', LAUNCH);
+  room.put('docs/ticket.md', TICKET);
+  room.put('docs/task.md', TASK);
+  await rooms.fetch([room]);
+  return { hosted, rooms, room };
+}
 
 async function copied(): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
   const hosted = await hostKit();
@@ -144,7 +204,6 @@ it('sends a changed field, section and preamble against its own prior value, so 
   ]);
   const canonical = [
     '---',
-    'type: memo',
     'owner: grace',
     'status: ready',
     '---',
@@ -210,6 +269,61 @@ it('sends a changed object field written in the form the MD model writes as one 
     ],
   ]);
   expect(room.files.get('docs/memo.md')!.content).toBe(local);
+});
+
+const LAUNCH_PATH = '/rooms/plans/docs/launch.md';
+const READY = { op: 'set_field', path: LAUNCH_PATH, field: 'status', base: 'draft', value: 'ready' };
+const RISKS = { op: 'replace_section', path: LAUNCH_PATH, section: 'Risks', base: '\nNone yet.\n', content: '\nScope creep.\n' };
+
+it.each([
+  ['one value', LAUNCH.replace('**Status**: draft', '**Status**: ready'), [READY]],
+  [
+    'a long text value',
+    LAUNCH.replace('Grow.', 'Grow fast.'),
+    [{ op: 'set_field', path: LAUNCH_PATH, field: 'goals', base: 'Grow.', value: 'Grow fast.' }],
+  ],
+  ['a free section', LAUNCH.replace('None yet.', 'Scope creep.'), [RISKS]],
+  ['a value and a free section', LAUNCH.replace('**Status**: draft', '**Status**: ready').replace('None yet.', 'Scope creep.'), [READY, RISKS]],
+])('sends an edit of %s of a typed document as one change each, read by its type in the schema the Local copy holds', async (_, local, changes) => {
+  const { hosted, room } = await typed();
+  await writeFile(join(room.repository, 'docs/launch.md'), local);
+  const pushedCommit = commitAll(room.repository, 'launch');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0, stdout: `House accepted ${short(pushedCommit)}.\n` });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([changes]);
+  expect(room.files.get('docs/launch.md')!.content).toBe(local);
+});
+
+it('reads a typed document by the schema the Local copy holds read-only when its grant cannot write the schema', async () => {
+  const { hosted, room } = await typed(['docs']);
+  const local = LAUNCH.replace('**Status**: draft', '**Status**: ready');
+  await writeFile(join(room.repository, 'docs/launch.md'), local);
+  commitAll(room.repository, 'ready');
+
+  expect(git(room.repository, 'ls-files', 'settings')).toBe('');
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([[READY]]);
+  expect(room.files.get('docs/launch.md')!.content).toBe(local);
+});
+
+it('sends an edit of a document whose type no schema of the Local copy declares, a Wayfinding ticket among them, as a whole-file replace with its base', async () => {
+  const { hosted, room } = await typed();
+  const ticket = room.revision('docs/ticket.md');
+  const task = room.revision('docs/task.md');
+  const tickets = TICKET.replace('**Status**: open', '**Status**: done');
+  const tasks = TASK.replace('Some words.', 'Other words.');
+  await writeFile(join(room.repository, 'docs/ticket.md'), tickets);
+  await writeFile(join(room.repository, 'docs/task.md'), tasks);
+  commitAll(room.repository, 'done');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [
+      { op: 'replace', path: '/rooms/plans/docs/task.md', base: task, content: tasks },
+      { op: 'replace', path: '/rooms/plans/docs/ticket.md', base: ticket, content: tickets },
+    ],
+  ]);
+  expect(room.files.get('docs/ticket.md')!.content).toBe(tickets);
 });
 
 it('refuses a stale component or whole-file base as one batch, records House state on the House ref, and a native Git resolution then pushes', async () => {
@@ -316,7 +430,7 @@ it("brings House's result into the branch by fast-forward or a rebase of later c
   expect(await readFile(join(room.repository, 'docs/memo.md'), 'utf8')).toContain('owner: grace');
   expect(await readFile(join(room.repository, 'docs/memo.md'), 'utf8')).toContain('status: ready');
 
-  room.put('docs/memo.md', room.files.get('docs/memo.md')!.content.replace('type: memo', 'type: memo\nteam: core'));
+  room.put('docs/memo.md', room.files.get('docs/memo.md')!.content.replace('---\n', '---\nteam: core\n'));
   const memo = await readFile(join(room.repository, 'docs/memo.md'), 'utf8');
   await writeFile(join(room.repository, 'docs/memo.md'), memo.replace('status: ready', 'status: done'));
   const dirty = commitAll(room.repository, 'done');
@@ -488,11 +602,11 @@ it('picks its copies up again when the resident starts anew', async () => {
   expect(git(room.repository, 'show', 'refs/house/received:docs/memo.md')).toContain('owner: grace');
 });
 
-it('finishes a push whose operation expired when House holds its component changes beside a remote one', async () => {
-  const { hosted, rooms, room } = await copied();
-  await writeFile(join(room.repository, 'docs/memo.md'), MEMO.replace('status: draft', 'status: ready'));
+it('finishes a push whose operation expired when House holds its component changes to a typed document beside a remote one', async () => {
+  const { hosted, rooms, room } = await typed();
+  await writeFile(join(room.repository, 'docs/launch.md'), LAUNCH.replace('**Status**: draft', '**Status**: ready'));
   const pushedCommit = commitAll(room.repository, 'ready');
-  room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
+  room.put('docs/launch.md', LAUNCH.replace('**Owner**: ada', '**Owner**: grace'));
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
   hosted.house.route('POST', '/kit/door/files/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
@@ -501,9 +615,9 @@ it('finishes a push whose operation expired when House holds its component chang
 
   expect(recovered.stdout).toMatch(new RegExp(`^House accepted ${short(pushedCommit)}; main is at [0-9a-f]{12}\\.\\n$`));
   expect(room.batches).toHaveLength(1);
-  const memo = await readFile(join(room.repository, 'docs/memo.md'), 'utf8');
-  expect(memo).toContain('owner: grace');
-  expect(memo).toContain('status: ready');
+  expect(await readFile(join(room.repository, 'docs/launch.md'), 'utf8')).toBe(
+    LAUNCH.replace('**Owner**: ada', '**Owner**: grace').replace('**Status**: draft', '**Status**: ready'),
+  );
 });
 
 it('keeps newer House text on the House ref when it finishes a push whose answer it recovers after delivery moved on', async () => {

@@ -1,3 +1,4 @@
+import { readTypes } from '@agentshouse/mdmodel';
 import { expect, it } from 'vitest';
 import { changed } from '../src/translate.ts';
 import { growth, GROWTH_BOUND } from './growth.ts';
@@ -34,7 +35,7 @@ it.each([
 ] as const)('translates a document at the cap whose every %s changed in time that grows with its size', (shape, op) => {
   const translated = (bytes: number) => {
     const { before, after } = SHAPES[shape](bytes);
-    return () => changed(PATH, FILE, 'base', before, after);
+    return () => changed(PATH, FILE, 'base', before, after, readTypes(''));
   };
   expect(growth(translated(CAP / 4), translated(CAP))).toBeLessThan(GROWTH_BOUND);
   const edits = translated(CAP)();
