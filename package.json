@@ -27,7 +27,7 @@
     "@agentclientprotocol/sdk": "2.4.0",
     "@agentshouse/mdmodel": "0.1.0-caf6545f57b5d",
     "@agentshouse/mdruntime-adapter": "0.1.0-cf3b6e1c58319",
-    "@agentshouse/session-content": "0.1.0-c27fa9c4d6971",
+    "@agentshouse/session-content": "0.1.0-cad437697294e",
     "@agentshouse/skills": "0.1.0-c33c14a1acda2",
     "@lydell/node-pty": "1.2.0-beta.15",
     "micromark": "4.0.2",
