@@ -2,12 +2,14 @@ import {
   apply,
   definitionAt,
   parse,
+  readTypes,
   serialize,
   type Change,
   type Definition,
   type Document,
   type VerifiedModel,
 } from '@agentshouse/mdmodel';
+import { HOUSE_MODEL_TYPES, HOUSE_TYPED_PATHS } from '@agentshouse/mdruntime-adapter';
 
 export type Edit =
   | { op: 'create'; path: string; content: string }
@@ -17,6 +19,8 @@ export type Edit =
   | { op: 'set_field'; path: string; field: string; base?: unknown; value: unknown }
   | { op: 'replace_section'; path: string; section: string; base: string; content: string }
   | { op: 'replace_preamble'; path: string; base: string; content: string };
+
+const HOUSE_MODEL = readTypes(HOUSE_MODEL_TYPES);
 
 function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -32,12 +36,14 @@ export function readDocument(
   file: string,
   model: VerifiedModel,
 ): { document: Document; definition: Definition | undefined } | null {
-  const definitions = definitionAt(model, file);
+  const definitions = definitionAt(model, file, HOUSE_TYPED_PATHS);
   const parsed = parse(content, file, definitions);
   if (!parsed.ok) return null;
   const { document } = parsed;
   const definition = definitions(document.type);
-  return document.type === undefined || definition !== undefined ? { document, definition } : null;
+  const untyped =
+    document.type === undefined && definitionAt(HOUSE_MODEL, file, HOUSE_TYPED_PATHS)(undefined) === undefined;
+  return definition !== undefined || untyped ? { document, definition } : null;
 }
 
 function components(

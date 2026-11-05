@@ -326,6 +326,25 @@ it('sends an edit of a document whose type no schema of the Local copy declares,
   expect(room.files.get('docs/ticket.md')!.content).toBe(tickets);
 });
 
+it('sends an edit of an Agent function document, whose type its path binds and no schema declares, as a whole-file replace with its base', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('private');
+  room.protected = ['agents', 'house'];
+  const path = 'rooms/plans/agent-functions/weekly.md';
+  const written = ['- **Description**: Sums up the week.', '- **Input**: The week.', '- **Agent**: 0192f0e4-1c2d-7000-8000-0000000000a1', '', 'Read the week.', ''].join('\n');
+  room.put(path, written);
+  await rooms.fetch([room]);
+  const revision = room.revision(path);
+  const local = written.replace('Sums up the week.', 'Sums up the month.');
+  await writeFile(join(room.repository, path), local);
+  commitAll(room.repository, 'monthly');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([[{ op: 'replace', path: `/rooms/private/${path}`, base: revision, content: local }]]);
+  expect(room.files.get(path)!.content).toBe(local);
+});
+
 it('refuses a stale component or whole-file base as one batch, records House state on the House ref, and a native Git resolution then pushes', async () => {
   const { hosted, room } = await copied();
   await writeFile(join(room.repository, 'docs/memo.md'), MEMO.replace('Grow.', 'Grow mine.'));
