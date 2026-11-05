@@ -64,6 +64,7 @@ it('changes no Local copy on a Kit connection One-way call, and still takes the 
   room.put('a.md', 'a, from House\n');
   hosted.connection.send({ type: 'entries', authority: room.ref, position: String(room.position), log_epoch: room.logEpoch, entries: [] });
   hosted.connection.send({ type: 'work_available', subject: 'local_copy' });
+  hosted.connection.send({ type: 'authority_changed', rooms: [room.ref] });
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
   hosted.call({ kind: 'open' });
 
