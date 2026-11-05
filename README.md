@@ -43,7 +43,6 @@ login run a lone `house` command outside their sandbox. `kit logout` disconnects
 computer, stops the Kit process and ends your own agent's connection, so `house` and `git` no
 longer act as you here; a later `kit login` reconnects the same Environment, or connects
 this computer as a new one when House no longer holds it.
-In a container you do not control, such as ChatGPT's, `npm i -g @agentshouse/kit` and `kit chatgpt --key <key>` with a key made on Connections let `house <tool>` act as you, starting and configuring nothing else.
 
 `kit resident` keeps the Environment connected and, as it connects, copies the text of each Room you chose for it as a
 Git repository in the workspace's `local-copies`, and keeps a Room's copy as it is, no longer refreshing it, once the

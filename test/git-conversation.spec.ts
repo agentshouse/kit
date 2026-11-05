@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { agentInstructions } from '@agentshouse/skills';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { until, type Received } from './double.ts';
 import { conversationCredential, hostKit, type Hosted } from './environment.ts';
-import { commitAll, git, OVERLOADED, serveRooms, type Room, type Rooms } from './rooms.ts';
+import { commitAll, git, house, OVERLOADED, serveRooms, type Room, type Rooms } from './rooms.ts';
 
 interface Shelled {
   sh: string;
@@ -138,33 +138,31 @@ it("fetches House's changes onto the House ref from a Conversation process", asy
   expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('one\n');
 });
 
-it("names each Local copy, house fetch before work and house push after in a conversation's first prompt", async () => {
+it("prompts a conversation's first message while a house fetch still waits for House's selection of Local copies", async () => {
   const { hosted, room } = await copied();
-
-  hosted.call({ kind: 'message', text: 'hello', first: true });
-
-  const prompt = await until(async () =>
-    (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
-  );
-  const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block).toEqual(agentInstructions('refs/house/received', [`/rooms/notes: ${room.repository}`]));
-});
-
-it("leaves a Room an authority change drops out of a conversation's first prompt, which then names no Local copy", async () => {
-  const { hosted, rooms, room } = await copied();
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  onTestFinished(() => release());
+  hosted.house.route('POST', '/kit/local-copies/selection/read', async () => {
+    await released;
+    return { body: { local_copy: { rooms: [{ room_ref: room.ref, room_handle: room.handle }] } } };
+  });
   const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read').length;
   const asked = selections();
-  rooms.answered = [];
-
-  hosted.connection.send({ type: 'authority_changed', rooms: [room.ref] });
+  const fetching = house(hosted, '/', 'fetch');
   await until(() => selections() > asked);
+
   hosted.call({ kind: 'message', text: 'hello', first: true });
 
   const prompt = await until(async () =>
     (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'),
   );
   const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block).toEqual(agentInstructions('refs/house/received', []));
+  expect(block).toEqual(agentInstructions());
+  release();
+  expect(await fetching).toMatchObject({ status: 0 });
 });
 
 it(

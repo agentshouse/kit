@@ -62,7 +62,7 @@ export async function fakeBin(home: string): Promise<string> {
   return `${bin}:${process.env.PATH}`;
 }
 
-export async function placeKitHouse(bin: string): Promise<void> {
+async function placeKitHouse(bin: string): Promise<void> {
   await writeFile(join(bin, 'house'), `#!/bin/sh\nexec ${process.execPath} ${HOUSE} "$@"\n`);
   await chmod(join(bin, 'house'), 0o755);
 }

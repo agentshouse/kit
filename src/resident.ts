@@ -204,7 +204,6 @@ export async function resident(): Promise<void> {
     },
     oneWayCall: (oneWayCall: OneWayCall) => {
       if (oneWayCall.type === 'watching') conversations.watching(oneWayCall.watching === true);
-      if (oneWayCall.type === 'authority_changed') logged(copies.changed(oneWayCall.rooms as string[]));
       if (oneWayCall.type === 'work_available' && oneWayCall.subject === 'agents') logged(agents.refresh());
       scripts.notified(oneWayCall);
     },

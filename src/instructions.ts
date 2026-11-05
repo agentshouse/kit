@@ -1,6 +1,5 @@
 import { agentInstructions } from '@agentshouse/skills';
 import type { Bridge } from './bridge.ts';
-import { HOUSE_REF } from './git.ts';
 
 const OWNER_RULES = '/rooms/private/owner-rules.md';
 const UNREADABLE = /^(?:\S+: )?(?:path_not_found|room_not_found|operation_denied)\b/;
@@ -30,7 +29,6 @@ async function readOwnerRules(bridge: Bridge): Promise<string> {
   return document;
 }
 
-export async function instructions(bridge: Bridge, base: string, copies: string[]): Promise<string> {
-  const lines = agentInstructions(HOUSE_REF, copies);
-  return [lines.join('\n'), base, (await readOwnerRules(bridge)).replace(/\n$/, '')].filter((part) => part !== '').join('\n\n');
+export async function instructions(bridge: Bridge, base: string): Promise<string> {
+  return [agentInstructions().join('\n'), base, (await readOwnerRules(bridge)).replace(/\n$/, '')].filter((part) => part !== '').join('\n\n');
 }

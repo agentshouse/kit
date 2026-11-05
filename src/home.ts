@@ -19,7 +19,7 @@ export interface Configuration {
 export interface OwnAgent {
   house: string;
   relay?: string;
-  user?: string;
+  user: string;
   credential: string;
 }
 

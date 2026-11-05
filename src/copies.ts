@@ -462,28 +462,16 @@ export class LocalCopies {
     }
   }
 
-  async mapping(): Promise<string[]> {
-    await this.answering;
-    return [...this.copies.values()]
-      .filter((copy) => copy.unfollowed === undefined)
-      .map((copy) => `${rootOf(copy.room_handle)}: ${copy.repository}`)
-      .sort();
-  }
-
   connected(): Promise<void> {
     return this.selected();
-  }
-
-  async changed(rooms: readonly string[]): Promise<void> {
-    if (rooms.length > 0) await this.selected(rooms);
   }
 
   fetch(): Promise<Pushed> {
     return this.answered(() => this.fetched(true));
   }
 
-  private async selected(rooms?: readonly string[]): Promise<void> {
-    const copied = await this.answered(() => this.fetched(false, rooms));
+  private async selected(): Promise<void> {
+    const copied = await this.answered(() => this.fetched(false));
     if (copied.refused) logged(copied.text);
   }
 
@@ -493,18 +481,16 @@ export class LocalCopies {
     return answered;
   }
 
-  private async fetched(refreshing: boolean, rooms?: readonly string[]): Promise<Pushed> {
+  private async fetched(refreshing: boolean): Promise<Pushed> {
     const { local_copy: answer } = await this.house.post<{
       local_copy: { rooms: { room_ref: string; room_handle: string }[] };
-    }>('/kit/local-copies/selection/read', rooms === undefined ? {} : { rooms });
+    }>('/kit/local-copies/selection/read', {});
     const synced = new Map(answer.rooms.map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
-    const named = rooms === undefined ? null : new Set(rooms.map((room) => `${ROOMS}${room}`));
-    const held = () => [...this.copies.values()].filter((copy) => named === null || named.has(copy.key));
-    return this.holding([...new Set([...held().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
+    return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
       const said: string[] = [];
       let refused = false;
       const mark = refreshing ? 'said' : 'unsaid';
-      for (const copy of held()) {
+      for (const copy of [...this.copies.values()]) {
         if (synced.has(copy.key) || copy.unfollowed === 'said' || copy.unfollowed === mark) continue;
         await this.save({ ...copy, unfollowed: mark });
         if (refreshing) said.push(`${rootOf(copy.room_handle)}: no longer followed; kept as it is`);
@@ -560,7 +546,7 @@ export class LocalCopies {
           said.push(failed);
         }
       }
-      for (const room of rooms ?? [...this.waiting]) {
+      for (const room of [...this.waiting]) {
         if (!unready.includes(room) && !unsettled.includes(room)) this.waiting.delete(room);
       }
       const due = unready.filter((room) => !this.waiting.has(room));

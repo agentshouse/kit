@@ -20,7 +20,7 @@ function refused(code: string): ToolResult {
   return { isError: true, content: [{ type: 'text', text: `${code}: you read no Room there\n` }] };
 }
 
-const LINES = agentInstructions('refs/house/received', []);
+const LINES = agentInstructions();
 
 function blockOf(prompt: Prompt): string[] {
   expect(prompt).toHaveLength(2);

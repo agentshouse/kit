@@ -20,7 +20,7 @@ import { startService } from './service.ts';
 import { placeSkillSet } from './skills.ts';
 import { endUnserved } from './wire.ts';
 
-export const DEFAULT_HOUSE = 'https://agents.house';
+const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
 // Polling every two seconds brings the User's confirmation to the waiting Kit moments after they give it.
 const POLL_INTERVAL_MS = 2000;
@@ -43,7 +43,7 @@ function open(link: string): void {
     .unref();
 }
 
-export async function accepted(house: string, credential: string): Promise<boolean> {
+async function accepted(house: string, credential: string): Promise<boolean> {
   const checked = await callHouse(house, credential, rpc('tools/list', {}));
   if (checked.status === 200) return true;
   if (checked.status === 401) return false;
