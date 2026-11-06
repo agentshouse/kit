@@ -1,15 +1,15 @@
 import {
   apply,
   definitionAt,
+  HOUSE_MODEL,
+  HOUSE_TYPED_PATHS,
   parse,
-  readTypes,
   serialize,
   type Change,
   type Definition,
   type Document,
   type VerifiedModel,
 } from '@agentshouse/mdmodel';
-import { HOUSE_MODEL_TYPES, HOUSE_TYPED_PATHS } from '@agentshouse/mdruntime-adapter';
 
 export type Edit =
   | { op: 'create'; path: string; content: string }
@@ -19,8 +19,6 @@ export type Edit =
   | { op: 'set_field'; path: string; field: string; base?: unknown; value: unknown }
   | { op: 'replace_section'; path: string; section: string; base: string; content: string }
   | { op: 'replace_preamble'; path: string; base: string; content: string };
-
-const HOUSE_MODEL = readTypes(HOUSE_MODEL_TYPES);
 
 function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
