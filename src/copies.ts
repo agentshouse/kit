@@ -1,4 +1,4 @@
-import { parse } from '@agentshouse/mdmodel';
+import { readTypes, type VerifiedModel } from '@agentshouse/mdmodel';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -22,7 +22,7 @@ import { paused } from './files.ts';
 import { kitHome } from './home.ts';
 import { operationId } from './operation.ts';
 import { refusalOf, type Refusal } from './refusals.ts';
-import { changed, type Edit } from './translate.ts';
+import { changed, readDocument, type Edit } from './translate.ts';
 
 const BRANCH = 'main';
 const PROVENANCE = '_provenance';
@@ -31,6 +31,7 @@ const ROOMS = 'rooms/';
 const ENUMERATE = '/kit/door/changes/enumerate';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
 const STAGED_CHUNKS = 'house-chunks';
+const SCHEMA = 'settings/schema.yaml';
 
 // A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
 const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
@@ -383,6 +384,12 @@ async function ignoreRules(
       '',
     ].join('\n'),
   );
+}
+
+async function modelOf(copy: Copy, files: ReadonlyMap<string, string>): Promise<VerifiedModel> {
+  const entry = files.get(SCHEMA);
+  if (entry !== undefined) return readTypes(await blobText(copy.repository, entry));
+  return readTypes(copy.read_only.includes(SCHEMA) ? await readFile(join(copy.repository, SCHEMA), 'utf8') : '');
 }
 
 function revisionAt(copy: Copy, commit: string, path: string): string | undefined {
@@ -927,6 +934,7 @@ export class LocalCopies {
       if (binary.length > 0) throw new Error(textOnly(binary));
     }
     const text = (entry: string) => blobText(copy.repository, entry);
+    const model = await modelOf(copy, after);
     const changes: Edit[] = [];
     for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
       if (arrived.has(path)) continue;
@@ -945,7 +953,7 @@ export class LocalCopies {
       if (prior === next) continue;
       if (next === undefined) changes.push({ op: 'remove', path: `${root}/${path}`, base: known });
       else if (prior === undefined) changes.push({ op: 'create', path: `${root}/${path}`, content: await text(next) });
-      else changes.push(...changed(`${root}/${path}`, path, known, await text(prior), await text(next)));
+      else changes.push(...changed(`${root}/${path}`, path, known, await text(prior), await text(next), model));
     }
     return changes;
   }
@@ -998,7 +1006,8 @@ export class LocalCopies {
     const current = (await this.caughtUp([copy], true))[0]!;
     const house = await tree(copy.repository, current.house);
     const root = rootOf(current.room_handle);
-    if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit)))) {
+    const model = await modelOf(current, house);
+    if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit), model))) {
       await this.save(without(current));
       return {
         refused: true,
@@ -1104,6 +1113,7 @@ export class LocalCopies {
     changes: readonly Edit[],
     house: Map<string, string>,
     selected: Map<string, string>,
+    model: VerifiedModel,
   ): Promise<boolean> {
     const text = async (path: string) => {
       const entry = house.get(relative(path));
@@ -1116,9 +1126,8 @@ export class LocalCopies {
         continue;
       }
       if ((change.op === 'create' || change.op === 'replace') && current === change.content) continue;
-      const parsed = current === undefined ? null : parse(current, change.path);
-      const document = parsed?.ok === true ? parsed.document : null;
-      if (document === null) return false;
+      const document = current === undefined ? undefined : readDocument(current, relative(change.path), model)?.document;
+      if (document === undefined) return false;
       if (change.op === 'set_field' && JSON.stringify(document.fields[change.field]) === JSON.stringify(change.value)) continue;
       if (change.op === 'replace_section' && document.sections[change.section] === change.content) continue;
       if (change.op === 'replace_preamble' && document.preamble === change.content) continue;

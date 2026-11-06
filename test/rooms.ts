@@ -1,4 +1,5 @@
-import { apply, parse, serialize, type Change } from '@agentshouse/mdmodel';
+import { apply, definitionAt, parse, readTypes, serialize, type Change } from '@agentshouse/mdmodel';
+import { HOUSE_ROOM_TYPES, HOUSE_TYPED_PATHS } from '@agentshouse/mdruntime-adapter';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
@@ -16,6 +17,7 @@ export const COPIES = '/agents/house/local-copies';
 const LOG_EPOCH = '0192f0e4-1c2d-7000-8000-000000000001';
 const CHUNK_BYTES = 1024 * 1024;
 const BODY_BYTES = 4 * 1024 * 1024;
+const ROOM_TYPES = readTypes(HOUSE_ROOM_TYPES);
 
 interface Stored {
   content: string;
@@ -297,7 +299,9 @@ export class Room {
           }
         }
       } else {
-        const parsed = current === undefined ? null : parse(current.content, path);
+        const schema = next.get('settings/schema.yaml')?.content;
+        const definitions = definitionAt(readTypes(schema ?? '', ROOM_TYPES), path, HOUSE_TYPED_PATHS);
+        const parsed = current === undefined ? null : parse(current.content, path, definitions);
         if (parsed === null || !parsed.ok) {
           stale('base_revision_stale');
           continue;
@@ -308,7 +312,7 @@ export class Room {
             : change.op === 'replace_preamble'
               ? { kind: 'preamble', value: change.content!, prior: String(change.base) }
               : { kind: 'section', name: change.section!, value: change.content!, prior: String(change.base) };
-        const result = apply(parsed.document, [structured]);
+        const result = apply(parsed.document, [structured], definitions(parsed.document.type));
         if (result.outcome !== 'applied') stale(`${structured.kind}_base_stale`);
         else set(path, 'replace', serialize(result.document));
       }
