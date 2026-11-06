@@ -17,6 +17,11 @@ async function enrol(house: House, home: string, credential: string) {
   );
 }
 
+async function loggedIn(house: House, home: string, credential: string): Promise<void> {
+  serveLogin(house, 'environment-one', credential);
+  expect((await logIn(house, home)).exit).toBe(0);
+}
+
 async function resident(house: House, home?: string, environment: Record<string, string> = {}): Promise<KitRun> {
   home ??= await temporaryHome();
   await enrol(house, home, 'ahk_held');
@@ -76,7 +81,7 @@ it('presents the credential a later login stored when it opens its next Kit conn
   runKit(['resident'], { HOUSE_KIT_HOME: home });
   const first = await until(() => house.connections[0]);
 
-  await enrol(house, home, 'ahk_second');
+  await loggedIn(house, home, 'ahk_second');
   first.close(1008, 'authority_changed');
 
   const second = await until(() => house.connections[1]);
@@ -121,10 +126,10 @@ it('refuses a second resident while the first waits for a login, and leaves the 
 
   expect(await ended(second)).toBe(1);
   expect(second.stderr()).toBe(`kit: Kit process ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another Kit process here\n`);
-  await enrol(house, home, 'ahk_held');
+  await loggedIn(house, home, 'ahk_held');
   await until(() => house.connections[0]);
   await settle();
-  expect(openings(house)).toBe(1);
+  expect(house.connections).toHaveLength(1);
 });
 
 it('refuses a second resident that starts while the first removes the owner socket a killed Kit process left, and leaves the first holding the Environment', async () => {
@@ -143,10 +148,10 @@ it('refuses a second resident that starts while the first removes the owner sock
   expect(second.stderr()).toBe(`kit: another Kit process already runs this Environment from Kit home ${home}; stop it first to run another Kit process here\n`);
   first.input.write('\n');
   await until(() => first.stderr().includes('run kit login'));
-  await enrol(house, home, 'ahk_held');
+  await loggedIn(house, home, 'ahk_held');
   await until(() => house.connections[0]);
   await settle();
-  expect(openings(house)).toBe(1);
+  expect(house.connections).toHaveLength(1);
 });
 
 it('refuses a second resident that reaches the running Kit home through a symbolic link', async () => {
@@ -171,7 +176,7 @@ it('waits for a login on a Kit home that does not exist yet, and connects once a
   const kit = runKit(['resident'], { HOUSE_KIT_HOME: home });
   await until(() => kit.stderr().includes('run kit login'));
 
-  await enrol(house, home, 'ahk_held');
+  await loggedIn(house, home, 'ahk_held');
 
   expect((await until(() => house.connections[0])).headers.authorization).toBe('Bearer ahk_held');
 });
@@ -246,7 +251,7 @@ it('keeps the credential a later login stored when House rejects the one it held
   const home = await temporaryHome();
   const kit = await resident(house, home);
   const connection = await until(() => house.connections[0]);
-  await enrol(house, home, 'ahk_second');
+  await loggedIn(house, home, 'ahk_second');
 
   connection.close(1008, 'credential_rejected');
 
