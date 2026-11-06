@@ -1,4 +1,4 @@
-import { readTypes, type VerifiedModel } from '@agentshouse/mdmodel';
+import { HOUSE_ROOM_TYPES, readTypes, type VerifiedModel } from '@agentshouse/mdmodel';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -388,8 +388,8 @@ async function ignoreRules(
 
 async function modelOf(copy: Copy, files: ReadonlyMap<string, string>): Promise<VerifiedModel> {
   const entry = files.get(SCHEMA);
-  if (entry !== undefined) return readTypes(await blobText(copy.repository, entry));
-  return readTypes(copy.read_only.includes(SCHEMA) ? await readFile(join(copy.repository, SCHEMA), 'utf8') : '');
+  if (entry !== undefined) return readTypes(await blobText(copy.repository, entry), HOUSE_ROOM_TYPES);
+  return readTypes(copy.read_only.includes(SCHEMA) ? await readFile(join(copy.repository, SCHEMA), 'utf8') : '', HOUSE_ROOM_TYPES);
 }
 
 function revisionAt(copy: Copy, commit: string, path: string): string | undefined {
