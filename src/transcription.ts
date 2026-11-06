@@ -1,6 +1,7 @@
 import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { availableParallelism, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { unlessAborted } from './abort.ts';
 import { downloadServed } from './building.ts';
 import { failureOf, run } from './clis.ts';
@@ -57,11 +58,10 @@ const UNDECODABLE = 'an audio file this message links could not be decoded';
 
 const UNTRANSCRIBED = 'an audio file this message links could not be transcribed';
 
-const NO_ENGINE = 'there is no transcription engine for this computer';
-
 export interface TranscriptionReport {
   installed: boolean;
   failure: string | null;
+  no_engine?: true;
 }
 
 let held: Promise<unknown> = Promise.resolve();
@@ -115,10 +115,8 @@ function ready(): void {
   if (!readiness.installed) throw new Error(NOT_INSTALLED);
 }
 
-function pinnedHere(): Engine {
-  const engine = ENGINES[`${process.platform}-${process.arch}`];
-  if (engine === undefined) throw new Error(NO_ENGINE);
-  return engine;
+function pinnedHere(): Engine | undefined {
+  return ENGINES[`${process.platform}-${process.arch}`];
 }
 
 const DOWNLOADS = 3;
@@ -158,7 +156,7 @@ async function install(artifacts: Artifact[], signal: AbortSignal): Promise<void
 }
 
 function reported(next: TranscriptionReport): boolean {
-  const changed = next.installed !== readiness.installed || next.failure !== readiness.failure;
+  const changed = !isDeepStrictEqual(next, readiness);
   readiness = next;
   return changed;
 }
@@ -170,10 +168,11 @@ async function settle(transcribe: boolean): Promise<boolean> {
     await rm(directory(), { recursive: true, force: true });
     return reported({ installed: false, failure: null });
   }
+  const pinned = pinnedHere();
+  if (pinned === undefined) return reported({ installed: false, failure: null, no_engine: true });
   const download = new AbortController();
   downloading = download;
   try {
-    const pinned = pinnedHere();
     await install([pinned.decoder, pinned.engine, MODEL], download.signal);
     return reported({ installed: true, failure: null });
   } catch (error) {
@@ -196,7 +195,7 @@ export function transcriptionReport(): TranscriptionReport {
 }
 
 async function transcribed(audio: string, parts: string, signal: AbortSignal): Promise<string> {
-  const pinned = pinnedHere();
+  const pinned = pinnedHere()!;
   await mkdir(parts);
   await failing(
     UNDECODABLE,
