@@ -25,7 +25,6 @@ const NOT_INSTALLED = "the speech engine is not installed on the Agent's Environ
 const NOT_DOWNLOADED = 'an audio file this message links could not be downloaded; send the message again';
 const UNDECODABLE = 'an audio file this message links could not be decoded';
 const UNTRANSCRIBED = 'an audio file this message links could not be transcribed';
-const NO_ENGINE = 'there is no transcription engine for this computer';
 const INTERRUPTED = 'the conversation was interrupted';
 const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
@@ -342,7 +341,7 @@ it('installs the engine and the decoder built for Apple silicon on a Mac', async
 it('reports that there is no transcription engine for an Intel Mac, downloading nothing', async () => {
   const hosted = await hostMac({ transcribe: true, arch: 'x64' });
 
-  expect(await settled(hosted, (report) => report.failure !== null)).toEqual({ installed: false, failure: NO_ENGINE });
+  expect(await settled(hosted, (report) => report.no_engine === true)).toEqual({ installed: false, failure: null, no_engine: true });
   expect(await downloads(hosted)).toEqual([]);
   expect(existsSync(join(hosted.home, 'transcription'))).toBe(false);
 });
