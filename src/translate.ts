@@ -1,7 +1,6 @@
 import {
   apply,
   definitionAt,
-  HOUSE_MODEL,
   HOUSE_TYPED_PATHS,
   parse,
   serialize,
@@ -39,9 +38,7 @@ export function readDocument(
   if (!parsed.ok) return null;
   const { document } = parsed;
   const definition = definitions(document.type);
-  const untyped =
-    document.type === undefined && definitionAt(HOUSE_MODEL, file, HOUSE_TYPED_PATHS)(undefined) === undefined;
-  return definition !== undefined || untyped ? { document, definition } : null;
+  return definition !== undefined || document.type === undefined ? { document, definition } : null;
 }
 
 function components(

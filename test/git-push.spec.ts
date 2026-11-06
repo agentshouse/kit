@@ -306,27 +306,59 @@ it('reads a typed document by the schema the Local copy holds read-only when its
   expect(room.files.get('docs/launch.md')!.content).toBe(local);
 });
 
-it('sends an edit of a document whose type no schema of the Local copy declares, a Wayfinding ticket among them, as a whole-file replace with its base', async () => {
+it('sends an edit of a document whose type no schema of the Local copy declares as a whole-file replace with its base', async () => {
   const { hosted, room } = await typed();
-  const ticket = room.revision('docs/ticket.md');
   const task = room.revision('docs/task.md');
-  const tickets = TICKET.replace('**Status**: open', '**Status**: done');
   const tasks = TASK.replace('Some words.', 'Other words.');
-  await writeFile(join(room.repository, 'docs/ticket.md'), tickets);
   await writeFile(join(room.repository, 'docs/task.md'), tasks);
+  commitAll(room.repository, 'other words');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([[{ op: 'replace', path: '/rooms/plans/docs/task.md', base: task, content: tasks }]]);
+  expect(room.files.get('docs/task.md')!.content).toBe(tasks);
+});
+
+it("sends an edit of a value of a Wayfinding ticket, a built-in type no Room's schema declares, as one field edit", async () => {
+  const { hosted, room } = await typed();
+  const tickets = TICKET.replace('**Status**: open', '**Status**: done');
+  await writeFile(join(room.repository, 'docs/ticket.md'), tickets);
   commitAll(room.repository, 'done');
 
   expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
   expect(batches(hosted).map((batch) => batch.changes)).toEqual([
-    [
-      { op: 'replace', path: '/rooms/plans/docs/task.md', base: task, content: tasks },
-      { op: 'replace', path: '/rooms/plans/docs/ticket.md', base: ticket, content: tickets },
-    ],
+    [{ op: 'set_field', path: '/rooms/plans/docs/ticket.md', field: 'status', base: 'open', value: 'done' }],
   ]);
   expect(room.files.get('docs/ticket.md')!.content).toBe(tickets);
 });
 
-it('sends an edit of an Agent function document, whose type its path binds and no schema declares, as a whole-file replace with its base', async () => {
+it("sends an edit of a chat card's value as one field edit when the Room's schema names the chat type to set who may create it", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('support');
+  const card = ['---', 'type: chat', '---', '# Ada', '', '- **Chat**: 4711', '- **Customer**:', '  - **Name**: Ada', '  - **Username**: ada', ''].join('\n');
+  room.put('settings/schema.yaml', 'chat:\n  create_roles: [editor]\n');
+  room.put('inbox/ada.md', card);
+  await rooms.fetch([room]);
+  const local = card.replace('**Name**: Ada', '**Name**: Ada Lovelace');
+  await writeFile(join(room.repository, 'inbox/ada.md'), local);
+  commitAll(room.repository, 'full name');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [
+      {
+        op: 'set_field',
+        path: '/rooms/support/inbox/ada.md',
+        field: 'customer',
+        base: { name: 'Ada', username: 'ada' },
+        value: { name: 'Ada Lovelace', username: 'ada' },
+      },
+    ],
+  ]);
+  expect(room.files.get('inbox/ada.md')!.content).toBe(local);
+});
+
+it('sends an edit of a value of an Agent function document, whose type its path binds and no schema declares, as one field edit', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('private');
@@ -335,13 +367,14 @@ it('sends an edit of an Agent function document, whose type its path binds and n
   const written = ['- **Description**: Sums up the week.', '- **Input**: The week.', '- **Agent**: 0192f0e4-1c2d-7000-8000-0000000000a1', '', 'Read the week.', ''].join('\n');
   room.put(path, written);
   await rooms.fetch([room]);
-  const revision = room.revision(path);
   const local = written.replace('Sums up the week.', 'Sums up the month.');
   await writeFile(join(room.repository, path), local);
   commitAll(room.repository, 'monthly');
 
   expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
-  expect(batches(hosted).map((batch) => batch.changes)).toEqual([[{ op: 'replace', path: `/rooms/private/${path}`, base: revision, content: local }]]);
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [{ op: 'set_field', path: `/rooms/private/${path}`, field: 'description', base: 'Sums up the week.', value: 'Sums up the month.' }],
+  ]);
   expect(room.files.get(path)!.content).toBe(local);
 });
 
