@@ -772,6 +772,9 @@ export class Conversations {
     const running = conversation.running;
     if (running === null) return;
     try {
+      if (conversation.options?.find(({ id }) => id === option)?.category === 'mode') {
+        throw new Error(`conversation ${conversation.id} keeps the mode its Agent's launch settings name`);
+      }
       running.reader.requested(option, value);
       const answered = await running.adapter.connection.agent.request('session/set_config_option', {
         sessionId: running.sessionId,
@@ -980,7 +983,7 @@ export class Conversations {
   private options(conversation: Conversation, options: SessionConfigOption[]): void {
     if (conversation.running === null) return;
     conversation.options = options;
-    this.kit.send({ type: 'options', conversation_id: conversation.id, options });
+    this.kit.send({ type: 'options', conversation_id: conversation.id, options: options.filter((option) => option.category !== 'mode') });
     const chosen = (category: string) => {
       const value = options.find((option) => option.category === category)?.currentValue;
       return value === undefined ? null : String(value);

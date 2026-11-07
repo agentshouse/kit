@@ -195,9 +195,9 @@ it('sets an option on the running process and relays the commands and options th
   const current = (oneWayCall: Record<string, unknown>) =>
     Object.fromEntries((oneWayCall.options as { id: string; currentValue: string }[]).map((option) => [option.id, option.currentValue]));
   expect(hosted.connection.oneWayCalls.filter(options).map(current)).toEqual([
-    { mode: 'agent-full-access', collaboration_mode: 'default', model: 'route-model', reasoning_effort: 'route-effort' },
-    { mode: 'agent-full-access', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'route-effort' },
-    { mode: 'agent-full-access', collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'from-cli' },
+    { collaboration_mode: 'default', model: 'route-model', reasoning_effort: 'route-effort' },
+    { collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'route-effort' },
+    { collaboration_mode: 'default', model: 'other-model', reasoning_effort: 'from-cli' },
   ]);
   expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'commands')).toEqual([
     {
@@ -207,6 +207,35 @@ it('sets an option on the running process and relays the commands and options th
     },
   ]);
 });
+
+it.each([
+  ['codex-acp', 'read-only', 'agent-full-access', ['collaboration_mode', 'model', 'reasoning_effort']],
+  ['claude-agent-acp', 'default', 'bypassPermissions', ['model', 'effort']],
+])(
+  "relays every option %s offers but its permission mode, and an option call naming the mode leaves the session's mode as it launched",
+  async (kind, asking, launched, relayed) => {
+    const hosted = await hostKit([{ kind, model: null, effort: null }]);
+    await opened(hosted);
+    const options = (oneWayCall: Record<string, unknown>) => oneWayCall.type === 'options';
+    await until(() => hosted.connection.oneWayCalls.find(options));
+
+    hosted.call({ kind: 'option', option: 'mode', value: asking });
+    await hosted.result(lastCall());
+    hosted.call({ kind: 'message', text: '@config', first: true });
+    await until(() => ended(hosted)[0]);
+
+    const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
+    expect(settings.map((entry) => entry.params)).toEqual([expect.objectContaining({ configId: 'mode', value: launched })]);
+    const ids = (oneWayCall: Record<string, unknown>) => (oneWayCall.options as { id: string }[]).map((option) => option.id);
+    expect(hosted.connection.oneWayCalls.filter(options).map(ids)).toEqual([relayed, relayed]);
+    const modes = hosted.connection.oneWayCalls
+      .filter((oneWayCall) => oneWayCall.type === 'state')
+      .map((oneWayCall) => (oneWayCall.state as { mode: string | null }).mode);
+    expect(modes.at(-1)).toBe(launched);
+    expect(new Set(modes.filter((mode) => mode !== null))).toEqual(new Set([launched]));
+    expect(hosted.kit.stderr()).toContain("kit: conversation conversation-1 keeps the mode its Agent's launch settings name\n");
+  },
+);
 
 it('reports a question with the CLI request unchanged and passes the answer back unchanged', async () => {
   const hosted = await hostKit();
