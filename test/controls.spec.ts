@@ -233,6 +233,7 @@ it.each([
       .map((oneWayCall) => (oneWayCall.state as { mode: string | null }).mode);
     expect(modes.at(-1)).toBe(launched);
     expect(new Set(modes.filter((mode) => mode !== null))).toEqual(new Set([launched]));
+    expect(hosted.kit.stderr()).toContain("kit: conversation conversation-1 keeps the mode its Agent's launch settings name\n");
   },
 );
 
