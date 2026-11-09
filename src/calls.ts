@@ -1,73 +1,11 @@
+import type { KitCallResult } from '@agentshouse/kit-wire';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { House } from './api.ts';
 import { kitHome } from './home.ts';
 
-export type Result =
-  | { provider_session_id: string }
-  | { refused: string; resume_refused?: true }
-  | { exit_code: number }
-  | { exit_code: number; output: string; cut: boolean }
-  | { timed_out: true; output: string; cut: boolean }
-  | { started: true }
-  | Record<string, never>;
-
-export interface KitMethods {
-  readonly open: { readonly params: { afk?: true }; readonly result: Result };
-  readonly kill: { readonly params: Record<never, never>; readonly result: Result };
-  readonly done: { readonly params: Record<never, never>; readonly result: Result };
-  readonly message: {
-    readonly params: { message_id: string; text: string; first: boolean; at_once?: true; recent?: string; afk?: true };
-    readonly result: Result;
-  };
-  readonly take_out: { readonly params: { message_id: string }; readonly result: Result };
-  readonly interrupt: { readonly params: { turn_id: string }; readonly result: Result };
-  readonly answer: {
-    readonly params: { interaction_id: string; response: unknown; request: unknown };
-    readonly result: Result;
-  };
-  readonly option: {
-    readonly params: { option: string; value: string | boolean };
-    readonly result: Result;
-  };
-  readonly sign_in: {
-    readonly params: { cli: string; ends_in: number };
-    readonly result: Result;
-  };
-  readonly update: {
-    readonly params: { release: string };
-    readonly result: Result;
-  };
-  readonly run_wizard: { readonly params: { script: string }; readonly result: Result };
-  readonly run_function: {
-    readonly params: { script: string; input: unknown; terminal: boolean; time_cap: number; output_cap: number };
-    readonly result: Result;
-  };
-}
-
-type KitMethod = keyof KitMethods;
-
-type EnvironmentMethod = 'sign_in' | 'update' | 'run_wizard' | 'run_function';
-
-interface ConversationHeader {
-  input_id: string;
-  conversation_id: string;
-  agent_id: string;
-  provider_session_id: string | null;
-}
-
-interface EnvironmentHeader {
-  input_id: string;
-}
-
-export type Call<Method extends KitMethod = KitMethod> = {
-  [Named in Method]: (Named extends EnvironmentMethod ? EnvironmentHeader : ConversationHeader) & {
-    kind: Named;
-  } & KitMethods[Named]['params'];
-}[Method];
-
 export interface Carried {
-  result: Result;
+  result: KitCallResult;
   returned?(): Promise<void>;
   release?: boolean;
 }
@@ -81,7 +19,7 @@ export class Calls {
   private readonly changed: () => void;
   private readonly carried = new Map<string, Promise<Carried>>();
   private readonly path = join(kitHome(), 'call-results.json');
-  private readonly results: Map<string, Result>;
+  private readonly results: Map<string, KitCallResult>;
   private readonly returned = new Set<string>();
   private readonly released = new Set<string>();
   private open = 0;
@@ -90,11 +28,11 @@ export class Calls {
     this.house = house;
     this.changed = changed;
     this.results = new Map(
-      existsSync(this.path) ? Object.entries(JSON.parse(readFileSync(this.path, 'utf8')) as Record<string, Result>) : [],
+      existsSync(this.path) ? Object.entries(JSON.parse(readFileSync(this.path, 'utf8')) as Record<string, KitCallResult>) : [],
     );
   }
 
-  keepResult(callId: string, result: Result): void {
+  keepResult(callId: string, result: KitCallResult): void {
     if (this.returned.has(callId)) return;
     this.results.set(callId, result);
     this.save();
@@ -118,7 +56,7 @@ export class Calls {
     return carried
       .then(async ({ result, returned, release }) => {
         try {
-          await this.house.deliver('/kit/kit-calls/results/return', { call: callId, ...result });
+          await this.house.deliver('kit-calls/results/return', { call: callId, ...result });
         } finally {
           this.returned.add(callId);
           if (this.results.delete(callId)) this.save();

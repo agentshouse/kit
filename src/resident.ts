@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { received } from './bridge.ts';
-import { CONVERSATION_METHODS, Conversations, type ConversationCall } from './conversations.ts';
+import { Conversations } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
-import { restart, unknownMethod } from './end.ts';
+import { restart } from './end.ts';
 import { agentBase, enrolled, kitHome, ownerLock, ownerSocket, readEnrolment } from './home.ts';
-import { Calls, type Call } from './calls.ts';
+import { Calls } from './calls.ts';
 import { killDescendants } from './scope.ts';
 import { removeInputs, Scripts } from './scripts.ts';
 import { quoted } from './shell.ts';
 import { SignIns } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
-import { holdConnection, type Connection, type OneWayCall } from './connection.ts';
+import { holdConnection, type Connection } from './connection.ts';
 import { KitUpdate } from './update.ts';
 import { takeUnservedRelease } from './wire.ts';
 import { codexLauncher } from './work.ts';
@@ -151,7 +151,7 @@ export async function resident(): Promise<void> {
       void stop(() => restart(`Kit ${placed} is placed; its supervisor starts it`));
     } else if (!reported) {
       reported = true;
-      logged(house.deliver('/kit/kits/report-idle', {}, idle));
+      logged(house.deliver('kits/report-idle', {}, idle));
     }
   };
   const calls = new Calls(house, changed);
@@ -182,7 +182,7 @@ export async function resident(): Promise<void> {
   watch(kitHome(), unenrolled);
   unenrolled();
 
-  await house.deliver('/kit/kits/report-restart', {}).catch(report);
+  await house.deliver('kits/report-restart', {}).catch(report);
   logged(agents.refresh());
   agents.keepCurrent(() => process.env.HOUSE_KIT_SANDBOX === '1' && reported);
   connection = holdConnection({
@@ -192,18 +192,14 @@ export async function resident(): Promise<void> {
       logged(copies.connected());
     },
     closed: () => scripts.disconnected(),
-    call: (call: Call) => {
+    call: (call) => {
       if (call.kind === 'sign_in') signIns.start(call);
       else if (call.kind === 'update') update.take(call);
       else if (call.kind === 'run_wizard' || call.kind === 'run_function') scripts.start(call);
-      else if (CONVERSATION_METHODS.has(call.kind)) conversations.call(call as ConversationCall);
-      else {
-        const refused = { refused: unknownMethod((call as { kind: string }).kind) };
-        void calls.carry(call.input_id, async () => ({ result: refused }));
-      }
+      else conversations.call(call);
     },
-    oneWayCall: (oneWayCall: OneWayCall) => {
-      if (oneWayCall.type === 'watching') conversations.watching(oneWayCall.watching === true);
+    oneWayCall: (oneWayCall) => {
+      if (oneWayCall.type === 'watching') conversations.watching(oneWayCall.watching);
       if (oneWayCall.type === 'work_available' && oneWayCall.subject === 'agents') logged(agents.refresh());
       scripts.notified(oneWayCall);
     },

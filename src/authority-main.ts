@@ -1,4 +1,4 @@
-import { HouseRefusal, post } from './api.ts';
+import { HouseRefusal, kitAct } from './api.ts';
 import { readEnrolment } from './home.ts';
 import { proxyUnlessRelayed } from './relay.ts';
 
@@ -10,7 +10,7 @@ proxyUnlessRelayed();
 try {
   const { house, credential } = (await readEnrolment())!;
   try {
-    await post(house, '/kit/agents/desired/list', {}, credential);
+    await kitAct(house, 'agents/desired/list', {}, credential);
   } catch (error) {
     if (!unanswered(error)) throw error;
     process.stderr.write(`kit: House did not answer, so the stored credential stands: ${(error as Error).message}\n`);

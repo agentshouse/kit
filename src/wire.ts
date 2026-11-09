@@ -1,29 +1,18 @@
-import { newerThanHouse, updateRequired } from './end.ts';
-import { machine, type Machine } from './placement.ts';
+import type { BuildingKit } from '@agentshouse/kit-wire';
+import { updateRequired } from './end.ts';
 import { refusalOf } from './refusals.ts';
-
-export const KIT_WIRE = 6;
-export const KIT_WIRE_HEADER = 'x-house-kit-wire';
-
-interface Unserved {
-  code: string;
-  release: string;
-  commands: Record<Machine, string>;
-}
 
 let take: ((release: string) => void) | null = null;
 let taken = false;
 
-function unservedBy(text: string): Unserved | null {
-  let body: { error?: Unserved } | null;
+function unservedBy(text: string): BuildingKit | null {
+  let body: { error?: { code?: string } & BuildingKit } | null;
   try {
-    body = JSON.parse(text) as { error?: Unserved } | null;
+    body = JSON.parse(text) as { error?: { code?: string } & BuildingKit } | null;
   } catch {
     return null;
   }
-  const error = body?.error;
-  if (error?.code !== 'kit_update_required' && error?.code !== 'kit_newer_than_house') return null;
-  return typeof error.release === 'string' ? error : null;
+  return body?.error?.code === 'kit_update_required' ? body.error : null;
 }
 
 export function takeUnservedRelease(taking: (release: string) => void): void {
@@ -44,5 +33,4 @@ export function endUnserved(text: string): void {
     return;
   }
   if (refusalOf(text)?.code === 'kit_update_required') updateRequired();
-  if (refused?.code === 'kit_newer_than_house') newerThanHouse(refused.release, refused.commands[machine()]);
 }

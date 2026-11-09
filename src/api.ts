@@ -1,9 +1,17 @@
+import {
+  KIT_WIRE,
+  KIT_WIRE_HEADER,
+  type KitActAnswer,
+  type KitActName,
+  type KitActRequest,
+  type KitDoorAct,
+} from '@agentshouse/kit-wire';
 import { setTimeout as delay } from 'node:timers/promises';
 import { signInAgain } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { retryable } from './refusals.ts';
 import { relayed } from './relay.ts';
-import { endUnserved, KIT_WIRE, KIT_WIRE_HEADER } from './wire.ts';
+import { endUnserved } from './wire.ts';
 
 export class HouseRefusal extends Error {
   readonly status: number;
@@ -48,7 +56,7 @@ export async function post<T>(
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      [KIT_WIRE_HEADER]: String(KIT_WIRE),
+      [KIT_WIRE_HEADER]: KIT_WIRE,
       ...(credential === undefined ? {} : { authorization: `Bearer ${credential}` }),
     },
     body: JSON.stringify(body),
@@ -60,9 +68,20 @@ export async function post<T>(
   return JSON.parse(text) as T;
 }
 
+export function kitAct<Name extends KitActName>(
+  house: string,
+  act: Name,
+  request: KitActRequest<Name>,
+  credential: string,
+  signal?: AbortSignal,
+): Promise<KitActAnswer<Name>> {
+  return post(house, `/kit/${act}`, request, credential, signal);
+}
+
 export interface House {
-  post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T>;
-  deliver<T>(path: string, body: unknown, current?: () => boolean): Promise<T>;
+  act<Name extends KitActName>(act: Name, request: KitActRequest<Name>, signal?: AbortSignal): Promise<KitActAnswer<Name>>;
+  door<T>(act: KitDoorAct, body: object, signal?: AbortSignal): Promise<T>;
+  deliver<Name extends KitActName>(act: Name, request: KitActRequest<Name>, current?: () => boolean): Promise<KitActAnswer<Name>>;
 }
 
 async function enrolledPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
@@ -76,14 +95,15 @@ async function enrolledPost<T>(path: string, body: unknown, signal?: AbortSignal
 }
 
 export const house: House = {
-  post: enrolledPost,
-  deliver: async <T>(path: string, body: unknown, current = () => true): Promise<T> => {
+  act: (act, request, signal) => enrolledPost(`/kit/${act}`, request, signal),
+  door: (act, body, signal) => enrolledPost(`/kit/door/${act}`, body, signal),
+  deliver: async (act, request, current = () => true) => {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await enrolledPost<T>(path, body);
+        return await enrolledPost(`/kit/${act}`, request);
       } catch (error) {
         if (finalRefusal(error)) throw error;
-        process.stderr.write(`kit: ${path} did not reach House: ${(error as Error).message}\n`);
+        process.stderr.write(`kit: /kit/${act} did not reach House: ${(error as Error).message}\n`);
         // A delivery House did not take is sent again on the jittered curve for as long as it is still current.
         await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
         if (!current()) throw error;

@@ -1,14 +1,15 @@
+import type { KitCallOf, SecretCeremonyStep } from '@agentshouse/kit-wire';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { Agents } from './agents.ts';
 import type { House } from './api.ts';
 import { CLIS } from './clis.ts';
-import type { Call, Calls, Carried } from './calls.ts';
+import type { Calls, Carried } from './calls.ts';
 import { childEnvironment } from './relay.ts';
 import { killTree } from './scope.ts';
-import { holdSecretInput, type Step } from './secret-input.ts';
+import { holdSecretInput } from './secret-input.ts';
 
-export type SignInCall = Call<'sign_in'>;
+export type SignInCall = KitCallOf<'sign_in'>;
 
 const ESCAPE = /\u001b\[[\d;]*m/g;
 const LINK = /https:\/\/\S+/;
@@ -82,7 +83,7 @@ export class SignIns {
       if (login.code === 'collect' && plain.includes(login.rejected)) killTree(child);
       link ??= LINK.exec(plain)?.[0];
       if (CODE.test(plain)) code ??= plain;
-      const step: Step | undefined =
+      const step: SecretCeremonyStep | undefined =
         login.code === 'collect'
           ? { kind: 'collect', label: 'Code shown after you sign in', name: 'code' }
           : code === undefined
@@ -90,7 +91,7 @@ export class SignIns {
             : { kind: 'show', label: 'One-time code', text: code };
       if (held || link === undefined || step === undefined) return;
       held = true;
-      const steps: Step[] = [{ kind: 'visit', label: 'Open this link and sign in', url: link }, step];
+      const steps: SecretCeremonyStep[] = [{ kind: 'visit', label: 'Open this link and sign in', url: link }, step];
       void holdSecretInput(this.house, call.input_id, steps, running).then((content) => {
         if (!running()) return;
         if (content === null) killTree(child);

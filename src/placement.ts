@@ -2,8 +2,6 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { kitHome } from './home.ts';
 
-export type Machine = 'macos' | 'linux' | 'container' | 'server' | 'windows';
-
 function recorded(name: string): string | null {
   try {
     return readFileSync(join(kitHome(), name), 'utf8').trim();
@@ -15,12 +13,6 @@ function recorded(name: string): string | null {
 
 export function installCommand(): string | null {
   return recorded('install-command');
-}
-
-export function machine(): Machine {
-  const placed = recorded('placement');
-  if (placed === 'container' || placed === 'server' || placed === 'windows') return placed;
-  return process.platform === 'darwin' ? 'macos' : 'linux';
 }
 
 export function placedPrefix(): string {

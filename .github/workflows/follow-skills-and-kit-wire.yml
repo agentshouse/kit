@@ -1,8 +1,8 @@
-name: Follow the Skills package
+name: Follow the Skills and Kit wire packages
 
 on:
   schedule:
-    # The Skills package changes at most daily, so a daily move keeps the Kit's Skill set at most a day behind it.
+    # A daily move keeps every Kit release at most a day behind npm's latest Skills and Kit wire packages for two npm reads a day.
     - cron: '53 5 * * *'
   workflow_dispatch:
 
@@ -11,7 +11,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: follow-skills
+  group: follow-skills-and-kit-wire
   cancel-in-progress: false
 
 jobs:
@@ -25,19 +25,23 @@ jobs:
         with:
           node-version: 24.22.1
       - run: npm install --global --ignore-scripts npm@11.19.1
-      - run: npm run follow-skills
-      - name: Land the moved version and publish it
+      - id: follow
+        run: |
+          set -euo pipefail
+          subject=$(npm run --silent follow-skills-and-kit-wire)
+          echo "$subject"
+          echo "subject=$subject" >> "$GITHUB_OUTPUT"
+      - name: Land the moved versions and publish them
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUBJECT: ${{ steps.follow.outputs.subject }}
         run: |
           set -euo pipefail
           git add package.json package-lock.json
           if git diff --cached --quiet; then
-            echo "The Kit already installs the Skills package's latest"
             exit 0
           fi
-          version=$(node -p "require('./package.json').dependencies['@agentshouse/skills']")
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            commit --quiet --message "The Kit installs @agentshouse/skills $version"
+            commit --quiet --message "$SUBJECT"
           git push origin HEAD:main
           gh workflow run publish.yml --ref main

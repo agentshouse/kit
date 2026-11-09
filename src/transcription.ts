@@ -1,3 +1,4 @@
+import type { TranscriptionReport } from '@agentshouse/kit-wire';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { availableParallelism, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -57,12 +58,6 @@ const NOT_DOWNLOADED = 'an audio file this message links could not be downloaded
 const UNDECODABLE = 'an audio file this message links could not be decoded';
 
 const UNTRANSCRIBED = 'an audio file this message links could not be transcribed';
-
-export interface TranscriptionReport {
-  installed: boolean;
-  failure: string | null;
-  no_engine?: true;
-}
 
 let held: Promise<unknown> = Promise.resolve();
 let holding: Promise<unknown> = Promise.resolve();

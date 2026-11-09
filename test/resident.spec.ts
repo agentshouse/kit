@@ -1,3 +1,4 @@
+import { KIT_CONNECTION_PROTOCOL_PREFIX, KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { access, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,7 +50,7 @@ it('holds the Kit connection with its credential and opens a new connection afte
 
   const first = await until(() => house.connections[0]);
   expect(first.headers.authorization).toBe('Bearer ahk_held');
-  expect(first.protocol).toBe('house.kit.stream.6');
+  expect(first.protocol).toBe(`${KIT_CONNECTION_PROTOCOL_PREFIX}${KIT_WIRE}`);
 
   first.close(1008, 'heartbeat_missed');
   const second = await until(() => house.connections[1]);
@@ -360,7 +361,7 @@ it('opens its Kit connection again after an answer to its opening that carries n
 
 const COMMANDS = { macos: 'macos command', linux: 'linux command', container: 'container command', server: 'server command', windows: 'windows command' };
 
-const TOO_OLD = { status: 426, body: { error: { code: 'kit_update_required', retryable: false, release: '0.2.2-c0ffee000002', commands: COMMANDS } } };
+const UNSERVED = { status: 426, body: { error: { code: 'kit_update_required', retryable: false, release: '0.2.2-c0ffee000002', commands: COMMANDS } } };
 
 const SANDBOX = { HOUSE_KIT_SANDBOX: '1' };
 
@@ -372,36 +373,19 @@ it('names its wire in its stream subprotocol and in a header on every other /kit
   const house = await startHouse();
   await resident(house);
 
-  expect((await until(() => house.connections[0])).protocol).toBe('house.kit.stream.6');
+  expect((await until(() => house.connections[0])).protocol).toBe(`${KIT_CONNECTION_PROTOCOL_PREFIX}${KIT_WIRE}`);
   const requests = house.requests.filter((request) => request.method === 'POST' && request.path.startsWith('/kit/'));
   expect(requests.map((request) => request.path)).toContain('/kit/kits/report-restart');
-  expect(requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(requests.map(() => '6'));
+  expect(requests.map((request) => request.headers[KIT_WIRE_HEADER])).toEqual(requests.map(() => KIT_WIRE));
 });
 
-it("ends a Sandbox's Kit, left stopped and placing nothing, saying it must be installed again, when House refuses its Kit connection opening as too old", async () => {
+it("ends a Sandbox's Kit, left stopped and placing nothing, saying it must be installed again, when House refuses its Kit connection opening for its wire", async () => {
   const house = await startHouse();
-  house.route('UPGRADE', '/kit/stream', () => TOO_OLD);
+  house.route('UPGRADE', '/kit/stream', () => UNSERVED);
   const kit = await resident(house, undefined, SANDBOX);
 
   expect(await ended(kit)).toBe(0);
-  expect(kit.stderr()).toContain('kit: This Kit is too old for House; install it again.\n');
+  expect(kit.stderr()).toContain("kit: House does not serve this Kit's wire; install it again.\n");
   expect(openings(house)).toBe(1);
-  expect(placements(house)).toEqual([]);
-});
-
-const KIT_RELEASE = (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
-
-const NEWER = { status: 426, body: { error: { code: 'kit_newer_than_house', retryable: false, release: '0.2.0-c0ffee000001', commands: COMMANDS } } };
-
-it("ends a Sandbox's Kit, left stopped and placing nothing, naming its version, the Building's Kit release and the Linux install command House named, when a House at the previous wire refuses its calls as newer than the Building", async () => {
-  const house = await startHouse();
-  house.route('POST', '/kit/kits/report-restart', (request) => (request.headers['x-house-kit-wire'] === '5' ? { body: {} } : NEWER));
-  const kit = await resident(house, undefined, SANDBOX);
-
-  expect(await ended(kit)).toBe(0);
-  expect(kit.stderr()).toContain(
-    `kit: Kit ${KIT_RELEASE} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: linux command\n`,
-  );
-  expect(openings(house)).toBe(0);
   expect(placements(house)).toEqual([]);
 });

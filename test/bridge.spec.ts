@@ -1,3 +1,4 @@
+import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -110,7 +111,7 @@ it("names the Kit's wire in a header on every call a conversation's bridge relay
 
   await runs(hosted, 2);
   expect(hosted.mcp.length).toBeGreaterThan(1);
-  expect(hosted.mcp.map((received) => received.headers['x-house-kit-wire'])).toEqual(hosted.mcp.map(() => '6'));
+  expect(hosted.mcp.map((received) => received.headers[KIT_WIRE_HEADER])).toEqual(hosted.mcp.map(() => KIT_WIRE));
 });
 
 it('attaches a fresh operation id to every Tool call, a read included, and never asks House which Tools write', async () => {

@@ -17,8 +17,8 @@ const FAST_PLACEMENTS = fileURLToPath(new URL('./fast-placements.ts', import.met
 
 const COMMANDS = { macos: 'macos command', linux: 'linux command', container: 'container command', server: 'server command', windows: 'windows command' };
 
-function unserved(code: 'kit_update_required' | 'kit_newer_than_house', release: string) {
-  return { status: 426, body: { error: { code, retryable: false, release, commands: COMMANDS } } };
+function unserved(release: string) {
+  return { status: 426, body: { error: { code: 'kit_update_required', retryable: false, release, commands: COMMANDS } } };
 }
 
 function openings(hosted: Hosted): number {
@@ -162,13 +162,13 @@ it('answers an update naming the release it runs at once and keeps running, plac
   expect(await current(hosted)).toBe(KIT_RELEASE);
 });
 
-it('places the release House names when it refuses its Kit connection as too old at once, though a turn is open, opening no Kit connection again, and ends with a failure so its supervisor starts it', async () => {
+it('places the release House names when it refuses its Kit connection for its wire at once, though a turn is open, opening no Kit connection again, and ends with a failure so its supervisor starts it', async () => {
   const hosted = await hostKit();
   await serveRelease(hosted, await released(PLACED));
   await opened(hosted);
   hosted.call({ kind: 'message', text: '@gate go\n@say done', first: true });
   await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
-  hosted.house.route('UPGRADE', '/kit/stream', () => unserved('kit_update_required', PLACED));
+  hosted.house.route('UPGRADE', '/kit/stream', () => unserved(PLACED));
 
   hosted.connection.close(1012, 'deploy');
 
@@ -180,11 +180,11 @@ it('places the release House names when it refuses its Kit connection as too old
   expect(openings(hosted)).toBe(2);
 });
 
-it('places the older release House names when it refuses any of its calls as newer than the Building the same way', async () => {
+it('places the release House names when it refuses any of its calls for its wire the same way, an older one too', async () => {
   const hosted = await hostKit();
   await serveRelease(hosted, await released(OLDER));
   await opened(hosted);
-  hosted.house.route('POST', '/kit/turns/start', () => unserved('kit_newer_than_house', OLDER));
+  hosted.house.route('POST', '/kit/turns/start', () => unserved(OLDER));
 
   hosted.call({ kind: 'message', text: '@gate go\n@say done', first: true });
 
@@ -203,7 +203,7 @@ it('stays offline on its release while it cannot place the release a refusal nam
   });
   const building = await serveRelease(hosted, await released(PLACED));
   building.answers = false;
-  hosted.house.route('UPGRADE', '/kit/stream', () => unserved('kit_update_required', PLACED));
+  hosted.house.route('UPGRADE', '/kit/stream', () => unserved(PLACED));
   const failed = `kit: Kit ${PLACED} could not be placed: the Building did not answer: `;
   const offline = `kit: Kit ${KIT_RELEASE} stays offline and tries again in 5 minutes. Update it: ${command}\n`;
 
@@ -226,7 +226,7 @@ it('places the release its Building serves when it tries again after the Buildin
   const hosted = await hostKit([{}], { node: ['--import', FAST_PLACEMENTS] });
   const building = await serveRelease(hosted, await released(PLACED));
   building.answers = false;
-  hosted.house.route('UPGRADE', '/kit/stream', () => unserved('kit_update_required', PLACED));
+  hosted.house.route('UPGRADE', '/kit/stream', () => unserved(PLACED));
 
   hosted.connection.close(1012, 'deploy');
 

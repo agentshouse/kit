@@ -1,4 +1,3 @@
-import { KIT_RELEASE } from './clis.ts';
 import { forgetRejected } from './home.ts';
 import { installCommand } from './placement.ts';
 import { killDescendants } from './scope.ts';
@@ -25,15 +24,7 @@ export function updateLine(lead: string): string {
 }
 
 export function updateRequired(): never {
-  end(updateLine('This Kit is too old for House'));
-}
-
-export function unknownMethod(kind: string): string {
-  return updateLine(`This Kit does not know ${kind}`);
-}
-
-export function newerThanHouse(release: string, command: string): never {
-  end(`Kit ${KIT_RELEASE} is newer than this Building supports (Kit ${release}). Install Kit ${release}: ${command}`);
+  end(updateLine("House does not serve this Kit's wire"));
 }
 
 export async function signInAgain(rejected: string): Promise<never> {

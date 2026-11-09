@@ -1,15 +1,16 @@
+import type { KitCallOf, KitCallResult } from '@agentshouse/kit-wire';
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { downloadServed, servedRelease } from './building.ts';
-import type { Call, Calls, Result } from './calls.ts';
+import type { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { restart, updateLine } from './end.ts';
 import { kitHome, readEnrolment } from './home.ts';
 import { placedPrefix } from './placement.ts';
 import { childEnvironment, relayOrigin } from './relay.ts';
 
-export type UpdateCall = Call<'update'>;
+export type UpdateCall = KitCallOf<'update'>;
 
 const INSTALLER_BYTES = 1_000_000;
 
@@ -96,7 +97,7 @@ export class KitUpdate {
     return taken;
   }
 
-  private async update(release: string): Promise<Result> {
+  private async update(release: string): Promise<KitCallResult> {
     if (release === (this.placed ?? KIT_RELEASE)) return {};
     if (this.placed !== null) return { refused: `Kit ${this.placed} is placed and starts first, once no turn is open` };
     const failure = await this.place(release, 'named');

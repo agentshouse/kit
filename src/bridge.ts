@@ -111,7 +111,7 @@ export async function openBridge(
   const path = [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter);
   const origin = (await readEnrolment())!.house;
   const { credential } = await retrying(
-    () => house.post<{ credential: string }>('/kit/conversations/credentials/issue', { conversation: conversationId }, signal),
+    () => house.act('conversations/credentials/issue', { conversation: conversationId }, signal),
     signal,
   );
 

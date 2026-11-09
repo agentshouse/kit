@@ -1,4 +1,5 @@
 import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
+import { KIT_WIRE, type DesiredAgentRoute, type KitActAnswer, type KitActRequest, type ReportedAgentKind } from '@agentshouse/kit-wire';
 import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
@@ -6,45 +7,12 @@ import type { House } from './api.ts';
 import { CLIS, KIT_RELEASE, below, installCli, locate, run, updateCli, versionOf } from './clis.ts';
 import { agentBase, kitHome } from './home.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
-import { KIT_WIRE } from './wire.ts';
 
-export interface Route {
-  agent_id: string;
-  kind: string;
-  base_instructions: string;
-  working_directory: string;
-  model: string | null;
-  effort: string | null;
-  mode: string | null;
-}
+type Model = ReportedAgentKind['models'][number];
 
-export interface Desired {
-  agents: string[];
-  routes: Route[];
-  transcribe: boolean;
-}
+type Offer = Pick<ReportedAgentKind, 'signed_in' | 'models' | 'modes'>;
 
-interface Model {
-  model: string;
-  efforts: string[];
-}
-
-interface Mode {
-  mode: string;
-  name: string;
-}
-
-interface Offer {
-  signed_in: boolean;
-  models: Model[];
-  modes: Mode[];
-}
-
-interface Reading extends Offer {
-  release: string | null;
-  failure: string | null;
-  installing?: true;
-}
+type Reading = Offer & Pick<ReportedAgentKind, 'release' | 'failure' | 'installing'>;
 
 // Two quiet seconds let a fresh conversation start before background model discovery competes for its CPU.
 const MODEL_PROBE_QUIET_MS = 2_000;
@@ -80,7 +48,7 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
-type Form = 'laptop' | 'desktop' | 'server';
+type Form = NonNullable<KitActRequest<'agents/report'>['form']>;
 
 const LAPTOP_CHASSIS = new Set(['8', '9', '10', '14', '30', '31', '32']);
 const DESKTOP_CHASSIS = new Set(['3', '4', '5', '6', '7', '15', '16']);
@@ -158,7 +126,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
   }
 }
 
-function reported(kind: string, reading: Reading) {
+function reported(kind: string, reading: Reading): ReportedAgentKind {
   const { minimum, update } = CLIS[kind]!;
   return {
     kind,
@@ -204,7 +172,7 @@ async function hostForm(): Promise<Form | undefined> {
 }
 
 export class Agents {
-  desired: Desired = { agents: [], routes: [], transcribe: false };
+  desired: KitActAnswer<'agents/desired/list'> = { agents: [], routes: [], transcribe: false };
   private readonly house: House;
   private reading: Promise<unknown> = Promise.resolve();
   private readonly queues = new Map<string, Promise<unknown>>();
@@ -236,7 +204,7 @@ export class Agents {
     );
   }
 
-  route(agentId: string): Route | undefined {
+  route(agentId: string): DesiredAgentRoute | undefined {
     return this.desired.routes.find((route) => route.agent_id === agentId);
   }
 
@@ -244,7 +212,7 @@ export class Agents {
     this.refreshing++;
     this.changed();
     const reading = this.read().then(async () => {
-      this.desired = await this.house.deliver<Desired>('/kit/agents/desired/list', {});
+      this.desired = await this.house.deliver('agents/desired/list', {});
       return this.desired;
     });
     this.reading = reading;
@@ -473,7 +441,7 @@ export class Agents {
     };
     const state = JSON.stringify(body);
     if (state === this.sent) return;
-    await this.house.deliver('/kit/agents/report', body);
+    await this.house.deliver('agents/report', body);
     this.sent = state;
   }
 }

@@ -8,6 +8,18 @@ import {
   type ResumeSessionRequest,
   type SessionConfigOption,
 } from '@agentclientprotocol/sdk';
+import type {
+  DesiredAgentRoute,
+  KitActAnswer,
+  KitActRequest,
+  KitCall,
+  KitCallOf,
+  KitCallResult,
+  KitOneWayCall,
+  KitOneWayCallOf,
+  KitQuestion,
+  SecretCeremonyStep,
+} from '@agentshouse/kit-wire';
 import type { Operation, SessionState, Tokens } from '@agentshouse/session-content';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
@@ -15,7 +27,7 @@ import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import { formAnswered, grokQuestionAnswered, permissionAllowed, PLAN_APPROVED } from './afk.ts';
-import type { Agents, Route } from './agents.ts';
+import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
 import { CLIS } from './clis.ts';
@@ -25,13 +37,12 @@ import { answeredFailure, readerFor, type Event, type Message, type Reader, type
 import { inspectedFile, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, type GrokPlan, type GrokQuestions } from './grok.ts';
 import { agentBase } from './home.ts';
-import type { Call, Calls, Result } from './calls.ts';
+import type { Calls } from './calls.ts';
 import { instructions } from './instructions.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { killMarked, Scope } from './scope.ts';
-import { holdSecretInput, type Step } from './secret-input.ts';
-import type { OneWayCall } from './connection.ts';
+import { holdSecretInput } from './secret-input.ts';
 import { transcribe } from './transcription.ts';
 import { workFor, type Work } from './work.ts';
 
@@ -40,13 +51,13 @@ export interface Kit {
   agents: Agents;
   copies: LocalCopies;
   calls: Calls;
-  send(oneWayCall: OneWayCall): boolean;
+  send(oneWayCall: KitOneWayCall): boolean;
   changed(): void;
 }
 
-export type ConversationMethod = 'open' | 'message' | 'take_out' | 'interrupt' | 'kill' | 'done' | 'option' | 'answer';
+type ConversationCall = Extract<KitCall, { conversation_id: string }>;
 
-export type ConversationCall = Call<ConversationMethod> & { [field: string]: unknown };
+type Said = Omit<KitCallOf<'message'>, 'kind' | 'message_id'> & { kind: 'message' | 'answer'; message_id: string | null };
 
 type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error' | 'silent';
 
@@ -123,12 +134,16 @@ function unopened(reason: string): (error: unknown) => string {
   return (error) => (signedOut(error) ? NOT_SIGNED_IN : reason);
 }
 
-type Starting = 'transcription' | 'session';
+type Starting = NonNullable<KitOneWayCallOf<'starting'>['step']>;
 
 type TurnAct = 'turns/start' | 'turns/activity/report' | 'turns/end' | 'turns/images/declare' | 'conversations/interaction/ask';
 
 // A start-up step is shown only once it has lasted a second, so a quick start shows none of them.
 const STARTING_SHOWN_AFTER_MS = 1_000;
+
+function turnOf(conversation: Conversation, turn: Turn): { conversation: string; turn: string } {
+  return { conversation: conversation.id, turn: turn.id };
+}
 
 function unbridged(error: unknown): string {
   return (finalRefusal(error) ? ENDED[refusalOf(error.text)?.code ?? ''] : undefined) ?? NO_CONNECTION;
@@ -145,8 +160,6 @@ const GROK_QUESTION = {
     return value as GrokQuestions;
   },
 };
-
-export const CONVERSATION_METHODS: ReadonlySet<string> = new Set<ConversationMethod>(['open', 'message', 'take_out', 'interrupt', 'kill', 'done', 'option', 'answer']);
 
 function addedTokens(sum: Tokens | null, tokens: Tokens): Tokens {
   if (sum === null) return tokens;
@@ -255,11 +268,11 @@ interface Running {
 }
 
 interface Waiting {
-  call: ConversationCall;
-  route: Route;
+  call: Said;
+  route: DesiredAgentRoute;
   content: ContentBlock[];
   instructing: Promise<string> | null;
-  settle(result: Result): void;
+  settle(result: KitCallResult): void;
 }
 
 interface Launch {
@@ -432,7 +445,7 @@ export class Conversations {
     return conversation;
   }
 
-  private async carry(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
+  private async carry(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<KitCallResult> }> {
     if (call.kind === 'open') return this.open(conversation, call);
     if (call.kind === 'message') return this.message(conversation, call);
     if (call.kind === 'done') {
@@ -440,20 +453,20 @@ export class Conversations {
       this.next(conversation);
       return { result: Promise.resolve({}) };
     }
-    if (call.kind === 'take_out') return { result: Promise.resolve(this.takeOut(conversation, String(call.message_id))) };
+    if (call.kind === 'take_out') return { result: Promise.resolve(this.takeOut(conversation, call.message_id)) };
     await this.launched(conversation);
     if (call.kind === 'interrupt') {
       if (--conversation.interrupts === 0) conversation.interrupted = new AbortController();
-      await this.interrupt(conversation, String(call.turn_id));
+      await this.interrupt(conversation, call.turn_id);
     }
     if (call.kind === 'kill') {
       await this.kill(conversation);
       await conversation.sending;
       if (--conversation.kills === 0) conversation.killed = new AbortController();
     }
-    if (call.kind === 'option') await this.option(conversation, String(call.option), call.value);
+    if (call.kind === 'option') await this.option(conversation, call.option, call.value);
     if (call.kind === 'answer') {
-      const question = this.questions.get(String(call.interaction_id));
+      const question = this.questions.get(call.interaction_id);
       if (question === undefined) {
         const text = answerMessage(call.request, call.response);
         return this.message(conversation, { ...call, text, first: false, message_id: null });
@@ -463,7 +476,7 @@ export class Conversations {
     return { result: Promise.resolve({}) };
   }
 
-  private takeOut(conversation: Conversation, messageId: string): Result {
+  private takeOut(conversation: Conversation, messageId: string): KitCallResult {
     const index = conversation.waiting.findIndex((waiting) => waiting.call.message_id === messageId);
     if (index === -1) return { started: true };
     const [waiting] = conversation.waiting.splice(index, 1);
@@ -471,7 +484,7 @@ export class Conversations {
     return {};
   }
 
-  private async open(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
+  private async open(conversation: Conversation, call: KitCallOf<'open'>): Promise<{ result: Promise<KitCallResult> }> {
     await this.stop(conversation);
     const launch = conversation.launch ?? this.launch(conversation, this.route(conversation, call.agent_id), null, true);
     return {
@@ -488,7 +501,7 @@ export class Conversations {
     await running?.adapter.exited;
   }
 
-  private launch(conversation: Conversation, route: Promise<Route>, sessionId: string | null, empty: boolean): Launch {
+  private launch(conversation: Conversation, route: Promise<DesiredAgentRoute>, sessionId: string | null, empty: boolean): Launch {
     let opened!: (bridge: Bridge) => void;
     let failed!: (error: unknown) => void;
     const bridge = new Promise<Bridge>((resolve, reject) => {
@@ -516,7 +529,7 @@ export class Conversations {
     while (conversation.launch !== null) await conversation.launch.session.catch(() => undefined);
   }
 
-  private instructed(conversation: Conversation, route: Route): Promise<string> | null {
+  private instructed(conversation: Conversation, route: DesiredAgentRoute): Promise<string> | null {
     const bridge = conversation.running === null ? conversation.launch?.bridge : Promise.resolve(conversation.running.bridge);
     if (bridge === undefined) return null;
     const read = bridge.then((opened) => instructions(opened, route.base_instructions));
@@ -524,17 +537,17 @@ export class Conversations {
     return read;
   }
 
-  private async message(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<Result> }> {
+  private async message(conversation: Conversation, call: Said): Promise<{ result: Promise<KitCallResult> }> {
     const content: ContentBlock[] = [
-      ...(typeof call.recent === 'string' ? [{ type: 'text' as const, text: call.recent }] : []),
-      { type: 'text', text: String(call.text) },
+      ...(call.recent === undefined ? [] : [{ type: 'text' as const, text: call.recent }]),
+      { type: 'text', text: call.text },
     ];
-    let route: Route;
+    let route: DesiredAgentRoute;
     let instructing: Promise<string> | null = null;
     try {
       route = await this.route(conversation, call.agent_id);
       if (call.first === true) instructing = this.instructed(conversation, route);
-      if (call.message_id !== null) content.push(...(await this.transcribed(conversation, String(call.message_id), String(call.text))));
+      if (call.message_id !== null) content.push(...(await this.transcribed(conversation, call.message_id, call.text)));
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
       this.closeIdleBridge(conversation);
@@ -542,7 +555,7 @@ export class Conversations {
       return { result: Promise.resolve({ refused: refusal(conversation, error) }) };
     }
     conversation.preparing = null;
-    const { promise, resolve: settle } = Promise.withResolvers<Result>();
+    const { promise, resolve: settle } = Promise.withResolvers<KitCallResult>();
     const waiting: Waiting = { call, route, content, instructing, settle };
     if (call.at_once === true && conversation.turns.size > 0) await this.atOnce(conversation, waiting);
     else conversation.waiting.push(waiting);
@@ -585,7 +598,7 @@ export class Conversations {
       if (outcome === 'injected') {
         for (const turn of conversation.turns) turn.steered ||= turn.prompted;
       }
-      this.kit.calls.keepResult(String(waiting.call.input_id), {});
+      this.kit.calls.keepResult(waiting.call.input_id, {});
       waiting.settle({});
     } else {
       const cause = outcome instanceof Error ? outcome : new Error(`the CLI answered ${JSON.stringify(outcome)}`);
@@ -610,7 +623,7 @@ export class Conversations {
 
   private async send(conversation: Conversation, waiting: Waiting): Promise<void> {
     const { call } = waiting;
-    let result: Result = {};
+    let result: KitCallResult = {};
     let started = false;
     let instructing = waiting.instructing;
     const prompt: ContentBlock[] = [];
@@ -646,7 +659,7 @@ export class Conversations {
       return;
     }
     this.starts(conversation, null);
-    this.prompt(conversation, [...prompt, ...waiting.content], () => this.kit.calls.keepResult(String(call.input_id), result));
+    this.prompt(conversation, [...prompt, ...waiting.content], () => this.kit.calls.keepResult(call.input_id, result));
     waiting.settle(result);
   }
 
@@ -704,7 +717,7 @@ export class Conversations {
         await step(
           unbridged,
           unlessAborted(
-            this.kit.house.deliver('/kit/transcripts/keep', { conversation: conversation.id, message: messageId, path, text: said }, () => !signal.aborted),
+            this.kit.house.deliver('transcripts/keep', { conversation: conversation.id, message: messageId, path, text: said }, () => !signal.aborted),
             signal,
           ),
         );
@@ -788,7 +801,7 @@ export class Conversations {
     }
   }
 
-  private async route(conversation: Conversation, agentId: string): Promise<Route> {
+  private async route(conversation: Conversation, agentId: string): Promise<DesiredAgentRoute> {
     const signal = conversation.killed.signal;
     await unlessAborted(this.kit.agents.read(), signal);
     if (this.kit.agents.route(agentId) === undefined) await unlessAborted(this.kit.agents.refresh(), signal);
@@ -802,7 +815,7 @@ export class Conversations {
 
   private async start(
     conversation: Conversation,
-    routed: Promise<Route>,
+    routed: Promise<DesiredAgentRoute>,
     sessionId: string | null,
     empty: boolean,
     bridged: (bridge: Bridge) => void,
@@ -906,7 +919,7 @@ export class Conversations {
 
   private async launchSettings(
     running: Running,
-    route: Route,
+    route: DesiredAgentRoute,
     offered: SessionConfigOption[],
   ): Promise<SessionConfigOption[]> {
     let options = offered;
@@ -991,11 +1004,14 @@ export class Conversations {
     this.stated(conversation, { model: chosen('model'), effort: chosen('thought_level'), mode: chosen('mode') });
   }
 
-  private deliver(conversation: Conversation, turn: Turn, act: TurnAct, body: object | Promise<object>, current?: () => boolean): Promise<unknown> {
+  private deliver<Act extends TurnAct>(
+    conversation: Conversation,
+    act: Act,
+    request: KitActRequest<Act> | Promise<KitActRequest<Act>>,
+    current?: () => boolean,
+  ): Promise<KitActAnswer<Act>> {
     this.reporting++;
-    const delivered = conversation.reports.then(async () =>
-      this.kit.house.deliver(`/kit/${act}`, { conversation: conversation.id, turn: turn.id, ...(await body) }, current),
-    );
+    const delivered = conversation.reports.then(async () => this.kit.house.deliver(act, await request, current));
     conversation.reports = delivered
       .catch(() => undefined)
       .finally(() => {
@@ -1018,9 +1034,9 @@ export class Conversations {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
     conversation.turns.add(turn);
     conversation.running?.adapter.turn(true);
-    void this.deliver(conversation, turn, 'turns/start', {})
+    void this.deliver(conversation, 'turns/start', turnOf(conversation, turn))
       .then((answer) => {
-        if ((answer as { run?: boolean }).run === true) turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
+        if (answer.run === true) turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
       })
       .catch(logged);
     conversation.turn = turn;
@@ -1046,10 +1062,11 @@ export class Conversations {
     conversation.tokens = null;
     if (tokens !== null) this.stated(conversation, { tokens: addedTokens(conversation.state.tokens, tokens) });
     const body = Promise.allSettled(turn.uploads).then(() => ({
+      ...turnOf(conversation, turn),
       content: { parts: turn.content.parts, tokens, state: conversation.state },
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
-    void this.deliver(conversation, turn, 'turns/end', body).catch(logged);
+    void this.deliver(conversation, 'turns/end', body).catch(logged);
     this.next(conversation);
     this.kit.changed();
   }
@@ -1125,9 +1142,10 @@ export class Conversations {
     const answered = new Promise<Response | null>((answer, fail) => {
       this.questions.set(interactionId, { conversation, answer: (response) => answer(response as Response) });
       signal.addEventListener('abort', () => answer(null), { once: true });
-      this.deliver(conversation, turn, 'conversations/interaction/ask', {
+      this.deliver(conversation, 'conversations/interaction/ask', {
+        ...turnOf(conversation, turn),
         interaction_id: interactionId,
-        request: { method, params },
+        request: { method, params } as KitQuestion['request'],
         secret,
       }).then(() => {
         if (secret) void this.holdSecret(interactionId, params as CreateElicitationRequest);
@@ -1149,7 +1167,7 @@ export class Conversations {
   }
 
   private async holdSecret(interactionId: string, request: CreateElicitationRequest): Promise<void> {
-    const steps: Step[] = Object.entries(formProperties(request)).map(([name, property]) => ({
+    const steps: SecretCeremonyStep[] = Object.entries(formProperties(request)).map(([name, property]) => ({
       kind: 'collect',
       label: property.title ?? name,
       name,
@@ -1172,7 +1190,7 @@ export class Conversations {
     const turn = conversation.turn;
     if (turn === null || Date.now() < turn.quietUntil) return;
     turn.quietUntil = Infinity;
-    void this.deliver(conversation, turn, 'turns/activity/report', {}, () => false)
+    void this.deliver(conversation, 'turns/activity/report', turnOf(conversation, turn), () => false)
       .catch(logged)
       .finally(() => {
         turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
@@ -1278,7 +1296,8 @@ export class Conversations {
     const name = `image-${++turn.images}.${mediaType.split('/')[1]}`;
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     try {
-      const declared = (await this.deliver(conversation, turn, 'turns/images/declare', {
+      const declared = (await this.deliver(conversation, 'turns/images/declare', {
+        ...turnOf(conversation, turn),
         name,
         media_type: mediaType,
         bytes: bytes.length,
@@ -1291,7 +1310,7 @@ export class Conversations {
         read: (start, end) => [bytes.subarray(start, end)],
         send: (url, start, end, headers) => sentPart(url, bytes.subarray(start, end), headers),
         finish: (upload, partSha256) =>
-          this.kit.house.deliver<Finished<SavedImage>>('/kit/uploads/finish', { upload, part_sha256: partSha256 }),
+          this.kit.house.deliver('uploads/finish', { upload, part_sha256: partSha256 }) as Promise<Finished<SavedImage>>,
       });
       turn.content.arrived(this.parentIn(conversation, turn, parent) ?? null, { type: 'image', file: saved.path, name, media_type: mediaType });
     } catch (error) {

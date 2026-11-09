@@ -22,36 +22,6 @@ it('keeps a pending Kit call Result in the current call-results store', async ()
   });
 });
 
-it('refuses a Kit call whose method it does not know, naming the method, and returns its refusal once', async () => {
-  const hosted = await hostKit();
-
-  hosted.call({ kind: 'rewind', turn_id: 'turn-1' });
-
-  expect(await hosted.result(lastCall())).toEqual({ refused: 'This Kit does not know rewind; install it again.' });
-  await settle();
-  expect(hosted.results.map((result) => idOf(result, 'call'))).toEqual([lastCall()]);
-  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([]);
-});
-
-it('refuses a Kit call whose method it does not know with the install command its bootstrap recorded, which updates it', async () => {
-  const home = await temporaryHome();
-  const command = `sh -c 'kit=$(curl -fsSL "$0") || exit 1; eval "$kit"' https://dev.agents.house/kit --linux`;
-  await writeFile(join(home, 'install-command'), `${command}\n`);
-  const hosted = await hostKit([{}], { home, skills: false });
-
-  hosted.call({ kind: 'rewind', turn_id: 'turn-1' });
-
-  expect(await hosted.result(lastCall())).toEqual({ refused: `This Kit does not know rewind. Update it: ${command}` });
-});
-
-it('carries a Kit call of a method it knows though the call names a field it does not know', async () => {
-  const hosted = await hostKit();
-
-  hosted.call({ kind: 'open', resumed_from: 'a later House' });
-
-  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
-});
-
 it('opens no second session for an open its reopened connection sends after it returned its result, and returns the same result again', async () => {
   const hosted = await hostKit();
   hosted.call({ kind: 'open' });

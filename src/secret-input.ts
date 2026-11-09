@@ -1,21 +1,15 @@
+import type { SecretCeremonyStep } from '@agentshouse/kit-wire';
 import { finalRefusal, retryDelay, type House } from './api.ts';
-
-export type Step =
-  | { kind: 'visit'; label: string; url: string }
-  | { kind: 'show'; label: string; text: string }
-  | { kind: 'collect'; label: string; name: string; description?: string };
-
-type Held = { outcome: 'collected'; content: Record<string, string> } | { outcome: 'released'; release: string };
 
 export async function holdSecretInput(
   house: House,
   subject: string,
-  steps: Step[],
+  steps: SecretCeremonyStep[],
   waiting: () => boolean,
 ): Promise<Record<string, string> | null> {
   for (let failures = 0; waiting(); ) {
     try {
-      const held = await house.post<Held>('/kit/secret-inputs/await', { subject, steps });
+      const held = await house.act('secret-inputs/await', { subject, steps });
       if (held.outcome === 'collected') return held.content;
       if (held.release !== 'held') return null;
       failures = 0;

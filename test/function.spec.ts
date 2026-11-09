@@ -1,3 +1,4 @@
+import type { HouseOneWayCall, KitCall, KitCallOf } from '@agentshouse/kit-wire';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,11 +17,13 @@ interface Ran {
 
 const TREE = 'sleep 300 & echo "child $!"; echo "script $$"; wait';
 
-function send(hosted: Hosted, frame: Record<string, unknown>): void {
+function send(hosted: Hosted, frame: HouseOneWayCall | KitCall): void {
   hosted.house.connections.at(-1)!.send(frame);
 }
 
-function call(script: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
+type FunctionCall = Omit<KitCallOf<'run_function'>, 'type' | 'input_id' | 'provider_session_id'>;
+
+function call(script: string, fields: Partial<FunctionCall> = {}): FunctionCall {
   return {
     kind: 'run_function',
     conversation_id: null,
@@ -34,7 +37,7 @@ function call(script: string, fields: Record<string, unknown> = {}): Record<stri
   };
 }
 
-function run(hosted: Hosted, script: string, fields: Record<string, unknown> = {}): string {
+function run(hosted: Hosted, script: string, fields: Partial<FunctionCall> = {}): string {
   hosted.call(call(script, fields));
   return lastCall();
 }
@@ -236,7 +239,7 @@ it("ends every function run's whole process group when the Kit connection drops 
 it('starts a run id once however often House delivers it, answering each delivery that arrives while it holds the result', async () => {
   const hosted = await hostKit([]);
   const directory = await scratch();
-  const frame = {
+  const frame: KitCall = {
     type: 'input',
     input_id: 'run-delivered-again',
     provider_session_id: null,

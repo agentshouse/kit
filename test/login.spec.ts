@@ -568,36 +568,7 @@ function placements(house: House): string[] {
   return house.requests.filter((request) => request.path.startsWith('/kit-installer/')).map((request) => request.path);
 }
 
-it.each([
-  ['native', 'linux'],
-  ['container', 'container'],
-  ['server', 'server'],
-  ['windows', 'windows'],
-] as const)(
-  "fails, placing nothing, naming its version, the Building's Kit release and the install command House named for a %s Kit home, when House refuses the login as newer than the Building",
-  async (placement, kind) => {
-    const house = await startHouse();
-    const home = await temporaryHome();
-    await writeFile(join(home, 'placement'), `${placement}\n`);
-    house.route('POST', '/kit', () => ({
-      status: 426,
-      body: { error: { code: 'kit_newer_than_house', retryable: false, release: '0.2.0-c0ffee000001', commands: COMMANDS } },
-    }));
-    const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-
-    const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
-
-    expect(await login.exited).toBe(1);
-    expect(login.stderr()).toContain(
-      `kit: Kit ${version} is newer than this Building supports (Kit 0.2.0-c0ffee000001). Install Kit 0.2.0-c0ffee000001: ${COMMANDS[kind]}\n`,
-    );
-    expect(house.requests.filter((request) => request.path === '/kit')).toHaveLength(1);
-    expect(placements(house)).toEqual([]);
-    await expect(access(join(home, 'credential.json'))).rejects.toThrow();
-  },
-);
-
-it('fails, placing nothing, naming the install command its bootstrap recorded, when House refuses the login as too old', async () => {
+it('fails, placing nothing, naming the install command its bootstrap recorded, when House refuses the login for its wire', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   const command = `HOUSE_KIT_RELAY=https://relay.example sh -c 'kit=$(curl -fsSL "$0") || exit 1; eval "$kit"' https://relay.example/dev.agents.house/kit --linux`;
@@ -610,12 +581,12 @@ it('fails, placing nothing, naming the install command its bootstrap recorded, w
   const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
 
   expect(await login.exited).toBe(1);
-  expect(login.stderr()).toContain(`kit: This Kit is too old for House. Update it: ${command}\n`);
+  expect(login.stderr()).toContain(`kit: House does not serve this Kit's wire. Update it: ${command}\n`);
   expect(placements(house)).toEqual([]);
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
 });
 
-it("ends saying it is too old for House when House's MCP door refuses the User's own agent's check as too old, and starts no login", async () => {
+it("ends saying House does not serve its wire when House's MCP door refuses the User's own agent's check for its wire, and starts no login", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_live' }));
@@ -626,7 +597,7 @@ it("ends saying it is too old for House when House's MCP door refuses the User's
       id: 1,
       error: {
         code: -32000,
-        message: 'kit_update_required: this Kit is too old for House; run its install command again to update it',
+        message: "kit_update_required: House does not serve this Kit's wire; install Kit 0.2.2-c0ffee000002 with this computer's command in commands",
         data: { code: 'kit_update_required', retryable: false },
       },
     },
@@ -635,7 +606,7 @@ it("ends saying it is too old for House when House's MCP door refuses the User's
   const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
 
   expect(await login.exited).toBe(1);
-  expect(login.stderr()).toContain('kit: This Kit is too old for House; install it again.\n');
+  expect(login.stderr()).toContain("kit: House does not serve this Kit's wire; install it again.\n");
   expect(house.requests.filter((request) => request.path === '/kit')).toHaveLength(0);
 });
 

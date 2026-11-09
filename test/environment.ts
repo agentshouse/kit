@@ -1,3 +1,4 @@
+import type { KitCall } from '@agentshouse/kit-wire';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -354,7 +355,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
         provider_session_id: null,
         ...(fields.kind === 'message' ? { message_id: `message-${calls}` } : {}),
         ...fields,
-      });
+      } as KitCall);
     },
     result: async (callId) =>
       without(

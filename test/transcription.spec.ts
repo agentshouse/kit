@@ -1,3 +1,4 @@
+import type { TranscriptionReport } from '@agentshouse/kit-wire';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -10,7 +11,7 @@ import { beforeAll, expect, it, onTestFinished } from 'vitest';
 import { attached, bridgeSockets, inspected, posted } from './attachments.ts';
 import { KIT_FILE_CORRUPT, KIT_FILE_DROPPED_ONCE, KIT_FILE_OVERSIZE, KIT_FILE_STALL, cacheArtifacts, kitFileRequests, pinnedArtifacts } from './building.ts';
 import { idOf, until, type Answer } from './double.ts';
-import { ENGINES, type TranscriptionReport } from '../src/transcription.ts';
+import { ENGINES } from '../src/transcription.ts';
 import { hostKit, hostMac, lastCall, lastMessage, opened, type Hosted, type Hosting } from './environment.ts';
 import { alive, stop } from './kit.ts';
 

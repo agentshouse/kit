@@ -1,24 +1,29 @@
+import {
+  KIT_CONNECTION_PATH,
+  KIT_CONNECTION_PROTOCOL_PREFIX,
+  KIT_WIRE,
+  type HouseOneWayCall,
+  type KitCall,
+  type KitOneWayCall,
+} from '@agentshouse/kit-wire';
 import { subscribe } from 'node:diagnostics_channel';
 import { setTimeout as delay } from 'node:timers/promises';
 import { HouseRefusal, retryDelay } from './api.ts';
-import type { Call } from './calls.ts';
 import { end, REPLACED, signInAgain } from './end.ts';
 import { readEnrolment } from './home.ts';
 import { relayed } from './relay.ts';
 import { Silence } from './silence.ts';
-import { endUnserved, KIT_WIRE, unserved } from './wire.ts';
-
-export type OneWayCall = { type: string } & Record<string, unknown>;
+import { endUnserved, unserved } from './wire.ts';
 
 export interface ConnectionHandlers {
   opened(): void;
   closed(): void;
-  call(call: Call): void;
-  oneWayCall(oneWayCall: OneWayCall): void;
+  call(call: KitCall): void;
+  oneWayCall(oneWayCall: HouseOneWayCall): void;
 }
 
 export interface Connection {
-  send(oneWayCall: OneWayCall): boolean;
+  send(oneWayCall: KitOneWayCall): boolean;
   close(): Promise<void>;
 }
 
@@ -27,8 +32,7 @@ interface Answered {
   response: { statusCode: number; statusText: string; headers: Buffer[] };
 }
 
-const PATH = '/kit/stream';
-const SUBPROTOCOL = `house.kit.stream.${KIT_WIRE}`;
+const SUBPROTOCOL = `${KIT_CONNECTION_PROTOCOL_PREFIX}${KIT_WIRE}`;
 const REFUSAL_HEADER = 'x-house-refusal';
 // House beats each Kit connection every thirty seconds, so two silent beats mean this Kit process cannot hear House.
 export const CONNECTION_SILENCE_MS = 60_000;
@@ -36,7 +40,7 @@ export const CONNECTION_SILENCE_MS = 60_000;
 const CLOSE_ANSWER_MS = 2_000;
 
 function connectionUrl(house: string): URL {
-  const url = new URL(PATH, house);
+  const url = new URL(KIT_CONNECTION_PATH, house);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url;
 }
@@ -52,8 +56,8 @@ let refused: HouseRefusal | null = null;
 
 subscribe('undici:request:headers', (message) => {
   const { request, response } = message as Answered;
-  if (!request.path.endsWith(PATH)) return;
-  refused = new HouseRefusal(PATH, response.statusCode, header(response.headers, REFUSAL_HEADER) || response.statusText);
+  if (!request.path.endsWith(KIT_CONNECTION_PATH)) return;
+  refused = new HouseRefusal(KIT_CONNECTION_PATH, response.statusCode, header(response.headers, REFUSAL_HEADER) || response.statusText);
 });
 
 export function holdConnection(handlers: ConnectionHandlers): Connection {
@@ -107,8 +111,8 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
     };
     opening.onmessage = (event) => {
       silence?.heard();
-      const arrived = JSON.parse(String(event.data)) as OneWayCall;
-      if (arrived.type === 'input') handlers.call(arrived as unknown as Call);
+      const arrived = JSON.parse(String(event.data)) as KitCall | HouseOneWayCall;
+      if (arrived.type === 'input') handlers.call(arrived);
       else if (arrived.type !== 'beat') handlers.oneWayCall(arrived);
     };
     opening.onerror = () => undefined;

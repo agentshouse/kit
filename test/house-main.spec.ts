@@ -1,3 +1,4 @@
+import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
@@ -68,7 +69,7 @@ it("names the Kit's wire in a header on its call to House's MCP door", async () 
 
   await runHouse(home, ['search', '{"query":"invoice"}']);
 
-  expect(house.requests.map((request) => request.headers['x-house-kit-wire'])).toEqual(['6']);
+  expect(house.requests.map((request) => request.headers[KIT_WIRE_HEADER])).toEqual([KIT_WIRE]);
 });
 
 function zeros(size: number): string {

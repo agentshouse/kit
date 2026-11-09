@@ -1,3 +1,4 @@
+import { KIT_WIRE } from '@agentshouse/kit-wire';
 import { createHash } from 'node:crypto';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -31,4 +32,4 @@ for (const artifact of [...Object.values(ENGINES).flatMap(({ decoder, engine }) 
 for (const name of new Set([...Object.values(HOSTS), `kit-${version}.tar.gz`])) {
   if (files[name]?.from !== undefined || files[name] === undefined) throw new Error(`${release} holds no ${name}`);
 }
-await writeFile(join(release, MANIFEST), `${JSON.stringify({ schemaVersion: 3, version, hosts: HOSTS, image, files }, null, 2)}\n`);
+await writeFile(join(release, MANIFEST), `${JSON.stringify({ schemaVersion: 3, version, wire: KIT_WIRE, hosts: HOSTS, image, files }, null, 2)}\n`);

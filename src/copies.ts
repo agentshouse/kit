@@ -28,7 +28,6 @@ const BRANCH = 'main';
 const PROVENANCE = '_provenance';
 const IDENTITY = { GIT_COMMITTER_NAME: 'Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
 const ROOMS = 'rooms/';
-const ENUMERATE = '/kit/door/changes/enumerate';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
 const STAGED_CHUNKS = 'house-chunks';
 const SCHEMA = 'settings/schema.yaml';
@@ -438,7 +437,7 @@ export class LocalCopies {
       submit: async (operation, changes) => {
         try {
           const outcome = await retrying(() =>
-            house.post<{ contents: Written[] }>('/kit/door/files/batch', { operation_id: operation, changes }),
+            house.door<{ contents: Written[] }>('files/batch', { operation_id: operation, changes }),
           );
           return { accepted: outcome.contents };
         } catch (error) {
@@ -489,9 +488,7 @@ export class LocalCopies {
   }
 
   private async fetched(refreshing: boolean): Promise<Pushed> {
-    const { local_copy: answer } = await this.house.post<{
-      local_copy: { rooms: { room_ref: string; room_handle: string }[] };
-    }>('/kit/local-copies/selection/read', {});
+    const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
     const synced = new Map(answer.rooms.map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
     return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
       const said: string[] = [];
@@ -638,7 +635,7 @@ export class LocalCopies {
 
   private async discovered(handles: readonly string[]): Promise<Discovery> {
     const discover = (group: readonly string[]) =>
-      this.house.post<Discovery>('/kit/door/rooms/discover', { prefixes: group.map(rootOf) });
+      this.house.door<Discovery>('rooms/discover', { prefixes: group.map(rootOf) });
     const [first, ...rest] = handles;
     const { bounds, authorities } = await discover([first!]);
     for (const group of grouped(rest, bounds.max_prefixes)) authorities.push(...(await discover(group)).authorities);
@@ -648,7 +645,7 @@ export class LocalCopies {
   private async chunked(root: string, room: string, directory: string): Promise<Whole> {
     await mkdir(directory, { recursive: true });
     for (let renewed = false; ; renewed = true) {
-      const { rooms } = await this.house.post<{ rooms: Listed[] }>('/kit/door/room-chunks/list', { prefixes: [root] });
+      const { rooms } = await this.house.door<{ rooms: Listed[] }>('room-chunks/list', { prefixes: [root] });
       const list = rooms.find((entry) => entry.room_ref === room);
       if (list === undefined) throw new Error('House serves nothing of it to copy');
       if (!list.ready) throw new NotReady([room]);
@@ -704,7 +701,7 @@ export class LocalCopies {
     let answer: { authorities: Enumerated[] } | null = null;
     try {
       if (!this.waiting.has(authority.room_ref)) {
-        answer = await this.house.post(ENUMERATE, {
+        answer = await this.house.door('changes/enumerate', {
           prefixes: [root],
           positions: [
             { authority: authority.room_ref, position: '0', log_epoch: authority.log_epoch, page: { through: authority.position, read: 0 } },
@@ -792,7 +789,7 @@ export class LocalCopies {
     while (asking.length > 0) {
       let answer: { authorities: Enumerated[] };
       try {
-        answer = await this.house.post(ENUMERATE, {
+        answer = await this.house.door('changes/enumerate', {
           prefixes: asking.map((copy) => rootOf(copy.room_handle)),
           positions: asking.map((copy) => ({ authority: copy.room_ref, position: copy.position, log_epoch: copy.log_epoch })),
         });
@@ -926,7 +923,7 @@ export class LocalCopies {
     const arrived = new Set(moved.values());
     const arriving = [...after].filter(([path, entry]) => before.get(path) !== entry);
     if (arriving.length > 0) {
-      const { bounds } = await this.house.post<Discovery>('/kit/door/rooms/discover', { prefixes: [root] });
+      const { bounds } = await this.house.door<Discovery>('rooms/discover', { prefixes: [root] });
       const binary: string[] = [];
       for (const [path, entry] of arriving) {
         if (!(await isText(copy.repository, entry, bounds.max_authored_file_bytes))) binary.push(path);
@@ -1137,7 +1134,7 @@ export class LocalCopies {
   }
 
   private async revisionText(path: string, wanted: string): Promise<string> {
-    const page = await this.house.post<{ revisions: { revision: string; content?: string }[] }>('/kit/door/files/revisions/list', {
+    const page = await this.house.door<{ revisions: { revision: string; content?: string }[] }>('files/revisions/list', {
       path,
       revision: wanted,
     });

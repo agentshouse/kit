@@ -1,3 +1,4 @@
+import { KIT_WIRE } from '@agentshouse/kit-wire';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,7 +125,7 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
     os: expect.stringMatching(/\S/),
     ...('form' in report ? { form: expect.stringMatching(/^(laptop|desktop|server)$/) } : {}),
     kit_release: KIT_PACKAGE.version,
-    wire: 6,
+    wire: KIT_WIRE,
     agent_base: '/agents/house/agents',
     agents: [
       {

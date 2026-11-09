@@ -1,3 +1,4 @@
+import type { HouseOneWayCall, KitCall } from '@agentshouse/kit-wire';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -7,7 +8,7 @@ import { alive, filesUnder } from './kit.ts';
 
 const TREE = 'sleep 300 & echo "child $!"; echo "script $$"; wait';
 
-function send(hosted: Hosted, frame: Record<string, unknown>): void {
+function send(hosted: Hosted, frame: HouseOneWayCall | KitCall): void {
   hosted.house.connections.at(-1)!.send(frame);
 }
 

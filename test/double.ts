@@ -1,3 +1,4 @@
+import type { HouseOneWayCall, KitCall } from '@agentshouse/kit-wire';
 import { spawnSync } from 'node:child_process';
 import { createReadStream, mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { createServer, STATUS_CODES, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -43,7 +44,7 @@ export interface KitConnection {
   protocol: string;
   oneWayCalls: Record<string, unknown>[];
   transport: WebSocket;
-  send(oneWayCall: Record<string, unknown>): void;
+  send(frame: HouseOneWayCall | KitCall): void;
   close(code: number, reason: string): void;
 }
 
@@ -221,7 +222,7 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
         protocol: transport.protocol,
         oneWayCalls: [],
         transport,
-        send: (oneWayCall) => transport.send(JSON.stringify(oneWayCall)),
+        send: (frame) => transport.send(JSON.stringify(frame)),
         close: (code, reason) => transport.close(code, reason),
       };
       transport.on('message', (data) => connection.oneWayCalls.push(JSON.parse(String(data)) as Record<string, unknown>));

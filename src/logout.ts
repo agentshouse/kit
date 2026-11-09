@@ -1,11 +1,11 @@
-import { HouseRefusal, post } from './api.ts';
+import { HouseRefusal, kitAct } from './api.ts';
 import { forgetEnrolment, forgetOwnAgent, readEnrolment } from './home.ts';
 
 export async function logout(): Promise<void> {
   const enrolled = await readEnrolment();
   if (enrolled !== null) {
     try {
-      await post(enrolled.house, '/kit/kits/log-out', {}, enrolled.credential);
+      await kitAct(enrolled.house, 'kits/log-out', {}, enrolled.credential);
     } catch (error) {
       if (!(error instanceof HouseRefusal && error.status === 401)) throw error;
     }

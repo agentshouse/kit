@@ -1,6 +1,15 @@
+import {
+  KIT_LOGIN_PATHS,
+  type EnvironmentRooms,
+  type KIT_LOGIN_ISSUED,
+  type KIT_LOGIN_POLL,
+  type KIT_LOGIN_START,
+  type KIT_LOGIN_STARTED,
+} from '@agentshouse/kit-wire';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
+import type { z } from 'zod';
 import { HouseRefusal, post, retrying } from './api.ts';
 import { placeAppGit } from './app-git.ts';
 import { writeCodexRule } from './clis.ts';
@@ -25,16 +34,16 @@ const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
 // Polling every two seconds brings the User's confirmation to the waiting Kit moments after they give it.
 const POLL_INTERVAL_MS = 2000;
 
-interface Started {
-  start_url: string;
-  login: string;
+type Started = z.output<typeof KIT_LOGIN_STARTED>;
+
+type Issued = z.output<typeof KIT_LOGIN_ISSUED>;
+
+function startLogin(house: string, request: z.input<typeof KIT_LOGIN_START>): Promise<Started> {
+  return post(house, KIT_LOGIN_PATHS.start, request);
 }
 
-interface Exchanged {
-  credential: string;
-  environment: string;
-  user: string;
-  headless_credential?: string;
+function pollLogin(house: string, request: z.input<typeof KIT_LOGIN_POLL>): Promise<Issued> {
+  return post(house, KIT_LOGIN_PATHS.poll, request);
 }
 
 function open(link: string): void {
@@ -70,7 +79,7 @@ function gone(error: unknown): boolean {
   return error instanceof HouseRefusal && refusalOf(error.text)?.code === 'kit_environment_not_found';
 }
 
-function chosenRooms(rooms: string | undefined, noPrivate: boolean): object {
+function chosenRooms(rooms: string | undefined, noPrivate: boolean): { rooms?: EnvironmentRooms } {
   if (rooms !== undefined && noPrivate) throw new Error('--rooms and --no-private are two choices of Rooms; pass one');
   if (rooms !== undefined) return { rooms: { reach: 'selected', refs: rooms.split(',') } };
   return noPrivate ? { rooms: { reach: 'all_but_private' } } : {};
@@ -110,15 +119,15 @@ export async function login(argv: string[]): Promise<void> {
   const ownAgent = await readOwnAgent();
   let held = false;
   let named = environment;
-  let exchanged: Exchanged;
+  let exchanged: Issued;
   if (values.code !== undefined) {
-    exchanged = await post<Exchanged>(house, '/kit/token', { code: values.code });
+    exchanged = await pollLogin(house, { code: values.code });
   } else {
     held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
     const verifier = randomBytes(32).toString('base64url');
     const start = () =>
       retrying(() =>
-        post<Started>(house, '/kit', {
+        startLogin(house, {
           ...(named === undefined
             ? { act: 'new_environment', ...(replaces === undefined ? {} : { replaces }) }
             : { act: 'existing_environment', environment_id: named }),
@@ -141,7 +150,7 @@ export async function login(argv: string[]): Promise<void> {
     open(started.start_url);
 
     exchanged = await retrying(
-      () => post<Exchanged>(house, '/kit/token', { login: started.login, code_verifier: verifier }),
+      () => pollLogin(house, { login: started.login, code_verifier: verifier }),
       undefined,
       () => POLL_INTERVAL_MS,
     );

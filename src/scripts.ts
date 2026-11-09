@@ -6,15 +6,15 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:os';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
+import type { HouseOneWayCall, KitCallOf, KitCallResult, KitOneWayCall } from '@agentshouse/kit-wire';
 import type { IPty } from '@lydell/node-pty';
-import type { Call, Calls, Carried, Result } from './calls.ts';
+import type { Calls, Carried } from './calls.ts';
 import { loginPath, onLoginPath } from './clis.ts';
-import type { OneWayCall } from './connection.ts';
 import { kitHome } from './home.ts';
 import { childEnvironment } from './relay.ts';
 import { killTree } from './scope.ts';
 
-export type ScriptCall = Call<'run_wizard' | 'run_function'>;
+export type ScriptCall = KitCallOf<'run_wizard' | 'run_function'>;
 
 interface Size {
   cols: number;
@@ -43,7 +43,7 @@ interface Run {
   terminal: IPty | null;
   size: Size | null;
   typed: string[];
-  ended: Result | null;
+  ended: KitCallResult | null;
   sized: PromiseWithResolvers<void>;
 }
 
@@ -52,13 +52,13 @@ const FIRST_SIZE: Size = { cols: 80, rows: 24 };
 const SIGNALLED = 128;
 const NEWLINE = 0x0a;
 const NO_BASH = "bash is not on the login shell's PATH";
-const LOST: Result = { refused: 'the Kit lost its connection to House' };
+const LOST: KitCallResult = { refused: 'the Kit lost its connection to House' };
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function failed(plan: Plan, cause: string): Result {
+function failed(plan: Plan, cause: string): KitCallResult {
   process.stderr.write(`kit: ${plan.named} could not start: ${cause}\n`);
   return { refused: `the script could not start: ${cause}` };
 }
@@ -168,10 +168,10 @@ class KeptOutput {
 
 export class Scripts {
   private readonly calls: Calls;
-  private readonly send: (oneWayCall: OneWayCall) => boolean;
+  private readonly send: (oneWayCall: KitOneWayCall) => boolean;
   private readonly runs = new Map<string, Run>();
 
-  constructor(calls: Calls, send: (oneWayCall: OneWayCall) => boolean) {
+  constructor(calls: Calls, send: (oneWayCall: KitOneWayCall) => boolean) {
     this.calls = calls;
     this.send = send;
   }
@@ -180,11 +180,12 @@ export class Scripts {
     void this.calls.carry(call.input_id, () => this.run(call.input_id, planned(call)));
   }
 
-  notified(oneWayCall: OneWayCall): void {
-    const run = this.runs.get(String(oneWayCall.wizard));
+  notified(oneWayCall: HouseOneWayCall): void {
+    if (!('wizard' in oneWayCall)) return;
+    const run = this.runs.get(oneWayCall.wizard);
     if (run === undefined) return;
-    if (oneWayCall.type === 'wizard_input') this.typed(run, String(oneWayCall.data));
-    if (oneWayCall.type === 'wizard_size') this.resized(run, { cols: Number(oneWayCall.cols), rows: Number(oneWayCall.rows) });
+    if (oneWayCall.type === 'wizard_input') this.typed(run, oneWayCall.data);
+    if (oneWayCall.type === 'wizard_size') this.resized(run, { cols: oneWayCall.cols, rows: oneWayCall.rows });
     if (oneWayCall.type === 'wizard_end' && run.plan.terminal === 'page') this.end(run, {});
   }
 
@@ -206,7 +207,7 @@ export class Scripts {
     }
   }
 
-  private async ran(id: string, run: Run): Promise<Result> {
+  private async ran(id: string, run: Run): Promise<KitCallResult> {
     const { plan, output } = run;
     let exited: Promise<number>;
     try {
@@ -278,7 +279,7 @@ export class Scripts {
     } catch {}
   }
 
-  private end(run: Run, result: Result): void {
+  private end(run: Run, result: KitCallResult): void {
     if (run.ended !== null) return;
     run.ended = result;
     run.sized.resolve();

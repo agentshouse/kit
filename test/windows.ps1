@@ -47,7 +47,7 @@ $readerAssignment = $ast.Find({ param($node) $node -is [System.Management.Automa
 . ([scriptblock]::Create($readerAssignment.Extent.Text))
 $readHome = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
 [void][IO.Directory]::CreateDirectory((Join-Path $readHome 'kit'))
-[IO.File]::WriteAllText((Join-Path $readHome 'credential.json'), '{"house":"https://agents.house","environment":"environment-one","credential":"ahk_one"}')
+[IO.File]::WriteAllText((Join-Path $readHome 'credential.json'), '{"house":"https://agents.house","environment":"environment-one","credential":"ahk_one","later":"a field a later Kit adds"}')
 [IO.File]::WriteAllText((Join-Path $readHome 'kit/current'), "0.2.1-alpha.1`n")
 foreach ($ending in @('', "`r`n")) {
   $read = @(($KitHomeReader.Replace('/kit-home', $readHome) + $ending) | & sh -s 2>&1 | ForEach-Object { "$_" })

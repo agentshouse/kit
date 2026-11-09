@@ -1,3 +1,4 @@
+import { KIT_WIRE } from '@agentshouse/kit-wire';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
@@ -287,7 +288,7 @@ it('lists and updates no CLI, asks nothing about one and leaves Kit home no rest
   await expect(access(join(host.home, '.house-kit', 'restart'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('writes the release manifest naming every file Kit installs by name and sha256, the image by digest and where a deploy takes each file the release does not carry', async () => {
+it('writes the release manifest naming the Kit wire the release was built for, every file Kit installs by name and sha256, the image by digest and where a deploy takes each file the release does not carry', async () => {
   const release = await temporaryHome();
   const own: Record<string, string> = {
     'connect-linux.sh': '#!/usr/bin/env bash\n',
@@ -308,6 +309,7 @@ it('writes the release manifest naming every file Kit installs by name and sha25
   expect(written).toMatchObject({
     schemaVersion: 3,
     version,
+    wire: KIT_WIRE,
     hosts: { linux: 'connect-linux.sh', macos: 'connect-linux.sh', windows: 'connect-windows.ps1' },
     image,
   });
