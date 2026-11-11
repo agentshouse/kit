@@ -43,6 +43,8 @@ interface Run {
   terminal: IPty | null;
   size: Size | null;
   typed: string[];
+  unsent: string;
+  waiting: ReturnType<typeof setTimeout> | null;
   ended: KitCallResult | null;
   sized: PromiseWithResolvers<void>;
 }
@@ -53,6 +55,11 @@ const SIGNALLED = 128;
 const NEWLINE = 0x0a;
 const NO_BASH = "bash is not on the login shell's PATH";
 const LOST: KitCallResult = { refused: 'the Kit lost its connection to House' };
+const UNSENT_CHARS = 64_000;
+// House holds a Web Wizard's run two minutes for its Kit to connect again, so the script waits as long for a dropped connection to come back.
+const RETURN_MS = 120_000;
+// House takes a run on again with its page's terminal size in the frames right after the Kit connects, so a script it sent nothing for in ten seconds is one House no longer carries.
+const TAKEN_ON_MS = 10_000;
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -86,6 +93,12 @@ async function inputFile(value: unknown): Promise<string> {
 
 export function removeInputs(): void {
   rmSync(inputs(), { recursive: true, force: true });
+}
+
+function latest(screen: string): string {
+  if (screen.length <= UNSENT_CHARS) return screen;
+  const line = screen.indexOf('\n', screen.length - UNSENT_CHARS);
+  return screen.slice(line < 0 ? screen.length - UNSENT_CHARS : line + 1);
 }
 
 function struck(line: string, typed: string[]): boolean {
@@ -184,19 +197,44 @@ export class Scripts {
     if (!('wizard' in oneWayCall)) return;
     const run = this.runs.get(oneWayCall.wizard);
     if (run === undefined) return;
+    this.waited(run, null);
     if (oneWayCall.type === 'wizard_input') this.typed(run, oneWayCall.data);
     if (oneWayCall.type === 'wizard_size') this.resized(run, { cols: oneWayCall.cols, rows: oneWayCall.rows });
     if (oneWayCall.type === 'wizard_end' && run.plan.terminal === 'page') this.end(run, {});
   }
 
   disconnected(): void {
-    for (const run of this.runs.values()) this.end(run, LOST);
+    for (const run of this.runs.values()) {
+      if (run.plan.terminal === 'page') this.waited(run, RETURN_MS);
+      else this.end(run, LOST);
+    }
+  }
+
+  connected(): void {
+    for (const [id, run] of this.runs) {
+      if (run.waiting === null) continue;
+      this.waited(run, TAKEN_ON_MS);
+      if (run.unsent !== '' && this.send({ type: 'wizard_output', wizard: id, data: run.unsent })) run.unsent = '';
+    }
   }
 
   private async run(id: string, plan: Plan): Promise<Carried> {
     const size = plan.terminal === 'page' ? null : FIRST_SIZE;
     const output = plan.function === null ? null : new KeptOutput(plan.function.outputCap);
-    const run: Run = { plan, input: null, output, process: null, pipes: [], terminal: null, size, typed: [], ended: null, sized: Promise.withResolvers() };
+    const run: Run = {
+      plan,
+      input: null,
+      output,
+      process: null,
+      pipes: [],
+      terminal: null,
+      size,
+      typed: [],
+      unsent: '',
+      waiting: null,
+      ended: null,
+      sized: Promise.withResolvers(),
+    };
     if (size !== null) run.sized.resolve();
     this.runs.set(id, run);
     try {
@@ -226,7 +264,7 @@ export class Scripts {
         run.process = terminal;
         run.terminal = terminal;
         terminal.onData((data) => {
-          this.send({ type: 'wizard_output', wizard: id, data });
+          if (!this.send({ type: 'wizard_output', wizard: id, data })) run.unsent = latest(`${run.unsent}${data}`);
           output?.add(data);
         });
         for (const data of run.typed.splice(0)) terminal.write(data);
@@ -281,9 +319,16 @@ export class Scripts {
 
   private end(run: Run, result: KitCallResult): void {
     if (run.ended !== null) return;
+    this.waited(run, null);
     run.ended = result;
     run.sized.resolve();
     this.stop(run);
+  }
+
+  private waited(run: Run, ms: number | null): void {
+    if (run.waiting !== null) clearTimeout(run.waiting);
+    run.waiting = ms === null ? null : setTimeout(() => this.end(run, LOST), ms);
+    run.waiting?.unref();
   }
 
   private stop(run: Run): void {

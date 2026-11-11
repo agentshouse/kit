@@ -188,6 +188,7 @@ export async function resident(): Promise<void> {
   connection = holdConnection({
     opened: () => {
       conversations.opened();
+      scripts.connected();
       changed();
       logged(copies.connected());
     },
