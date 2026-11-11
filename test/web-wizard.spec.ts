@@ -93,12 +93,35 @@ it("ends the script's whole process group, its child included, when House cancel
   await until(() => !pids.some(alive));
 });
 
-it("ends the script's whole process group when the Kit connection that started it drops and reports the run lost", async () => {
+it('keeps the script through a dropped connection and, once House takes the run on again with its size on the next connection, sends what it wrote meanwhile there and types what House sends', async () => {
+  const hosted = await hostKit([]);
+  const wizard = run(hosted, 'read -r -p "First: " first; sleep 0.5; echo "printed while away"; read -r -p "Second: " second; echo "got $first and $second"; exit 4');
+  await shown(hosted, wizard, 'First: ');
+  send(hosted, { type: 'wizard_input', wizard, data: 'one\r' });
+  await shown(hosted, wizard, 'one');
+
+  hosted.connection.transport.terminate();
+  const again = await until(() => hosted.house.connections[1]);
+  again.send({ type: 'wizard_size', wizard, cols: 80, rows: 24 });
+  await shown(hosted, wizard, 'Second: ');
+  again.send({ type: 'wizard_input', wizard, data: 'two\r' });
+
+  expect(await hosted.result(wizard)).toEqual({ exit_code: 4 });
+  const sentAgain = again.oneWayCalls
+    .filter((frame) => frame.type === 'wizard_output' && frame.wizard === wizard)
+    .map((frame) => frame.data as string)
+    .join('');
+  expect(sentAgain).toContain('printed while away');
+  expect(sentAgain).toContain('got one and two');
+});
+
+it("ends the script's whole process group and reports the run lost when House sends nothing for it once the Kit connects again", async () => {
   const hosted = await hostKit([]);
   const wizard = run(hosted, TREE);
   const pids = await tree(hosted, wizard);
 
   hosted.connection.transport.terminate();
+  await until(() => hosted.house.connections[1]);
 
   expect(await hosted.result(wizard)).toEqual({ refused: 'the Kit lost its connection to House' });
   await until(() => !pids.some(alive));
