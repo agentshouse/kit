@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { settle, until } from './double.ts';
 import { hostKit, lastCall, type Hosted } from './environment.ts';
-import { alive, filesUnder } from './kit.ts';
+import { accountOf, alive, filesUnder } from './kit.ts';
 
 const TREE = 'sleep 300 & echo "child $!"; echo "script $$"; wait';
 
@@ -58,7 +58,7 @@ it('runs a script in a terminal in the Kit home and working directory, forwards 
   expect(await hosted.result(wizard)).toEqual({ exit_code: 7 });
   const seen = output(hosted, wizard);
   expect(seen).toContain('in a terminal');
-  expect(seen).toContain(`home=${hosted.home} cwd=${process.cwd()}`);
+  expect(seen).toContain(`home=${accountOf(hosted.home)} cwd=${process.cwd()}`);
   expect(seen).toContain('signed in as owner-typed-4f1c');
   for (const kept of ['owner-typed-4f1c', 'signed in as', 'in a terminal']) {
     expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(kept);
@@ -129,7 +129,7 @@ it("ends the script's whole process group and reports the run lost when House se
 
 it("reports a script that cannot start with the Kit's reason", async () => {
   const hosted = await hostKit([], {
-    prepare: (home) => writeFile(join(home, '.profile'), 'PATH="$HOME/bin"\n'),
+    prepare: (home) => writeFile(join(accountOf(home), '.profile'), `PATH="${join(home, 'bin')}"\n`),
   });
   const wizard = called(hosted, 'echo never');
 

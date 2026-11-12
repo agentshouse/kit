@@ -12,7 +12,7 @@ import { expect, it, onTestFinished, vi } from 'vitest';
 import { ownerSocket } from '../src/home.ts';
 import { startHouse, type House } from './double.ts';
 import { helpLine, LISTING, shelled, type McpCall } from './environment.ts';
-import { runKit, temporaryHome } from './kit.ts';
+import { accountOf, runKit, temporaryHome } from './kit.ts';
 import { RELAYED, startStore, uploadTool, type Store } from './store.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
@@ -28,7 +28,7 @@ function runHouse(
   ambient: Record<string, string> = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const environment: NodeJS.ProcessEnv = { ...process.env, HOUSE_KIT_HOME: home, ...ambient };
+    const environment: NodeJS.ProcessEnv = { ...process.env, HOME: accountOf(home), ...ambient };
     delete environment.HOUSE_BRIDGE;
     if (bridge !== undefined) environment.HOUSE_BRIDGE = bridge;
     const child = spawn(process.execPath, [...node, HOUSE, ...argv], { env: environment });
@@ -387,7 +387,7 @@ it("refuses a Tool call naming kit login once kit logout has ended the User's ow
   const home = await connected(house, true);
   house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
 
-  expect(await runKit(['logout'], { HOUSE_KIT_HOME: home }).exited).toBe(0);
+  expect(await runKit(['logout'], { HOME: accountOf(home) }).exited).toBe(0);
   const ran = await runHouse(home, ['search', '{"query":"invoice"}']);
 
   expect(house.requests.map(({ path, headers, body }) => ({ path, authorization: headers.authorization, body }))).toEqual([
@@ -416,7 +416,7 @@ it("stops acting as the User when House had already disconnected the computer", 
   const home = await connected(house, true);
   house.route('POST', '/kit/kits/log-out', () => ({ status: 401, body: { error: { code: 'kit_credential_rejected' } } }));
 
-  const logout = runKit(['logout'], { HOUSE_KIT_HOME: home });
+  const logout = runKit(['logout'], { HOME: accountOf(home) });
 
   expect(await logout.exited).toBe(0);
   expect(logout.stdout()).toBe('Environment environment-one is disconnected; kit login reconnects it.\n');
@@ -645,7 +645,7 @@ it.each([
   [['fetch', '--x'], false, '--x', 'usage: house fetch'],
 ])('refuses house %j with its usage before it opens a Kit connection', async (argv, conversation, unexpected, usage) => {
   const home = await temporaryHome();
-  vi.stubEnv('HOUSE_KIT_HOME', home);
+  vi.stubEnv('HOME', accountOf(home));
   const owner = ownerSocket();
   vi.unstubAllEnvs();
   const opened: string[] = [];

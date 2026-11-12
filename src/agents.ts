@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_RELEASE, below, installCli, locate, run, updateCli, versionOf } from './clis.ts';
-import { agentBase, kitHome } from './home.ts';
+import { agentBase, kitHome, reinstall } from './home.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
 
 type Model = ReportedAgentKind['models'][number];
@@ -469,6 +469,7 @@ export class Agents {
       kit_release: KIT_RELEASE,
       wire: KIT_WIRE,
       agent_base: agentBase(),
+      ...(reinstall() === undefined ? {} : { reinstall: reinstall() }),
       agents,
       transcription: transcriptionReport(),
       ...(hostKey === null ? {} : { ssh_host_key: hostKey }),

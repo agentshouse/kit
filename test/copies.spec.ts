@@ -227,9 +227,9 @@ it('keeps each copied Room as its own Git repository with its readable tree, tra
   expect(searched).toEqual(expect.arrayContaining(['!/capture', '!/collaboration', '!/archive/old.md', '!_provenance']));
 });
 
-it('keeps the copied Rooms beneath the native workspace root and nothing under /agents/house', async () => {
+it("keeps the copied Rooms beneath the workspace kit.json names and none beneath Kit home", async () => {
   const workspace = await temporaryHome();
-  const hosted = await hostKit([{}], { environment: { HOUSE_KIT_WORKSPACE: workspace } });
+  const hosted = await hostKit([{}], { workspace });
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
   notes.put('plan.md', 'plan\n');
@@ -239,7 +239,8 @@ it('keeps the copied Rooms beneath the native workspace root and nothing under /
   const repository = join(workspace, 'local-copies', 'rooms', notes.ref);
   await until(() => existsSync(join(repository, 'plan.md')));
   expect(git(repository, 'ls-files').trim()).toBe('plan.md');
-  expect(existsSync(notes.repository)).toBe(false);
+  expect(notes.repository).toBe(repository);
+  expect(existsSync(join(hosted.home, 'local-copies', 'rooms', notes.ref))).toBe(false);
 });
 
 it('copies the Private Room at /rooms/private like any other Room', async () => {

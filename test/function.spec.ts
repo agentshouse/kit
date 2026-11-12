@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { idOf, settle, until, without } from './double.ts';
 import { hostKit, lastCall, type Hosted } from './environment.ts';
-import { alive, filesUnder, stop } from './kit.ts';
+import { accountOf, alive, filesUnder, stop } from './kit.ts';
 
 interface Ran {
   exit_code?: number;
@@ -91,7 +91,7 @@ it('runs a script with no terminal and empty standard input, which finds its JSO
 
   expect(result).toEqual({ exit_code: 3, output: expect.any(String), cut: false });
   expect(result.output.split('\n').sort()).toEqual(
-    ['no terminal', `home=${hosted.home} cwd=${process.cwd()}`, '{"marker":"input-7d2e","list":[1,2]}', 'to error', 'standard input empty', ''].sort(),
+    ['no terminal', `home=${accountOf(hosted.home)} cwd=${process.cwd()}`, '{"marker":"input-7d2e","list":[1,2]}', 'to error', 'standard input empty', ''].sort(),
   );
   expect(frames(hosted, id)).toBe('');
   await keepsNothing(hosted, ['input-7d2e', 'to error', 'standard input empty']);
@@ -203,7 +203,7 @@ it('ends a run at its time cap though a process outside its group still holds it
 
 it("reports a script that cannot start with the Kit's cause", async () => {
   const hosted = await hostKit([], {
-    prepare: (home) => writeFile(join(home, '.profile'), 'PATH="$HOME/bin"\n'),
+    prepare: (home) => writeFile(join(accountOf(home), '.profile'), `PATH="${join(home, 'bin')}"\n`),
   });
   const id = run(hosted, 'echo never', { input: 'input-0c4a' });
 

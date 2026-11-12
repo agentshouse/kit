@@ -17,11 +17,10 @@ import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import type { Answer, Received } from './double.ts';
 import { GIT_IDENTITY, type Hosted, type ToolResult } from './environment.ts';
-import { stop } from './kit.ts';
+import { accountOf, stop } from './kit.ts';
 import type { Store } from './store.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
-export const COPIES = '/agents/house/local-copies';
 const LOG_EPOCH = '0192f0e4-1c2d-7000-8000-000000000001';
 const CHUNK_BYTES = 1024 * 1024;
 const BODY_BYTES = 4 * 1024 * 1024;
@@ -108,8 +107,11 @@ export class Room {
   models: Record<string, unknown>[] = [];
   private built: { position: number; entries: object[] } | null = null;
 
-  constructor(handle: string) {
+  readonly copies: string;
+
+  constructor(handle: string, copies: string) {
     this.handle = handle;
+    this.copies = copies;
   }
 
   get root(): string {
@@ -117,7 +119,7 @@ export class Room {
   }
 
   get repository(): string {
-    return join(COPIES, 'rooms', this.ref);
+    return join(this.copies, 'rooms', this.ref);
   }
 
   writable(path: string): boolean {
@@ -401,7 +403,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     damagesChunks: false,
     unparsedChunks: false,
     room: (handle) => {
-      const room = new Room(handle);
+      const room = new Room(handle, join(hosted.workspace, 'local-copies'));
       rooms.push(room);
       onTestFinished(async () => {
         stop(hosted.kit.pid);
@@ -626,7 +628,7 @@ export interface HouseRun {
 
 export function house(hosted: Hosted, cwd: string, ...args: string[]): Promise<HouseRun> {
   return new Promise((resolve) => {
-    const environment: NodeJS.ProcessEnv = { ...process.env, HOUSE_KIT_HOME: hosted.home };
+    const environment: NodeJS.ProcessEnv = { ...process.env, HOME: accountOf(hosted.home) };
     delete environment.HOUSE_BRIDGE;
     const child = spawn(process.execPath, [HOUSE, ...args], { cwd, env: environment });
     let stdout = '';

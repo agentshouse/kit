@@ -5,6 +5,7 @@ import { stringify } from 'yaml';
 import { socketDirectory } from '../src/home.ts';
 import { idOf, without, type Received } from './double.ts';
 import type { Hosted, McpCall } from './environment.ts';
+import { accountOf } from './kit.ts';
 
 export interface Attachment {
   name: string;
@@ -64,7 +65,7 @@ export function inspected(hosted: Hosted): unknown[] {
 }
 
 export async function bridgeSockets(hosted: Hosted): Promise<string[]> {
-  vi.stubEnv('HOUSE_KIT_HOME', hosted.home);
+  vi.stubEnv('HOME', accountOf(hosted.home));
   const sockets = socketDirectory();
   vi.unstubAllEnvs();
   return (await readdir(sockets)).filter((name) => name.endsWith('.sock') && name !== 'owner.sock');

@@ -8,5 +8,5 @@ export interface Started {
 
 export function recordStart(name: string): void {
   const proxy = Object.keys(process.env).filter((variable) => /^https?_proxy$/i.test(variable));
-  appendFileSync(join(process.env.HOUSE_KIT_HOME!, 'started.log'), `${JSON.stringify({ name, proxy })}\n`);
+  appendFileSync(join(process.env.HOME!, '.agents', 'house', 'started.log'), `${JSON.stringify({ name, proxy })}\n`);
 }

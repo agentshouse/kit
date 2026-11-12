@@ -16,17 +16,17 @@ export const LOCATIONS: Record<string, string> = {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   recordStart('curl');
   const url = process.argv.at(-1)!;
-  appendFileSync(join(process.env.HOUSE_KIT_HOME!, 'curl.log'), `${url}\n`);
+  appendFileSync(join(process.env.HOME!, '.agents', 'house', 'curl.log'), `${url}\n`);
   const kind = Object.keys(CLIS).find((candidate) => CLIS[candidate]!.install.includes(` ${url} `));
   if (kind === undefined) process.exit(spawnSync('/usr/bin/curl', process.argv.slice(2), { stdio: 'inherit' }).status ?? 1);
-  if (existsSync(join(process.env.HOUSE_KIT_HOME!, `install-stall-${kind}`))) {
+  if (existsSync(join(process.env.HOME!, '.agents', 'house', `install-stall-${kind}`))) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
   }
   // The held install looks for its hold file every twentieth of a second, so it goes on as soon as the spec removes it.
-  while (existsSync(join(process.env.HOUSE_KIT_HOME!, `install-hold-${kind}`))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  while (existsSync(join(process.env.HOME!, '.agents', 'house', `install-hold-${kind}`))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   process.stdout.write(
     [
-      `if grep -qx ${kind} "$HOUSE_KIT_HOME/install-fail" 2>/dev/null; then cat "$HOUSE_KIT_HOME/install-output" 2>/dev/null; echo "Checksum verification failed" >&2; exit 1; fi`,
+      `if grep -qx ${kind} "$HOME/.agents/house/install-fail" 2>/dev/null; then cat "$HOME/.agents/house/install-output" 2>/dev/null; echo "Checksum verification failed" >&2; exit 1; fi`,
       `${process.execPath} ${CLI} ${kind} "$HOME/${LOCATIONS[kind]}"`,
       ...(kind === 'claude-agent-acp' ? [] : [`printf '%s\\n' 'PATH="$HOME/${LOCATIONS[kind]}:$PATH"' >> "$HOME/.profile"`]),
       '',

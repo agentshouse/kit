@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { accessSync, chmodSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { selectRelay } from './relay.ts';
 
@@ -14,6 +14,7 @@ export interface Enrolment {
 
 export interface Configuration {
   skills: boolean;
+  workspace: string;
 }
 
 export interface OwnAgent {
@@ -28,16 +29,7 @@ const DISCONNECTED = 'disconnected.json';
 const CONFIGURATION = 'kit.json';
 const OWN_AGENT = 'own-agent.json';
 
-let defaulted: string | undefined;
-
-function writable(directory: string): boolean {
-  try {
-    accessSync(directory, constants.W_OK | constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const EARLIER_PREFIXES = ['/kit-home/kit', '/opt/house-kit'];
 
 function privateDirectory(path: string): string {
   try {
@@ -53,17 +45,41 @@ function privateDirectory(path: string): string {
   return path;
 }
 
-function ownTemporaryHome(): string {
-  return privateDirectory(join(tmpdir(), `house-kit-${process.getuid!()}`));
+export function oneFolder(account = homedir()): string {
+  return join(account, '.agents', 'house');
 }
 
-function defaultHome(): string {
-  const home = join(homedir(), '.house-kit');
-  return existsSync(home) || writable(homedir()) ? home : ownTemporaryHome();
+export function desktopPrefix(): string {
+  return join(homedir(), '.local', 'share', 'house-kit');
+}
+
+export function earlierPrefix(): string | null {
+  const prefix = process.env.HOUSE_KIT_PREFIX;
+  if (prefix === undefined || prefix === '') return null;
+  return [...EARLIER_PREFIXES, desktopPrefix()].includes(resolve(prefix)) ? resolve(prefix) : null;
+}
+
+export function awaitsTakeover(): boolean {
+  const prefix = earlierPrefix();
+  return prefix === EARLIER_PREFIXES[0] || (prefix === EARLIER_PREFIXES[1] && process.getuid!() !== 0);
+}
+
+export function earlierHome(): string {
+  return process.env.HOUSE_KIT_HOME || join(homedir(), '.house-kit');
+}
+
+export function reinstall(): 'linux' | undefined {
+  if (!awaitsTakeover()) return undefined;
+  try {
+    return readFileSync(join(earlierHome(), 'placement'), 'utf8').trim() === 'windows' ? undefined : 'linux';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'linux';
+    throw error;
+  }
 }
 
 export function kitHome(): string {
-  return process.env.HOUSE_KIT_HOME || (defaulted ??= defaultHome());
+  return earlierPrefix() === null ? oneFolder() : earlierHome();
 }
 
 export function socketDirectory(): string {
@@ -82,7 +98,8 @@ export function ownerLock(): string {
 }
 
 export function workspaceRoot(): string {
-  return process.env.HOUSE_KIT_WORKSPACE ?? '/agents/house';
+  if (earlierPrefix() !== null) return process.env.HOUSE_KIT_WORKSPACE ?? '/agents/house';
+  return configuredWorkspace() ?? kitHome();
 }
 
 export function agentBase(): string {
@@ -169,10 +186,25 @@ export function forgetOwnAgent(): Promise<void> {
   return rm(join(kitHome(), OWN_AGENT), { force: true });
 }
 
-export async function readConfiguration(): Promise<Configuration> {
-  return { skills: (await readHome<Partial<Configuration>>(CONFIGURATION))?.skills !== false };
+function configuredWorkspace(): string | undefined {
+  try {
+    const { workspace } = JSON.parse(readFileSync(join(kitHome(), CONFIGURATION), 'utf8')) as Partial<Configuration>;
+    return workspace;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
 }
 
-export function writeConfiguration(configuration: Configuration): Promise<void> {
+export async function readConfiguration(): Promise<Configuration> {
+  const stored = await readHome<Partial<Configuration>>(CONFIGURATION);
+  return { skills: stored?.skills !== false, workspace: stored?.workspace ?? kitHome() };
+}
+
+export async function storedConfiguration(): Promise<Partial<Configuration> & Record<string, unknown>> {
+  return (await readHome<Partial<Configuration> & Record<string, unknown>>(CONFIGURATION)) ?? {};
+}
+
+export function writeConfiguration(configuration: Partial<Configuration> & Record<string, unknown>): Promise<void> {
   return writeHome(CONFIGURATION, configuration);
 }

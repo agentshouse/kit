@@ -2,7 +2,7 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
-import { filesUnder, runKit, temporaryHome } from './kit.ts';
+import { accountOf, filesUnder, runKit, temporaryHome } from './kit.ts';
 
 async function enrolled(house: House): Promise<string> {
   const home = await temporaryHome();
@@ -18,10 +18,10 @@ async function contents(home: string): Promise<Record<string, string>> {
 }
 
 it('prints its usage on standard output for kit --help', async () => {
-  const kit = runKit(['--help'], { HOUSE_KIT_HOME: await temporaryHome() });
+  const kit = runKit(['--help'], { HOME: accountOf(await temporaryHome()) });
 
   expect(await kit.exited).toBe(0);
-  expect(kit.stdout()).toBe('usage: kit <login|logout|resident>\n');
+  expect(kit.stdout()).toBe('usage: kit <connect|login|logout|resident>\n');
   expect(kit.stderr()).toBe('');
 });
 
@@ -29,31 +29,31 @@ it.each(['codex', 'chatgpt'])('prints its usage on standard error for kit %s, a 
   const house = await startHouse();
   const home = await temporaryHome();
 
-  const kit = runKit([command, '--key', 'ahp_script_key', '--house', house.origin, 'exec', 'hello'], { HOME: home });
+  const kit = runKit([command, '--key', 'ahp_script_key', '--house', house.origin, 'exec', 'hello'], { HOME: accountOf(home) });
 
   expect(await kit.exited).toBe(2);
   expect(kit.stdout()).toBe('');
-  expect(kit.stderr()).toBe('usage: kit <login|logout|resident>\n');
+  expect(kit.stderr()).toBe('usage: kit <connect|login|logout|resident>\n');
   expect(house.requests).toEqual([]);
   expect(await readdir(home)).toEqual([]);
 });
 
 it('refuses kit --help with anything after it and prints no usage', async () => {
-  const kit = runKit(['--help', '--bogus'], { HOUSE_KIT_HOME: await temporaryHome() });
+  const kit = runKit(['--help', '--bogus'], { HOME: accountOf(await temporaryHome()) });
 
   expect(await kit.exited).toBe(1);
   expect(kit.stdout()).toBe('');
   expect(kit.stderr()).toMatch(/^kit: /);
 });
 
-it.each(['logout', 'resident', 'git-credential'])(
+it.each(['connect', 'logout', 'resident', 'git-credential'])(
   'prints kit %s --help on standard output and leaves an enrolled home and its House untouched',
   async (command) => {
     const house = await startHouse();
     const home = await enrolled(house);
     const before = await contents(home);
 
-    const kit = runKit([command, '--help'], { HOUSE_KIT_HOME: home });
+    const kit = runKit([command, '--help'], { HOME: accountOf(home) });
     kit.input.end();
 
     expect(await kit.exited).toBe(0);
@@ -71,7 +71,7 @@ it.each([[['logout', '--force']], [['resident', 'now']], [['git-credential', 'ge
     const home = await enrolled(house);
     const before = await contents(home);
 
-    const kit = runKit(argv, { HOUSE_KIT_HOME: home });
+    const kit = runKit(argv, { HOME: accountOf(home) });
     kit.input.end();
 
     expect(await kit.exited).toBe(1);

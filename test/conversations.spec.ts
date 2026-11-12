@@ -10,7 +10,7 @@ import { socketDirectory } from '../src/home.ts';
 import { attached, bridgeSockets, inspected } from './attachments.ts';
 import { idOf, settle, until, without, type Received } from './double.ts';
 import { conversationCredential, emit, hostKit, installHeld, lastCall, lastMessage, outcome, userBin, type Hosted } from './environment.ts';
-import { alive, placeHostKey, runKit, temporaryHome } from './kit.ts';
+import { accountOf, alive, placeHostKey, runKit, temporaryHome } from './kit.ts';
 
 const FAST_REPORTS = fileURLToPath(new URL('./fast-reports.ts', import.meta.url));
 
@@ -50,7 +50,7 @@ it("opens the session in the mode the route names, and Codex runs each `house` o
   const hosted = await hostKit([{ mode: 'read-only', effort: null }], {
     prepare: async (home) => {
       await writeFile(join(userBin(home), 'house'), '#!/bin/sh\n', { mode: 0o755 });
-      await writeFile(join(home, '.profile'), `PATH="${userBin(home)}:/usr/bin:/bin"\n`);
+      await writeFile(join(accountOf(home), '.profile'), `PATH="${userBin(home)}:/usr/bin:/bin"\n`);
     },
   });
 
@@ -65,7 +65,7 @@ it("opens the session in the mode the route names, and Codex runs each `house` o
   expect(log.find((entry) => entry.method === 'initialize')!.env).toMatchObject({
     CODEX_CONFIG: '{"features":{"shell_zsh_fork":true}}',
   });
-  expect(await readFile(join(hosted.home, '.codex', 'rules', 'house.rules'), 'utf8')).toBe(
+  expect(await readFile(join(accountOf(hosted.home), '.codex', 'rules', 'house.rules'), 'utf8')).toBe(
     `prefix_rule(pattern = ["house"], decision = "allow")\nhost_executable(name = "house", paths = ["${join(userBin(hosted.home), 'house')}"])\n`,
   );
 });
@@ -176,8 +176,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
   const hosted = await hostKit();
   const hold = await installHeld(hosted);
   const agentId = `agent-${randomUUID()}`;
-  const directory = `/agents/house/agents/${agentId}`;
-  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const directory = join(hosted.home, 'agents', agentId);
   const route = {
     agent_id: agentId,
     kind: 'grok-build',
@@ -289,11 +288,11 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   ]);
 });
 
-it('creates an absent default launch directory beneath /agents/house/agents before it opens the session there', async () => {
+it("creates an absent default launch directory beneath Kit home's agents before it opens the session there", async () => {
   const agentId = `agent-${randomUUID()}`;
-  const directory = `/agents/house/agents/${agentId}`;
-  onTestFinished(() => rm(directory, { recursive: true, force: true }));
-  const hosted = await hostKit([{ agent_id: agentId, working_directory: directory }]);
+  const home = await temporaryHome();
+  const directory = join(home, 'agents', agentId);
+  const hosted = await hostKit([{ agent_id: agentId, working_directory: directory }], { home, skills: false });
 
   hosted.call({ kind: 'open', agent_id: agentId });
 
@@ -311,7 +310,7 @@ it('creates an absent default launch directory beneath the native workspace root
       { agent_id: agentId, working_directory: join(workspace, 'agents', agentId) },
       { agent_id: rootAgentId, working_directory: join(workspace, rootAgentId) },
     ],
-    { environment: { HOUSE_KIT_WORKSPACE: workspace } },
+    { workspace },
   );
 
   hosted.call({ kind: 'open', agent_id: agentId });
@@ -547,7 +546,7 @@ it.each([
     1,
     async (hosted: Hosted) => {
       hosted.house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
-      await runKit(['logout'], { HOUSE_KIT_HOME: hosted.home }).exited;
+      await runKit(['logout'], { HOME: accountOf(hosted.home) }).exited;
     },
   ],
 ])("tells House that the process of each conversation it runs is not running when %s, before it exits as it did", async (_stop, status, stop) => {
@@ -805,7 +804,7 @@ it('closes the connection a message opened to read its links when its CLI does n
 
 it("refuses a conversation whose connection cannot open in the Kit's words, and logs why", async () => {
   const hosted = await hostKit();
-  vi.stubEnv('HOUSE_KIT_HOME', hosted.home);
+  vi.stubEnv('HOME', accountOf(hosted.home));
   const sockets = socketDirectory();
   vi.unstubAllEnvs();
   await rm(sockets, { recursive: true, force: true });

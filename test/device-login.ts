@@ -70,7 +70,7 @@ export const DEVICE_LOGINS: Record<string, DeviceLogin> = {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   recordStart('device-login');
   const kind = process.env.ADAPTER_KIND!;
-  const home = process.env.HOUSE_KIT_HOME!;
+  const home = join(process.env.HOME!, '.agents', 'house');
   const argv = process.argv.slice(2);
   const login = DEVICE_LOGINS[kind]!;
   const log = (entry: Record<string, unknown>) =>

@@ -6,7 +6,7 @@ import { BINS, RELEASES, linkUserCli, placeUserCli, updatesRun } from './cli.ts'
 import { LOCATIONS } from './curl.ts';
 import { idOf, settle, until } from './double.ts';
 import { hostKit, lastCall, outcome, userBin, type Hosted } from './environment.ts';
-import { alive } from './kit.ts';
+import { accountOf, alive } from './kit.ts';
 
 const KINDS = Object.keys(BINS);
 const NEXT: Record<string, string> = { 'codex-acp': '0.167.0', 'claude-agent-acp': '2.1.318', 'grok-build': '1.0.48' };
@@ -58,7 +58,7 @@ async function initialized(hosted: Hosted): Promise<Record<string, unknown>[]> {
 it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself, with no home or configuration variable of its own', async (kind) => {
   const hosted = await hostKit([{ kind }], {
     prepare: async (home) => {
-      placeUserCli(join(home, '.local', 'bin'), kind, '0.0.1');
+      placeUserCli(join(accountOf(home), '.local', 'bin'), kind, '0.0.1');
     },
   });
 
@@ -78,7 +78,7 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
   }
   expect(env.CODEX_PATH).toBe(kind === 'codex-acp' ? join(hosted.home, 'launchers', 'codex') : undefined);
   expect(env.CLAUDE_CODE_ENTRYPOINT).toBe(kind === 'claude-agent-acp' ? 'claude-agent-acp' : undefined);
-  expect(env.HOME).toBe(hosted.home);
+  expect(env.HOME).toBe(accountOf(hosted.home));
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GROK_HOME']) expect(env[variable]).toBeUndefined();
 });
 
@@ -110,7 +110,7 @@ it.each(KINDS)('gives a %s conversation its login shell PATH with Kit shims and 
       const bin = userBin(home);
       await writeFile(join(bin, 'user-tool'), '#!/bin/sh\necho from-login-shell\n');
       await chmod(join(bin, 'user-tool'), 0o755);
-      await writeFile(join(home, '.profile'), `echo login-startup\nPATH="${bin}:/usr/bin:/bin"\n`);
+      await writeFile(join(accountOf(home), '.profile'), `echo login-startup\nPATH="${bin}:/usr/bin:/bin"\n`);
     },
   });
 
@@ -130,7 +130,7 @@ it.each(KINDS)('gives a %s conversation its login shell PATH with Kit shims and 
     userBin(hosted.home),
     '/usr/bin',
     '/bin',
-    join(hosted.home, '.local', 'bin'),
+    join(accountOf(hosted.home), '.local', 'bin'),
   ]);
 });
 
@@ -153,7 +153,7 @@ it.each(KINDS)('runs a %s its official installer placed beneath the home when th
   const hosted = await hostKit([{ kind }], {
     prepare: async (home) => {
       await rm(join(userBin(home), BINS[kind]!));
-      await writeFile(join(home, '.profile'), 'PATH="$HOME/bin:/usr/bin:/bin"\n');
+      await writeFile(join(accountOf(home), '.profile'), `PATH="${join(home, 'bin')}:/usr/bin:/bin"\n`);
     },
   });
 
@@ -161,14 +161,14 @@ it.each(KINDS)('runs a %s its official installer placed beneath the home when th
   await answer(hosted, 'conversation-1', `@sh command -v ${BINS[kind]}; ${BINS[kind]} --version`);
 
   const entry = (await initialized(hosted)).find((entry) => (entry.env as Record<string, string>).HOUSE_BRIDGE !== undefined)!;
-  const cli = join(hosted.home, LOCATIONS[kind]!, BINS[kind]!);
+  const cli = join(accountOf(hosted.home), LOCATIONS[kind]!, BINS[kind]!);
   expect(entry.cli).toEqual({ path: cli, release: RELEASES[kind] });
   expect((await hosted.adapterLog()).find((entry) => 'sh' in entry)).toMatchObject({
     status: 0,
     stdout: expect.stringContaining(`${cli}\n`),
     stderr: '',
   });
-  expect((entry.env as Record<string, string>).PATH.split(':').filter((path) => path === join(hosted.home, '.local', 'bin'))).toHaveLength(1);
+  expect((entry.env as Record<string, string>).PATH.split(':').filter((path) => path === join(accountOf(hosted.home), '.local', 'bin'))).toHaveLength(1);
 });
 
 it("runs a conversation on a CLI below its minimum, reported with the minimum and the CLI's update command, while a CLI that did not install refuses its own", async () => {
@@ -321,7 +321,7 @@ it("ends a CLI's update command still running at its deadline, with every proces
 
 it('runs a CLI the login shell finds through a relative PATH entry from any working directory', async () => {
   const hosted = await hostKit([{ kind: 'grok-build' }], {
-    prepare: (home) => writeFile(join(home, '.profile'), `PATH="${relative(process.cwd(), userBin(home))}:$PATH"\n`),
+    prepare: (home) => writeFile(join(accountOf(home), '.profile'), `PATH="${relative(process.cwd(), userBin(home))}:$PATH"\n`),
   });
 
   expect(await open(hosted, 'conversation-1')).toEqual({ provider_session_id: expect.any(String) });
@@ -336,14 +336,14 @@ it.each([
       await symlink(join(home, 'physical', 'work'), join(home, 'link'));
       placeUserCli(join(home, 'elsewhere'), 'grok-build', '1.0.49');
       placeUserCli(join(home, 'physical', 'elsewhere'), 'grok-build', '1.0.50');
-      await writeFile(join(home, '.profile'), 'cd "$HOME/link"\nPATH="../elsewhere"\n');
+      await writeFile(join(accountOf(home), '.profile'), `cd "${join(home, 'link')}"\nPATH="../elsewhere"\n`);
     },
   ],
   [
     'an empty entry in the directory it ends its profile in',
     async (home: string) => {
       placeUserCli(join(home, 'there'), 'grok-build', '1.0.50');
-      await writeFile(join(home, '.profile'), 'cd "$HOME/there"\nPATH=":$PATH"\n');
+      await writeFile(join(accountOf(home), '.profile'), `cd "${join(home, 'there')}"\nPATH=":$PATH"\n`);
     },
   ],
 ])('runs the CLI the login shell runs through %s', async (_case, prepare) => {

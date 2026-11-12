@@ -2,7 +2,7 @@ import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const home = process.env.HOUSE_KIT_HOME ?? '/tmp';
+const home = join(process.env.HOME ?? '/tmp', '.agents', 'house');
 const memories = !process.argv.includes('memories') && existsSync(join(home, 'codex-memories'));
 const queues = new Map<string, number>();
 const hung = existsSync(join(home, 'hung-app-server'));

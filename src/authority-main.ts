@@ -2,6 +2,8 @@ import { HouseRefusal, kitAct } from './api.ts';
 import { readEnrolment } from './home.ts';
 import { proxyUnlessRelayed } from './relay.ts';
 
+process.env.HOUSE_KIT_PREFIX ||= '/kit-home/kit';
+
 function unanswered(error: unknown): boolean {
   return error instanceof HouseRefusal ? error.status >= 500 : error instanceof TypeError && error.message === 'fetch failed';
 }

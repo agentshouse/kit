@@ -25,11 +25,11 @@ import {
 import { callHouse, rpc } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { selectRelay } from './relay.ts';
-import { startService } from './service.ts';
+import { startService } from './supervisor.ts';
 import { placeSkillSet } from './skills.ts';
 import { endUnserved } from './wire.ts';
 
-const DEFAULT_HOUSE = 'https://agents.house';
+export const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
 // Polling every two seconds brings the User's confirmation to the waiting Kit moments after they give it.
 const POLL_INTERVAL_MS = 2000;
@@ -85,6 +85,14 @@ function chosenRooms(rooms: string | undefined, noPrivate: boolean): { rooms?: E
   return noPrivate ? { rooms: { reach: 'all_but_private' } } : {};
 }
 
+export interface Chosen {
+  house?: string;
+  environment?: string;
+  rooms?: string;
+  'no-private': boolean;
+  code?: string;
+}
+
 export async function login(argv: string[]): Promise<void> {
   const { values } = parseArgs({
     args: argv,
@@ -101,6 +109,22 @@ export async function login(argv: string[]): Promise<void> {
     process.stdout.write(USAGE);
     return;
   }
+  const house = await enrol(values);
+  await placeConnection(house);
+  try {
+    startService();
+  } catch (error) {
+    process.stderr.write(`kit: ${(error as Error).message}\n`);
+  }
+}
+
+export async function placeConnection(house: string): Promise<void> {
+  await placeSkillSet(house);
+  await writeCodexRule().catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
+  await placeAppGit(await readOwnAgent()).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
+}
+
+export async function enrol(values: Chosen): Promise<string> {
   if (values.code !== undefined && values.rooms !== undefined) throw new Error('--code cannot be used with --rooms');
   if (values.code !== undefined && values['no-private']) throw new Error('--code cannot be used with --no-private');
   if (values.code !== undefined && values.environment !== undefined) throw new Error('--code cannot be used with --environment');
@@ -112,10 +136,11 @@ export async function login(argv: string[]): Promise<void> {
   const relay = process.env.HOUSE_KIT_RELAY || undefined;
   selectRelay(relay);
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
-  const replaces = process.env.HOUSE_KIT_REPLACES;
-  const remembered =
-    replaces === undefined && values.environment === undefined && enrolled?.house === house ? enrolled.environment : undefined;
-  const environment = replaces === undefined ? (values.environment ?? remembered) : undefined;
+  const remembered = values.environment === undefined && enrolled?.house === house ? enrolled.environment : undefined;
+  const environment = values.environment ?? remembered;
+  if (environment !== undefined && rooms.rooms !== undefined) {
+    throw new Error(`Environment ${environment} keeps its Rooms; change them on its page in House`);
+  }
   const ownAgent = await readOwnAgent();
   let held = false;
   let named = environment;
@@ -128,9 +153,7 @@ export async function login(argv: string[]): Promise<void> {
     const start = () =>
       retrying(() =>
         startLogin(house, {
-          ...(named === undefined
-            ? { act: 'new_environment', ...(replaces === undefined ? {} : { replaces }) }
-            : { act: 'existing_environment', environment_id: named }),
+          ...(named === undefined ? { act: 'new_environment' } : { act: 'existing_environment', environment_id: named }),
           ...rooms,
           code_challenge: createHash('sha256').update(verifier).digest('base64url'),
           ...(held ? {} : { headless: true }),
@@ -155,8 +178,6 @@ export async function login(argv: string[]): Promise<void> {
       () => POLL_INTERVAL_MS,
     );
   }
-  await placeSkillSet(house);
-  await writeCodexRule().catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
   const relayRecord = relay === undefined ? {} : { relay };
   await writeEnrolment({
     house,
@@ -173,10 +194,5 @@ export async function login(argv: string[]): Promise<void> {
   } else if (held && ownAgent !== null) {
     await writeOwnAgent({ house, ...relayRecord, user: ownAgent.user, credential: ownAgent.credential });
   }
-  await placeAppGit(await readOwnAgent()).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
-  try {
-    startService();
-  } catch (error) {
-    process.stderr.write(`kit: ${(error as Error).message}\n`);
-  }
+  return house;
 }

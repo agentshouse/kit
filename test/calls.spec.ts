@@ -5,11 +5,11 @@ import type { House } from '../src/api.ts';
 import { Calls } from '../src/calls.ts';
 import { idOf, settle, until, without } from './double.ts';
 import { hostKit, lastCall } from './environment.ts';
-import { temporaryHome } from './kit.ts';
+import { accountOf, temporaryHome } from './kit.ts';
 
 it('keeps a pending Kit call Result in the current call-results store', async () => {
   const home = await temporaryHome();
-  vi.stubEnv('HOUSE_KIT_HOME', home);
+  vi.stubEnv('HOME', accountOf(home));
   onTestFinished(() => {
     vi.unstubAllEnvs();
   });

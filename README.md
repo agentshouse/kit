@@ -6,39 +6,28 @@ your Agents' conversations through the agent CLIs you chose and gives each Agent
 ## Install
 
 Run `sh -c 'kit=$(curl -fsSL "$0") || { echo "Kit could not be downloaded; run this command again." >&2; exit 1; }; eval "$kit"' agents.house/kit`,
-or `& { try { $kit = irm agents.house/kit.ps1 } catch { throw 'Kit could not be downloaded; run this command again.' }; & ([scriptblock]::Create($kit)) @args }` on Windows, which run nothing of a failed download, and again to update; options follow `agents.house/kit`.
-On macOS and Linux it installs Kit natively under your own account, without an admin password, as a service that runs
-while you are logged in. `kit` and `house` are then on your login shell's `PATH`, and your workspace is `~/AgentsHouse` unless you
-pass `--workspace <path>`. Every run places the Kit release your Building serves, with the Node.js and agent adapters it runs on, in a directory of its own beside the one that runs, then starts it; the earlier one stays until the next release. Kit also updates itself: when your Building takes another release, Kit places it the same way and, once no turn is open, ends so its service, or the container's restart policy, starts it. When House no longer serves the wire of the Kit that runs, Kit places your Building's release at once, ending any running turn, and ends the same way; while it cannot, it stays offline, prints why with the command that installs it again, and tries again regularly.
+or `& { try { $kit = irm agents.house/kit.ps1 } catch { throw 'Kit could not be downloaded; run this command again.' }; & ([scriptblock]::Create($kit)) @args }` on Windows, which run nothing of a failed download, and again to update; `--code <code>` follows `agents.house/kit` to connect with a login code.
+On macOS and Linux, a server included, it installs Kit natively under your own account, without an admin password, in one folder, `~/.agents/house`: Kit's own files at its top, its releases and their Node.js in `kit`, `kit` and `house` in `bin`, which it adds to your login shell's `PATH`, and your workspace, the Agents' folders in `agents` and the Rooms' copies in `local-copies`. It stops, changing nothing, where `~/.agents/house` holds something that is not Kit's. On Linux it adds a missing `ca-certificates`, `curl` or `git` through apt. Then `kit connect` keeps the Environment you connected, redeems the login code or prints a link you confirm, writes Kit's settings where `kit.json` has none, places House's Skills and starts Kit: as a systemd user unit that starts at boot through lingering on Linux, and as a LaunchAgent on macOS. On a Linux without systemd it starts nothing: run the `kit resident` command it prints under your own service manager, restarting it whenever it ends with a failure. One account runs one Kit for one Building; to move it to another, run `kit logout` and then the other Building's command.
 
-Add `--container` to run Kit in one Docker container instead, with your workspace mounted at `/agents/house`; your Agents then reach only that
-workspace. The container's image holds no Kit release and no Node.js: every run places them in Kit home's `kit` folder, which a container created again keeps. On Windows,
-Kit home is the Docker volume `house-kit-home` and the container is the one choice. Append a `kit` or `house` command to the container's options to run it in that container.
-Running the command for the other choice on a connected computer asks you to
-confirm, then replaces its Environment, whose Agents end, with a new one. Running it with a different `HOUSE_KIT_HOME`
-from the running Kit process asks you to confirm before it replaces that process, and leaves the earlier Kit home as it was.
+Every run places the Kit release your Building serves, with the Node.js and agent adapters it runs on, in a directory of its own beside the one that runs, then starts it; the earlier one stays until the next release. Kit also updates itself: when your Building takes another release, Kit places it the same way and, once no turn is open, ends so its service starts it. When House no longer serves the wire of the Kit that runs, Kit places your Building's release at once, ending any running turn, and ends the same way; while it cannot, it stays offline, prints why with the command that installs it again, and tries again regularly.
 
-On your own Linux server, run the Linux command with `--linux` to install Kit natively, with its workspace at `/agents/house` and a missing `ca-certificates`, `curl` or `git` installed through apt; `kit` and `house` are then on the server's `PATH`.
+A Kit installed before moves itself into `~/.agents/house` on its next update, a Mac's or a Linux desktop's and one running as root; one in a container or under a system unit of another account asks you, on its Environment's page, to run the install command again on that computer, which moves it and removes the container or the unit, keeping its Environment. On Windows, Kit home is the Docker volume `house-kit-home` and Kit runs in a container.
 
-Kit is built for macOS 27 on Apple silicon, Ubuntu 26.04 LTS on amd64 and Windows 11 on amd64. On another release, distribution or architecture the command prints one warning line, such as `Warning: macOS 26.7.1 is outdated; update to macOS 27.`, and installs anyway. It refuses only an architecture other than amd64 and arm64, a native install on a macOS older than 13.5, and one on a Linux without glibc 2.28 or newer, where `--container` still runs Kit. On a Linux without systemd it installs and connects Kit but starts nothing: run the `kit resident` command it prints under your own service manager, restarting it whenever it ends with a failure. `--container` installs Docker Engine on Ubuntu and Debian; another Linux needs a working Docker Engine first.
+Kit is built for macOS 27 on Apple silicon, Ubuntu 26.04 LTS on amd64 and Windows 11 on amd64. On another release, distribution or architecture the command prints one warning line, such as `Warning: macOS 26.7.1 is outdated; update to macOS 27.`, and installs anyway. It refuses only an architecture other than amd64 and arm64, a macOS older than 13.5 and a Linux without glibc 2.28 or newer.
 
 Kit runs each agent CLI through the link your login shell finds and installs a missing one through that CLI's own
 installer. When it starts and regularly after, Kit runs each CLI's own update command, such as `claude update`, beside
 your conversations: a running conversation keeps its version and the next one runs the new release. A CLI older than
 the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version, that
 oldest release and its update command. Kit also gives every Agent on the Environment the agent skills of
-`@agentshouse/skills`, at the version each Kit release installs. Add `--no-skills` to the command to leave them out; running it again without the flag brings them back.
+`@agentshouse/skills`, at the version each Kit release installs, unless `kit.json`'s `skills` is `false`.
 
 ## Commands
 
-`kit login` opens or prints a link you confirm in any browser, on this computer
-or another, continues on its own and keeps the Environment's credential in
-`$HOUSE_KIT_HOME` when it is set, else in `~/.house-kit`, or in `house-kit-<uid>` under the temporary directory when your home is read-only. `--environment <id>`
-reconnects an Environment you already have; `--rooms <ref>[,<ref>...]` gives it
-only those Rooms and `--no-private` every Room but your Private Room; `--code <code>` connects immediately without a link.
+`kit login` opens or prints a link you confirm in any browser, on this computer or another, continues on its own and keeps the Environment's credential in `~/.agents/house`. `--environment <id>` reconnects an Environment you already have, which keeps its Rooms: its page in House changes them. A new Environment takes `--rooms <ref>[,<ref>...]` for only those Rooms and `--no-private` for every Room but your Private Room; `--code <code>` connects immediately without a link.
 A login also connects your own agent: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you, each through the Kit
-home `$HOUSE_KIT_HOME` names where it runs, until you revoke that connection on Connections. `house help` lists the Tools and `house help <tool>` one Tool's arguments. Codex sessions started after a
+home of the account it runs as, until you revoke that connection on Connections. `house help` lists the Tools and `house help <tool>` one Tool's arguments. Codex sessions started after a
 login run a lone `house` command outside their sandbox. `kit logout` disconnects this
 computer, stops the Kit process and ends your own agent's connection, so `house` and `git` no
 longer act as you here; a later `kit login` reconnects the same Environment, or connects
@@ -47,8 +36,7 @@ this computer as a new one when House no longer holds it.
 `kit resident` keeps the Environment connected and, as it connects, copies the text of each Room you chose for it as a
 Git repository in the workspace's `local-copies`, and keeps a Room's copy as it is, no longer refreshing it, once the
 Room may no longer be copied here. `house fetch` does the same and records House's changes on each copy's
-`refs/house/received`; rebase onto it, commit and run `house push --owner` in the copy, through the install command in
-the container. An Agent runs both, without `--owner`. `house upload` and `house download` move a Room's other files straight between disk and House's store, and a broken upload resumes on its own.
+`refs/house/received`; rebase onto it, commit and run `house push --owner` in the copy. An Agent runs both, without `--owner`. `house upload` and `house download` move a Room's other files straight between disk and House's store, and a broken upload resumes on its own.
 
 Kit turns each audio file your message to an Agent links into text on this computer before the Agent reads it, and keeps a message whose audio it cannot turn into text from starting. While transcription is on, the speech engine and model use about 425 MB beside the Environment's credential; turning it off deletes them.
 

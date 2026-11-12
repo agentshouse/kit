@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { GIT_IDENTITY, hostKit, type Hosted } from './environment.ts';
-import { fakeBin, runKit } from './kit.ts';
+import { accountOf, fakeBin, runKit } from './kit.ts';
 import { commitAll, git, house, serveRooms, tryGit, type Room, type Rooms } from './rooms.ts';
 
 const MEMO = [
@@ -641,7 +641,7 @@ it('picks its copies up again when the resident starts anew', async () => {
   process.kill(hosted.kit.pid, 'SIGKILL');
   await hosted.kit.exited;
   room.put('docs/memo.md', MEMO.replace('owner: ada', 'owner: grace'));
-  runKit(['resident'], { HOUSE_KIT_HOME: hosted.home, PATH: await fakeBin(hosted.home), ...GIT_IDENTITY });
+  runKit(['resident'], { HOME: accountOf(hosted.home), PATH: await fakeBin(hosted.home), ...GIT_IDENTITY });
   await until(() => hosted.house.connections[1]);
   await writeFile(join(room.repository, 'docs/plan.md'), 'one\ntwo\nthree\n');
   const pushedCommit = commitAll(room.repository, 'three');
