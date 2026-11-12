@@ -1237,6 +1237,77 @@ it("relays what a background Claude Code sub-agent is doing while it runs in the
   expect(running(hosted)).toEqual([[], subagent(null), subagent('Running First sleep'), subagent('Running Second sleep'), []]);
 });
 
+const SECOND_SLEEP = HELD_LINES.findIndex((line) => line.params?.message?.message?.content?.[0]?.input?.description === 'Second sleep');
+const SLEPT = HELD_LINES.findIndex((line) => line.params?.message?.subtype === 'task_updated');
+const REPORTED = HELD_LINES.findIndex((line) => line.params?.message?.summary === 'slept') + 1;
+const AGENT_SESSION = '$SESSION-agent';
+const GROK_TASK = { 'x.ai/tool': { name: 'spawn_subagent', kind: 'task' } };
+
+function agentStep(id: string, title: string): string[] {
+  return [
+    emit('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: id, title, kind: 'read', status: 'pending' } }, AGENT_SESSION),
+    emit('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed' } }, AGENT_SESSION),
+  ];
+}
+
+function agentSaid(content: Record<string, unknown>): string {
+  return emit('session/update', { update: { sessionUpdate: 'agent_message_chunk', content, messageId: 'item-agent' } }, AGENT_SESSION);
+}
+
+const AGENT_STEPS: [string[], string[]] = [
+  [...agentStep('call-first', 'First sleep'), agentSaid({ type: 'image', data: Buffer.from('slept').toString('base64'), mimeType: 'image/png' })],
+  [...agentStep('call-second', 'Second sleep'), agentSaid({ type: 'text', text: 'slept' })],
+];
+const CODEX_NESTED = [
+  emit('session/update', { update: { sessionUpdate: 'subagent_spawned', subagentSessionId: `${AGENT_SESSION}-nested`, name: 'Sleep once', task: 'Sleep once', capabilities: {} } }, AGENT_SESSION),
+  emit('session/update', { update: { sessionUpdate: 'subagent_state_update', subagentSessionId: `${AGENT_SESSION}-nested`, state: 'completed' } }, AGENT_SESSION),
+];
+
+it.each([
+  ['claude-agent-acp', [`@play ${HELD} 0 ${ENDED + 1}`], [[`@play ${HELD} ${ENDED + 1} ${SECOND_SLEEP}`], [`@play ${HELD} ${SECOND_SLEEP} ${SLEPT}`]], [`@play ${HELD} ${SLEPT} ${REPORTED}`]],
+  [
+    'codex-acp',
+    [emit('session/update', { update: { sessionUpdate: 'subagent_spawned', subagentSessionId: AGENT_SESSION, name: 'Sleep twice', task: 'Sleep twice', capabilities: {} } }), '@say launched'],
+    [[...AGENT_STEPS[0], ...CODEX_NESTED], AGENT_STEPS[1]],
+    [emit('session/update', { update: { sessionUpdate: 'subagent_state_update', subagentSessionId: AGENT_SESSION, state: 'completed' } })],
+  ],
+  [
+    'grok-build',
+    [
+      emit('session/update', { update: { sessionUpdate: 'tool_call', toolCallId: 'call-task', title: 'Sleep twice', status: 'pending', rawInput: { description: 'Sleep twice' }, _meta: GROK_TASK } }),
+      emit('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_spawned', child_session_id: AGENT_SESSION, description: 'Sleep twice', subagent_type: 'general' } }),
+      '@say launched',
+    ],
+    AGENT_STEPS,
+    [
+      emit('_x.ai/session_notification', { update: { sessionUpdate: 'subagent_finished', child_session_id: AGENT_SESSION, status: 'completed', output: 'slept' } }),
+      emit('session/update', { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-task', status: 'completed', _meta: GROK_TASK } }),
+    ],
+  ],
+] as [string, string[], [string[], string[]], string[]][])(
+  "shows a background %s sub-agent only in the turn that started it while what it does reaches a message's turn and a compaction's, runs in the session's state meanwhile and shows its end in the turn running then",
+  async (kind, start, [message, compaction], end) => {
+    const hosted = await opened(kind);
+    const turns = [start, [...message, '@say next'], ['/compact', ...compaction, '@say compacted'], [...end, '@say done']];
+
+    for (const [index, script] of turns.entries()) {
+      hosted.call({ kind: 'message', text: script.join('\n'), first: false });
+      await ends(hosted, index + 1);
+    }
+
+    const ended = endedTurns(hosted).map((turn) => (turn.body as { content: Turn }).content);
+    expect(ended[0]!.parts).toContainEqual(expect.objectContaining({ type: 'subagent', parent: null, task: 'Sleep twice', status: 'running' }));
+    for (const [later, text] of [[ended[1]!, 'next'], [ended[2]!, 'compacted']] as const) {
+      expect(later.parts).toEqual([{ type: 'text', parent: null, text }]);
+      expect(later.state.running).toEqual([expect.objectContaining({ kind: 'subagent', label: 'Sleep twice' })]);
+    }
+    expect(hosted.images).toEqual([]);
+    expect(ended[3]!.parts[0]).toEqual(expect.objectContaining({ type: 'subagent', parent: null, task: 'Sleep twice', status: 'done', report: 'slept' }));
+    expect(ended[3]!.parts.filter((part) => part.parent !== null)).toEqual([]);
+    expect(ended[3]!.state.running).toEqual([]);
+  },
+);
+
 it('ends a Claude Code turn whose sub-agent runs on refused at its result, and a refused one with none at its answer with the explanation the adapter sent after its result', async () => {
   const hosted = await opened('claude-agent-acp');
   onTestFinished(gated(hosted, 'held'));
