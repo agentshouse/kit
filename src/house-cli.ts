@@ -304,16 +304,15 @@ function resolved(schema: Schema, root: Schema): Schema {
   return typeof found === 'object' && found !== null ? (found as Schema) : {};
 }
 
-// The schema to expand with the $refs then open, or null when its $ref is open already, so a schema that
-// holds itself is expanded once.
+// The schema a $ref resolves to, with that $ref added to the open ones, or null when it is open already,
+// so a schema that holds itself is expanded once.
 function expanded(schema: Schema, root: Schema, refs: ReadonlySet<string>): { schema: Schema; refs: ReadonlySet<string> } | null {
   if (schema.$ref === undefined) return { schema, refs };
   return refs.has(schema.$ref) ? null : { schema: resolved(schema, root), refs: new Set([...refs, schema.$ref]) };
 }
 
 // One line per argument: its name, its value when it has one or a few, whether it is required, and its
-// description. When deep, the arguments of its value or its items follow, then each alternative of a oneOf
-// or anyOf that has arguments of its own, as a "- " entry.
+// description. When deep, the arguments its value holds follow it.
 function argumentLines(schema: Schema, root: Schema, indent: string, deep: boolean, refs: ReadonlySet<string> = new Set()): string[] {
   const required = new Set(schema.required ?? []);
   return Object.entries(schema.properties ?? {}).flatMap(([name, property]) => {
@@ -322,21 +321,24 @@ function argumentLines(schema: Schema, root: Schema, indent: string, deep: boole
     const words = [name, ...(values.length === 0 ? [] : [values.map((one) => JSON.stringify(one)).join(' | ')]), ...(required.has(name) ? ['(required)'] : [])];
     const description = property.description ?? value.description;
     const line = `${indent}${words.join(' ')}${description === undefined ? '' : `: ${description}`}`;
-    return deep ? [line, ...within(property, root, `${indent}  `, refs)] : [line];
+    return deep ? [line, ...held(property, root, `${indent}  `, refs)] : [line];
   });
 }
 
-function within(property: Schema, root: Schema, indent: string, refs: ReadonlySet<string>): string[] {
-  const value = expanded(property, root, refs);
-  const item = value === null || value.schema.items === undefined ? value : expanded(value.schema.items, root, value.refs);
-  if (item === null) return [];
+// The arguments a value holds: its own, its items', and those of each alternative of a oneOf or anyOf,
+// each alternative a "- " entry when more than one has arguments.
+function held(schema: Schema, root: Schema, indent: string, refs: ReadonlySet<string>): string[] {
+  const value = expanded(schema, root, refs);
+  if (value === null) return [];
+  const alternatives = (value.schema.oneOf ?? value.schema.anyOf ?? [])
+    .map((alternative) => held(alternative, root, indent, value.refs))
+    .filter((lines) => lines.length > 0);
   return [
-    ...argumentLines(item.schema, root, indent, true, item.refs),
-    ...(item.schema.oneOf ?? item.schema.anyOf ?? []).flatMap((alternative) => {
-      const one = expanded(alternative, root, item.refs);
-      if (one === null) return [];
-      return argumentLines(one.schema, root, `${indent}  `, true, one.refs).map((line, index) => (index === 0 ? `${indent}- ${line.trimStart()}` : line));
-    }),
+    ...argumentLines(value.schema, root, indent, true, value.refs),
+    ...(value.schema.items === undefined ? [] : held(value.schema.items, root, indent, value.refs)),
+    ...(alternatives.length === 1
+      ? alternatives[0]!
+      : alternatives.flatMap((lines) => lines.map((line, index) => (index === 0 ? `${indent}- ${line.slice(indent.length)}` : `  ${line}`)))),
   ];
 }
 

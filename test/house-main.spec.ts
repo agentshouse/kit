@@ -454,27 +454,39 @@ it('tells an Agent whose CLI sandbox refuses the bridge to run house directly', 
   expect(house.requests).toEqual([]);
 });
 
-it('prints the same help for house help as for house --help, naming house help <tool>, listing help, push, fetch and download, a Tool without a description with its arguments, and no Git verb', async () => {
-  const house = await startHouse();
-  const home = await connected(house, true);
+function listing(house: House, tools: unknown[]): void {
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
-    return { body: { jsonrpc: '2.0', id: message.id, result: { tools: [...LISTING, { name: 'about_house', inputSchema: { type: 'object' } }] } } };
+    return { body: { jsonrpc: '2.0', id: message.id, result: { tools } } };
   });
+}
+
+it('prints the same help for house help as for house --help, naming house help <tool>, listing help, push, fetch and download, and no Git verb', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
 
   const help = await runHouse(home, ['help']);
   const dashed = await runHouse(home, ['--help']);
 
   expect(help).toEqual(dashed);
   expect(help.status).toBe(0);
-  const lines = help.stdout.split('\n');
-  expect(lines.slice(0, 5)).toEqual([
+  expect(help.stdout.split('\n').slice(0, 5)).toEqual([
     USAGE,
     'help [tool]',
     "push [commit]: sends the Local copy's committed changes to House",
     "fetch: records House's changes on each Local copy's refs/house/received",
     'download: writes a binary file of a Room to the local file named by file',
   ]);
+  expect(help.stdout).not.toMatch(/\bgit\b/);
+});
+
+it('lists a Tool without a description in house --help with its top-level arguments, and a described Tool by its line alone', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  listing(house, [...LISTING, { name: 'about_house', inputSchema: { type: 'object' } }]);
+
+  const help = await runHouse(home, ['--help']);
+
   expect(help.stdout).toContain(
     [
       'files_batch',
@@ -483,11 +495,8 @@ it('prints the same help for house help as for house --help, naming house help <
       'records_append: Add a record to a Room, stored as given.',
     ].join('\n'),
   );
-  expect(lines).toContain('inspect: Provenance and revisions; `shell` reads current file text.');
-  expect(lines).not.toContain('  path (required): A file path.');
-  expect(lines).toContain('about_house');
-  expect(help.stdout).not.toMatch(/\bgit\b/);
-  expect((await runHouse(home, ['about_house', '--help'])).stdout).toBe('about_house\n');
+  expect(help.stdout).toContain('inspect: Provenance and revisions; `shell` reads current file text.\nfiles_batch\n');
+  expect(help.stdout.endsWith('\nabout_house\n')).toBe(true);
 });
 
 it.each([
@@ -528,31 +537,68 @@ it.each([
   expect(dashed).toEqual(help);
 });
 
-it("prints an argument whose schema holds itself once, with its own arguments, and no deeper", async () => {
-  const house = await startHouse();
-  const home = await connected(house, true);
-  const outline = {
-    name: 'outline',
-    inputSchema: {
-      type: 'object',
-      properties: { root: { $ref: '#/$defs/node' } },
-      required: ['root'],
-      $defs: {
-        node: {
-          type: 'object',
-          properties: { title: { type: 'string', description: 'Its title.' }, children: { type: 'array', items: { $ref: '#/$defs/node' } } },
-        },
+it.each([
+  [
+    'a nullable array of objects',
+    {
+      rows: {
+        anyOf: [{ type: 'array', items: { type: 'object', properties: { a: { type: 'string', description: 'A.' } }, required: ['a'] } }, { type: 'null' }],
+        description: 'Rows.',
       },
     },
+    ['  rows: Rows.', '    a (required): A.'],
+  ],
+  [
+    'an anyOf of two objects',
+    {
+      target: {
+        anyOf: [
+          { type: 'object', properties: { room: { type: 'string' } }, required: ['room'] },
+          { type: 'object', properties: { path: { type: 'string' } } },
+        ],
+      },
+    },
+    ['  target', '    - room (required)', '    - path'],
+  ],
+  [
+    'an array of arrays of objects',
+    { grid: { type: 'array', items: { type: 'array', items: { type: 'object', properties: { cell: { type: 'string' } } } } } },
+    ['  grid', '    cell'],
+  ],
+  [
+    'an alternative that holds a oneOf',
+    {
+      v: {
+        oneOf: [
+          { oneOf: [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object', properties: { b: { type: 'string' } } }] },
+          { type: 'string' },
+        ],
+      },
+    },
+    ['  v', '    - a', '    - b'],
+  ],
+  [
+    'a $ref whose target holds the description, and one that points outside the schema',
+    { v: { $ref: '#/$defs/a~1b' }, far: { $ref: 'https://example.com/far', description: 'Far.' } },
+    ['  v: From the target.', '  far: Far.'],
+  ],
+  [
+    'an argument whose schema holds itself, once and no deeper',
+    { root: { $ref: '#/$defs/node' } },
+    ['  root', '    title: Its title.', '    children'],
+  ],
+])('prints the arguments of %s', async (_shape, properties, expected) => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const $defs = {
+    'a/b': { type: 'string', description: 'From the target.' },
+    node: { type: 'object', properties: { title: { type: 'string', description: 'Its title.' }, children: { type: 'array', items: { $ref: '#/$defs/node' } } } },
   };
-  house.route('POST', '/', ({ body }) => {
-    const message = body as { id: string } & McpCall;
-    return { body: { jsonrpc: '2.0', id: message.id, result: { tools: [outline] } } };
-  });
+  listing(house, [{ name: 'shape', inputSchema: { type: 'object', properties, $defs } }]);
 
-  const help = await runHouse(home, ['help', 'outline']);
+  const help = await runHouse(home, ['help', 'shape']);
 
-  expect(help).toEqual({ status: 0, stdout: 'outline\n  root (required)\n    title: Its title.\n    children\n', stderr: '' });
+  expect(help).toEqual({ status: 0, stdout: `${['shape', ...expected].join('\n')}\n`, stderr: '' });
 });
 
 it.each([
