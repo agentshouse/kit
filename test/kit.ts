@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import type { Writable } from 'node:stream';
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 
@@ -17,22 +17,25 @@ export interface KitRun {
   exited: Promise<number | null>;
 }
 
+export async function temporaryDirectory(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'kit-account-'));
+  onTestFinished(() => rm(directory, { recursive: true, force: true, maxRetries: 10 }));
+  return directory;
+}
+
 export async function temporaryHome(): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'kit-home-'));
-  onTestFinished(() => rm(home, { recursive: true, force: true, maxRetries: 10 }));
+  const home = join(await temporaryDirectory(), '.agents', 'house');
+  await mkdir(home, { recursive: true, mode: 0o700 });
   return home;
 }
 
-export async function readOnlyHome(home: string): Promise<{ temporary: string; kitHome: string }> {
-  await chmod(home, 0o555);
-  onTestFinished(() => chmod(home, 0o700));
-  const temporary = await temporaryHome();
-  return { temporary, kitHome: join(temporary, `house-kit-${process.getuid!()}`) };
+export function accountOf(home: string): string {
+  return dirname(dirname(home));
 }
 
 export function runKit(argv: string[], environment: Record<string, string>, node: string[] = []): KitRun {
   const child = spawn(process.execPath, [...node, KIT, ...argv], {
-    env: { ...process.env, HOME: environment.HOUSE_KIT_HOME ?? process.env.HOME, ...environment },
+    env: { ...process.env, ...environment },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stdout = '';

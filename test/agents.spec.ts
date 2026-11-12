@@ -7,7 +7,7 @@ import { RELEASES, placeUserCli } from './cli.ts';
 import { serveKitFiles } from './building.ts';
 import { startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL, placeUserClis, placeRelease, userBin } from './environment.ts';
-import { HOST_KEY, fakeBin, placeHostKey, runKit, temporaryHome, type KitRun } from './kit.ts';
+import { accountOf, fakeBin, HOST_KEY, placeHostKey, runKit, temporaryHome, type KitRun } from './kit.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
@@ -66,7 +66,7 @@ async function start(prepare?: () => Promise<void>, node: string[] = [], environ
   const path = await fakeBin(home);
   await placeUserClis(home);
   await prepare?.();
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: path, ...LOGIN_SHELL, ...(await placeRelease(home)), ...environment }, node);
+  kit = runKit(['resident'], { HOME: accountOf(home), PATH: path, ...LOGIN_SHELL, ...(await placeRelease(home)), ...environment }, node);
 }
 
 async function signIn(...kinds: string[]): Promise<void> {
@@ -126,7 +126,7 @@ it("reports the release of each CLI the login shell finds, its sign-in state, th
     ...('form' in report ? { form: expect.stringMatching(/^(laptop|desktop|server)$/) } : {}),
     kit_release: KIT_PACKAGE.version,
     wire: KIT_WIRE,
-    agent_base: '/agents/house/agents',
+    agent_base: join(home, 'agents'),
     agents: [
       {
         kind: 'codex-acp',
@@ -202,13 +202,13 @@ it('installs each chosen CLI the login shell does not find through its official 
     'https://x.ai/cli/install.sh',
   ]);
   for (const place of ['.local/bin/codex', '.local/bin/claude', '.grok/bin/grok']) {
-    expect(await readFile(join(home, place), 'utf8')).toContain('CLI_RELEASE');
+    expect(await readFile(join(accountOf(home), place), 'utf8')).toContain('CLI_RELEASE');
   }
 
   process.kill(kit!.pid, 'SIGKILL');
   await kit!.exited;
   reports.length = 0;
-  kit = runKit(['resident'], { HOUSE_KIT_HOME: home, PATH: await fakeBin(home), ...LOGIN_SHELL });
+  kit = runKit(['resident'], { HOME: accountOf(home), PATH: await fakeBin(home), ...LOGIN_SHELL });
 
   expect((await until(() => completeReports()[0])).agents).toEqual(report.agents);
   expect(await logged('curl.log')).toHaveLength(3);
@@ -218,7 +218,7 @@ it('installs a chosen CLI the login shell does not find though its profile print
   desired = ['claude-agent-acp'];
   await start(async () => {
     await rm(join(userBin(home), 'claude'));
-    await writeFile(join(home, '.profile'), `echo "$HOME"\n${await readFile(join(home, '.profile'), 'utf8')}`);
+    await writeFile(join(accountOf(home), '.profile'), `echo "$HOME"\n${await readFile(join(accountOf(home), '.profile'), 'utf8')}`);
   });
 
   const report = await until(() => completeReports()[0]);
@@ -441,7 +441,7 @@ it('reports the SHA256 fingerprint of the host SSH key when the host has one', a
 it('creates and reports the agents folder of the native workspace root as its Agent base', async () => {
   desired = [];
   const workspace = await temporaryHome();
-  await start(undefined, [], { HOUSE_KIT_WORKSPACE: workspace });
+  await start(() => writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false, workspace })));
 
   const report = await until(() => completeReports()[0]);
 

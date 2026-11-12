@@ -13,7 +13,7 @@ import { recordStart } from './started.ts';
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const EVENTS = fileURLToPath(new URL('./fixtures/events/', import.meta.url));
 const kind = process.env.ADAPTER_KIND ?? 'codex-acp';
-const home = process.env.HOUSE_KIT_HOME ?? '/tmp';
+const home = join(process.env.HOME ?? '/tmp', '.agents', 'house');
 const signedIn = () => existsSync(join(home, 'signed-in', kind));
 const executable = process.env.CODEX_PATH ?? process.env.CLAUDE_CODE_EXECUTABLE;
 const cli =

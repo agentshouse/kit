@@ -2,44 +2,15 @@
 set -euo pipefail
 export NODE_USE_SYSTEM_CA=1
 
-IMAGE_DIGEST='sha256:__IMAGE_DIGEST__'
 VERSION='__KIT_RELEASE__'
 KIT_SHA256='__KIT_SHA256__'
 ADAPTERS='__ADAPTERS__'
-NAME='house-kit'
 HOUSE='https://agents.house'
-WORKSPACE="$HOME/AgentsHouse"
-if [[ -n "${HOUSE_KIT_HOME:-}" ]]; then
-  KIT_HOME=$HOUSE_KIT_HOME
-elif [[ -e "$HOME/.house-kit" || ( -w "$HOME" && -x "$HOME" ) ]]; then
-  KIT_HOME="$HOME/.house-kit"
-else
-  KIT_HOME=${TMPDIR:-${TMP:-${TEMP:-/tmp}}}
-  [[ "$KIT_HOME" == / ]] || KIT_HOME=${KIT_HOME%/}
-  KIT_HOME="$KIT_HOME/house-kit-$(id -u)"
-fi
-LINK='Open this link and confirm: '
-RECONNECT='run this command again with kit login appended'
-WORKSPACE_SELECTED=0
 HOUSE_SELECTED=0
-FORWARDING=0
-FORWARDED=kit
-FORWARD=()
-NO_SKILLS=()
-ROOMS=()
+KIT_HOME="$HOME/.agents/house"
 CODE=()
-ALREADY_CONNECTED=0
-CONFIGURED=''
-DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
-CONFLICTING_PACKAGES=(docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc)
-DOCKER_APP=/Applications/Docker.app
-# Docker Desktop's first start waits on its own terms and setup windows; five minutes bounds that before asking for a rerun.
-DESKTOP_WAIT_SECONDS=300
-RUNTIME='Docker Engine'
-OPENER=xdg-open
-NETWORK=(--network host)
-NATIVE=0
-CONTAINER=0
+PLACE=''
+PLACING=0
 MACOS=0
 MACOS_RELEASE=27
 NATIVE_RELEASE=26.04
@@ -52,32 +23,9 @@ NODE_PLATFORM=linux-x64
 NODE_SHA256=eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c
 NODE_BYTES=58290700
 CHECKSUM=(sha256sum)
-SERVER_PREFIX=/opt/house-kit
-DESKTOP_PREFIX="$HOME/.local/share/house-kit"
-DESKTOP_BIN="$HOME/.local/bin"
-NATIVE_PREFIX="$SERVER_PREFIX"
-CONTAINED=/kit-home/kit
-PACKAGE=lib/node_modules/@agentshouse/kit/dist
-PLACE=''
-PLACED=0
 TRUST=()
 DIRECT=(env)
 [[ -z "${HOUSE_KIT_RELAY:-}" ]] || DIRECT=(env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy)
-LINKING=(elevated)
-NATIVE_BIN=/usr/local/bin
-NATIVE_SERVICE=house-kit.service
-NATIVE_UNIT=/etc/systemd/system/house-kit.service
-NATIVE_WORKSPACE=/agents/house
-SERVICE=house-kit
-LAUNCH_AGENT="$HOME/Library/LaunchAgents/$SERVICE.plist"
-USER_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE.service"
-REDEFINED=0
-REPLACES=''
-STORED_REFUSED=0
-OTHER_HOME=0
-SECOND=0
-OTHER_HOUSE=''
-CERTIFICATES=/kit-home/certificates.pem
 
 refuse() {
   printf 'kit_bootstrap_refused: %s\n' "$1" >&2
@@ -94,14 +42,6 @@ served_from() {
     printf '%s/%s' "$HOUSE_KIT_RELAY" "$(host_of "$HOUSE")"
   else
     printf '%s' "$HOUSE"
-  fi
-}
-
-registry() {
-  if [[ -n "${HOUSE_KIT_RELAY:-}" ]]; then
-    printf '%s/%s' "$(host_of "$HOUSE_KIT_RELAY")" "$(host_of "$HOUSE")"
-  else
-    host_of "$HOUSE"
   fi
 }
 
@@ -122,123 +62,6 @@ download() {
   printf '%s  %s\n' "$3" "$4" | "${CHECKSUM[@]}" --check >/dev/null 2>&1 || refuse "the $1 download does not match its pinned checksum"
 }
 
-bind_mount() {
-  local source=${1//\"/\"\"}
-  printf 'type=bind,"src=%s",dst=%s' "$source" "$2"
-}
-
-enrolled() {
-  sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p" "$KIT_HOME/credential.json"
-}
-
-open_link() {
-  local line
-  while IFS= read -r line; do
-    printf '%s\n' "$line"
-    if [[ "$line" == "$LINK"* ]] && command -v "$OPENER" >/dev/null; then
-      "$OPENER" "${line#"$LINK"}" </dev/null >/dev/null 2>&1 || true
-    fi
-  done
-}
-
-login_kit() {
-  if ((CONTAINER)); then
-    "${LOGIN_KIT[@]}" "$@" | open_link || exit
-  else
-    "${LOGIN_KIT[@]}" "$@" || exit
-  fi
-  [[ -f "$KIT_HOME/credential.json" ]] || refuse 'kit login connected no Environment'
-}
-
-needs_login() {
-  [[ ! -f "$KIT_HOME/credential.json" || -n "$REPLACES" ]] || ((STORED_REFUSED))
-}
-
-log_in() {
-  local login=() record failed=0
-  if ((HOUSE_SELECTED)); then login+=(--house "$HOUSE"); fi
-  login+=(${ROOMS[@]+"${ROOMS[@]}"} ${CODE[@]+"${CODE[@]}"})
-  if ((${#CODE[@]} == 0)); then
-    login_kit ${login[@]+"${login[@]}"}
-    return
-  fi
-  ((HOUSE_SELECTED)) || login+=(--house "$HOUSE")
-  trap 'settle_enrolment; exit 130' HUP INT TERM
-  mkdir "$KIT_HOME/held-enrolment" || refuse "$KIT_HOME could not be cleared"
-  for record in credential.json disconnected.json; do
-    [[ ! -f "$KIT_HOME/$record" ]] || mv "$KIT_HOME/$record" "$KIT_HOME/held-enrolment/" || { settle_enrolment; refuse "$KIT_HOME could not be cleared"; }
-  done
-  (login_kit "${login[@]}") || failed=$?
-  trap - HUP INT TERM
-  settle_enrolment
-  ((failed == 0)) || exit "$failed"
-}
-
-settle_enrolment() {
-  local record
-  if [[ ! -e "$KIT_HOME/credential.json" ]]; then
-    for record in credential.json disconnected.json; do
-      [[ ! -f "$KIT_HOME/held-enrolment/$record" ]] || mv "$KIT_HOME/held-enrolment/$record" "$KIT_HOME/" || true
-    done
-  fi
-  rm -rf "$KIT_HOME/held-enrolment" || true
-}
-
-set_rooms_again() {
-  if ((ALREADY_CONNECTED)) && [[ -n "${ROOMS[*]-}" ]]; then login_kit "${ROOMS[@]}"; fi
-}
-
-prepare_directory() {
-  [[ ! -L "$1" ]] || refuse "$1 is a symbolic link"
-  mkdir -p -m 700 "$1" || refuse "$1 could not be created"
-  [[ -d "$1" ]] || refuse "$1 is not a directory"
-  [[ -O "$1" ]] || refuse "$1 is not owned by this User"
-  chmod 700 "$1" || refuse "$1 could not be owner-protected"
-}
-
-bind_house() {
-  if [[ -f "$KIT_HOME/credential.json" ]]; then
-    BOUND_HOUSE=$(enrolled house) || refuse 'the stored credential is unreadable'
-    [[ -n "$BOUND_HOUSE" ]] || refuse 'the stored credential names no House origin'
-    if ((HOUSE_SELECTED)) && [[ "$HOUSE" != "$BOUND_HOUSE" ]]; then
-      ((FORWARDING == 0)) && terminal || refuse 'this Environment is bound to another House origin'
-      confirmed 'Kit is already installed for another account. Replace it?' || refuse "Environment $(enrolled environment) was kept; nothing changed"
-      "$1"
-      find "$KIT_HOME" -mindepth 1 -delete || refuse "$KIT_HOME could not be cleared"
-    else
-      HOUSE="$BOUND_HOUSE"
-    fi
-  fi
-  [[ "$HOUSE" == https://* || "$HOUSE" == http://127.0.0.1:* || "$HOUSE" == http://localhost:* ]] || refuse 'House origin must use HTTPS or local loopback HTTP'
-}
-
-terminal() {
-  { : </dev/tty; } 2>/dev/null
-}
-
-confirmed() {
-  local answer=''
-  read -r -p "$1 [y/N] " answer </dev/tty || true
-  [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]]
-}
-
-check_authority() {
-  HOUSE_KIT_HOME="$KIT_HOME" "$@" ||
-    refuse "House refuses the stored Kit credential of Environment $(enrolled environment); to reconnect it, $RECONNECT"
-}
-
-check_stored_authority() {
-  if ((${#CODE[@]} == 0)); then
-    check_authority "$@"
-  elif ((STORED_REFUSED == 0)); then
-    HOUSE_KIT_HOME="$KIT_HOME" "$@" || STORED_REFUSED=1
-  fi
-}
-
-configure_kit() {
-  CONFIGURED=$(HOUSE_KIT_HOME="$KIT_HOME" "$@" ${NO_SKILLS[@]+"${NO_SKILLS[@]}"}) || refuse 'the Kit configuration could not be written'
-}
-
 elevated() {
   if ((EUID == 0)); then
     "$@"
@@ -247,125 +70,10 @@ elevated() {
   fi
 }
 
-docker_member() {
-  [[ " $(id -nG "$@") " == *' docker '* ]]
-}
-
-docker_answers() {
-  DOCKER_PLATFORM=$(docker info --format '{{.OSType}}/{{.Architecture}}' 2>/dev/null)
-}
-
-docker_cause() {
-  docker info 2>&1 >/dev/null | tail -n 1
-}
-
-unanswered() {
-  type -P docker >/dev/null || return 0
-  printf '; Docker Engine does not answer: %s' "$(docker_cause)"
-}
-
-install_docker_desktop() {
-  local mount
-  DOWNLOAD=$(mktemp -d) || refuse 'no temporary directory for the Docker Desktop download'
-  trap 'rm -rf "$DOWNLOAD"' EXIT
-  mount="$DOWNLOAD/volume"
-  printf 'Downloading Docker Desktop for %s from docker.com.\n' "$1"
-  curl -fsSL -o "$DOWNLOAD/Docker.dmg" "https://desktop.docker.com/mac/main/$ARCH/Docker.dmg" || refuse 'Docker Desktop could not be downloaded'
-  printf 'Installing Docker Desktop in /Applications; sudo may ask for your password.\n'
-  mkdir "$mount" || refuse 'the Docker Desktop disk image has no mount point'
-  elevated hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$DOWNLOAD/Docker.dmg" >/dev/null || refuse 'the Docker Desktop disk image could not be opened'
-  if ! elevated "$mount/Docker.app/Contents/MacOS/install" "--user=$(id -un)"; then
-    elevated hdiutil detach "$mount" >/dev/null 2>&1 || true
-    refuse 'the Docker Desktop installer did not finish'
-  fi
-  elevated hdiutil detach "$mount" >/dev/null || refuse 'the Docker Desktop disk image could not be closed'
-}
-
-establish_docker_desktop() {
-  docker_answers && return
-  if ((FORWARDING)); then
-    [[ -d "$DOCKER_APP" ]] || refuse "Kit is not installed; run this command without $FORWARDED and its arguments first"
-    refuse "Docker Desktop does not answer: $(docker_cause); start Docker Desktop, then rerun this command"
-  fi
-  [[ -d "$DOCKER_APP" ]] || install_docker_desktop "$1"
-  printf 'Starting Docker Desktop; accept its terms or finish its setup if its window asks.\n'
-  open "$DOCKER_APP" || refuse 'Docker Desktop could not be opened'
-  local waited=0
-  until docker_answers; do
-    ((waited < DESKTOP_WAIT_SECONDS)) || refuse "Docker Desktop is not ready: $(docker_cause); finish what its window asks, then rerun this bootstrap"
-    # Checking every two seconds finds Docker Desktop ready at most two seconds after it answers.
-    sleep 2
-    waited=$((waited + 2))
-  done
-}
-
-installed_packages() {
-  { dpkg-query -W -f='${db:Status-Status} ${Package}\n' "$@" 2>/dev/null || true; } | awk '$1 == "installed" { print $2 }'
-}
-
-install_docker_engine() {
-  printf 'Installing Docker Engine from Docker'\''s apt repository for %s; sudo may ask for your password.\n' "$1"
-  elevated apt-get update -qq >/dev/null || refuse 'apt could not refresh its package lists'
-  elevated apt-get install -y -qq ca-certificates curl >/dev/null || refuse 'apt could not install ca-certificates and curl'
-  elevated install -m 0755 -d /etc/apt/keyrings || refuse '/etc/apt/keyrings could not be created'
-  elevated curl -fsSL "https://download.docker.com/linux/$2/gpg" -o /etc/apt/keyrings/docker.asc || refuse 'the Docker apt repository key could not be downloaded'
-  elevated chmod a+r /etc/apt/keyrings/docker.asc || refuse 'the Docker apt repository key could not be made readable'
-  printf 'Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n' "$2" "$3" "$(dpkg --print-architecture)" \
-    | elevated tee /etc/apt/sources.list.d/docker.sources >/dev/null || refuse 'the Docker apt repository could not be configured'
-  elevated apt-get update -qq >/dev/null || refuse 'apt could not read the Docker apt repository'
-  elevated apt-get install -y -qq "${DOCKER_PACKAGES[@]}" >/dev/null || refuse 'apt could not install Docker Engine'
-}
-
-establish_docker_engine() {
-  docker_answers && return
-  if ((EUID != 0)) && ! docker_member && docker_member "$(id -un)"; then
-    refuse "$(id -un) joined the docker group after this session began; sign out and back in, then rerun this bootstrap"
-  fi
-  local distribution='' release='' described='this Linux distribution' conflicting present
-  if [[ -r /etc/os-release ]]; then
-    distribution=$(. /etc/os-release && printf '%s' "${ID:-}")
-    release=$(. /etc/os-release && printf '%s' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
-    described=$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-$described}")
-  fi
-  if ((FORWARDING)); then
-    type -P docker >/dev/null || refuse "Kit is not installed; run this command without $FORWARDED and its arguments first"
-    refuse "Docker Engine does not answer: $(docker_cause)"
-  fi
-  if [[ "$distribution" != ubuntu && "$distribution" != debian ]]; then
-    type -P docker >/dev/null || refuse "Docker Engine is not installed on $described; install a working Docker Engine, then rerun this bootstrap"
-    refuse "Docker Engine does not answer on $described: $(docker_cause)"
-  fi
-  conflicting=$(installed_packages "${CONFLICTING_PACKAGES[@]}" | paste -sd ' ' -)
-  [[ -z "$conflicting" ]] || refuse "the installed packages $conflicting conflict with Docker Engine; remove them or make their Docker Engine work, then rerun this bootstrap$(unanswered)"
-  present=$(installed_packages "${DOCKER_PACKAGES[@]}" | wc -l)
-  ((present == ${#DOCKER_PACKAGES[@]})) || install_docker_engine "$described" "$distribution" "$release"
-  if ! systemctl is-active --quiet docker.service; then
-    printf 'Starting Docker Engine; sudo may ask for your password.\n'
-    elevated systemctl start docker.service || refuse 'Docker Engine could not be started'
-  fi
-  if ((EUID != 0)); then
-    if ! docker_member "$(id -un)"; then
-      printf 'Adding %s to the docker group; it applies from your next sign-in, so this run reaches Docker Engine through sudo.\n' "$(id -un)"
-      elevated usermod -aG docker "$(id -un)" || refuse "$(id -un) could not be added to the docker group"
-    fi
-    docker_member || docker() { sudo -u "$(id -un)" docker "$@"; }
-  fi
-  docker_answers || refuse "Docker Engine does not answer: $(docker_cause)"
-}
-
-service_manager() {
-  [[ -d /run/systemd/system ]]
-}
-
 at_least() {
   local major=${1%%.*} minor=${1#*.}
   minor=${minor%%.*}
   ((major > ${2%%.*} || (major == ${2%%.*} && minor >= ${2#*.})))
-}
-
-in_container() {
-  printf 'rerun this bootstrap with --container'
-  ((NATIVE == 0)) || printf ' in place of --linux'
 }
 
 named() {
@@ -394,7 +102,7 @@ establish_native_packages() {
   absent_native_packages
   ((${#ABSENT[@]})) || return 0
   absent=$(named "${ABSENT[@]}")
-  type -P apt-get >/dev/null || refuse "this host has no apt to install $absent; install $absent, then rerun this bootstrap"
+  type -P apt-get >/dev/null || refuse "this host has no apt to install $absent; install $absent, then run this command again"
   printf 'Installing %s with apt; sudo may ask for your password.\n' "$absent"
   elevated "${DIRECT[@]}" apt-get update -qq >/dev/null || refuse 'apt could not refresh its package lists'
   elevated "${DIRECT[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${ABSENT[@]}" >/dev/null || refuse "apt could not install $absent"
@@ -413,14 +121,12 @@ trust_extra_authorities() {
 }
 
 place_release() {
-  local prefix=$1 current='' mask command placed adapter entry
-  PLACED=0
+  local prefix=$1 bin=$2 current='' mask command placed adapter entry quoted
   [[ ! -f "$prefix/current" ]] || current=$(cat "$prefix/current")
-  [[ "$current" != "$VERSION" ]] || return 0
   mask=$(umask)
   umask 022
-  mkdir -p "$prefix/releases" "$prefix/bin" || refuse "Kit could not be placed in $prefix"
-  if [[ ! -d "$prefix/releases/$VERSION" ]]; then
+  mkdir -p "$prefix/releases" "$bin" || refuse "Kit could not be placed in $prefix"
+  if [[ "$current" != "$VERSION" && ! -d "$prefix/releases/$VERSION" ]]; then
     rm -rf "$prefix/placing" && mkdir -p "$prefix/placing/release" || refuse "Kit could not be placed in $prefix"
     trust_extra_authorities "$prefix/placing"
     if [[ -n "$current" && "$(cat "$prefix/releases/$current/node.sha256" 2>/dev/null)" == "$NODE_SHA256" ]]; then
@@ -447,124 +153,52 @@ place_release() {
     done
     mv "$prefix/placing/release" "$prefix/releases/$VERSION" && rm -rf "$prefix/placing" || refuse "Kit could not be placed in $prefix"
   fi
+  quoted=${prefix//\'/\'\\\'\'}
   for command in kit house; do
-    printf '#!/bin/sh\nprefix=${0%%/bin/*}\nread -r release < "$prefix/current"\nexport NODE_USE_SYSTEM_CA=1 HOUSE_KIT_PREFIX="$prefix"\nPATH="$prefix/releases/$release/bin:$PATH" exec "$prefix/releases/$release/bin/%s" "$@"\n' "$command" > "$prefix/bin/$command.new" &&
-      chmod 0755 "$prefix/bin/$command.new" && mv -f "$prefix/bin/$command.new" "$prefix/bin/$command" || refuse "$prefix/bin/$command could not be written"
+    printf '#!/bin/sh\nprefix='"'"'%s'"'"'\nread -r release < "$prefix/current"\nexport NODE_USE_SYSTEM_CA=1 HOUSE_KIT_PREFIX="$prefix"\nPATH="$prefix/releases/$release/bin:$PATH" exec "$prefix/releases/$release/bin/%s" "$@"\n' "$quoted" "$command" > "$bin/$command.new" || refuse "$bin/$command could not be written"
+    if cmp -s "$bin/$command.new" "$bin/$command"; then
+      rm -f "$bin/$command.new"
+    else
+      chmod 0755 "$bin/$command.new" && mv -f "$bin/$command.new" "$bin/$command" || refuse "$bin/$command could not be written"
+    fi
   done
-  printf '%s\n' "$VERSION" > "$prefix/current.new" && mv -f "$prefix/current.new" "$prefix/current" || refuse "Kit could not be placed in $prefix"
+  if [[ "$current" != "$VERSION" ]]; then
+    printf '%s\n' "$VERSION" > "$prefix/current.new" && mv -f "$prefix/current.new" "$prefix/current" || refuse "Kit could not be placed in $prefix"
+  fi
   for placed in "$prefix/releases"/*; do
     [[ "${placed##*/}" == "$VERSION" || "${placed##*/}" == "$current" ]] || rm -rf "$placed"
   done
   umask "$mask"
-  PLACED=1
 }
 
-own_prefix() {
-  [[ ! -O "$NATIVE_PREFIX" ]] || return 0
-  printf 'Creating %s for Kit; sudo may ask for your password.\n' "$NATIVE_PREFIX"
-  stop_native_service
-  elevated rm -rf "$NATIVE_PREFIX" && elevated install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$NATIVE_PREFIX" || refuse "$NATIVE_PREFIX could not be created"
-}
-
-link_commands() {
-  local command
-  "${LINKING[@]}" mkdir -p "$NATIVE_BIN" || refuse "$NATIVE_BIN could not be created"
-  for command in kit house; do
-    printf '#!/bin/sh\nexec "%s/bin/%s" "$@"\n' "$NATIVE_PREFIX" "$command" | "${LINKING[@]}" tee "$NATIVE_BIN/$command" >/dev/null &&
-      "${LINKING[@]}" chmod 0755 "$NATIVE_BIN/$command" || refuse "$NATIVE_BIN/$command could not be written"
-  done
-}
-
-stop_native_service() {
-  if service_manager && systemctl is-active --quiet "$NATIVE_SERVICE"; then
-    elevated systemctl stop "$NATIVE_SERVICE" || refuse 'the Kit service could not be stopped'
-  fi
-}
-
-start_native_service() {
-  # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
-  printf '[Unit]\nDescription=Kit\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nUser=%s\nEnvironment="HOUSE_KIT_HOME=%s"\nWorkingDirectory=%s\nExecStart=%s/kit resident\nRestart=on-failure\nRestartSec=5\nDelegate=yes\nOOMPolicy=continue\n\n[Install]\nWantedBy=multi-user.target\n' \
-    "$(id -un)" "$(unit_text "$KIT_HOME")" "$NATIVE_WORKSPACE" "$NATIVE_BIN" | elevated tee "$NATIVE_UNIT" >/dev/null &&
-    elevated chmod 0644 "$NATIVE_UNIT" || refuse "$NATIVE_UNIT could not be written"
-  elevated systemctl daemon-reload || refuse 'systemd could not read the Kit service'
-  elevated systemctl --quiet enable --now "$NATIVE_SERVICE" || refuse 'the Kit service could not be started'
-}
-
-announce() {
-  case "$1" in
-    unsupervised)
-      local workspace=$WORKSPACE
-      ((NATIVE == 0)) || workspace=$NATIVE_WORKSPACE
-      printf 'Kit %s is installed for Environment %s, but no systemd runs on this host to start it; run env HOUSE_KIT_HOME=%q HOUSE_KIT_WORKSPACE=%q %q/kit resident under your own service manager, restarting it whenever it ends with a failure.\n' \
-        "$VERSION" "$(enrolled environment)" "$KIT_HOME" "$workspace" "$NATIVE_BIN"
+add_path_line() {
+  local profile="$HOME/.profile" line="export PATH=\"$1:\$PATH\""
+  case "${SHELL:-}" in
+    */zsh) profile="$("$SHELL" -c 'printf "\n%s" "${ZDOTDIR:-$HOME}"' | tail -n 1)/.zprofile" ;;
+    */bash)
+      for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+        [[ ! -f "$profile" ]] || break
+      done
       ;;
-    connected) printf 'Kit connected for Environment %s.\n' "$(enrolled environment)" ;;
-    updated) printf 'Kit updated.\n' ;;
-    running) printf 'Kit is already installed.\n' ;;
-    restarted) printf 'Kit restarted for Environment %s.\n' "$(enrolled environment)" ;;
+    */fish)
+      profile="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+      line="set -gx PATH \"$1\" \$PATH"
+      ;;
   esac
+  grep -Fqx "$line" "$profile" 2>/dev/null && return
+  if [[ -s "$profile" && -n "$(tail -c 1 "$profile")" ]]; then printf '\n' >> "$profile"; fi
+  mkdir -p "${profile%/*}" && printf '%s\n' "$line" >> "$profile" || refuse "$profile could not be written"
+  printf 'Added %s to the path in %s; new terminals find kit and house.\n' "$1" "$profile"
 }
 
-containerized() {
-  type -P docker >/dev/null && docker container inspect "$NAME" >/dev/null 2>&1
-}
-
-connect_native() {
-  local connected=updated
-  RECONNECT="run $NATIVE_BIN/kit login"
-  if containerized; then
-    refuse "a Kit process runs in the container $NAME on this computer; remove that container, then rerun this bootstrap with --linux"
-  fi
-  [[ ! -e "$DESKTOP_PREFIX" ]] || refuse 'a Kit process runs natively for this User; rerun this bootstrap without --linux'
-  if service_manager && [[ -f "$NATIVE_UNIT" ]] && ! grep -qx "User=$(id -un)" "$NATIVE_UNIT"; then
-    refuse 'a Kit process runs natively on this host for another account'
-  fi
-  keep_other_home
-  notice_host
-  establish_native_packages
-  [[ ! -L "${NATIVE_WORKSPACE%/*}" ]] || refuse "${NATIVE_WORKSPACE%/*} is a symbolic link"
-  if [[ ! -e "$NATIVE_WORKSPACE" && ! -L "$NATIVE_WORKSPACE" ]]; then
-    printf 'Creating %s for the Agents on this host; sudo may ask for your password.\n' "$NATIVE_WORKSPACE"
-    { [[ -d "${NATIVE_WORKSPACE%/*}" ]] || elevated install -d -m 0755 "${NATIVE_WORKSPACE%/*}"; } &&
-      elevated install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$NATIVE_WORKSPACE" || refuse "$NATIVE_WORKSPACE could not be created"
-  fi
-  prepare_directory "$KIT_HOME"
-  KIT_HOME=$(cd "$KIT_HOME" && pwd -P)
-  bind_house stop_native_service
-  ((OTHER_HOME == 0)) || stop_native_service
-  own_prefix
-  place_release "$NATIVE_PREFIX"
-  RELEASE_DIR="$NATIVE_PREFIX/releases/$VERSION"
-  if ((PLACED)); then
-    link_commands
-    stop_native_service
-  elif service_manager && systemctl is-active --quiet "$NATIVE_SERVICE"; then
-    connected=running
+prepare_home() {
+  if [[ -e "$KIT_HOME" || -L "$KIT_HOME" ]]; then
+    [[ -d "$KIT_HOME" && ! -L "$KIT_HOME" && ( -e "$KIT_HOME/credential.json" || -e "$KIT_HOME/kit.json" || -e "$KIT_HOME/kit" ) ]] ||
+      refuse "$KIT_HOME holds what is not Kit's; move it elsewhere, then run this command again"
   else
-    connected=restarted
+    mkdir -p "${KIT_HOME%/*}" && mkdir -m 700 "$KIT_HOME" || refuse "$KIT_HOME could not be created"
   fi
-  record_placement server
-  if [[ -f "$KIT_HOME/credential.json" ]]; then
-    check_stored_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
-  fi
-  configure_kit "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/configure-main.js"
-  LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
-  if ! needs_login; then
-    ALREADY_CONNECTED=1
-  else
-    connected=connected
-    log_in
-  fi
-  if ! service_manager; then
-    announce unsupervised
-    return
-  fi
-  start_native_service
-  if [[ "$connected" == running && -n "$CONFIGURED" ]]; then
-    elevated systemctl restart "$NATIVE_SERVICE" || refuse 'the Kit service could not be restarted'
-    connected=restarted
-  fi
-  announce "$connected"
+  [[ -O "$KIT_HOME" ]] || refuse "$KIT_HOME is not owned by this account"
 }
 
 notice_host() {
@@ -589,404 +223,9 @@ notice_host() {
   printf 'Warning: %s is outdated; update to %s.\n' "$found" "$contract"
 }
 
-prepare_roots() {
-  umask 077
-  for path in "$KIT_HOME" "$WORKSPACE"; do
-    prepare_directory "$path"
-  done
-  KIT_HOME=$(cd "$KIT_HOME" && pwd -P)
-  WORKSPACE=$(cd "$WORKSPACE" && pwd -P)
-  [[ "$WORKSPACE/" != "$KIT_HOME/"* && "$KIT_HOME/" != "$WORKSPACE/"* ]] || refuse "the workspace root $WORKSPACE and Kit home $KIT_HOME must not contain each other"
-}
-
-define() {
-  mkdir -p "${1%/*}" && printf '%s\n' "$2" > "$1.new" || refuse "$1 could not be written"
-  if cmp -s "$1.new" "$1"; then
-    rm -f "$1.new"
-  else
-    mv "$1.new" "$1" || refuse "$1 could not be written"
-    REDEFINED=1
-  fi
-}
-
-xml_text() {
-  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
-}
-
-unit_text() {
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g'
-}
-
-define_desktop_service() {
-  if ((MACOS)); then
-    define "$LAUNCH_AGENT" "$(printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>%s</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s/kit</string>\n\t\t<string>resident</string>\n\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>HOUSE_KIT_HOME</key>\n\t\t<string>%s</string>\n\t\t<key>HOUSE_KIT_WORKSPACE</key>\n\t\t<string>%s</string>\n\t</dict>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\t<key>StandardErrorPath</key>\n\t<string>%s/kit.log</string>\n</dict>\n</plist>\n' \
-      "$SERVICE" "$(xml_text "$NATIVE_BIN")" "$(xml_text "$KIT_HOME")" "$(xml_text "$WORKSPACE")" "$(xml_text "$KIT_HOME")")"
-  else
-    # A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
-    define "$USER_UNIT" "$(printf '[Unit]\nDescription=Kit\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nEnvironment="HOUSE_KIT_HOME=%s"\nEnvironment="HOUSE_KIT_WORKSPACE=%s"\nExecStart="%s/kit" resident\nRestart=on-failure\nRestartSec=5\nDelegate=yes\nOOMPolicy=continue\n\n[Install]\nWantedBy=graphical-session.target\n' \
-      "$(unit_text "$KIT_HOME")" "$(unit_text "$WORKSPACE")" "$(unit_text "$NATIVE_BIN")")"
-  fi
-}
-
-unit_variable() {
-  [[ ! -f "$2" ]] ||
-    sed -n "s/^Environment=\"$1=\\(.*\\)\"\$/\\1/p" "$2" | sed -e 's/%%/%/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
-}
-
-installed_variable() {
-  if ((MACOS)); then
-    [[ ! -f "$LAUNCH_AGENT" ]] ||
-      sed -n "/<key>$1<\\/key>/{n;s/^[[:space:]]*<string>\\(.*\\)<\\/string>\$/\\1/p;}" "$LAUNCH_AGENT" |
-      sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
-  else
-    unit_variable "$1" "$USER_UNIT"
-  fi
-}
-
-installed_workspace() {
-  installed_variable HOUSE_KIT_WORKSPACE
-}
-
-installed_homes() {
-  if ((NATIVE)); then
-    unit_variable HOUSE_KIT_HOME "$NATIVE_UNIT"
-    return 0
-  fi
-  ((SECOND)) || installed_variable HOUSE_KIT_HOME
-  if containerized; then
-    docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Source}}{{end}}{{end}}' "$NAME" || true
-  fi
-}
-
-keep_other_home() {
-  local held homes here=$KIT_HOME
-  [[ ! -d "$here" ]] || here=$(cd "$here" && pwd -P)
-  homes=$(installed_homes)
-  if ((CONTAINER == 0)) && [[ "$homes" != "$here" ]] && type -P docker >/dev/null && ! docker_answers; then
-    refuse "Docker does not answer: $(docker_cause); start Docker so this bootstrap can see whether a Kit process runs in its container with another Kit home, then rerun this bootstrap"
-  fi
-  while IFS= read -r held; do
-    [[ -n "$held" && "$held" != "$here" ]] || continue
-    terminal || refuse "a Kit process runs on this computer with the Kit home $held; installing Kit with the Kit home $here replaces that process, so run this bootstrap in a terminal to confirm"
-    confirmed "Kit is already installed on this computer with the Kit home $held. Replace it?" || refuse "the Kit home $held was kept; nothing changed"
-    OTHER_HOME=1
-    return 0
-  done <<< "$homes"
-}
-
-desktop_loaded() {
-  if ((MACOS)); then
-    launchctl print "gui/$(id -u)/$SERVICE" >/dev/null 2>&1
-  else
-    systemctl --user is-enabled --quiet "$SERVICE.service" || systemctl --user is-active --quiet "$SERVICE.service"
-  fi
-}
-
-stop_desktop_service() {
-  if ((MACOS)); then
-    launchctl bootout "gui/$(id -u)/$SERVICE" || refuse 'the Kit service could not be stopped'
-  else
-    systemctl --user stop "$SERVICE.service" || refuse 'the Kit service could not be stopped'
-  fi
-}
-
-stop_loaded_desktop() {
-  if desktop_loaded; then stop_desktop_service; fi
-}
-
-start_desktop_service() {
-  if ((MACOS)); then
-    launchctl enable "gui/$(id -u)/$SERVICE" && launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT" ||
-      refuse 'the Kit service could not be started'
-  else
-    { ((REDEFINED == 0)) || systemctl --user daemon-reload; } && systemctl --user --quiet enable --now "$SERVICE.service" ||
-      refuse 'the Kit service could not be started'
-  fi
-}
-
-start_stopped_desktop() {
-  local started
-  started=$("$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/service-main.js") || refuse 'the Kit service could not be started'
-  [[ -n "$started" ]]
-}
-
-restart_desktop_service() {
-  if ((MACOS && REDEFINED)); then
-    stop_desktop_service
-    start_desktop_service
-  elif ((MACOS)); then
-    launchctl kickstart -k "gui/$(id -u)/$SERVICE" || refuse 'the Kit service could not be restarted'
-  else
-    { ((REDEFINED == 0)) || systemctl --user daemon-reload; } && systemctl --user restart "$SERVICE.service" ||
-      refuse 'the Kit service could not be restarted'
-  fi
-}
-
-add_path_line() {
-  local profile="$HOME/.profile" line="export PATH=\"$NATIVE_BIN:\$PATH\""
-  case "${SHELL##*/}" in
-    zsh) profile="$("$SHELL" -c 'printf "\n%s" "${ZDOTDIR:-$HOME}"' | tail -n 1)/.zprofile" ;;
-    bash)
-      for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
-        [[ ! -f "$profile" ]] || break
-      done
-      ;;
-    fish)
-      profile="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
-      line="set -gx PATH \"$NATIVE_BIN\" \$PATH"
-      ;;
-  esac
-  grep -Fqx "$line" "$profile" 2>/dev/null && return
-  if [[ -s "$profile" && -n "$(tail -c 1 "$profile")" ]]; then printf '\n' >> "$profile"; fi
-  mkdir -p "${profile%/*}" && printf '%s\n' "$line" >> "$profile" || refuse "$profile could not be written"
-  printf 'Added %s to the path in %s; new terminals find kit and house.\n' "$NATIVE_BIN" "$profile"
-}
-
-held_placement() {
-  if [[ -f "$KIT_HOME/placement" ]]; then
-    cat "$KIT_HOME/placement"
-  elif [[ -e "$DESKTOP_PREFIX" ]]; then
-    printf 'native\n'
-  else
-    printf 'container\n'
-  fi
-}
-
-record_placement() {
-  local flag=''
-  printf '%s\n' "$1" > "$KIT_HOME/placement" || refuse "$KIT_HOME/placement could not be written"
-  [[ -n "${HOUSE_KIT_INSTALL_COMMAND:-}" ]] || return 0
-  case "$1" in
-    server) flag=' --linux' ;;
-    container) flag=' --container' ;;
-  esac
-  printf '%s%s\n' "$HOUSE_KIT_INSTALL_COMMAND" "$flag" > "$KIT_HOME/install-command" || refuse "$KIT_HOME/install-command could not be written"
-}
-
-placed() {
-  if [[ "$1" == native ]]; then printf natively; else printf 'in a container'; fi
-}
-
-take_placement() {
-  local held environment
-  [[ -f "$KIT_HOME/credential.json" ]] || return 0
-  held=$(held_placement)
-  [[ "$held" != "$1" ]] || return 0
-  environment=$(enrolled environment)
-  if [[ "$held" == container ]] && type -P docker >/dev/null && ! docker_answers; then
-    refuse "a Kit process runs in the container $NAME for Environment $environment and Docker does not answer: $(docker_cause); start Docker so that container can be removed, then rerun this bootstrap"
-  fi
-  terminal || refuse "a Kit process runs $(placed "$held") on this computer for Environment $environment; installing Kit $(placed "$1") ends that Environment and its Agents, so run this bootstrap in a terminal to confirm"
-  confirmed "Kit is already installed $(placed "$held"). Replace it?" || refuse "Environment $environment was kept; nothing changed"
-  record_placement "$held"
-  REPLACES=$environment
-}
-
-remove_container() {
-  containerized || return 0
-  docker rm -f "$NAME" >/dev/null || refuse "the container $NAME could not be removed"
-}
-
-remove_native() {
-  if [[ -e "$LAUNCH_AGENT" || -e "$USER_UNIT" ]]; then
-    stop_loaded_desktop
-    if ((MACOS)); then
-      rm -f "$LAUNCH_AGENT" || refuse "$LAUNCH_AGENT could not be removed"
-    else
-      systemctl --user --quiet disable "$SERVICE.service" && rm -f "$USER_UNIT" && systemctl --user daemon-reload ||
-        refuse "$USER_UNIT could not be removed"
-    fi
-  fi
-  rm -rf "$DESKTOP_PREFIX" "$DESKTOP_BIN/kit" "$DESKTOP_BIN/house" || refuse "Kit could not be removed from $DESKTOP_PREFIX"
-}
-
-connect_desktop() {
-  local connected=running installed
-  NATIVE_PREFIX="$DESKTOP_PREFIX"
-  NATIVE_BIN="$DESKTOP_BIN"
-  LINKING=(env)
-  RECONNECT="run $NATIVE_BIN/kit login"
-  take_placement native
-  keep_other_home
-  notice_host
-  remove_container
-  rm -rf "$KIT_HOME/kit" || refuse "the container's Kit release in $KIT_HOME/kit could not be removed"
-  if ((WORKSPACE_SELECTED == 0)); then
-    installed=$(installed_workspace)
-    WORKSPACE=${installed:-$WORKSPACE}
-  fi
-  prepare_roots
-  bind_house stop_loaded_desktop
-  place_release "$NATIVE_PREFIX"
-  RELEASE_DIR="$NATIVE_PREFIX/releases/$VERSION"
-  if ((PLACED)); then
-    connected=updated
-    link_commands
-    stop_loaded_desktop
-  fi
-  add_path_line
-  [[ -f "$KIT_HOME/credential.json" ]] || record_placement native
-  if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_stored_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
-  fi
-  configure_kit "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/configure-main.js"
-  LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" ${REPLACES:+"HOUSE_KIT_REPLACES=$REPLACES"} "$NATIVE_BIN/kit" login)
-  if needs_login; then
-    connected=connected
-    log_in
-  else
-    ALREADY_CONNECTED=1
-  fi
-  record_placement native
-  if ((MACOS == 0)) && ! service_manager; then
-    announce unsupervised
-    return
-  fi
-  define_desktop_service
-  if ! desktop_loaded; then
-    start_desktop_service
-  elif ((REDEFINED)) || [[ -n "$CONFIGURED" ]]; then
-    restart_desktop_service
-  elif ! start_stopped_desktop; then
-    announce "$connected"
-    return
-  fi
-  [[ "$connected" != running ]] || connected=restarted
-  announce "$connected"
-}
-
-kit_running() {
-  [[ "$(docker inspect --format '{{.State.Running}}' "$NAME")" == true ]]
-}
-
-kit_installed() {
-  docker container inspect "$NAME" >/dev/null 2>&1
-}
-
-check_installation() {
-  [[ "$(docker inspect --format '{{len .Mounts}}' "$NAME")" == 2 ]] || refuse 'the installed Kit has unexpected mounts'
-  [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Source}}{{end}}{{end}}' "$NAME")" == "$KIT_HOME" ]] || refuse 'the Kit process uses another Kit home'
-  [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/kit-home"}}{{.Type}}/{{.RW}}{{end}}{{end}}' "$NAME")" == bind/true ]] || refuse 'the installed Kit home is not a writable bind mount'
-  [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/agents/house"}}{{.Source}}{{end}}{{end}}' "$NAME")" == "$WORKSPACE" ]] || refuse 'the installed Kit uses another workspace root'
-  [[ "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/agents/house"}}{{.Type}}/{{.RW}}{{end}}{{end}}' "$NAME")" == bind/true ]] || refuse 'the installed workspace is not a writable bind mount'
-  [[ "$(docker inspect --format '{{index .Config.Labels "agentshouse.house"}}' "$NAME")" == "$HOUSE" ]] || refuse 'the installed Kit uses another House origin'
-}
-
-house_workdir() {
-  local here
-  here=$(pwd -P)
-  if [[ "$here" == "$WORKSPACE" || "$here" == "$WORKSPACE"/* ]]; then
-    printf '/agents/house%s' "${here#"$WORKSPACE"}"
-  else
-    printf /agents/house
-  fi
-}
-
-asks_help() {
-  local argument
-  for argument in ${FORWARD[@]+"${FORWARD[@]}"}; do
-    [[ "$argument" != --help ]] || return 0
-  done
-  return 1
-}
-
-forward_kit() {
-  local placed=() entry=() terminal=()
-  if [[ "$FORWARDED" == house ]]; then
-    placed=(--workdir "$(house_workdir)")
-    entry=(--entrypoint house)
-  fi
-  if [[ -t 0 && -t 1 ]]; then terminal=(-t); fi
-  if [[ -t 0 && ! -t 1 ]]; then
-    ECHOED=$(stty -g)
-    trap 'stty "$ECHOED"' EXIT
-    stty -echo
-  fi
-  if kit_running; then
-    docker exec -i ${terminal[@]+"${terminal[@]}"} ${placed[@]+"${placed[@]}"} ${RELAY[@]+"${RELAY[@]}"} "$NAME" "$FORWARDED" ${FORWARD[@]+"${FORWARD[@]}"}
-  else
-    "${DOCKER_RUN[@]:0:2}" -i ${terminal[@]+"${terminal[@]}"} ${placed[@]+"${placed[@]}"} ${entry[@]+"${entry[@]}"} "${DOCKER_RUN[@]:2}" ${FORWARD[@]+"${FORWARD[@]}"}
-  fi
-}
-
-start_resident() {
-  local network=()
-  [[ "$HOUSE" == https://* ]] || network=(--network host)
-  docker run -d --name "$NAME" --restart on-failure ${network[@]+"${network[@]}"} --env "NODE_EXTRA_CA_CERTS=$CERTIFICATES" --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" --label "agentshouse.house=$HOUSE" "$IMAGE" resident >/dev/null
-}
-
-write_certificates() {
-  local bundle
-  if ((MACOS)); then
-    security find-certificate -a -p /Library/Keychains/System.keychain > "$KIT_HOME/certificates.pem" 2>/dev/null || : > "$KIT_HOME/certificates.pem"
-    return 0
-  fi
-  for bundle in "${CERTIFICATE_BUNDLES[@]}"; do
-    if [[ -f "$bundle" ]]; then
-      cp "$bundle" "$KIT_HOME/certificates.pem" || refuse "$KIT_HOME/certificates.pem could not be written"
-      return 0
-    fi
-  done
-  : > "$KIT_HOME/certificates.pem" || refuse "$KIT_HOME/certificates.pem could not be written"
-}
-
-second_building() {
-  local key
-  [[ -z "${HOUSE_KIT_HOME:-}" ]] && ((HOUSE_SELECTED)) && [[ -f "$KIT_HOME/credential.json" ]] || return 0
-  OTHER_HOUSE=$(enrolled house) || return 0
-  [[ -n "$OTHER_HOUSE" && "$OTHER_HOUSE" != "$HOUSE" ]] || return 0
-  ((CONTAINER)) || refuse "Kit on this computer serves $OTHER_HOUSE, and a computer runs one native Kit; install Kit for $HOUSE in a container: add --container"
-  key=$(host_of "$HOUSE")
-  key=${key//:/-}
-  SECOND=1
-  NAME="house-kit-$key"
-  KIT_HOME="$HOME/.house-kit-$key"
-  ((WORKSPACE_SELECTED)) || WORKSPACE="$HOME/AgentsHouse-$key"
-}
-
-place_contained() {
-  [[ "$(cat "$KIT_HOME/kit/current" 2>/dev/null || true)" != "$VERSION" ]] || return 0
-  "${DOCKER_RUN[@]:0:2}" -i --entrypoint bash "${DOCKER_RUN[@]:2}" -s - --house "$HOUSE" --place "$CONTAINED" < "${BASH_SOURCE[0]}" || exit
-  PLACED=1
-}
-
-update_kit() {
-  docker rm -f "$NAME" >/dev/null
-  start_resident
-  printf 'Kit updated.\n'
-}
-
-resume_kit() {
-  if ! kit_running; then
-    docker start "$NAME" >/dev/null
-  elif [[ -n "$CONFIGURED" ]]; then
-    docker restart "$NAME" >/dev/null
-  else
-    printf 'Kit is already installed.\n'
-    return
-  fi
-  printf 'Kit restarted for Environment %s.\n' "$(enrolled environment)"
-}
-
-connect_kit() {
-  [[ -f "$KIT_HOME/credential.json" ]] || record_placement container
-  if [[ -f "$KIT_HOME/credential.json" && -z "$REPLACES" ]]; then
-    check_stored_authority "${AUTHORITY[@]}"
-  fi
-  configure_kit "${CONFIGURE[@]}"
-  if needs_login; then
-    log_in
-  else
-    ALREADY_CONNECTED=1
-  fi
-  record_placement container
-  start_resident
-  printf 'Kit connected for Environment %s.\n' "$(enrolled environment)"
-}
-
 read_host() {
   local adapter glibc
-  [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$KIT_SHA256" =~ ^[0-9a-f]{64}$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
+  [[ "$KIT_SHA256" =~ ^[0-9a-f]{64}$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
     refuse 'this bootstrap has not been published with an immutable release'
   for adapter in $ADAPTERS; do
     [[ "$adapter" =~ ^[a-z][a-z0-9-]*-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?\.tar\.gz=[0-9a-f]{64}$ ]] ||
@@ -995,217 +234,78 @@ read_host() {
   case "$(uname -s)" in
     Linux)
       case "$(uname -m)" in
-        x86_64|amd64) ARCH=amd64 ;;
+        x86_64|amd64) CHIP=amd64 ;;
         aarch64|arm64)
-          ARCH=arm64
+          CHIP=arm64
           NODE_PLATFORM=linux-arm64
           NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
           NODE_BYTES=58021129
           ;;
-        *) refuse "unsupported Linux architecture $(uname -m)" ;;
+        *) refuse "this Linux runs on $(uname -m), and Kit runs on amd64 and arm64" ;;
       esac
-      CHIP=$ARCH
-      if ((CONTAINER == 0)); then
-        glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null) || refuse "this Linux has no glibc, so Kit cannot run natively on it; $(in_container) to run Kit in a container"
-        glibc=${glibc##* }
-        at_least "$glibc" "$NODE_GLIBC" || refuse "this Linux has glibc $glibc and Kit needs glibc $NODE_GLIBC or newer to run natively; $(in_container) to run Kit in a container"
-      fi
+      glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null) || refuse 'this Linux has no glibc, and Kit needs glibc 2.28 or newer'
+      glibc=${glibc##* }
+      at_least "$glibc" "$NODE_GLIBC" || refuse "this Linux has glibc $glibc, and Kit needs glibc $NODE_GLIBC or newer"
       ;;
     Darwin)
-      ((NATIVE == 0)) || refuse "--linux runs only on Linux, not macOS"
       MACOS=1
       MACOS_VERSION=$(sw_vers -productVersion)
-      ((CONTAINER)) || at_least "$MACOS_VERSION" "$NODE_MACOS" || refuse "this Mac has macOS $MACOS_VERSION and Kit needs macOS $NODE_MACOS or newer"
+      at_least "$MACOS_VERSION" "$NODE_MACOS" || refuse "this Mac has macOS $MACOS_VERSION, and Kit needs macOS $NODE_MACOS or newer"
       CONTRACT_CHIP='Apple silicon'
-      PATH="$PATH:$DOCKER_APP/Contents/Resources/bin"
-      RUNTIME='Docker Desktop'
-      OPENER=open
       CHECKSUM=(shasum -a 256)
       if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == 1 ]]; then
-        ARCH=arm64
         CHIP='Apple silicon'
         NODE_PLATFORM=darwin-arm64
         NODE_SHA256=89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7
         NODE_BYTES=53062778
       else
-        ARCH=amd64
         CHIP='an Intel chip'
         NODE_PLATFORM=darwin-x64
         NODE_SHA256=d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035
         NODE_BYTES=54382566
       fi
       ;;
-    *) refuse "unsupported host $(uname -s); this bootstrap is for Linux and macOS" ;;
+    *) refuse "this bootstrap is for Linux and macOS, not $(uname -s)" ;;
   esac
 }
 
 while (($#)); do
   case "$1" in
-    kit|house)
-      FORWARDING=1
-      FORWARDED="$1"
-      FORWARD=("${@:2}")
-      break
-      ;;
-    --workspace|--house)
+    --house|--code)
       (($# >= 2)) || refuse "$1 requires one value"
-      case "$1" in
-        --workspace)
-          ((WORKSPACE_SELECTED == 0)) || refuse 'supply exactly one workspace root'
-          WORKSPACE="$2"
-          WORKSPACE_SELECTED=1
-          ;;
-        --house)
-          ((HOUSE_SELECTED == 0)) || refuse 'supply exactly one House origin'
-          HOUSE="$2"
-          HOUSE_SELECTED=1
-          ;;
-      esac
-      shift 2
-      ;;
-    --linux)
-      NATIVE=1
-      shift
-      ;;
-    --container)
-      CONTAINER=1
-      shift
-      ;;
-    --rooms)
-      (($# >= 2)) || refuse "$1 requires one value"
-      ROOMS+=(--rooms "$2")
-      shift 2
-      ;;
-    --no-private)
-      ROOMS+=(--no-private)
-      shift
-      ;;
-    --code)
-      (($# >= 2)) || refuse "$1 requires one value"
-      CODE+=(--code "$2")
+      if [[ "$1" == --house ]]; then
+        ((HOUSE_SELECTED == 0)) || refuse 'supply exactly one House origin'
+        HOUSE="$2"
+        HOUSE_SELECTED=1
+      else
+        ((${#CODE[@]} == 0)) || refuse 'supply exactly one login code'
+        CODE=(--code "$2")
+      fi
       shift 2
       ;;
     --place)
       (($# >= 2)) || refuse "$1 requires one value"
       PLACE="$2"
+      PLACING=1
       shift 2
-      ;;
-    --no-skills)
-      NO_SKILLS=(--no-skills)
-      shift
       ;;
     *) refuse "unknown argument $1" ;;
   esac
 done
-if [[ -n "$PLACE" ]]; then
-  read_host
-  place_release "$PLACE"
-  exit 0
-fi
-((NATIVE == 0 || CONTAINER == 0)) || refuse '--linux and --container are two placements; choose one'
-((FORWARDING == 0 || NATIVE == 0)) || refuse "--linux puts kit and house on this host's PATH; run $FORWARDED there directly"
-((FORWARDING == 0 || CONTAINER)) || refuse "this bootstrap forwards $FORWARDED only into the container; add --container, or run $FORWARDED directly"
-second_building
-if ((NATIVE)); then
-  ((WORKSPACE_SELECTED == 0)) || refuse "--linux keeps its workspace at $NATIVE_WORKSPACE; --workspace is for a computer"
-elif ((SECOND == 0)) && [[ -e "$SERVER_PREFIX" ]]; then
-  ((FORWARDING == 0)) || refuse "a Kit process runs natively on this host; run $FORWARDED there directly"
-  refuse 'a Kit process runs natively on this host; rerun this bootstrap with --linux'
-elif ((CONTAINER && FORWARDING && SECOND == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then
-  refuse "a Kit process runs natively on this computer; run $FORWARDED there directly"
-fi
-[[ "$WORKSPACE" == /* ]] || refuse 'workspace root must be an absolute path'
-
 read_host
-settle_enrolment
-
-if ((NATIVE)); then
-  connect_native
-  set_rooms_again
-  exit 0
-fi
-if ((CONTAINER == 0)); then
-  connect_desktop
-  set_rooms_again
-  exit 0
-fi
-if ((FORWARDING == 0)); then
-  take_placement container
-  notice_host
-fi
-
-if [[ "$RUNTIME" == 'Docker Desktop' ]]; then
-  establish_docker_desktop "$CHIP"
-  DOCKER_SYSTEM=$(docker info --format '{{.OperatingSystem}}' 2>/dev/null) || refuse "Docker Desktop does not answer: $(docker_cause)"
-  [[ "$DOCKER_SYSTEM" == 'Docker Desktop' ]] || refuse "Docker answers from $DOCKER_SYSTEM, not Docker Desktop; stop that engine or switch Docker to Docker Desktop, then rerun this bootstrap"
-else
-  establish_docker_engine
-fi
-case "$DOCKER_PLATFORM" in
-  linux/x86_64|linux/amd64) DOCKER_ARCH=amd64 ;;
-  linux/aarch64|linux/arm64) DOCKER_ARCH=arm64 ;;
-  *) refuse "unsupported $RUNTIME platform $DOCKER_PLATFORM" ;;
-esac
-[[ "$DOCKER_ARCH" == "$ARCH" ]] || refuse "host linux/$ARCH does not match $RUNTIME linux/$DOCKER_ARCH"
-if ((FORWARDING)); then
-  kit_installed || refuse "Kit is not installed; run this command without $FORWARDED and its arguments first"
-  WORKSPACE=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/agents/house"}}{{.Source}}{{end}}{{end}}' "$NAME")
-else
-  keep_other_home
-fi
-
-prepare_roots
-KIT_HOME_MOUNT=$(bind_mount "$KIT_HOME" /kit-home)
-WORKSPACE_MOUNT=$(bind_mount "$WORKSPACE" /agents/house)
-bind_house remove_container
-IMAGE="$(registry)/kit@$IMAGE_DIGEST"
-write_certificates
-if ((OTHER_HOME)); then remove_container; fi
-if ((FORWARDING == 0 && SECOND == 0)) && [[ -e "$DESKTOP_PREFIX" ]]; then remove_native; fi
-
-if [[ "$RUNTIME" == 'Docker Desktop' && "$HOUSE" == https://* ]]; then NETWORK=(); fi
-RELAY=()
-if [[ -n "${HOUSE_KIT_RELAY:-}" ]]; then RELAY=(--env "HOUSE_KIT_RELAY=$HOUSE_KIT_RELAY"); fi
-DOCKER_RUN=(docker run --rm ${NETWORK[@]+"${NETWORK[@]}"} ${RELAY[@]+"${RELAY[@]}"} --env "NODE_EXTRA_CA_CERTS=$CERTIFICATES" --user "$(id -u):$(id -g)" --mount "$KIT_HOME_MOUNT" --mount "$WORKSPACE_MOUNT" "$IMAGE")
-LOGIN_KIT=("${DOCKER_RUN[@]:0:2}" ${REPLACES:+--env "HOUSE_KIT_REPLACES=$REPLACES"} "${DOCKER_RUN[@]:2}" login)
-AUTHORITY=("${DOCKER_RUN[@]:0:2}" --entrypoint "$CONTAINED/releases/$VERSION/bin/node" "${DOCKER_RUN[@]:2}" "$CONTAINED/releases/$VERSION/$PACKAGE/authority-main.js")
-CONFIGURE=("${DOCKER_RUN[@]:0:2}" --entrypoint "$CONTAINED/releases/$VERSION/bin/node" "${DOCKER_RUN[@]:2}" "$CONTAINED/releases/$VERSION/$PACKAGE/configure-main.js")
-if ((FORWARDING == 0)); then
-  docker pull --quiet --platform "linux/$ARCH" "$IMAGE" >/dev/null
-  place_contained
-fi
-
-if kit_installed; then
-  check_installation
-  if ((FORWARDING)); then
-    [[ "$(docker inspect --format '{{.Config.Image}}' "$NAME")" == "$IMAGE" ]] || refuse "an installed Kit uses a different image; rerun this command without $FORWARDED and its arguments to update it"
-    if ! asks_help && [[ "$FORWARDED" == kit && "${FORWARD[0]:-}" == login ]]; then
-      login_kit ${FORWARD[@]+"${FORWARD[@]:1}"}
-      kit_running || docker start "$NAME" >/dev/null
-      exit 0
-    fi
-    asks_help || [[ -f "$KIT_HOME/credential.json" ]] || refuse 'the installed Kit has no enrolled authority'
-    forward_kit
-    if [[ "$FORWARDED" == kit && "${FORWARD[*]:-}" == logout ]]; then docker stop "$NAME" >/dev/null; fi
-    exit 0
-  fi
-  if [[ -f "$KIT_HOME/credential.json" ]]; then check_stored_authority "${AUTHORITY[@]}"; fi
-  if needs_login; then
-    remove_container
-    connect_kit
-    exit 0
-  fi
-  ALREADY_CONNECTED=1
-  record_placement container
-  configure_kit "${CONFIGURE[@]}"
-  if ((PLACED)) || [[ "$(docker inspect --format '{{.Config.Image}} {{.HostConfig.RestartPolicy.Name}}' "$NAME")" != "$IMAGE on-failure" ]]; then
-    update_kit
+if ((PLACING)); then
+  if [[ "$PLACE" == "$KIT_HOME/kit" ]]; then
+    place_release "$PLACE" "$KIT_HOME/bin"
+    add_path_line "$KIT_HOME/bin"
   else
-    resume_kit
+    place_release "$PLACE" "$PLACE/bin"
   fi
-  set_rooms_again
   exit 0
 fi
-
-connect_kit
-set_rooms_again
+[[ "$HOUSE" == https://* || "$HOUSE" == http://127.0.0.1:* || "$HOUSE" == http://localhost:* ]] || refuse 'House origin must use HTTPS or local loopback HTTP'
+notice_host
+((MACOS)) || establish_native_packages
+prepare_home
+place_release "$KIT_HOME/kit" "$KIT_HOME/bin"
+add_path_line "$KIT_HOME/bin"
+exec "$KIT_HOME/bin/kit" connect --house "$HOUSE" ${CODE[@]+"${CODE[@]}"}

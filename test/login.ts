@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { House } from './double.ts';
-import { runKit } from './kit.ts';
+import { accountOf, runKit } from './kit.ts';
 
 export const LOGIN = '0199d0a1-6b2c-7e3f-8a4b-5c6d7e8f9a0b';
 
@@ -10,7 +10,7 @@ const REJECTED = { status: 400, body: { error: { code: 'kit_login_rejected', ret
 
 const UNDECLARED = { status: 422, body: { error: { code: 'kit_declaration_invalid', retryable: false } } };
 
-const START_FIELDS = ['act', 'environment_id', 'replaces', 'headless', 'rooms', 'code_challenge'];
+const START_FIELDS = ['act', 'environment_id', 'headless', 'rooms', 'code_challenge'];
 
 const POLL_FIELDS = ['login', 'code_verifier'];
 
@@ -100,7 +100,7 @@ export async function opener(home: string, fails = false): Promise<{ path: strin
 
 export async function logIn(house: House, home: string, environment: Record<string, string> = {}, argv: string[] = []) {
   house.requests.length = 0;
-  const login = runKit(['login', '--house', house.origin, ...argv], { HOUSE_KIT_HOME: home, ...environment });
+  const login = runKit(['login', '--house', house.origin, ...argv], { HOME: accountOf(home), ...environment });
   const exit = await login.exited;
   const started = house.requests.find((request) => request.path === '/kit');
   return { started: started?.body as Record<string, unknown>, exit, login };

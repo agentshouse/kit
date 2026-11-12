@@ -65,6 +65,33 @@ function placing(installer: string, house: string, prefix: string, signal: Abort
   });
 }
 
+interface Placed {
+  version: string;
+  failure: string | null;
+}
+
+async function placed(prefix: () => string, admit: (version: string) => void): Promise<Placed> {
+  const signal = AbortSignal.timeout(PLACEMENT_MS);
+  let version = '';
+  try {
+    const placedIn = prefix();
+    const served = await servedRelease(signal);
+    admit(served.version);
+    version = served.version;
+    await mkdir(join(kitHome(), 'update'), { recursive: true, mode: 0o700 });
+    const installer = join(kitHome(), 'update', served.installer);
+    await downloadServed(served.installer, served.sha256, installer, signal, INSTALLER_BYTES);
+    return { version, failure: await placing(installer, (await readEnrolment())!.house, placedIn, signal) };
+  } catch (error) {
+    return { version, failure: signal.aborted ? `the placement did not end within ${PLACEMENT_MS / 1000} seconds` : causeOf(error) };
+  }
+}
+
+export async function placeServedRelease(prefix: string): Promise<string | null> {
+  const { version, failure } = await placed(() => prefix, () => undefined);
+  return failure === null ? null : `${version === '' ? "The Building's Kit release" : `Kit ${version}`} could not be placed: ${failure}`;
+}
+
 export class KitUpdate {
   private readonly calls: Calls;
   private queue: Promise<unknown> = Promise.resolve();
@@ -108,24 +135,12 @@ export class KitUpdate {
   }
 
   private async place(release: string, which: 'named' | 'served'): Promise<string | null> {
-    const signal = AbortSignal.timeout(PLACEMENT_MS);
-    let version = release;
-    let failure: string | null;
-    try {
-      const prefix = placedPrefix();
-      const served = await servedRelease(signal);
-      if (which === 'named' && served.version !== release) throw new Error(`the Building serves Kit ${served.version}, not Kit ${release}`);
-      version = served.version;
-      if (version === KIT_RELEASE) throw new Error(`the Building serves Kit ${KIT_RELEASE}, which this Kit runs`);
-      await mkdir(join(kitHome(), 'update'), { recursive: true, mode: 0o700 });
-      const installer = join(kitHome(), 'update', served.installer);
-      await downloadServed(served.installer, served.sha256, installer, signal, INSTALLER_BYTES);
-      failure = await placing(installer, (await readEnrolment())!.house, prefix, signal);
-    } catch (error) {
-      failure = signal.aborted ? `the placement did not end within ${PLACEMENT_MS / 1000} seconds` : causeOf(error);
-    }
+    const { version, failure } = await placed(placedPrefix, (served) => {
+      if (which === 'named' && served !== release) throw new Error(`the Building serves Kit ${served}, not Kit ${release}`);
+      if (served === KIT_RELEASE) throw new Error(`the Building serves Kit ${KIT_RELEASE}, which this Kit runs`);
+    });
     if (failure !== null) {
-      const refused = `Kit ${version} could not be placed: ${failure}`;
+      const refused = `Kit ${version || release} could not be placed: ${failure}`;
       process.stderr.write(`kit: ${refused}\n`);
       return refused;
     }

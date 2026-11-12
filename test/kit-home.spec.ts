@@ -5,8 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { settle, startHouse, until } from './double.ts';
 import { hostKit } from './environment.ts';
-import { fakeHost } from './host.ts';
-import { runKit, temporaryHome } from './kit.ts';
+import { accountOf, runKit, temporaryHome } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 import { house as houseFetch, serveRooms } from './rooms.ts';
 
@@ -20,7 +19,7 @@ async function absent(path: string): Promise<void> {
 
 function runHouse(home: string, argv: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const environment: NodeJS.ProcessEnv = { ...process.env, HOUSE_KIT_HOME: home };
+    const environment: NodeJS.ProcessEnv = { ...process.env, HOME: accountOf(home) };
     delete environment.HOUSE_BRIDGE;
     const child = spawn(process.execPath, [HOUSE, ...argv], { env: environment });
     let stdout = '';
@@ -36,25 +35,9 @@ it('connects its Environment with the credential an earlier Kit wrote, straight 
   const home = await temporaryHome();
   await writeFile(join(home, 'credential.json'), `{"house":"${house.origin}","environment":"environment-one","credential":"ahk_held"}\n`);
 
-  runKit(['resident'], { HOUSE_KIT_HOME: home });
+  runKit(['resident'], { HOME: accountOf(home) });
 
   expect((await until(() => house.connections[0])).headers.authorization).toBe('Bearer ahk_held');
-});
-
-it("reads the placement and the Environment an earlier Kit recorded in its installer, the credential's Environment beside a field a later Kit adds", async () => {
-  const host = await fakeHost({ system: 'Linux', machine: 'x86_64' });
-  expect(host.run()).toMatchObject({ status: 0 });
-  const kitHome = join(host.home, '.house-kit');
-  await writeFile(join(kitHome, 'placement'), 'container\n');
-  await writeFile(
-    join(kitHome, 'credential.json'),
-    '{"house":"https://agents.house","environment":"environment-two","credential":"ahk_one","later":"a field a later Kit adds"}\n',
-  );
-
-  const ran = host.run();
-
-  expect(ran.status).toBe(1);
-  expect(ran.stderr).toContain('a Kit process runs in a container on this computer for Environment environment-two;');
 });
 
 it('reconnects the Environment an earlier Kit recorded when it was disconnected', async () => {
@@ -125,11 +108,11 @@ it.each([
     skills: true,
     prepare: async (home) => {
       await writeFile(join(home, 'skill-set.json'), record);
-      await mkdir(join(home, '.agents', 'skills', 'retired'), { recursive: true });
+      await mkdir(join(accountOf(home), '.agents', 'skills', 'retired'), { recursive: true });
     },
   });
 
-  await absent(join(hosted.home, '.agents', 'skills', 'retired'));
+  await absent(join(accountOf(hosted.home), '.agents', 'skills', 'retired'));
   expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ version: KIT_RELEASE, origin: hosted.house.origin });
 });
 

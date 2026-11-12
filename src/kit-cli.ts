@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { answerGitCredential } from './app-git.ts';
+import { connect } from './connect.ts';
 import { login } from './login.ts';
 import { logout } from './logout.ts';
 import { proxyUnlessRelayed } from './relay.ts';
@@ -12,7 +13,7 @@ interface Command {
   run(operands: string[]): Promise<void>;
 }
 
-const USAGE = 'usage: kit <login|logout|resident>\n';
+const USAGE = 'usage: kit <connect|login|logout|resident>\n';
 const COMMANDS = new Map<string, Command>([
   [
     'logout',
@@ -47,6 +48,7 @@ const [command, ...argv] = process.argv.slice(2);
 proxyUnlessRelayed();
 
 async function run(): Promise<void> {
+  if (command === 'connect') return connect(argv);
   if (command === 'login') return login(argv);
   if (command === '--help') {
     parseArgs({ args: argv });

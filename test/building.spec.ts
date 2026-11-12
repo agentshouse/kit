@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startHouse, type House } from './double.ts';
-import { temporaryHome } from './kit.ts';
+import { accountOf, temporaryHome } from './kit.ts';
 
 const CONTENT = Buffer.from('the bytes of a file the release names\n');
 const SHA256 = createHash('sha256').update(CONTENT).digest('hex');
@@ -15,7 +15,7 @@ afterEach(() => {
 async function enrolled(house: string): Promise<{ home: string; building: typeof import('../src/building.ts') }> {
   const home = await temporaryHome();
   await writeFile(join(home, 'credential.json'), JSON.stringify({ house, environment: 'environment-one', credential: 'ahk_held' }));
-  vi.stubEnv('HOUSE_KIT_HOME', home);
+  vi.stubEnv('HOME', accountOf(home));
   vi.resetModules();
   return { home, building: await import('../src/building.ts') };
 }

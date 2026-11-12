@@ -7,7 +7,7 @@ import { onTestFinished } from 'vitest';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
 import { type Answer, certificate, idOf, startHouse, until, without, type House, type KitConnection, type Received } from './double.ts';
-import { fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
+import { accountOf, fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './adapters.ts';
 import { serveKitFiles } from './building.ts';
 import { MISMATCH, startStore, type Store } from './store.ts';
@@ -25,7 +25,7 @@ export function userBin(home: string): string {
 
 export async function placeUserClis(home: string): Promise<void> {
   for (const kind of Object.keys(BINS)) placeUserCli(userBin(home), kind);
-  await writeFile(join(home, '.profile'), 'PATH="$HOME/user-bin:$HOME/bin:$PATH"\n');
+  await writeFile(join(accountOf(home), '.profile'), `PATH="${userBin(home)}:${join(home, 'bin')}:$PATH"\n`);
 }
 
 export function releasePrefix(home: string): string {
@@ -208,12 +208,14 @@ export interface Hosting {
   node?: string[];
   home?: string;
   skills?: boolean;
+  workspace?: string;
   prepare?: (home: string) => Promise<void>;
 }
 
 export interface Hosted {
   house: House;
   home: string;
+  workspace: string;
   kit: KitRun;
   connection: KitConnection;
   workingDirectory: string;
@@ -267,8 +269,11 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     join(home, 'credential.json'),
     JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }),
   );
-  if (hosting.home === undefined || hosting.skills !== undefined) {
-    await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: hosting.skills ?? false }));
+  if (hosting.home === undefined || hosting.skills !== undefined || hosting.workspace !== undefined) {
+    await writeFile(
+      join(home, 'kit.json'),
+      JSON.stringify({ skills: hosting.skills ?? false, ...(hosting.workspace === undefined ? {} : { workspace: hosting.workspace }) }),
+    );
   }
   const resolved = routes.map((route, index) => ({
     agent_id: `agent-${index + 1}`,
@@ -358,7 +363,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     return { body: {} };
   });
   const environment = {
-    HOUSE_KIT_HOME: home,
+    HOME: accountOf(home),
     ...placed,
     PATH: await fakeBin(home),
     ...LOGIN_SHELL,
@@ -372,6 +377,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const hosted: Hosted = {
     house,
     home,
+    workspace: hosting.workspace ?? home,
     kit,
     connection,
     workingDirectory,

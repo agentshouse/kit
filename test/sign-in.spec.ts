@@ -5,7 +5,7 @@ import { expect, it, onTestFinished } from 'vitest';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { idOf, settle, until, without } from './double.ts';
 import { hostKit, lastCall, userBin, type Hosted } from './environment.ts';
-import { alive, filesUnder, temporaryHome } from './kit.ts';
+import { accountOf, alive, filesUnder, temporaryHome } from './kit.ts';
 
 interface Hold {
   subject: string;
@@ -331,7 +331,7 @@ it('ends the install a sign-in started when the time House gave the sign-in runs
   await until(() => hosted.kit.stderr().includes('the claude-agent-acp sign-in reached the end House set for it'));
   await rm(hold);
   await settle();
-  await expect(access(join(hosted.home, '.local', 'bin', 'claude'))).rejects.toThrow();
+  await expect(access(join(accountOf(hosted.home), '.local', 'bin', 'claude'))).rejects.toThrow();
   await expect(access(join(hosted.home, 'login.log'))).rejects.toThrow();
   expect(hosted.kit.stderr()).not.toContain('claude-agent-acp did not install');
 });

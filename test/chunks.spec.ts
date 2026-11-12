@@ -325,7 +325,7 @@ it('downloads what a failed chunk left once more and finishes the copy from what
 
 it("sweeps the staging its Kit left when stopped during a copy as it starts again, and leaves another Kit's", async () => {
   const workspace = await temporaryHome();
-  const hosted = await hostKit([{}], { environment: { HOUSE_KIT_WORKSPACE: workspace } });
+  const hosted = await hostKit([{}], { workspace });
   const rooms = serveRooms(hosted);
   const room = rooms.room('large');
   room.put('a.md', 'a\n');
@@ -348,7 +348,7 @@ it("sweeps the staging its Kit left when stopped during a copy as it starts agai
 
 it('removes what a copy staged when its chunks cannot be read', async () => {
   const workspace = await temporaryHome();
-  const hosted = await hostKit([{}], { environment: { HOUSE_KIT_WORKSPACE: workspace } });
+  const hosted = await hostKit([{}], { workspace });
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
@@ -423,7 +423,7 @@ it("refuses a chunk that did not arrive whole, keeps the copy where it was, and 
 
 it("copies a Room larger than the former bundle limit with the Kit's heap capped far below the Room and its peak memory under half of it", { timeout: 300_000 }, async () => {
   const workspace = await temporaryHome();
-  const hosted = await hostKit([{}], { node: [`--max-old-space-size=${KIT_HEAP_MEGABYTES}`], environment: { HOUSE_KIT_WORKSPACE: workspace } });
+  const hosted = await hostKit([{}], { node: [`--max-old-space-size=${KIT_HEAP_MEGABYTES}`], workspace });
   const rooms = serveRooms(hosted);
   const room = rooms.room('large');
   const text = `${'a line of a large document\n'.repeat(37_000)}`;

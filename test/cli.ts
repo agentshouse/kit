@@ -75,7 +75,7 @@ export function updatesRun(home: string): Updated[] {
 }
 
 function updateUserCli(kind: string, path: string): void {
-  const home = process.env.HOUSE_KIT_HOME!;
+  const home = join(process.env.HOME!, '.agents', 'house');
   const log = (entry: Updated) => appendFileSync(join(home, 'updates.log'), `${JSON.stringify(entry)}\n`);
   log({ kind, path });
   if (existsSync(join(home, 'update-hold'))) log({ kind, path, held: true, pid: process.pid });

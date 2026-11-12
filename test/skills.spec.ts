@@ -7,7 +7,7 @@ import { listSkills } from '@agentshouse/skills';
 import { afterAll, beforeAll, expect, it, onTestFinished } from 'vitest';
 import { startHouse } from './double.ts';
 import { hostKit, lastCall, opened, userBin, type Hosted, type Hosting } from './environment.ts';
-import { readOnlyHome, temporaryHome } from './kit.ts';
+import { accountOf, temporaryHome } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 
 const MANIFEST = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -77,16 +77,16 @@ async function restart(hosted: Hosted, hosting: Hosting): Promise<Hosted> {
 }
 
 function skills(home: string, name = ''): string {
-  return join(home, '.agents', 'skills', name);
+  return join(accountOf(home), '.agents', 'skills', name);
 }
 
 function claude(home: string, name = ''): string {
-  return join(home, '.claude', 'skills', name);
+  return join(accountOf(home), '.claude', 'skills', name);
 }
 
 function configure(home: string, argv: string[]): { status: number | null; stdout: string; stderr: string } {
   const ran = spawnSync(process.execPath, [fileURLToPath(new URL('../src/configure-main.ts', import.meta.url)), ...argv], {
-    env: { ...process.env, HOUSE_KIT_HOME: home },
+    env: { ...process.env, HOME: accountOf(home), HOUSE_KIT_HOME: home },
     encoding: 'utf8',
   });
   return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
@@ -130,7 +130,7 @@ it("installs every Guide page the package labels a Skill as that Skill under its
 it('links each skill so it resolves when the Claude skill directory is redirected elsewhere', async () => {
   const home = await temporaryHome();
   await mkdir(join(home, 'claude-skills'));
-  await mkdir(join(home, '.claude'));
+  await mkdir(join(accountOf(home), '.claude'));
   await symlink(join(home, 'claude-skills'), claude(home));
 
   await host({ home, skills: true });
@@ -144,7 +144,7 @@ it('links each skill so it resolves when the Claude skill directory is redirecte
 it('makes no per-skill link when the Claude skill directory already resolves to the shared one', async () => {
   const home = await temporaryHome();
   await mkdir(skills(home), { recursive: true });
-  await mkdir(join(home, '.claude'));
+  await mkdir(join(accountOf(home), '.claude'));
   await symlink(join('..', '.agents', 'skills'), claude(home));
 
   const hosted = await host({ home, skills: true });
@@ -185,12 +185,12 @@ it('keeps an installed skill as the owner edited it while the Kit release and th
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
-  await logIn(house, join(home, '.house-kit'), { HOME: home, ...planted });
+  await logIn(house, home, planted);
   await writeFile(join(skills(home, FIRST), 'SKILL.md'), "the owner's own skill\n");
   await writeFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), "the owner's own errand\n");
   serveLogin(house, 'environment-one', 'ahk_second');
 
-  await logIn(house, join(home, '.house-kit'), { HOME: home, ...planted });
+  await logIn(house, home, planted);
 
   expect(await readFile(join(skills(home, FIRST), 'SKILL.md'), 'utf8')).toBe("the owner's own skill\n");
   expect(await readFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), 'utf8')).toBe("the owner's own errand\n");
@@ -201,15 +201,15 @@ it("fills the Skill pages in again with the other Building's control origin when
   const second = await startHouse();
   const home = await temporaryHome();
   serveLogin(first, 'environment-one', 'ahk_first');
-  await logIn(first, join(home, '.house-kit'), { HOME: home, ...planted });
+  await logIn(first, home, planted);
   serveLogin(second, 'environment-two', 'ahk_second');
 
-  const { exit } = await logIn(second, join(home, '.house-kit'), { HOME: home, ...planted });
+  const { exit } = await logIn(second, home, planted);
 
   expect(exit).toBe(0);
   expect(await readFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), 'utf8')).toBe(skillPage(second.origin));
   expect((await readdir(skills(home))).sort()).toEqual(NAMES);
-  expect(await recorded(join(home, '.house-kit'))).toEqual({ version: KIT_RELEASE, origin: second.origin, names: NAMES });
+  expect(await recorded(home)).toEqual({ version: KIT_RELEASE, origin: second.origin, names: NAMES });
 });
 
 it('replaces only the names an earlier Kit release recorded when a new version starts', async () => {
@@ -297,7 +297,7 @@ it('places every skill at kit login in the home of whoever runs it, with no resi
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const { exit } = await logIn(house, join(home, '.house-kit'), { HOME: home, ...planted });
+  const { exit } = await logIn(house, home, planted);
 
   expect(exit).toBe(0);
   expect((await readdir(skills(home))).sort()).toEqual(NAMES);
@@ -305,34 +305,21 @@ it('places every skill at kit login in the home of whoever runs it, with no resi
     expect(await realpath(claude(home, name))).toBe(await realpath(skills(home, name)));
   }
   expect(await readFile(join(skills(home, SKILL_PAGE), 'SKILL.md'), 'utf8')).toBe(skillPage(house.origin));
-  expect(await recorded(join(home, '.house-kit'))).toEqual({ version: KIT_RELEASE, origin: house.origin, names: NAMES });
+  expect(await recorded(home)).toEqual({ version: KIT_RELEASE, origin: house.origin, names: NAMES });
 });
 
 it('places no skill at kit login when the Skill set is declined', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
-  expect(configure(join(home, '.house-kit'), ['--no-skills']).status).toBe(0);
+  expect(configure(home, ['--no-skills']).status).toBe(0);
 
-  const { exit } = await logIn(house, join(home, '.house-kit'), { HOME: home, ...planted });
+  const { exit } = await logIn(house, home, planted);
 
   expect(exit).toBe(0);
   await absent(skills(home));
   await absent(claude(home));
-  expect(await recorded(join(home, '.house-kit'))).toBeNull();
-});
-
-it('keeps the Environment connected from a read-only home, saying the skills could not be placed', async () => {
-  const home = await temporaryHome();
-  const readOnly = await temporaryHome();
-  await writeFile(join(readOnly, '.profile'), `PATH="${userBin(home)}:${join(home, 'bin')}:$PATH"\n`);
-  await readOnlyHome(readOnly);
-
-  const hosted = await host({ home, skills: true, environment: { HOME: readOnly, CODEX_HOME: await temporaryHome() } });
-  hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
-
-  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
-  expect(hosted.kit.stderr()).toMatch(/^kit: the skills could not be placed: EACCES: .*\.agents/m);
+  expect(await recorded(home)).toBeNull();
 });
 
 it('opens a conversation when a declined Skill set leaves recorded skills it could not remove', async () => {

@@ -4,11 +4,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
-import { temporaryHome } from './kit.ts';
+import { accountOf, temporaryHome } from './kit.ts';
 
 function entry(name: string, argv: string[], home: string) {
   const child = spawn(process.execPath, [fileURLToPath(new URL(`../src/${name}`, import.meta.url)), ...argv], {
-    env: { ...process.env, HOUSE_KIT_HOME: home },
+    env: { ...process.env, HOME: accountOf(home), HOUSE_KIT_HOME: home },
   });
   let output = '';
   child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));

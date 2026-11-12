@@ -6,7 +6,7 @@ import { request } from 'node:http';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { idOf, until, type Received } from './double.ts';
-import { temporaryHome } from './kit.ts';
+import { temporaryDirectory } from './kit.ts';
 import {
   appRemote,
   conversationCredential,
@@ -51,8 +51,8 @@ it("reaches House with each process's own conversation credential and never show
 });
 
 it.each([60, 120])("opens a conversation and answers its house calls under a Kit home %i characters deeper than a temporary directory", async (deeper) => {
-  const home = join(await temporaryHome(), 'k'.repeat(deeper));
-  await mkdir(home);
+  const home = join(await temporaryDirectory(), 'k'.repeat(deeper), '.agents', 'house');
+  await mkdir(home, { recursive: true });
   const hosted = await hostKit([{}], { home, skills: false });
 
   hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });

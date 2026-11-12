@@ -1,10 +1,10 @@
-import { access, chmod, mkdir, readdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { certificate, startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL } from './environment.ts';
-import { readOnlyHome, runKit, temporaryHome } from './kit.ts';
+import { accountOf, runKit, temporaryHome } from './kit.ts';
 import { answerOwnAgent, LOGIN, logIn, loginLink, opener, ownAgent, serveLogin } from './login.ts';
 
 it('prints the link, opens it with the host opener, waits for the confirmation and stores the credential, reading nothing from standard input', async () => {
@@ -13,7 +13,7 @@ it('prints the link, opens it with the host opener, waits for the confirmation a
   const served = serveLogin(house, 'environment-one', 'ahk_first', { waiting: true });
   const { path, opened } = await opener(home);
 
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home, PATH: path });
+  const login = runKit(['login', '--house', house.origin], { HOME: accountOf(home), PATH: path });
   await until(() => house.requests.some((request) => request.path === '/kit/token'));
   served.confirm('Studio Mac');
 
@@ -46,7 +46,7 @@ it.each([
   const house = await startHouse();
   const home = await temporaryHome();
   const served = serveLogin(house, 'environment-one', 'ahk_first', { waiting: true });
-  const environment = { HOUSE_KIT_HOME: home, PATH: fails ? (await opener(home, true)).path : join(home, 'empty') };
+  const environment = { HOME: accountOf(home), PATH: fails ? (await opener(home, true)).path : join(home, 'empty') };
 
   const login = runKit(['login', '--house', house.origin], environment);
   await until(() => login.stdout().includes(loginLink(house)) && house.requests.some((request) => request.path === '/kit/token'));
@@ -62,7 +62,7 @@ it('ends with the cause and no credential when the waiting login expires', async
   const home = await temporaryHome();
   const served = serveLogin(house, 'environment-one', 'ahk_first', { waiting: true });
 
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin], { HOME: accountOf(home) });
   await until(() => house.requests.some((request) => request.path === '/kit/token'));
   served.end();
 
@@ -98,7 +98,7 @@ it('redeems a login code once with nothing but the code, stores both credentials
   }));
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
-    HOUSE_KIT_HOME: home,
+    HOME: accountOf(home),
   });
 
   expect(await login.exited).toBe(0);
@@ -116,47 +116,6 @@ it('redeems a login code once with nothing but the code, stores both credentials
   });
 });
 
-it('connects from a read-only home with its Kit home under the temporary directory, naming the skills, the Codex rule and the Git helper it could not place', async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  const { temporary, kitHome } = await readOnlyHome(home);
-  house.route('POST', '/kit/token', () => ({
-    body: { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one', headless_credential: 'ahp_code_credential' },
-  }));
-
-  const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOME: home, TMPDIR: temporary, CODEX_HOME: '', ...LOGIN_SHELL });
-
-  expect(await login.exited).toBe(0);
-  expect(login.stdout()).toBe(`Environment environment-one is connected to ${house.origin}.\n`);
-  expect(login.stderr().split('\n')).toEqual([
-    expect.stringMatching(/^kit: the skills could not be placed: EACCES: /),
-    expect.stringMatching(/^kit: Codex's rule for house could not be written: EACCES: /),
-    expect.stringMatching(/^kit: git config failed: .*\.gitconfig/),
-    '',
-  ]);
-  expect(JSON.parse(await readFile(join(kitHome, 'credential.json'), 'utf8'))).toEqual({
-    house: house.origin,
-    environment: 'environment-one',
-    credential: 'ahk_code_credential',
-  });
-  expect(await ownAgent(kitHome)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_code_credential' });
-});
-
-it('refuses a Kit home under the temporary directory that is a symbolic link, asking House nothing and writing nothing through it', async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  const { temporary, kitHome } = await readOnlyHome(home);
-  const elsewhere = await temporaryHome();
-  await symlink(elsewhere, kitHome);
-
-  const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOME: home, TMPDIR: temporary, CODEX_HOME: '', ...LOGIN_SHELL });
-
-  expect(await login.exited).toBe(1);
-  expect(login.stderr()).toBe(`kit: ${kitHome} is a symbolic link\n`);
-  expect(house.requests).toEqual([]);
-  expect(await readdir(elsewhere)).toEqual([]);
-});
-
 async function placeHouse(directory: string): Promise<string> {
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, 'house'), '#!/bin/sh\n', { mode: 0o755 });
@@ -171,19 +130,18 @@ it("writes Codex's rule for a lone house at a login by code from a Kit home of i
   const house = await startHouse();
   const home = await temporaryHome();
   const onPath = await placeHouse(join(home, 'bin'));
-  const inUserBin = await placeHouse(join(home, '.local', 'bin'));
+  const inUserBin = await placeHouse(join(accountOf(home), '.local', 'bin'));
   house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' } }));
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
-    HOUSE_KIT_HOME: join(home, '.house-kit-own'),
-    HOME: home,
+    HOME: accountOf(home),
     CODEX_HOME: '',
     PATH: `${join(home, 'bin')}:${join(home, 'empty')}`,
     ...LOGIN_SHELL,
   });
 
   expect(await login.exited).toBe(0);
-  expect(await readFile(join(home, '.codex', 'rules', 'house.rules'), 'utf8')).toBe(codexRule([onPath, inUserBin]));
+  expect(await readFile(join(accountOf(home), '.codex', 'rules', 'house.rules'), 'utf8')).toBe(codexRule([onPath, inUserBin]));
 });
 
 it("keeps each house another Kit home's Codex rule names and drops one that is gone when a login writes the rule", async () => {
@@ -191,19 +149,18 @@ it("keeps each house another Kit home's Codex rule names and drops one that is g
   const home = await temporaryHome();
   const onPath = await placeHouse(join(home, 'bin'));
   const otherKit = await placeHouse(join(home, 'other-kit', 'bin'));
-  await mkdir(join(home, '.codex', 'rules'), { recursive: true });
-  await writeFile(join(home, '.codex', 'rules', 'house.rules'), codexRule([otherKit, join(home, 'gone', 'house')]));
+  await mkdir(join(accountOf(home), '.codex', 'rules'), { recursive: true });
+  await writeFile(join(accountOf(home), '.codex', 'rules', 'house.rules'), codexRule([otherKit, join(home, 'gone', 'house')]));
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const { exit } = await logIn(house, join(home, '.house-kit-own'), {
-    HOME: home,
+  const { exit } = await logIn(house, home, {
     CODEX_HOME: '',
     PATH: `${join(home, 'bin')}:${join(home, 'empty')}`,
     ...LOGIN_SHELL,
   });
 
   expect(exit).toBe(0);
-  expect(await readFile(join(home, '.codex', 'rules', 'house.rules'), 'utf8')).toBe(codexRule([otherKit, onPath]));
+  expect(await readFile(join(accountOf(home), '.codex', 'rules', 'house.rules'), 'utf8')).toBe(codexRule([otherKit, onPath]));
 });
 
 it.each(['kit_code_used', 'kit_code_cancelled', 'kit_code_expired'])("ends with House's %s refusal after one login-code exchange", async (cause) => {
@@ -215,7 +172,7 @@ it.each(['kit_code_used', 'kit_code_cancelled', 'kit_code_expired'])("ends with 
   }));
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
-    HOUSE_KIT_HOME: home,
+    HOME: accountOf(home),
   });
 
   expect(await login.exited).toBe(1);
@@ -240,7 +197,7 @@ it('records the login-code relay and the resident uses it without an ambient var
   }));
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
-    HOUSE_KIT_HOME: home,
+    HOME: accountOf(home),
     HOUSE_KIT_RELAY: relay.origin,
     NODE_EXTRA_CA_CERTS: tls.path,
   });
@@ -260,7 +217,7 @@ it('records the login-code relay and the resident uses it without an ambient var
   relay.route('POST', `${prefix}/kit/agents/desired/list`, () => ({
     body: { agents: [], routes: [], transcribe: false },
   }));
-  runKit(['resident'], { HOUSE_KIT_HOME: home, NODE_EXTRA_CA_CERTS: tls.path });
+  runKit(['resident'], { HOME: accountOf(home), NODE_EXTRA_CA_CERTS: tls.path });
 
   const connection = await until(() => relay.connections[0]);
   expect(connection.headers.authorization).toBe('Bearer ahk_code_credential');
@@ -284,7 +241,7 @@ it('clears a recorded relay when a later bare login has no relay variable', asyn
     },
   }));
   const coded = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
-    HOUSE_KIT_HOME: home,
+    HOME: accountOf(home),
     HOUSE_KIT_RELAY: relay.origin,
     NODE_EXTRA_CA_CERTS: tls.path,
   });
@@ -293,7 +250,7 @@ it('clears a recorded relay when a later bare login has no relay variable', asyn
   answerOwnAgent(house, 'ahp_code_credential');
   serveLogin(house, 'environment-one', 'ahk_direct');
 
-  const bare = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  const bare = runKit(['login', '--house', house.origin], { HOME: accountOf(home) });
 
   expect(await bare.exited).toBe(0);
   expect(relay.requests).toHaveLength(relayedRequests);
@@ -314,7 +271,7 @@ it.each([
   const house = await startHouse();
   const home = await temporaryHome();
 
-  const login = runKit(['login', '--house', house.origin, ...argv], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin, ...argv], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(1);
   expect(login.stderr()).toBe(`kit: ${reason}\n`);
@@ -334,7 +291,7 @@ it.each(['credential.json', 'disconnected.json'])('refuses a login code when Kit
   );
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
-    HOUSE_KIT_HOME: home,
+    HOME: accountOf(home),
   });
 
   expect(await login.exited).toBe(1);
@@ -378,7 +335,7 @@ it('forgets the Environment House no longer holds even when the new login it sta
   await writeFile(join(home, 'disconnected.json'), JSON.stringify({ house: house.origin, environment: 'environment-gone' }));
   const served = serveLogin(house, 'environment-two', 'ahk_second', { gone: 'environment-gone', waiting: true });
 
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin], { HOME: accountOf(home) });
   await until(() => house.requests.some((request) => request.path === '/kit/token'));
   served.end();
 
@@ -407,7 +364,7 @@ it('refuses --manual as an unknown option before starting a login', async () => 
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const login = runKit(['login', '--house', house.origin, '--manual'], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin, '--manual'], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(1);
   expect(login.stderr()).toContain("Unknown option '--manual'");
@@ -433,35 +390,11 @@ it('refuses --rooms beside --no-private before starting a login', async () => {
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const login = runKit(['login', '--house', house.origin, '--rooms', 'r_k2v.4', '--no-private'], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin, '--rooms', 'r_k2v.4', '--no-private'], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(1);
   expect(login.stderr()).toBe('kit: --rooms and --no-private are two choices of Rooms; pass one\n');
   expect(house.requests).toEqual([]);
-});
-
-it.each([
-  ['--rooms', ['--rooms', 'r_k2v.4'], { reach: 'selected', refs: ['r_k2v.4'] }],
-  ['--no-private', ['--no-private'], { reach: 'all_but_private' }],
-])('sets the Rooms again on a reconnect with %s, and a plain reconnect names none', async (_name, argv, rooms) => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first');
-  await logIn(house, home);
-
-  serveLogin(house, 'environment-one', 'ahk_second');
-  const chosen = await logIn(house, home, {}, argv);
-  serveLogin(house, 'environment-one', 'ahk_third');
-  const plain = await logIn(house, home);
-
-  expect([chosen.exit, plain.exit]).toEqual([0, 0]);
-  expect(chosen.started).toMatchObject({
-    act: 'existing_environment',
-    environment_id: 'environment-one',
-    rooms,
-  });
-  expect(plain.started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
-  expect(plain.started).not.toHaveProperty('rooms');
 });
 
 it('ends with the cause and no credential when House refuses a Room the login names', async () => {
@@ -485,7 +418,7 @@ it('names --code, --rooms and --no-private in kit login --help, --code in a form
   const house = await startHouse();
   const home = await temporaryHome();
 
-  const login = runKit(['login', '--house', house.origin, '--help'], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin, '--help'], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(0);
   expect(login.stdout()).toMatch(/^ +--code <code> +\S/m);
@@ -517,25 +450,25 @@ it('reconnects the same Environment on a second login', async () => {
   });
 });
 
-it('enrols a new Environment naming the stored one it replaces, and keeps only the new enrolment', async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first');
-  await logIn(house, home);
-  serveLogin(house, 'environment-two', 'ahk_second');
+it.each([[['--rooms', 'r_k2v.4']], [['--no-private']]])(
+  'refuses %j on a login that reconnects its Environment, saying its page changes its Rooms, before it asks House anything',
+  async (rooms) => {
+    const house = await startHouse();
+    const home = await temporaryHome();
+    serveLogin(house, 'environment-one', 'ahk_first');
+    await logIn(house, home);
+    house.requests.length = 0;
 
-  const { started, exit } = await logIn(house, home, { HOUSE_KIT_REPLACES: 'environment-one' });
+    const login = runKit(['login', '--house', house.origin, ...rooms], { HOME: accountOf(home) });
+    const named = runKit(['login', '--house', house.origin, '--environment', 'environment-two', ...rooms], { HOME: accountOf(await temporaryHome()) });
 
-  expect(exit).toBe(0);
-  expect(started).toMatchObject({ act: 'new_environment', replaces: 'environment-one' });
-  expect(started).not.toHaveProperty('label');
-  expect(started).not.toHaveProperty('environment_id');
-  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
-    house: house.origin,
-    environment: 'environment-two',
-    credential: 'ahk_second',
-  });
-});
+    expect(await login.exited).toBe(1);
+    expect(login.stderr()).toBe('kit: Environment environment-one keeps its Rooms; change them on its page in House\n');
+    expect(await named.exited).toBe(1);
+    expect(named.stderr()).toBe('kit: Environment environment-two keeps its Rooms; change them on its page in House\n');
+    expect(house.requests).toEqual([]);
+  },
+);
 
 it('starts the login again while House answers its start as retryable', async () => {
   const house = await startHouse();
@@ -555,7 +488,7 @@ it('ends with the cause when House refuses to start the login', async () => {
   house.route('POST', '/kit', () => ({ status: 404, body: { error: { code: 'kit_environment_not_found', retryable: false } } }));
 
   const login = runKit(['login', '--house', house.origin, '--environment', 'environment-gone'], {
-    HOUSE_KIT_HOME: home,
+    HOME: accountOf(home),
   });
 
   expect(await login.exited).toBe(1);
@@ -578,7 +511,7 @@ it('fails, placing nothing, naming the install command its bootstrap recorded, w
     body: { error: { code: 'kit_update_required', retryable: false, release: '0.2.2-c0ffee000002', commands: COMMANDS } },
   }));
 
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(1);
   expect(login.stderr()).toContain(`kit: House does not serve this Kit's wire. Update it: ${command}\n`);
@@ -603,7 +536,7 @@ it("ends saying House does not serve its wire when House's MCP door refuses the 
     },
   }));
 
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(1);
   expect(login.stderr()).toContain("kit: House does not serve this Kit's wire; install it again.\n");
@@ -688,7 +621,7 @@ it("stops with House's answer when House cannot say whether the User's own agent
   house.route('POST', '/', () => ({ status: 503, body: { error: { code: 'house_unavailable' } } }));
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const login = runKit(['login', '--house', house.origin], { HOUSE_KIT_HOME: home });
+  const login = runKit(['login', '--house', house.origin], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(1);
   expect(login.stderr()).toContain('503');
@@ -700,12 +633,12 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
   await logIn(house, home);
-  const resident = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  const resident = runKit(['resident'], { HOME: accountOf(home) });
   await until(() => house.connections[0]);
   house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
   house.requests.length = 0;
 
-  const logout = runKit(['logout'], { HOUSE_KIT_HOME: home });
+  const logout = runKit(['logout'], { HOME: accountOf(home) });
 
   expect(await logout.exited).toBe(0);
   expect(logout.stdout()).toBe('Environment environment-one is disconnected; kit login reconnects it.\n');
@@ -714,7 +647,7 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   ]);
   await expect(access(join(home, 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await resident.exited).toBe(1);
-  const restarted = runKit(['resident'], { HOUSE_KIT_HOME: home });
+  const restarted = runKit(['resident'], { HOME: accountOf(home) });
   await until(() => restarted.stderr().includes('run kit login'));
   expect(house.connections).toHaveLength(1);
 
@@ -739,7 +672,7 @@ it('logs out and connects this computer as a new Environment of the other accoun
   serveLogin(house, 'environment-one', 'ahk_first');
   await logIn(house, home);
   house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
-  expect(await runKit(['logout'], { HOUSE_KIT_HOME: home }).exited).toBe(0);
+  expect(await runKit(['logout'], { HOME: accountOf(home) }).exited).toBe(0);
   serveLogin(house, 'environment-two', 'ahk_second', { user: 'user-two' });
 
   const { started, exit, login } = await logIn(house, home);
@@ -760,21 +693,19 @@ it('logs out and connects this computer as a new Environment of the other accoun
 const MACOS = ['--import', fileURLToPath(new URL('./darwin.ts', import.meta.url))];
 const UID = process.getuid!();
 
-const SERVED = 'served=$(cat "$(dirname "$0")/served" 2>/dev/null || printf %s "$HOUSE_KIT_HOME")\n';
-
-const SYSTEMD = (scope: string, running: boolean) => `${SERVED}case "$1" in --user) held=user; shift ;; *) held=system ;; esac
-[ "$held" = ${scope} ] || exit 1
+const SYSTEMD = (running: boolean) => `[ "$1" = --user ] || exit 1
+shift
+[ "$1" != --quiet ] || shift
 case "$1" in
   is-enabled) ;;
   is-active) ${running ? 'exit 0' : 'exit 3'} ;;
-  show) case "$served" in *' '*) printf '"HOUSE_KIT_HOME=%s" HOUSE_KIT_WORKSPACE=/agents/house\\n' "$served" ;; *) printf 'HOUSE_KIT_HOME=%s HOUSE_KIT_WORKSPACE=/agents/house\\n' "$served" ;; esac ;;
   start) ;;
   *) exit 1 ;;
 esac
 `;
 
-const LAUNCHD = (running: boolean) => `${SERVED}case "$1" in
-  print) printf 'gui/%s/house-kit = {\\n\\tactive count = 0\\n\\tstate = ${running ? 'running' : 'not running'}\\n\\n\\tprogram = kit\\n\\tenvironment = {\\n\\t\\tHOUSE_KIT_HOME => %s\\n\\t}\\n}\\n' "$(id -u)" "$served" ;;
+const LAUNCHD = (running: boolean) => `case "$1" in
+  print) printf 'gui/%s/house-kit = {\\n\\tactive count = 0\\n\\tstate = ${running ? 'running' : 'not running'}\\n\\n\\tprogram = kit\\n}\\n' "$(id -u)" ;;
   kickstart) ;;
   *) exit 1 ;;
 esac
@@ -784,7 +715,7 @@ async function serviceManager(
   home: string,
   tool: string,
   script: string,
-): Promise<{ path: string; starts: () => Promise<string[]>; serves: (served: string) => Promise<void> }> {
+): Promise<{ path: string; starts: () => Promise<string[]> }> {
   const bin = join(home, 'manager');
   await mkdir(bin);
   const log = join(home, 'manager.log');
@@ -794,17 +725,16 @@ async function serviceManager(
     (await readFile(log, 'utf8').catch(() => ''))
       .split('\n')
       .filter((call) => /^(--user )?(start|kickstart) /.test(call));
-  return { path: `${bin}:${process.env.PATH}`, starts, serves: (served) => writeFile(join(bin, 'served'), served) };
+  return { path: `${bin}:${process.env.PATH}`, starts };
 }
 
 async function loginWithCode(house: House, home: string, path: string, node: string[] = []) {
   house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' } }));
-  return runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOUSE_KIT_HOME: home, PATH: path }, node);
+  return runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOME: accountOf(home), PATH: path }, node);
 }
 
 it.each([
-  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', false), [], ['--user start house-kit.service']],
-  ["server's systemd service", 'systemctl', SYSTEMD('system', false), [], ['start house-kit.service']],
+  ['systemd user service on Linux', 'systemctl', SYSTEMD(false), [], ['--user start house-kit.service']],
   ['LaunchAgent on macOS', 'launchctl', LAUNCHD(false), MACOS, [`kickstart gui/${UID}/house-kit`]],
 ] as const)('starts the loaded %s that is not running once it stores the credential', async (_name, tool, script, node, started) => {
   const house = await startHouse();
@@ -818,7 +748,7 @@ it.each([
 });
 
 it.each([
-  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', true), []],
+  ['systemd user service on Linux', 'systemctl', SYSTEMD(true), []],
   ['LaunchAgent on macOS', 'launchctl', LAUNCHD(true), MACOS],
 ] as const)('leaves the running %s alone, for it reads the stored credential itself', async (_name, tool, script, node) => {
   const house = await startHouse();
@@ -831,43 +761,10 @@ it.each([
   expect(await starts()).toEqual([]);
 });
 
-it.each([
-  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', false), [], ['--user start house-kit.service']],
-  ["server's systemd service", 'systemctl', SYSTEMD('system', false), [], ['start house-kit.service']],
-  ['LaunchAgent on macOS', 'launchctl', LAUNCHD(false), MACOS, [`kickstart gui/${UID}/house-kit`]],
-] as const)('starts the stopped %s of its own Kit home when that home lies at a path with a space', async (_name, tool, script, node, started) => {
-  const house = await startHouse();
-  const home = join(await temporaryHome(), 'Kit Home');
-  await mkdir(home);
-  const { path, starts } = await serviceManager(home, tool, script);
-
-  const login = await loginWithCode(house, home, path, [...node]);
-
-  expect(await login.exited).toBe(0);
-  expect(await starts()).toEqual(started);
-});
-
-it.each([
-  ['systemd user service on Linux', 'systemctl', SYSTEMD('user', false), []],
-  ["server's systemd service", 'systemctl', SYSTEMD('system', false), []],
-  ['LaunchAgent on macOS', 'launchctl', LAUNCHD(false), MACOS],
-] as const)('leaves a stopped %s alone when it runs another Kit home', async (_name, tool, script, node) => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  const { path, starts, serves } = await serviceManager(home, tool, script);
-  await serves(await temporaryHome());
-
-  const login = await loginWithCode(house, home, path, [...node]);
-
-  expect(await login.exited).toBe(0);
-  expect(login.stderr()).toBe('');
-  expect(await starts()).toEqual([]);
-});
-
 it('keeps the stored credential and names the cause when the stopped service does not start', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
-  const refusing = SYSTEMD('user', false).replace('  start) ;;', "  start) echo 'Failed to start house-kit.service: Unit house-kit.service is masked.' >&2; exit 1 ;;");
+  const refusing = SYSTEMD(false).replace('  start) ;;', "  start) echo 'Failed to start house-kit.service: Unit house-kit.service is masked.' >&2; exit 1 ;;");
   const { path } = await serviceManager(home, 'systemctl', refusing);
 
   const login = await loginWithCode(house, home, path);
