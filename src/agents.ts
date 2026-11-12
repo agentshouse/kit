@@ -10,7 +10,7 @@ import { holdTranscription, transcriptionReport } from './transcription.ts';
 
 type Model = ReportedAgentKind['models'][number];
 
-type Offer = Pick<ReportedAgentKind, 'signed_in' | 'models' | 'modes'>;
+type Offer = Pick<ReportedAgentKind, 'signed_in' | 'models' | 'modes'> & { default_model: string | null; default_effort: string | null };
 
 type Reading = Offer & Pick<ReportedAgentKind, 'release' | 'failure' | 'installing'>;
 
@@ -23,7 +23,9 @@ export const CLI_UPDATE_MS = 60 * 60_000;
 // A sign-in's model read that has not answered in ten seconds leaves its sign-in to the status check, so a hung CLI never holds the sign-in's result.
 const SIGNED_IN_READ_MS = 10_000;
 
-const SIGNED_OUT: Offer = { signed_in: false, models: [], modes: [] };
+const UNNAMED = { default_model: null, default_effort: null };
+
+const SIGNED_OUT: Offer = { signed_in: false, models: [], ...UNNAMED, modes: [] };
 
 const INSTALLING: Reading = { release: null, failure: null, installing: true, ...SIGNED_OUT };
 
@@ -38,6 +40,26 @@ function choices(options: SessionConfigSelectOptions) {
 
 function values(options: SessionConfigSelectOptions): string[] {
   return choices(options).map((entry) => entry.value);
+}
+
+const CLI_DEFAULT = 'default';
+
+function effortsOf(option: ReturnType<typeof select>): string[] {
+  return option === undefined ? [] : values(option.options).filter((value) => value !== CLI_DEFAULT);
+}
+
+function named(options: SessionConfigSelectOptions) {
+  const listed = choices(options).filter((entry) => entry.value !== CLI_DEFAULT);
+  return listed.filter((entry, at) => listed.findIndex((first) => first.name === entry.name) === at);
+}
+
+function starting(model: NonNullable<ReturnType<typeof select>>, effort: ReturnType<typeof select>): Pick<Offer, 'default_model' | 'default_effort'> {
+  const current = choices(model.options).find((entry) => entry.value === model.currentValue);
+  const name = current?.value === CLI_DEFAULT ? current.description : current?.name;
+  return {
+    default_model: named(model.options).find((entry) => entry.name === name)?.value ?? null,
+    default_effort: effort === undefined || effort.currentValue === CLI_DEFAULT ? null : effort.currentValue,
+  };
 }
 
 function causeOf(error: unknown): string {
@@ -66,16 +88,17 @@ export function hostVm(version: string): boolean {
   return /docker desktop|microsoft|wsl|linuxkit/i.test(version);
 }
 
-async function models(kind: string, adapter: Adapter, known: Model[]): Promise<Pick<Offer, 'models' | 'modes'>> {
+async function models(kind: string, adapter: Adapter, known: Model[]): Promise<Omit<Offer, 'signed_in'>> {
   const agent = adapter.connection.agent;
   const opened = await agent.request('session/new', { cwd: kitHome(), mcpServers: [] });
   let options = opened.configOptions ?? [];
   const mode = select(options, 'mode');
   const modes = mode === undefined ? [] : choices(mode.options).map(({ value, name }) => ({ mode: value, name }));
   const model = select(options, 'model');
-  if (model === undefined) return { models: [], modes };
+  if (model === undefined) return { models: [], ...UNNAMED, modes };
+  const started = starting(model, select(options, 'thought_level'));
   const offered: Model[] = [];
-  for (const value of values(model.options)) {
+  for (const { value, name } of named(model.options)) {
     if (select(options, 'model')?.currentValue !== value) {
       try {
         options = (
@@ -83,14 +106,13 @@ async function models(kind: string, adapter: Adapter, known: Model[]): Promise<P
         ).configOptions;
       } catch (error) {
         process.stderr.write(`kit: ${kind} refused its model ${value}: ${causeOf(error)}\n`);
-        offered.push({ model: value, efforts: known.find((entry) => entry.model === value)?.efforts ?? [] });
+        offered.push({ model: value, name, efforts: known.find((entry) => entry.model === value)?.efforts ?? [] });
         continue;
       }
     }
-    const effort = select(options, 'thought_level');
-    offered.push({ model: value, efforts: effort === undefined ? [] : values(effort.options) });
+    offered.push({ model: value, name, efforts: effortsOf(select(options, 'thought_level')) });
   }
-  return { models: offered, modes };
+  return { models: offered, ...started, modes };
 }
 
 function ended(signal: AbortSignal): Promise<never> {
@@ -119,6 +141,8 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
     return {
       signed_in: adapter === undefined && 'initializeMeta' in probe ? known.signed_in : true,
       models: known.models,
+      default_model: known.default_model,
+      default_effort: known.default_effort,
       modes: known.modes,
     };
   } finally {
@@ -138,6 +162,8 @@ function reported(kind: string, reading: Reading): ReportedAgentKind {
     models: reading.models,
     modes: reading.modes,
     full_access: CLIS[kind]!.fullAccess,
+    ...(reading.default_model === null ? {} : { default_model: reading.default_model }),
+    ...(reading.default_effort === null ? {} : { default_effort: reading.default_effort }),
   };
 }
 
@@ -254,7 +280,15 @@ export class Agents {
       const known = this.readings.get(kind);
       const kept = known?.release === null ? SIGNED_OUT : (known ?? SIGNED_OUT);
       if (known?.release !== release || this.installs.has(kind)) {
-        this.update(kind, { release, failure: null, signed_in: kept.signed_in, models: kept.models, modes: kept.modes });
+        this.update(kind, {
+          release,
+          failure: null,
+          signed_in: kept.signed_in,
+          models: kept.models,
+          default_model: kept.default_model,
+          default_effort: kept.default_effort,
+          modes: kept.modes,
+        });
       }
       const read = this.nextRead(kind);
       this.quietOffer(kind, cli, kept)

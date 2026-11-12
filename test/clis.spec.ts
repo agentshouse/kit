@@ -207,8 +207,8 @@ it('reads the CLI again at every Conversation process start, its sign-in and eve
       ...signedOut,
       signed_in: true,
       models: [
-        { model: 'gpt-6', efforts: ['high', 'max'] },
-        { model: 'gpt-5.5', efforts: ['medium'] },
+        { model: 'gpt-6', name: '6', efforts: ['high', 'max'] },
+        { model: 'gpt-5.5', name: '5.5', efforts: ['medium'] },
       ],
       modes: [
         { mode: 'read-only', name: 'Read-only' },
@@ -216,6 +216,8 @@ it('reads the CLI again at every Conversation process start, its sign-in and eve
         { mode: 'agent', name: 'Auto review' },
         { mode: 'agent-full-access', name: 'Full access' },
       ],
+      default_model: 'gpt-6',
+      default_effort: 'medium',
     },
   ]);
   const count = reported(hosted).length;
@@ -243,7 +245,7 @@ it('reports the read of the latest Conversation process start when an earlier re
   await until(async () => (await hosted.adapterLog()).some((entry) => entry.releasedProbe === 'grok-older'));
   await settle();
 
-  expect((reported(hosted).at(-1)!.agents as { models: unknown[] }[])[0]!.models).toEqual([{ model: 'grok-newer', efforts: ['high'] }]);
+  expect((reported(hosted).at(-1)!.agents as { models: unknown[] }[])[0]!.models).toEqual([{ model: 'grok-newer', name: 'grok-newer', efforts: ['high'] }]);
 });
 
 it.each(KINDS)("runs a %s whose link its update command moved at the new version in the next conversation, while the running one keeps its own and Kit runs on", async (kind) => {
@@ -378,11 +380,13 @@ it('reads a CLI a conversation finds at a new version again, its sign-in and eve
       failure: null,
       signed_in: true,
       models: [
-        { model: 'grok-5', efforts: ['high'] },
-        { model: 'grok-4.6', efforts: ['low'] },
+        { model: 'grok-5', name: 'Grok 5', efforts: ['high'] },
+        { model: 'grok-4.6', name: 'Grok 4.6', efforts: ['low'] },
       ],
       modes: [],
       full_access: null,
+      default_model: 'grok-5',
+      default_effort: 'medium',
     },
   ]);
   expect(await probes(hosted)).toBe(2);
@@ -455,10 +459,7 @@ it('reports a model its CLI refuses to select, when it reads that CLI again, wit
       release: '2.1.318',
       failure: null,
       signed_in: true,
-      models: [
-        { model: 'default', efforts: ['default', 'high'] },
-        { model: 'sonnet', efforts: ['default', 'low', 'medium', 'high', 'max'] },
-      ],
+      models: [{ model: 'sonnet', name: 'Sonnet', efforts: ['low', 'medium', 'high', 'max'] }],
       modes: [
         { mode: 'default', name: 'Manual' },
         { mode: 'acceptEdits', name: 'Accept edits' },
@@ -467,6 +468,7 @@ it('reports a model its CLI refuses to select, when it reads that CLI again, wit
         { mode: 'bypassPermissions', name: 'Bypass permissions' },
       ],
       full_access: 'bypassPermissions',
+      default_effort: 'medium',
     },
   ]);
   await until(() => hosted.kit.stderr().includes('claude-agent-acp refused its model sonnet'));

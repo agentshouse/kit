@@ -3,10 +3,12 @@ import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 export interface CliModel {
   id: string;
   name: string;
+  description?: string;
   efforts: string[];
+  effort?: string;
 }
 
-type Choice = { value: string; name: string };
+type Choice = { value: string; name: string; description?: string };
 type Build = (models: CliModel[], model: string, effort: string, mode?: string, collaboration?: string) => SessionConfigOption[];
 
 export const MODELS: Record<string, CliModel[]> = {
@@ -16,9 +18,11 @@ export const MODELS: Record<string, CliModel[]> = {
     { id: 'codex-instant', name: 'codex-instant', efforts: [] },
   ],
   'claude-agent-acp': [
-    { id: 'default', name: 'Default (recommended)', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
-    { id: 'sonnet', name: 'Sonnet', efforts: ['low', 'medium', 'high', 'max'] },
-    { id: 'haiku', name: 'Haiku', efforts: [] },
+    { id: 'default', name: 'Default (recommended)', description: 'Opus 5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'xhigh' },
+    { id: 'opus', name: 'Opus 5.5', description: 'For complex work and everyday tasks', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    { id: 'sonnet', name: 'Sonnet 5.5', efforts: ['low', 'medium', 'high', 'max'] },
+    { id: 'haiku', name: 'Haiku 5.5', efforts: [] },
+    { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', efforts: [] },
   ],
   'grok-build': [
     { id: 'grok-4.6', name: 'Grok 4.6', efforts: ['xhigh', 'high', 'medium', 'low'] },
@@ -33,7 +37,13 @@ function select(id: string, name: string, category: string, currentValue: string
 }
 
 function modelOption(models: CliModel[], model: string): SessionConfigOption {
-  return select('model', 'Model', 'model', model, models.map(({ id, name }) => ({ value: id, name })));
+  return select(
+    'model',
+    'Model',
+    'model',
+    model,
+    models.map(({ id, name, description }) => ({ value: id, name, ...(description === undefined ? {} : { description }) })),
+  );
 }
 
 function effortOption(id: string, name: string, models: CliModel[], model: string, effort: string, first: Choice[] = []) {
