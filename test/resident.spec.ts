@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { settle, startHouse, until, type House } from './double.ts';
+import { hostKit, releasePrefix } from './environment.ts';
 import { runKit, stop, temporaryHome, type KitRun } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
+import { released, serveRelease } from './release.ts';
 
 const RACING_LOGIN = fileURLToPath(new URL('./racing-login.ts', import.meta.url));
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
@@ -379,13 +381,15 @@ it('names its wire in its stream subprotocol and in a header on every other /kit
   expect(requests.map((request) => request.headers[KIT_WIRE_HEADER])).toEqual(requests.map(() => KIT_WIRE));
 });
 
-it("ends a Sandbox's Kit, left stopped and placing nothing, saying it must be installed again, when House refuses its Kit connection opening for its wire", async () => {
-  const house = await startHouse();
-  house.route('UPGRADE', '/kit/stream', () => UNSERVED);
-  const kit = await resident(house, undefined, SANDBOX);
+it("places the release House names when it refuses a Sandbox's Kit connection for its wire, and ends with a failure so the Sandbox's loop starts it", async () => {
+  const hosted = await hostKit([{}], { environment: SANDBOX });
+  await serveRelease(hosted, await released(UNSERVED.body.error.release));
+  hosted.house.route('UPGRADE', '/kit/stream', () => UNSERVED);
 
-  expect(await ended(kit)).toBe(0);
-  expect(kit.stderr()).toContain("kit: House does not serve this Kit's wire; install it again.\n");
-  expect(openings(house)).toBe(1);
-  expect(placements(house)).toEqual([]);
+  hosted.connection.close(1012, 'deploy');
+
+  expect(await hosted.kit.exited).toBe(1);
+  expect(hosted.kit.stderr()).toContain(`kit: Kit ${UNSERVED.body.error.release} is placed; its supervisor starts it\n`);
+  expect((await readFile(join(releasePrefix(hosted.home), 'current'), 'utf8')).trim()).toBe(UNSERVED.body.error.release);
+  expect(placements(hosted.house)).not.toEqual([]);
 });

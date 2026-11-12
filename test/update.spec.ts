@@ -149,6 +149,22 @@ it.each([
   expect(await current(hosted)).toBe(PLACED);
 });
 
+it("places the release House names on a Sandbox, answers, reports it idle again and keeps running, so the Sandbox's next start starts it", async () => {
+  const hosted = await hostKit([{}], { environment: { HOUSE_KIT_SANDBOX: '1' } });
+  await serveRelease(hosted, await released(PLACED));
+  const idled = hosted.idles.length;
+
+  callUpdate(hosted, 'update-1', PLACED);
+
+  expect(await hosted.result('update-1')).toEqual({});
+  await until(() => hosted.idles.length > idled);
+  await settle();
+  expect(alive(hosted.kit.pid)).toBe(true);
+  expect(hosted.kit.stderr()).toContain(`kit: Kit ${PLACED} is placed; it starts when the Sandbox starts again\n`);
+  expect(await current(hosted)).toBe(PLACED);
+  expect(await placedReleases(hosted)).toEqual([KIT_RELEASE, PLACED].sort());
+});
+
 it('answers an update naming the release it runs at once and keeps running, placing nothing', async () => {
   const hosted = await hostKit();
   await serveRelease(hosted, await released(PLACED));
