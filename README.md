@@ -38,7 +38,7 @@ reconnects an Environment you already have; `--rooms <ref>[,<ref>...]` gives it
 only those Rooms and `--no-private` every Room but your Private Room; `--code <code>` connects immediately without a link.
 A login also connects your own agent: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you, each through the Kit
-home `$HOUSE_KIT_HOME` names where it runs, until you revoke that connection on Connections. `house help` lists the Tools. Codex sessions started after a
+home `$HOUSE_KIT_HOME` names where it runs, until you revoke that connection on Connections. `house help` lists the Tools and `house help <tool>` one Tool's arguments. Codex sessions started after a
 login run a lone `house` command outside their sandbox. `kit logout` disconnects this
 computer, stops the Kit process and ends your own agent's connection, so `house` and `git` no
 longer act as you here; a later `kit login` reconnects the same Environment, or connects
