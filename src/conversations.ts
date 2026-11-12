@@ -1042,7 +1042,7 @@ export class Conversations {
     conversation.turn = turn;
     this.stated(conversation, { suggestion: null });
     for (const event of conversation.reader?.began() ?? []) this.event(conversation, event);
-    for (const held of conversation.held.splice(0)) this.place(conversation, turn, held);
+    for (const held of conversation.held.splice(0)) this.place(turn, held);
     this.kit.changed();
     return turn;
   }
@@ -1242,7 +1242,7 @@ export class Conversations {
     switch (event.kind) {
       case 'text':
       case 'reasoning': {
-        const parent = this.parentIn(conversation, turn, event.parent);
+        const parent = this.parentIn(turn, event.parent);
         if (parent !== undefined) turn.content.write(event.kind, event.id, parent, event.text);
         return;
       }
@@ -1252,10 +1252,13 @@ export class Conversations {
       case 'plan':
         turn.content.plan(event.entries);
         return;
-      case 'image':
-        turn.uploads.push(this.image(conversation, turn, event.parent, event.data, event.mediaType));
+      case 'image': {
+        const parent = this.parentIn(turn, event.parent);
+        if (parent === undefined) return;
+        turn.uploads.push(this.image(conversation, turn, parent, event.data, event.mediaType));
         this.kit.changed();
         return;
+      }
     }
   }
 
@@ -1268,30 +1271,26 @@ export class Conversations {
     if (earlier) {
       if (running) return;
       if (turn === null) conversation.held.push(keyed);
-      else this.place(conversation, turn, keyed);
+      else this.place(turn, keyed);
       return;
     }
     if (keyed.parent !== null && turn === null) return;
-    this.place(conversation, this.started(conversation), keyed);
+    this.place(this.started(conversation), keyed);
   }
 
-  private place(conversation: Conversation, turn: Turn, keyed: Keyed): void {
-    const parent = this.parentIn(conversation, turn, keyed.parent);
-    if (parent === undefined && workRuns(keyed.part) === null) return;
-    turn.content.put(keyed.key, parent ?? null, keyed.part);
+  private place(turn: Turn, keyed: Keyed): void {
+    const parent = this.parentIn(turn, keyed.parent);
+    if (parent !== undefined) turn.content.put(keyed.key, parent, keyed.part);
   }
 
-  private parentIn(conversation: Conversation, turn: Turn, key: string | null): number | null | undefined {
+  // A sub-agent's card lives only in the turn keyed() placed it in, so its steps, text, images and sub-agents join a turn only under a card that turn holds.
+  private parentIn(turn: Turn, key: string | null): number | null | undefined {
     if (key === null) return null;
     const index = turn.content.index(key);
-    if (index !== undefined) return turn.content.parts[index]!.type === 'subagent' ? index : undefined;
-    const running = conversation.work.get(key);
-    if (running?.part.type !== 'subagent') return undefined;
-    const parent = this.parentIn(conversation, turn, running.parent);
-    return parent === undefined ? undefined : turn.content.put(key, parent, running.part);
+    return index !== undefined && turn.content.parts[index]!.type === 'subagent' ? index : undefined;
   }
 
-  private async image(conversation: Conversation, turn: Turn, parent: string | null, data: string, mediaType: string): Promise<void> {
+  private async image(conversation: Conversation, turn: Turn, parent: number | null, data: string, mediaType: string): Promise<void> {
     const bytes = Buffer.from(data, 'base64');
     const name = `image-${++turn.images}.${mediaType.split('/')[1]}`;
     const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -1312,7 +1311,7 @@ export class Conversations {
         finish: (upload, partSha256) =>
           this.kit.house.deliver('uploads/finish', { upload, part_sha256: partSha256 }) as Promise<Finished<SavedImage>>,
       });
-      turn.content.arrived(this.parentIn(conversation, turn, parent) ?? null, { type: 'image', file: saved.path, name, media_type: mediaType });
+      turn.content.arrived(parent, { type: 'image', file: saved.path, name, media_type: mediaType });
     } catch (error) {
       const cause = error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error);
       turn.content.arrived(null, { type: 'notice', kind: 'error', text: `${name} was not saved: ${cause}` });
