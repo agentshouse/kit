@@ -85,7 +85,7 @@ jobs:
           kit=$(sha256sum "tmp/release/kit-$VERSION.tar.gz" | cut -d ' ' -f 1)
           adapters=$(cd tmp/release && for archive in *.tar.gz; do [ "$archive" = "kit-$VERSION.tar.gz" ] || printf '%s=%s ' "$archive" "$(sha256sum "$archive" | cut -d ' ' -f 1)"; done)
           sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_RELEASE__/$VERSION/" -e "s/__KIT_SHA256__/$kit/" -e "s/__ADAPTERS__/${adapters% }/" bin/connect-linux.sh > tmp/release/connect-linux.sh
-          sed -e "s/__IMAGE_DIGEST__/${digest#sha256:}/" -e "s/__KIT_RELEASE__/$VERSION/" bin/connect-windows.ps1 > tmp/release/connect-windows.ps1
+          cp bin/connect-windows.ps1 tmp/release/connect-windows.ps1
           npm run bootstrap-manifest -- tmp/release "$digest"
           mkdir -p tmp/building/kit-installer
           cp tmp/release/*.tar.gz tmp/building/kit-installer/

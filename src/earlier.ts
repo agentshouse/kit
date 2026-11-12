@@ -10,7 +10,7 @@ import { awaitsTakeover, desktopPrefix, earlierHome, earlierPrefix, oneFolder } 
 import { defineSupervisor, launchAgent, linger, manage, required, systemd, userUnit } from './supervisor.ts';
 import { placeServedRelease } from './update.ts';
 
-type Kind = 'desktop' | 'server' | 'container';
+type Kind = 'desktop' | 'server' | 'container' | 'windows';
 
 interface Earlier {
   kind: Kind;
@@ -27,6 +27,9 @@ const SERVER_WORKSPACE = '/agents/house';
 const CONTAINER = 'house-kit';
 const CONTAINER_HOME = '/kit-home';
 const CONTAINER_WORKSPACE = '/agents/house';
+const WINDOWS_COPY = '.house-kit-home';
+const WINDOWS_WORKSPACE = 'workspace';
+const PLACEMENT = 'placement';
 const RELEASES = 'kit';
 const WORKSPACE_FOLDERS = ['agents', 'local-copies'];
 const RECORDS = join('local-copies', 'rooms');
@@ -102,6 +105,13 @@ function containerKit(): Earlier | null {
   const workspace = source(CONTAINER_WORKSPACE);
   if (home === undefined || workspace === undefined) throw new Error(`the container ${CONTAINER} mounts no Kit home or no workspace`);
   return { kind: 'container', home, workspace, seen: CONTAINER_WORKSPACE, unit: false };
+}
+
+function windowsKit(): Earlier | null {
+  const home = join(homedir(), WINDOWS_COPY);
+  const workspace = readText(join(home, WINDOWS_WORKSPACE))?.trim();
+  if (workspace === undefined) return null;
+  return { kind: 'windows', home, workspace, seen: CONTAINER_WORKSPACE, unit: false };
 }
 
 function defaulted(earlier: Earlier): boolean {
@@ -195,9 +205,10 @@ async function removeFolder(path: string): Promise<void> {
 
 async function relocate(earlier: Earlier): Promise<void> {
   const folder = oneFolder();
-  await merged(earlier.home, folder, [RELEASES]);
+  const copied = earlier.kind === 'windows';
+  await merged(earlier.home, folder, copied ? [RELEASES, PLACEMENT, WINDOWS_WORKSPACE] : [RELEASES]);
   if (earlier.kind === 'container') await rm(join(earlier.home, RELEASES), { recursive: true, force: true });
-  await removeFolder(earlier.home);
+  if (!copied) await removeFolder(earlier.home);
   const command = join(folder, 'install-command');
   const recorded = await readFile(command, 'utf8').catch(() => null);
   if (recorded !== null && DROPPED_FLAGS.test(recorded.trim())) await writeFile(command, `${recorded.trim().replace(DROPPED_FLAGS, '')}\n`);
@@ -214,6 +225,7 @@ async function relocate(earlier: Earlier): Promise<void> {
     }
   }
   await followRoot(earlier.seen, workspace);
+  if (copied) await rm(earlier.home, { recursive: true, force: true });
 }
 
 function elevated(args: string[], failed: string): void {
@@ -250,7 +262,7 @@ function stopDesktop(): void {
 }
 
 export async function takeOverEarlier(): Promise<void> {
-  const earlier = containerKit() ?? serverKit() ?? desktopKit();
+  const earlier = windowsKit() ?? containerKit() ?? serverKit() ?? desktopKit();
   if (earlier === null) return;
   process.stdout.write(`Moving the Kit installed before into ${oneFolder()}.\n`);
   if (earlier.kind === 'container') required('docker', ['rm', '-f', CONTAINER], `the container ${CONTAINER} could not be removed`);

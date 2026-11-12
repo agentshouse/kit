@@ -68,10 +68,10 @@ export function earlierHome(): string {
   return process.env.HOUSE_KIT_HOME || join(homedir(), '.house-kit');
 }
 
-export function reinstall(): 'linux' | undefined {
+export function reinstall(): 'linux' | 'windows' | undefined {
   if (!awaitsTakeover()) return undefined;
   try {
-    return readFileSync(join(earlierHome(), 'placement'), 'utf8').trim() === 'windows' ? undefined : 'linux';
+    return readFileSync(join(earlierHome(), 'placement'), 'utf8').trim() === 'windows' ? 'windows' : 'linux';
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'linux';
     throw error;
