@@ -1283,7 +1283,7 @@ export class Conversations {
     if (parent !== undefined) turn.content.put(keyed.key, parent, keyed.part);
   }
 
-  // A sub-agent's card lives only in the turn keyed() placed it in, so its steps, text and images join a turn only under a card that turn holds.
+  // A sub-agent's card lives only in the turn keyed() placed it in, so its steps, text, images and sub-agents join a turn only under a card that turn holds.
   private parentIn(turn: Turn, key: string | null): number | null | undefined {
     if (key === null) return null;
     const index = turn.content.index(key);
