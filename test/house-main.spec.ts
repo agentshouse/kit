@@ -579,7 +579,7 @@ it.each([
   ],
   [
     'a $ref whose target holds the description, and one that points outside the schema',
-    { v: { $ref: '#/$defs/a~1b' }, far: { $ref: 'https://example.com/far', description: 'Far.' } },
+    { v: { $ref: '#/$defs/a~1b~01c' }, far: { $ref: 'https://example.com/far', description: 'Far.' } },
     ['  v: From the target.', '  far: Far.'],
   ],
   [
@@ -591,7 +591,7 @@ it.each([
   const house = await startHouse();
   const home = await connected(house, true);
   const $defs = {
-    'a/b': { type: 'string', description: 'From the target.' },
+    'a/b~1c': { type: 'string', description: 'From the target.' },
     node: { type: 'object', properties: { title: { type: 'string', description: 'Its title.' }, children: { type: 'array', items: { $ref: '#/$defs/node' } } } },
   };
   listing(house, [{ name: 'shape', inputSchema: { type: 'object', properties, $defs } }]);
