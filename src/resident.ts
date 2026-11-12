@@ -146,7 +146,7 @@ export async function resident(): Promise<void> {
   const changed = () => {
     if (!idle()) {
       reported = false;
-    } else if (update.placedRelease() !== null && conversations.quiet()) {
+    } else if (update.placedRelease() !== null && conversations.quiet() && process.env.HOUSE_KIT_SANDBOX !== '1') {
       const placed = update.placedRelease();
       void stop(() => restart(`Kit ${placed} is placed; its supervisor starts it`));
     } else if (!reported) {
@@ -165,7 +165,7 @@ export async function resident(): Promise<void> {
   });
   const signIns = new SignIns(house, agents, calls);
   const update = new KitUpdate(calls);
-  if (process.env.HOUSE_KIT_SANDBOX !== '1') takeUnservedRelease((release) => logged(update.takeRefused(release)));
+  takeUnservedRelease((release) => logged(update.takeRefused(release)));
   removeInputs();
   const scripts = new Scripts(calls, (oneWayCall) => connection?.send(oneWayCall) ?? false);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {

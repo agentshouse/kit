@@ -102,7 +102,8 @@ export class KitUpdate {
     if (this.placed !== null) return { refused: `Kit ${this.placed} is placed and starts first, once no turn is open` };
     const failure = await this.place(release, 'named');
     if (failure !== null) return { refused: failure };
-    process.stderr.write(`kit: Kit ${release} is placed; it starts once no turn is open\n`);
+    const starts = process.env.HOUSE_KIT_SANDBOX === '1' ? 'when the Sandbox starts again' : 'once no turn is open';
+    process.stderr.write(`kit: Kit ${release} is placed; it starts ${starts}\n`);
     return {};
   }
 
