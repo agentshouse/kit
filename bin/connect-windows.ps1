@@ -105,7 +105,8 @@ function Test-Restart {
 }
 
 function Install-Wsl {
-  if ((Invoke-Native wsl.exe @('--version')).Status -eq 0) { return }
+  if ((Invoke-Native wsl.exe @('--status')).Status -eq 0) { return }
+  $platform = @(Get-CimInstance -ClassName Win32_OptionalFeature -Filter "Name='VirtualMachinePlatform'")[0]
   Write-Host 'Installing WSL; Windows asks you to approve administrator rights.'
   try {
     $process = Start-Process -FilePath wsl.exe -ArgumentList @('--install', '--no-distribution') -Verb RunAs -Wait -PassThru
@@ -113,7 +114,7 @@ function Install-Wsl {
     Stop-Bootstrap "WSL could not be installed; Windows did not grant administrator rights: $($_.Exception.Message); run this command again and approve the prompt"
   }
   if ($process.ExitCode -ne 0) { Stop-Bootstrap "WSL could not be installed (exit $($process.ExitCode)); run this command again" }
-  if (Test-Restart) { Stop-Bootstrap 'WSL is installed and Windows needs a restart; restart Windows, then run this command again' }
+  if ($platform.InstallState -ne 1) { Stop-Bootstrap 'WSL is installed and Windows needs a restart; restart Windows, then run this command again' }
 }
 
 function Find-Ubuntu {
@@ -145,7 +146,7 @@ function Initialize-User([string] $Ubuntu) {
   if ((Get-LastLine (Invoke-Ubuntu $Ubuntu @('id', '-u'))) -ne '0') { return }
   if ((Invoke-Ubuntu $Ubuntu @('getent', 'passwd', '1000') 'root').Status -eq 0) { return }
   $name = Get-LinuxName $env:USERNAME
-  $created = Invoke-Ubuntu $Ubuntu @('useradd', '--create-home', '--shell', '/bin/bash', '--groups', 'sudo', $name) 'root'
+  $created = Invoke-Ubuntu $Ubuntu @('/usr/sbin/useradd', '--create-home', '--shell', '/bin/bash', '--groups', 'sudo', $name) 'root'
   if ($created.Status -ne 0) { Stop-Bootstrap "the Ubuntu user $name could not be created: $(Get-LastLine $created)" }
   $chosen = Invoke-Native wsl.exe @('--manage', $Ubuntu, '--set-default-user', $name)
   if ($chosen.Status -ne 0) { Stop-Bootstrap "$name could not be made Ubuntu's default user: $(Get-LastLine $chosen)" }
@@ -186,14 +187,16 @@ function Set-KeepRunning {
   $kept = Get-KeptRunning $text
   if ($kept -ceq $text) { return }
   [IO.File]::WriteAllText($path, $kept, (New-Object Text.UTF8Encoding($false)))
+  Write-Host 'Restarting WSL so that it keeps running.'
+  $stopped = Invoke-Native wsl.exe @('--shutdown')
+  if ($stopped.Status -ne 0) { Stop-Bootstrap "WSL could not be restarted: $(Get-LastLine $stopped)" }
 }
 
 function Register-Start([string] $Ubuntu) {
   $link = Join-Path ([Environment]::GetFolderPath('Startup')) $Shortcut
   $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($link)
   $shortcut.TargetPath = Join-Path $env:ProgramFiles 'WSL\wslg.exe'
-  $shortcut.Arguments = Join-CommandLine @('--distribution', $Ubuntu, '--exec', '/bin/true')
-  $shortcut.WindowStyle = 7
+  $shortcut.Arguments = Join-CommandLine @('--distribution', $Ubuntu, '--shell-type', 'none', '--', '/bin/true')
   $shortcut.Save()
 }
 
@@ -285,9 +288,9 @@ function Connect-Kit {
   $ubuntu = Find-Ubuntu
   if (-not $ubuntu) { $ubuntu = Install-Ubuntu }
   Initialize-User $ubuntu
-  Set-KeepRunning
-  Register-Start $ubuntu
   Move-ContainerKit $ubuntu
+  Register-Start $ubuntu
+  Set-KeepRunning
   Connect-Ubuntu $ubuntu $given
 }
 

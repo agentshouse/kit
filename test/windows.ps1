@@ -67,13 +67,6 @@ $profileFolder = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileN
 [void][IO.Directory]::CreateDirectory($profileFolder)
 $env:USERPROFILE = $profileFolder
 $wslconfig = Join-Path $profileFolder '.wslconfig'
-Set-KeepRunning
-if ([IO.File]::ReadAllText($wslconfig) -cne "[general]`r`ninstanceIdleTimeout=-1`r`n") { $findings += "Set-KeepRunning wrote a new .wslconfig as: $([IO.File]::ReadAllText($wslconfig) | ConvertTo-Json)" }
-[IO.File]::WriteAllText($wslconfig, "[wsl2]`nmemory=8GB`n")
-Set-KeepRunning
-Set-KeepRunning
-if ([IO.File]::ReadAllText($wslconfig) -cne "[wsl2]`nmemory=8GB`n`n[general]`ninstanceIdleTimeout=-1`n") { $findings += "Set-KeepRunning kept the person's .wslconfig as: $([IO.File]::ReadAllText($wslconfig) | ConvertTo-Json)" }
-if ([IO.File]::ReadAllBytes($wslconfig)[0] -eq 0xEF) { $findings += 'Set-KeepRunning wrote a byte order mark' }
 
 foreach ($case in @(
   @('Anton', 'anton'),
@@ -100,7 +93,8 @@ $tools = @{
 printf '%s' "$*" | tr '\n' ' ' >> "$FAKE/wsl.log"
 echo >> "$FAKE/wsl.log"
 case "$1" in
-  --version) [ ! -e "$FAKE/no-wsl" ]; exit ;;
+  --status) [ ! -e "$FAKE/no-wsl" ] || exit 50; exit 0 ;;
+  --shutdown) exit 0 ;;
   --list) [ -s "$FAKE/distributions" ] || exit 1; cat "$FAKE/distributions"; exit 0 ;;
   --install) echo Ubuntu >> "$FAKE/distributions"; exit 0 ;;
   --manage) exit 0 ;;
@@ -110,7 +104,7 @@ shift
 case "$1" in
   id) if [ -e "$FAKE/root-default" ]; then echo 0; else echo 1001; fi; exit 0 ;;
   getent) [ -e "$FAKE/user-1000" ]; exit ;;
-  useradd) exit 0 ;;
+  /usr/sbin/useradd) exit 0 ;;
 esac
 for name in $(printf '%s' "${WSLENV:-}" | tr ':' ' '); do
   name=${name%%/*}
@@ -178,6 +172,16 @@ function Get-Copied {
   if (-not (Test-Path -LiteralPath $folder)) { return 'nothing' }
   (@(Get-ChildItem -LiteralPath $folder -Recurse -Force -File | ForEach-Object { $_.FullName.Substring($folder.Length + 1) }) | Sort-Object) -join ','
 }
+
+Reset-Fake
+Set-KeepRunning
+if ([IO.File]::ReadAllText($wslconfig) -cne "[general]`r`ninstanceIdleTimeout=-1`r`n") { $findings += "Set-KeepRunning wrote a new .wslconfig as: $([IO.File]::ReadAllText($wslconfig) | ConvertTo-Json)" }
+[IO.File]::WriteAllText($wslconfig, "[wsl2]`nmemory=8GB`n")
+Set-KeepRunning
+Set-KeepRunning
+if ([IO.File]::ReadAllText($wslconfig) -cne "[wsl2]`nmemory=8GB`n`n[general]`ninstanceIdleTimeout=-1`n") { $findings += "Set-KeepRunning kept the person's .wslconfig as: $([IO.File]::ReadAllText($wslconfig) | ConvertTo-Json)" }
+if ([IO.File]::ReadAllBytes($wslconfig)[0] -eq 0xEF) { $findings += 'Set-KeepRunning wrote a byte order mark' }
+if (((Read-Fake 'wsl.log') -join '|') -cne '--shutdown|--shutdown') { $findings += "Set-KeepRunning restarted WSL as: $((Read-Fake 'wsl.log') -join '|')" }
 
 $distribution = 'Ubuntu'
 foreach ($case in @(
@@ -256,22 +260,24 @@ if ($refused -cne 'kit_bootstrap_refused: the install in Ubuntu ended with statu
 
 function Test-Host { }
 function Register-Start([string] $Ubuntu) { $script:Registered += , $Ubuntu }
-function Test-Restart { $script:RestartPending }
+function Get-CimInstance([string] $ClassName, [string] $Filter) { [pscustomobject]@{ InstallState = $script:Platform } }
 function Start-Process([string] $FilePath, [string[]] $ArgumentList, [string] $Verb, [switch] $Wait, [switch] $PassThru) {
   $script:Elevated += , "$Verb $FilePath $($ArgumentList -join ' ')"
   [IO.File]::WriteAllText((Join-Path $fake 'installed'), '')
   [pscustomobject]@{ ExitCode = 0 }
 }
 foreach ($case in @(
-  @{ Name = 'a computer without WSL that needs a restart'; NoWsl = $true; Restart = $true; Distributions = ''; Root = $false; Refusal = 'kit_bootstrap_refused: WSL is installed and Windows needs a restart; restart Windows, then run this command again'; Elevated = 'RunAs wsl.exe --install --no-distribution'; Wsl = @('--version'); Users = '' },
-  @{ Name = 'a computer without Ubuntu'; NoWsl = $false; Restart = $false; Distributions = "docker-desktop`n"; Root = $true; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--version', '--list --quiet', '--install --distribution Ubuntu --no-launch', '--distribution Ubuntu --cd ~ --exec id -u', '--distribution Ubuntu --user root --cd ~ --exec getent passwd 1000', '--distribution Ubuntu --user root --cd ~ --exec useradd --create-home --shell /bin/bash --groups sudo anton', '--manage Ubuntu --set-default-user anton', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json'); Users = 'Ubuntu' },
-  @{ Name = 'a computer whose Ubuntu has its own default user'; NoWsl = $false; Restart = $false; Distributions = "Ubuntu-24.04`ndocker-desktop`n"; Root = $false; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--version', '--list --quiet', '--distribution Ubuntu-24.04 --cd ~ --exec id -u', '--distribution Ubuntu-24.04 --cd ~ --exec test -e .agents/house/credential.json'); Users = 'Ubuntu-24.04' }
+  @{ Name = 'a computer without WSL whose virtual machine platform is off'; NoWsl = $true; Platform = 2; Distributions = ''; Root = $false; Refusal = 'kit_bootstrap_refused: WSL is installed and Windows needs a restart; restart Windows, then run this command again'; Elevated = 'RunAs wsl.exe --install --no-distribution'; Wsl = @('--status'); Users = '' },
+  @{ Name = 'a computer without WSL whose virtual machine platform is on'; NoWsl = $true; Platform = 1; Distributions = "Ubuntu`n"; Root = $false; Refusal = 'no refusal'; Elevated = 'RunAs wsl.exe --install --no-distribution'; Wsl = @('--status', '--list --quiet', '--distribution Ubuntu --cd ~ --exec id -u', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json', '--shutdown'); Users = 'Ubuntu' },
+  @{ Name = 'a computer without Ubuntu'; NoWsl = $false; Platform = 1; Distributions = "docker-desktop`n"; Root = $true; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--status', '--list --quiet', '--install --distribution Ubuntu --no-launch', '--distribution Ubuntu --cd ~ --exec id -u', '--distribution Ubuntu --user root --cd ~ --exec getent passwd 1000', '--distribution Ubuntu --user root --cd ~ --exec /usr/sbin/useradd --create-home --shell /bin/bash --groups sudo anton', '--manage Ubuntu --set-default-user anton', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json', '--shutdown'); Users = 'Ubuntu' },
+  @{ Name = 'a computer whose Ubuntu has its own default user'; NoWsl = $false; Platform = 1; Distributions = "Ubuntu-24.04`ndocker-desktop`n"; Root = $false; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--status', '--list --quiet', '--distribution Ubuntu-24.04 --cd ~ --exec id -u', '--distribution Ubuntu-24.04 --cd ~ --exec test -e .agents/house/credential.json', '--shutdown'); Users = 'Ubuntu-24.04' }
 )) {
   Reset-Fake
   if ($case.NoWsl) { [IO.File]::WriteAllText((Join-Path $fake 'no-wsl'), '') }
   if ($case.Distributions) { [IO.File]::WriteAllText((Join-Path $fake 'distributions'), $case.Distributions) }
   if ($case.Root) { [IO.File]::WriteAllText((Join-Path $fake 'root-default'), '') }
-  $script:RestartPending = $case.Restart
+  $script:Platform = $case.Platform
+  [IO.File]::Delete($wslconfig)
   $script:Elevated = @()
   $script:Registered = @()
   $env:USERNAME = 'Anton'

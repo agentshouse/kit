@@ -63,7 +63,7 @@ it('connects a fresh Linux account with a login code, writes the absent settings
     'WantedBy=default.target',
     '',
   ]);
-  expect(tools.calls('loginctl')).toEqual(['enable-linger']);
+  expect(tools.calls('loginctl')).toEqual([`enable-linger ${process.getuid!()}`]);
   expect(managed(tools)).toEqual(['--user daemon-reload', '--user --quiet enable house-kit.service', '--user start house-kit.service']);
   expect(tools.calls('sudo')).toEqual([]);
 });
@@ -209,7 +209,7 @@ it("runs root's Kit under root's own lingering user unit, starting root's servic
   const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one'], ROOTED, { KIT_TEST_UID0: '1' });
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(tools.calls('loginctl')).toEqual(['enable-linger']);
+  expect(tools.calls('loginctl')).toEqual(['enable-linger 0']);
   expect(managed(tools)).toEqual(['start user@0.service', '--user daemon-reload', '--user --quiet enable house-kit.service', '--user start house-kit.service']);
   expect(tools.calls('sudo')).toEqual([]);
 });

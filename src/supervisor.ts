@@ -109,7 +109,7 @@ export function defineSupervisor(): Promise<boolean> {
 }
 
 export function linger(): void {
-  required('loginctl', ['enable-linger'], 'lingering could not be turned on for this account');
+  required('loginctl', ['enable-linger', String(process.getuid!())], 'lingering could not be turned on for this account');
   if (process.getuid!() === 0) required('systemctl', ['start', 'user@0.service'], "root's service manager could not be started");
 }
 
