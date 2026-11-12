@@ -22,8 +22,6 @@ LINK='Open this link and confirm: '
 RECONNECT='run this command again with kit login appended'
 WORKSPACE_SELECTED=0
 HOUSE_SELECTED=0
-ENROLL=''
-ENROLL_SELECTED=0
 FORWARDING=0
 FORWARDED=kit
 FORWARD=()
@@ -477,15 +475,6 @@ link_commands() {
   done
 }
 
-enroll_kit() {
-  local credential=''
-  IFS= read -rs -p 'Kit credential: ' credential || true
-  if [[ -t 0 ]]; then printf '\n' >&2; fi
-  [[ -n "$credential" ]] || refuse 'no Kit credential on standard input'
-  printf '%s' "$credential" | HOUSE_KIT_HOME="$KIT_HOME" "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/enrol-main.js" "$HOUSE" "$ENROLL" ||
-    refuse 'the Kit credential could not be stored'
-}
-
 stop_native_service() {
   if service_manager && systemctl is-active --quiet "$NATIVE_SERVICE"; then
     elevated systemctl stop "$NATIVE_SERVICE" || refuse 'the Kit service could not be stopped'
@@ -543,9 +532,6 @@ connect_native() {
   KIT_HOME=$(cd "$KIT_HOME" && pwd -P)
   bind_house stop_native_service
   ((OTHER_HOME == 0)) || stop_native_service
-  if ((ENROLL_SELECTED)) && [[ -f "$KIT_HOME/credential.json" && "$(enrolled environment)" != "$ENROLL" ]]; then
-    refuse "this host is enrolled for Environment $(enrolled environment), not $ENROLL"
-  fi
   own_prefix
   place_release "$NATIVE_PREFIX"
   RELEASE_DIR="$NATIVE_PREFIX/releases/$VERSION"
@@ -565,10 +551,6 @@ connect_native() {
   LOGIN_KIT=(env "HOUSE_KIT_HOME=$KIT_HOME" "$NATIVE_BIN/kit" login)
   if ! needs_login; then
     ALREADY_CONNECTED=1
-  elif ((ENROLL_SELECTED)); then
-    connected=connected
-    enroll_kit
-    check_authority "$RELEASE_DIR/bin/node" "$RELEASE_DIR/$PACKAGE/authority-main.js"
   else
     connected=connected
     log_in
@@ -1065,7 +1047,7 @@ while (($#)); do
       FORWARD=("${@:2}")
       break
       ;;
-    --workspace|--house|--enroll)
+    --workspace|--house)
       (($# >= 2)) || refuse "$1 requires one value"
       case "$1" in
         --workspace)
@@ -1077,11 +1059,6 @@ while (($#)); do
           ((HOUSE_SELECTED == 0)) || refuse 'supply exactly one House origin'
           HOUSE="$2"
           HOUSE_SELECTED=1
-          ;;
-        --enroll)
-          ((ENROLL_SELECTED == 0)) || refuse 'supply exactly one Environment to enroll'
-          ENROLL="$2"
-          ENROLL_SELECTED=1
           ;;
       esac
       shift 2
@@ -1126,7 +1103,6 @@ if [[ -n "$PLACE" ]]; then
   exit 0
 fi
 ((NATIVE == 0 || CONTAINER == 0)) || refuse '--linux and --container are two placements; choose one'
-((ENROLL_SELECTED == 0 || NATIVE)) || refuse '--enroll enrolls a server; add --linux'
 ((FORWARDING == 0 || NATIVE == 0)) || refuse "--linux puts kit and house on this host's PATH; run $FORWARDED there directly"
 ((FORWARDING == 0 || CONTAINER)) || refuse "this bootstrap forwards $FORWARDED only into the container; add --container, or run $FORWARDED directly"
 second_building

@@ -1,19 +1,19 @@
 import { spawn } from 'node:child_process';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
 import { temporaryHome } from './kit.ts';
 
-function entry(name: string, argv: string[], home: string, input = '', environment: Record<string, string> = {}) {
+function entry(name: string, argv: string[], home: string) {
   const child = spawn(process.execPath, [fileURLToPath(new URL(`../src/${name}`, import.meta.url)), ...argv], {
-    env: { ...process.env, ...environment, HOUSE_KIT_HOME: home },
+    env: { ...process.env, HOUSE_KIT_HOME: home },
   });
   let output = '';
   child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
   child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
-  child.stdin.end(input);
+  child.stdin.end();
   return new Promise<{ status: number | null; output: string }>((resolve) =>
     child.on('close', (status) => resolve({ status, output })),
   );
@@ -25,36 +25,6 @@ async function enrolled(house: House, home: string, credential: string) {
     JSON.stringify({ house: house.origin, environment: 'environment-one', credential }),
   );
 }
-
-it('stores the credential it reads on standard input for the named Environment and prints nothing', async () => {
-  const home = await temporaryHome();
-
-  const stored = await entry('enrol-main.ts', ['https://house.test', 'environment-one'], home, 'ahk_supplied\n');
-
-  expect(stored).toEqual({ status: 0, output: '' });
-  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
-    house: 'https://house.test',
-    environment: 'environment-one',
-    credential: 'ahk_supplied',
-  });
-  expect((await stat(join(home, 'credential.json'))).mode & 0o777).toBe(0o600);
-});
-
-it('stores the Kit relay beside a server or Sandbox enrolment', async () => {
-  const home = await temporaryHome();
-
-  const stored = await entry('enrol-main.ts', ['https://house.test', 'environment-one'], home, 'ahk_supplied\n', {
-    HOUSE_KIT_RELAY: 'https://kit-relay.example',
-  });
-
-  expect(stored).toEqual({ status: 0, output: '' });
-  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
-    house: 'https://house.test',
-    relay: 'https://kit-relay.example',
-    environment: 'environment-one',
-    credential: 'ahk_supplied',
-  });
-});
 
 it('accepts a stored credential House answers with it', async () => {
   const house = await startHouse();
