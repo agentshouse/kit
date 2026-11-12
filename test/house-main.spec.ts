@@ -18,6 +18,7 @@ import { RELAYED, startStore, uploadTool, type Store } from './store.ts';
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const MEMORY = fileURLToPath(new URL('./memory.ts', import.meta.url));
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
+const USAGE = "usage: house <tool> ['<arguments as JSON>']; house help <tool>: its arguments";
 
 function runHouse(
   home: string,
@@ -453,7 +454,7 @@ it('tells an Agent whose CLI sandbox refuses the bridge to run house directly', 
   expect(house.requests).toEqual([]);
 });
 
-it('prints the same help for house help as for house --help, listing help, push, fetch and download, a Tool without a description by its name alone, and no Git verb', async () => {
+it('prints the same help for house help as for house --help, naming house help <tool>, listing help, push, fetch and download, a Tool without a description with its arguments, and no Git verb', async () => {
   const house = await startHouse();
   const home = await connected(house, true);
   house.route('POST', '/', ({ body }) => {
@@ -468,21 +469,97 @@ it('prints the same help for house help as for house --help, listing help, push,
   expect(help.status).toBe(0);
   const lines = help.stdout.split('\n');
   expect(lines.slice(0, 5)).toEqual([
-    "usage: house <tool> ['<arguments as JSON>']",
-    'help',
+    USAGE,
+    'help [tool]',
     "push [commit]: sends the Local copy's committed changes to House",
     "fetch: records House's changes on each Local copy's refs/house/received",
     'download: writes a binary file of a Room to the local file named by file',
   ]);
+  expect(help.stdout).toContain(
+    [
+      'files_batch',
+      '  changes (required): The changes, each with an `op`.',
+      '  mount: An empty folder; every change creates a document in it, all or none.',
+      'records_append: Add a record to a Room, stored as given.',
+    ].join('\n'),
+  );
+  expect(lines).toContain('inspect: Provenance and revisions; `shell` reads current file text.');
+  expect(lines).not.toContain('  path (required): A file path.');
   expect(lines).toContain('about_house');
   expect(help.stdout).not.toMatch(/\bgit\b/);
-  expect((await runHouse(home, ['about_house', '--help'])).stdout).toBe('{"type":"object"}\n');
+  expect((await runHouse(home, ['about_house', '--help'])).stdout).toBe('about_house\n');
+});
+
+it.each([
+  [
+    'files_batch',
+    [
+      'files_batch',
+      '  changes (required): The changes, each with an `op`.',
+      '    - op "set_field" (required)',
+      '      path (required): The file.',
+      "      field (required): The field's key.",
+      '      base: The `fr_` revision you read; for a field, its old value.',
+      '      value (required): Its new value.',
+      '    - op "rename" (required)',
+      '      path (required): The file.',
+      '      to (required): The new path; links to it follow.',
+      '      base: The `fr_` revision you read.',
+      '  mount: An empty folder; every change creates a document in it, all or none.',
+    ],
+  ],
+  [
+    'inspect',
+    [
+      'inspect: Provenance and revisions; `shell` reads current file text.',
+      '  path (required): A file path.',
+      '  view "sources" | "history": Optional `history`, or `sources` for a captured item.',
+    ],
+  ],
+  ['get_started', ['get_started']],
+])("prints %s's help as its arguments, each alternative of a oneOf with its own, for house help <tool> as for house <tool> --help", async (tool, expected) => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+
+  const help = await runHouse(home, ['help', tool]);
+  const dashed = await runHouse(home, [tool, '--help']);
+
+  expect(help).toEqual({ status: 0, stdout: `${expected.join('\n')}\n`, stderr: '' });
+  expect(dashed).toEqual(help);
+});
+
+it("prints an argument whose schema holds itself once, with its own arguments, and no deeper", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  const outline = {
+    name: 'outline',
+    inputSchema: {
+      type: 'object',
+      properties: { root: { $ref: '#/$defs/node' } },
+      required: ['root'],
+      $defs: {
+        node: {
+          type: 'object',
+          properties: { title: { type: 'string', description: 'Its title.' }, children: { type: 'array', items: { $ref: '#/$defs/node' } } },
+        },
+      },
+    },
+  };
+  house.route('POST', '/', ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    return { body: { jsonrpc: '2.0', id: message.id, result: { tools: [outline] } } };
+  });
+
+  const help = await runHouse(home, ['help', 'outline']);
+
+  expect(help).toEqual({ status: 0, stdout: 'outline\n  root (required)\n    title: Its title.\n    children\n', stderr: '' });
 });
 
 it.each([
   [['files_batch', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
   [['rooms_list', '{}', '--bogus'], '--bogus'],
   [['--version'], '--version'],
+  [['help', 'files_batch', '{}'], '{}'],
 ])('refuses house %j with its usage before it calls House', async (argv, unexpected) => {
   const house = await startHouse();
   const home = await connected(house, true);
@@ -492,7 +569,7 @@ it.each([
   expect(ran).toEqual({
     status: 1,
     stdout: '',
-    stderr: `house: unexpected argument ${unexpected}; usage: house <tool> ['<arguments as JSON>']\n`,
+    stderr: `house: unexpected argument ${unexpected}; ${USAGE}\n`,
   });
   expect(house.requests).toEqual([]);
 });
@@ -501,6 +578,9 @@ it.each([
   [['--help', 'push'], 'usage: house push [commit] [--owner]'],
   [['--help', 'push', 'HEAD', '--owner'], 'usage: house push [commit] [--owner]'],
   [['--help', 'fetch'], 'usage: house fetch'],
+  [['help', 'push'], 'usage: house push [commit] [--owner]'],
+  [['help', 'fetch'], 'usage: house fetch'],
+  [['help', 'download'], `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`],
   [['download', '--help'], `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`],
 ])('prints house %j as the usage of the command it names and calls nothing', async (argv, usage) => {
   const house = await startHouse();

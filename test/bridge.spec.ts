@@ -11,10 +11,8 @@ import {
   appRemote,
   conversationCredential,
   directed,
-  helpLine,
   hostKit,
   lastCall,
-  LISTING,
   opened,
   runs,
   type McpCall,
@@ -85,16 +83,36 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   const [help, toolHelp, search] = await runs(hosted, 3);
   expect(help!.stdout).toBe(
     [
-      "usage: house <tool> ['<arguments as JSON>']",
-      'help',
+      "usage: house <tool> ['<arguments as JSON>']; house help <tool>: its arguments",
+      'help [tool]',
       "push [commit]: sends the Local copy's committed changes to House",
       "fetch: records House's changes on each Local copy's refs/house/received",
       'download: writes a binary file of a Room to the local file named by file',
-      ...LISTING.map(helpLine),
+      'search',
+      '  query',
+      'shell: Read-only shell over `/rooms/<handle>`.',
+      'inspect: Provenance and revisions; `shell` reads current file text.',
+      'files_batch',
+      '  changes (required): The changes, each with an `op`.',
+      '  mount: An empty folder; every change creates a document in it, all or none.',
+      'records_append: Add a record to a Room, stored as given.',
+      'upload: Store a file of any kind at a path in a Room.',
+      'rooms_list: Your Rooms and what you may do in each.',
+      'find_command',
+      '  query',
+      'run_command',
+      '  command',
+      '  arguments',
+      'get_started',
     ].join('\n') + '\n',
   );
-  const inspect = LISTING.find((tool) => tool.name === 'inspect')!;
-  expect(toolHelp!.stdout).toBe(`${inspect.description}\n${JSON.stringify(inspect.inputSchema)}\n`);
+  expect(toolHelp!.stdout).toBe(
+    [
+      'inspect: Provenance and revisions; `shell` reads current file text.',
+      '  path (required): A file path.',
+      '  view "sources" | "history": Optional `history`, or `sources` for a captured item.',
+    ].join('\n') + '\n',
+  );
   expect(search!.stdout).toBe('search answered\n');
   expect(hosted.mcp.map((received) => [received.headers['mcp-method'], called(received).params.name])).toEqual([
     ['tools/list', undefined],

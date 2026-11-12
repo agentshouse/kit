@@ -17,7 +17,19 @@ import { parse } from 'yaml';
 interface Tool {
   name: string;
   description?: string;
-  inputSchema: unknown;
+  inputSchema: Schema;
+}
+
+interface Schema {
+  $ref?: string;
+  description?: string;
+  properties?: Record<string, Schema>;
+  required?: string[];
+  items?: Schema;
+  oneOf?: Schema[];
+  anyOf?: Schema[];
+  const?: unknown;
+  enum?: unknown[];
 }
 
 interface Description {
@@ -28,7 +40,8 @@ interface Description {
 
 type Finishing = { upload: UploadParts } | { text: string };
 
-const USAGE = "usage: house <tool> ['<arguments as JSON>']";
+const USAGE = "usage: house <tool> ['<arguments as JSON>']; house help <tool>: its arguments";
+const HELP = 'help [tool]';
 const PUSH_USAGE = 'usage: house push [commit] [--owner]';
 const PUSH = "push [commit]: sends the Local copy's committed changes to House";
 const FETCH_USAGE = 'usage: house fetch';
@@ -280,18 +293,75 @@ function argumentsOf(argument: string | undefined): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+// The schema a $ref points to inside the Tool's own inputSchema, or an empty one when it points elsewhere.
+function resolved(schema: Schema, root: Schema): Schema {
+  if (schema.$ref === undefined) return schema;
+  if (!schema.$ref.startsWith('#')) return {};
+  let found: unknown = root;
+  for (const key of schema.$ref.split('/').slice(1)) {
+    found = typeof found === 'object' && found !== null ? (found as Record<string, unknown>)[key.replaceAll('~1', '/').replaceAll('~0', '~')] : undefined;
+  }
+  return typeof found === 'object' && found !== null ? (found as Schema) : {};
+}
+
+// The schema to expand with the $refs then open, or null when its $ref is open already, so a schema that
+// holds itself is expanded once.
+function expanded(schema: Schema, root: Schema, refs: ReadonlySet<string>): { schema: Schema; refs: ReadonlySet<string> } | null {
+  if (schema.$ref === undefined) return { schema, refs };
+  return refs.has(schema.$ref) ? null : { schema: resolved(schema, root), refs: new Set([...refs, schema.$ref]) };
+}
+
+// One line per argument: its name, its value when it has one or a few, whether it is required, and its
+// description. When deep, the arguments of its value or its items follow, then each alternative of a oneOf
+// or anyOf that has arguments of its own, as a "- " entry.
+function argumentLines(schema: Schema, root: Schema, indent: string, deep: boolean, refs: ReadonlySet<string> = new Set()): string[] {
+  const required = new Set(schema.required ?? []);
+  return Object.entries(schema.properties ?? {}).flatMap(([name, property]) => {
+    const value = resolved(property, root);
+    const values = value.const !== undefined ? [value.const] : (value.enum ?? []);
+    const words = [name, ...(values.length === 0 ? [] : [values.map((one) => JSON.stringify(one)).join(' | ')]), ...(required.has(name) ? ['(required)'] : [])];
+    const description = property.description ?? value.description;
+    const line = `${indent}${words.join(' ')}${description === undefined ? '' : `: ${description}`}`;
+    return deep ? [line, ...within(property, root, `${indent}  `, refs)] : [line];
+  });
+}
+
+function within(property: Schema, root: Schema, indent: string, refs: ReadonlySet<string>): string[] {
+  const value = expanded(property, root, refs);
+  const item = value === null || value.schema.items === undefined ? value : expanded(value.schema.items, root, value.refs);
+  if (item === null) return [];
+  return [
+    ...argumentLines(item.schema, root, indent, true, item.refs),
+    ...(item.schema.oneOf ?? item.schema.anyOf ?? []).flatMap((alternative) => {
+      const one = expanded(alternative, root, item.refs);
+      if (one === null) return [];
+      return argumentLines(one.schema, root, `${indent}  `, true, one.refs).map((line, index) => (index === 0 ? `${indent}- ${line.trimStart()}` : line));
+    }),
+  ];
+}
+
+function listed(tool: Tool): string {
+  return tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`;
+}
+
+async function toolHelp(name: string): Promise<string> {
+  const tool = (await tools()).find((one) => one.name === name);
+  if (tool === undefined) throw new Error(`${name} is no Tool; house find_command '{"query":"${name}"}' finds Commands`);
+  return [listed(tool), ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', true)].join('\n');
+}
+
 async function house(args: string[]): Promise<string> {
   const { flags, positionals: [verb, argument] } = accepted(args, ['--help'], 2, USAGE);
-  if (verb === 'help' && argument !== undefined) throw unexpected(argument, USAGE);
   if (flags.has('--help') && argument !== undefined) throw unexpected('--help', USAGE);
+  // house help <name> runs as house <name> --help, so both forms answer alike.
+  if (verb === 'help' && argument !== undefined) return run([argument, '--help']);
   if (verb === undefined || verb === 'help') {
-    return [USAGE, 'help', PUSH, FETCH, DOWNLOAD, ...(await tools()).map((tool) => (tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`))].join('\n');
+    const listing = (await tools()).flatMap((tool) =>
+      tool.description === undefined ? [tool.name, ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', false)] : [listed(tool)],
+    );
+    return [USAGE, HELP, PUSH, FETCH, DOWNLOAD, ...listing].join('\n');
   }
-  if (flags.has('--help')) {
-    const tool = (await tools()).find((listed) => listed.name === verb);
-    if (tool === undefined) throw new Error(`${verb} is no Tool; house find_command '{"query":"${verb}"}' finds Commands`);
-    return [...(tool.description === undefined ? [] : [tool.description]), JSON.stringify(tool.inputSchema)].join('\n');
-  }
+  if (flags.has('--help')) return toolHelp(verb);
   const parsed = argumentsOf(argument);
   return verb === 'upload' ? upload(parsed) : called(verb, parsed);
 }
@@ -303,17 +373,17 @@ async function called(name: string, args: Record<string, unknown>): Promise<stri
   return text;
 }
 
+function run(argv: string[]): Promise<string> {
+  const named = argv.findIndex((arg) => !arg.startsWith('-'));
+  const rest = argv.filter((_arg, index) => index !== named);
+  if (argv[named] === 'push') return push(rest);
+  if (argv[named] === 'fetch') return fetched(rest);
+  if (argv[named] === 'download') return download(rest);
+  return house(argv);
+}
+
 const argv = process.argv.slice(2);
-const named = argv.findIndex((arg) => !arg.startsWith('-'));
-const rest = argv.filter((_arg, index) => index !== named);
-(argv[named] === 'push'
-  ? push(rest)
-  : argv[named] === 'fetch'
-    ? fetched(rest)
-    : argv[named] === 'download'
-      ? download(rest)
-      : house(argv)
-).then(
+run(argv).then(
   (text) => {
     process.stdout.write(`${text}\n`);
     if (argv[0] === 'shell') process.exitCode = Number(/^exit: (\d+)(?:\n|$)/.exec(text)?.[1] ?? 0);

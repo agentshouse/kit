@@ -81,11 +81,68 @@ export const LISTING: Listed[] = [
   {
     name: 'inspect',
     description: 'Provenance and revisions; `shell` reads current file text.',
-    inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'A file path.' },
+        view: { type: 'string', enum: ['sources', 'history'], description: 'Optional `history`, or `sources` for a captured item.' },
+      },
+      required: ['path'],
+    },
   },
   {
     name: 'files_batch',
-    inputSchema: { type: 'object', properties: { changes: { type: 'array' } } },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        changes: {
+          type: 'array',
+          items: {
+            oneOf: [
+              {
+                type: 'object',
+                properties: {
+                  op: { type: 'string', const: 'set_field' },
+                  path: { type: 'string', description: 'The file.' },
+                  field: { type: 'string', description: "The field's key." },
+                  base: { $ref: '#/$defs/__schema0', description: 'The `fr_` revision you read; for a field, its old value.' },
+                  value: { $ref: '#/$defs/__schema0', description: 'Its new value.' },
+                },
+                required: ['op', 'path', 'field', 'value'],
+              },
+              {
+                type: 'object',
+                properties: {
+                  op: { type: 'string', const: 'rename' },
+                  path: { type: 'string', description: 'The file.' },
+                  to: { type: 'string', description: 'The new path; links to it follow.' },
+                  base: {
+                    anyOf: [{ type: 'string' }, { type: 'object', propertyNames: { type: 'string' } }],
+                    description: 'The `fr_` revision you read.',
+                  },
+                },
+                required: ['op', 'path', 'to'],
+              },
+            ],
+          },
+          description: 'The changes, each with an `op`.',
+        },
+        mount: { type: 'string', description: 'An empty folder; every change creates a document in it, all or none.' },
+      },
+      required: ['changes'],
+      $defs: {
+        __schema0: {
+          anyOf: [
+            { type: 'string' },
+            { type: 'number' },
+            { type: 'boolean' },
+            { type: 'null' },
+            { type: 'array', items: { $ref: '#/$defs/__schema0' } },
+            { type: 'object', propertyNames: { type: 'string' } },
+          ],
+        },
+      },
+    },
   },
   {
     name: 'records_append',
