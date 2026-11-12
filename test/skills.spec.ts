@@ -129,9 +129,9 @@ it("installs every Guide page the package labels a Skill as that Skill under its
 
 it('links each skill so it resolves when the Claude skill directory is redirected elsewhere', async () => {
   const home = await temporaryHome();
-  await mkdir(join(home, 'claude-skills'));
+  await mkdir(join(accountOf(home), 'claude-skills'));
   await mkdir(join(accountOf(home), '.claude'));
-  await symlink(join(home, 'claude-skills'), claude(home));
+  await symlink(join(accountOf(home), 'claude-skills'), claude(home));
 
   await host({ home, skills: true });
 

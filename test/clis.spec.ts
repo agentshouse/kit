@@ -78,7 +78,7 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
   }
   expect(env.CODEX_PATH).toBe(kind === 'codex-acp' ? join(hosted.home, 'launchers', 'codex') : undefined);
   expect(env.CLAUDE_CODE_ENTRYPOINT).toBe(kind === 'claude-agent-acp' ? 'claude-agent-acp' : undefined);
-  expect(env.HOME).toBe(hosted.home);
+  expect(env.HOME).toBe(accountOf(hosted.home));
   for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GROK_HOME']) expect(env[variable]).toBeUndefined();
 });
 
