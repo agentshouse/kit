@@ -52,7 +52,7 @@ function neverWritten(sessionId: string): RequestError {
 const offered = join(home, 'models', kind);
 const models = existsSync(offered) ? (JSON.parse(readFileSync(offered, 'utf8')) as CliModel[]) : MODELS[kind]!;
 let model = models[0]!.id;
-let effort = 'medium';
+let effort = models[0]!.effort ?? 'medium';
 let mode: string | undefined;
 let collaboration: string | undefined;
 const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode, collaboration);

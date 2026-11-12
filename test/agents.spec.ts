@@ -114,7 +114,7 @@ it('pins in its package only the Codex and Claude Code adapters, no CLI and no G
   expect(Object.keys({ ...KIT_PACKAGE.dependencies, ...PINNED }).join(' ')).not.toMatch(/grok|@openai\/codex|claude-code/);
 });
 
-it('reports the release of each CLI the login shell finds, its sign-in state, the models with the efforts and the modes its session options name and its full-access mode, with the operating system, the Kit release, its wire and its transcription engine', async () => {
+it("reports the release of each CLI the login shell finds, its sign-in state, the models its session options name, each with its name and efforts and none for the CLI's own default, the model and the effort the CLI starts with, the modes and its full-access mode, with the operating system, the Kit release, its wire and its transcription engine", async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -134,10 +134,12 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
         failure: null,
         signed_in: true,
         models: [
-          { model: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'] },
-          { model: 'gpt-5.5-mini', efforts: ['minimal', 'low', 'medium', 'high'] },
-          { model: 'codex-instant', efforts: [] },
+          { model: 'gpt-5.5', name: '5.5', efforts: ['low', 'medium', 'high', 'xhigh'] },
+          { model: 'gpt-5.5-mini', name: '5.5 Mini', efforts: ['minimal', 'low', 'medium', 'high'] },
+          { model: 'codex-instant', name: 'codex-instant', efforts: [] },
         ],
+        default_model: 'gpt-5.5',
+        default_effort: 'medium',
         modes: [
           { mode: 'read-only', name: 'Read-only' },
           { mode: 'workspace-write', name: 'Workspace access' },
@@ -152,10 +154,13 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
         failure: null,
         signed_in: true,
         models: [
-          { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
-          { model: 'sonnet', efforts: ['default', 'low', 'medium', 'high', 'max'] },
-          { model: 'haiku', efforts: [] },
+          { model: 'opus', name: 'Opus 5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+          { model: 'sonnet', name: 'Sonnet 5.5', efforts: ['low', 'medium', 'high', 'max'] },
+          { model: 'haiku', name: 'Haiku 5.5', efforts: [] },
+          { model: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', efforts: [] },
         ],
+        default_model: 'opus',
+        default_effort: 'xhigh',
         modes: [
           { mode: 'default', name: 'Manual' },
           { mode: 'acceptEdits', name: 'Accept edits' },
@@ -171,9 +176,11 @@ it('reports the release of each CLI the login shell finds, its sign-in state, th
         failure: null,
         signed_in: true,
         models: [
-          { model: 'grok-4.6', efforts: ['xhigh', 'high', 'medium', 'low'] },
-          { model: 'grok-4.5', efforts: ['high', 'medium', 'low'] },
+          { model: 'grok-4.6', name: 'Grok 4.6', efforts: ['xhigh', 'high', 'medium', 'low'] },
+          { model: 'grok-4.5', name: 'Grok 4.5', efforts: ['high', 'medium', 'low'] },
         ],
+        default_model: 'grok-4.6',
+        default_effort: 'medium',
         modes: [],
         full_access: null,
       },
@@ -292,10 +299,12 @@ it("reports a CLI below its minimum with the version found, the minimum and the 
       failure: null,
       signed_in: true,
       models: [
-        { model: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'] },
-        { model: 'gpt-5.5-mini', efforts: ['minimal', 'low', 'medium', 'high'] },
-        { model: 'codex-instant', efforts: [] },
+        { model: 'gpt-5.5', name: '5.5', efforts: ['low', 'medium', 'high', 'xhigh'] },
+        { model: 'gpt-5.5-mini', name: '5.5 Mini', efforts: ['minimal', 'low', 'medium', 'high'] },
+        { model: 'codex-instant', name: 'codex-instant', efforts: [] },
       ],
+      default_model: 'gpt-5.5',
+        default_effort: 'medium',
       modes: [
         { mode: 'read-only', name: 'Read-only' },
         { mode: 'workspace-write', name: 'Workspace access' },
@@ -340,15 +349,68 @@ it('reports a model its CLI refuses to select with no efforts before the Kit rea
       failure: null,
       signed_in: true,
       models: [
-        { model: 'default', efforts: ['default', 'low', 'medium', 'high', 'xhigh', 'max'] },
-        { model: 'sonnet', efforts: [] },
-        { model: 'haiku', efforts: [] },
+        { model: 'opus', name: 'Opus 5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        { model: 'sonnet', name: 'Sonnet 5.5', efforts: [] },
+        { model: 'haiku', name: 'Haiku 5.5', efforts: [] },
+        { model: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', efforts: [] },
       ],
+      default_model: 'opus',
+        default_effort: 'xhigh',
       modes: expect.arrayContaining([{ mode: 'bypassPermissions', name: 'Bypass permissions' }]),
       full_access: 'bypassPermissions',
     },
   ]);
   expect(kit!.stderr()).toContain('claude-agent-acp refused its model sonnet: Model switch blocked by a PreModelSwitch hook');
+});
+
+it("reports a name two of a CLI's models share once, by the model it lists first, and names that model where the CLI starts with its default", async () => {
+  desired = ['claude-agent-acp'];
+  await signIn('claude-agent-acp');
+  await start(async () => {
+    await mkdir(join(home, 'models'), { recursive: true });
+    await writeFile(
+      join(home, 'models', 'claude-agent-acp'),
+      JSON.stringify([
+        { id: 'default', name: 'Default (recommended)', description: 'Opus 5.5', efforts: [] },
+        { id: 'claude-opus-5-5', name: 'Opus 5.5', efforts: [] },
+        { id: 'opus', name: 'Opus 5.5', efforts: [] },
+        { id: 'haiku', name: 'Haiku 5.5', efforts: [] },
+      ]),
+    );
+  });
+
+  const report = await until(() => completeReports()[0]);
+
+  const [claude] = report.agents as Record<string, unknown>[];
+  expect(claude).toMatchObject({
+    kind: 'claude-agent-acp',
+    models: [
+      { model: 'claude-opus-5-5', name: 'Opus 5.5', efforts: [] },
+      { model: 'haiku', name: 'Haiku 5.5', efforts: [] },
+    ],
+    default_model: 'claude-opus-5-5',
+  });
+});
+
+it('names no model a CLI starts with when its own default choice describes none of the models it lists', async () => {
+  desired = ['claude-agent-acp'];
+  await signIn('claude-agent-acp');
+  await start(async () => {
+    await mkdir(join(home, 'models'), { recursive: true });
+    await writeFile(
+      join(home, 'models', 'claude-agent-acp'),
+      JSON.stringify([
+        { id: 'default', name: 'Default (recommended)', description: 'Opus', efforts: [] },
+        { id: 'opus', name: 'Opus 5.5', efforts: [] },
+      ]),
+    );
+  });
+
+  const report = await until(() => completeReports()[0]);
+
+  const [claude] = report.agents as Record<string, unknown>[];
+  expect(claude).toMatchObject({ kind: 'claude-agent-acp', models: [{ model: 'opus', name: 'Opus 5.5', efforts: [] }] });
+  expect(claude).not.toHaveProperty('default_model');
 });
 
 it('reads the models when it starts and on no timer after it, though House names its Agents again', async () => {
