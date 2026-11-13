@@ -31,7 +31,7 @@ function unit(home: string): Promise<string> {
 }
 
 function managed(tools: Supervision): string[] {
-  return tools.calls('systemctl').filter((call) => !/is-(active|enabled)/.test(call));
+  return tools.calls('systemctl').filter((call) => !/is-(active|enabled)|show-environment/.test(call));
 }
 
 it('connects a fresh Linux account with a login code, writes the absent settings, places the Skill set and runs Kit under one lingering user unit', async () => {
@@ -226,6 +226,36 @@ it('stops with the error when lingering cannot be turned on, starting nothing fo
 
   expect(ran.status).toBe(1);
   expect(ran.stderr).toBe('kit: lingering could not be turned on for this account: Could not enable linger: Access denied\n');
+  expect(managed(tools)).toEqual([]);
+});
+
+it("waits for the account's service manager that lingering starts a moment later before it starts Kit, as in a WSL terminal holding no login session", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const tools = await supervision();
+  await tools.systemd();
+  await tools.mark('starts-late');
+  redeems(house);
+
+  const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').at(-2)).toBe('Kit connected for Environment environment-one.');
+  expect(managed(tools)).toEqual(['--user daemon-reload', '--user --quiet enable house-kit.service', '--user start house-kit.service']);
+});
+
+it("refuses naming the repair when the account's service manager never starts, starting nothing", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const tools = await supervision();
+  await tools.systemd();
+  await tools.mark('never-starts');
+  redeems(house);
+
+  const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one']);
+
+  expect(ran.status).toBe(1);
+  expect(ran.stderr).toBe("kit: this account's service manager did not start within 10 seconds; restart this computer, then run this command again\n");
   expect(managed(tools)).toEqual([]);
 });
 

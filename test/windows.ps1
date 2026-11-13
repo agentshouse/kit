@@ -137,7 +137,7 @@ foreach ($tool in $tools.Keys) {
   [IO.File]::WriteAllText((Join-Path $bin $tool), $tools[$tool].Replace("`r`n", "`n"))
   & chmod 755 (Join-Path $bin $tool)
 }
-[IO.File]::WriteAllText((Join-Path $fake 'bootstrap.sh'), "printf '%s\n' `"`$*`" > `"`$FAKE/bootstrap.args`"`nprintf '%s|%s\n' `"`${HOUSE_KIT_RELAY-unset}`" `"`${HOUSE_KIT_INSTALL_COMMAND-unset}`" > `"`$FAKE/bootstrap.env`"`nexit `"`$(cat `"`$FAKE/bootstrap.status`" 2>/dev/null || echo 0)`"`n")
+[IO.File]::WriteAllText((Join-Path $fake 'bootstrap.sh'), "printf '%s\n' `"`$*`" > `"`$FAKE/bootstrap.args`"`nprintf '%s|%s|%s\n' `"`${HOUSE_KIT_RELAY-unset}`" `"`${HOUSE_KIT_INSTALL_COMMAND-unset}`" `"`${HOUSE_KIT_FROM_WINDOWS-unset}`" > `"`$FAKE/bootstrap.env`"`nexit `"`$(cat `"`$FAKE/bootstrap.status`" 2>/dev/null || echo 0)`"`n")
 
 function Read-Fake([string] $Name) {
   $path = Join-Path $fake $Name
@@ -240,8 +240,8 @@ if ($refused -cne 'kit_bootstrap_refused: Kit runs in Docker Desktop on this com
 Remove-Item -LiteralPath (Join-Path $profileFolder 'AgentsHouse')
 
 foreach ($case in @(
-  @{ Name = 'a direct install'; Relay = $null; Given = @{ '--house' = 'https://agents.house'; '--code' = 'ahk_code_one' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house --code ahk_code_one'; Environment = "unset|irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'" },
-  @{ Name = 'a relayed install with no code'; Relay = 'https://kit-relay.example'; Given = @{ '--house' = 'https://agents.house' }; Url = '-fsSL -o * https://kit-relay.example/agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house'; Environment = "https://kit-relay.example|irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'" }
+  @{ Name = 'a direct install'; Relay = $null; Given = @{ '--house' = 'https://agents.house'; '--code' = 'ahk_code_one' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house --code ahk_code_one'; Environment = "unset|irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'|1" },
+  @{ Name = 'a relayed install with no code'; Relay = 'https://kit-relay.example'; Given = @{ '--house' = 'https://agents.house' }; Url = '-fsSL -o * https://kit-relay.example/agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house'; Environment = "https://kit-relay.example|irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'|1" }
 )) {
   Reset-Fake
   $env:HOUSE_KIT_RELAY = $case.Relay

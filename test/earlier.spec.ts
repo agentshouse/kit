@@ -111,7 +111,7 @@ it("moves a Linux desktop's Kit home and its default workspace into ~/.agents/ho
   expect(unit).toContain('WantedBy=default.target\n');
   expect(unit).not.toContain('HOUSE_KIT');
   expect(tools.calls('loginctl')).toEqual([`enable-linger ${process.getuid!()}`]);
-  expect(tools.calls('systemctl')).toEqual(['--user daemon-reload', '--user --quiet reenable house-kit.service']);
+  expect(tools.calls('systemctl')).toEqual(['--user show-environment', '--user daemon-reload', '--user --quiet reenable house-kit.service']);
 });
 
 it('keeps a workspace its person set elsewhere where it is and names it as the workspace setting', async () => {
@@ -177,6 +177,7 @@ it("moves a VPS's root Kit and /agents/house into root's ~/.agents/house, starts
   expect(tools.calls('loginctl')).toEqual(['enable-linger 0']);
   expect(tools.calls('systemctl')).toEqual([
     'start user@0.service',
+    '--user show-environment',
     '--user daemon-reload',
     '--user --quiet reenable house-kit.service',
     '--user --no-block start house-kit.service',

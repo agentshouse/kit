@@ -17,6 +17,9 @@ done
 
 const TOOLS: Record<string, string> = {
   systemctl: `${LOGGED}case "$*" in
+  *--user*) [ ! -e "$FAKE/starting" ] || { echo 'Failed to connect to user scope bus via local transport: No such file or directory' >&2; exit 1; } ;;
+esac
+case "$*" in
   *is-active*) [ -e "$FAKE/active" ] ;;
   *is-enabled*) [ -e "$FAKE/enabled" ] ;;
   *'--no-block stop house-kit.service'*) kill -TERM "$PPID" ;;
@@ -24,7 +27,10 @@ const TOOLS: Record<string, string> = {
   *'start house-kit.service') touch "$FAKE/active" ;;
 esac
 `,
-  loginctl: `${LOGGED}[ ! -e "$FAKE/linger-refused" ] || { echo 'Could not enable linger: Access denied' >&2; exit 1; }\n`,
+  loginctl: `${LOGGED}[ ! -e "$FAKE/linger-refused" ] || { echo 'Could not enable linger: Access denied' >&2; exit 1; }
+[ ! -e "$FAKE/starts-late" ] || { touch "$FAKE/starting"; (sleep 1; rm -f "$FAKE/starting") </dev/null >/dev/null 2>&1 & }
+[ ! -e "$FAKE/never-starts" ] || touch "$FAKE/starting"
+`,
   launchctl: `${LOGGED}case "$1" in
   print)
     [ -e "$FAKE/loaded" ] || exit 113

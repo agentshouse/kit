@@ -201,6 +201,18 @@ prepare_home() {
   [[ -O "$KIT_HOME" ]] || refuse "$KIT_HOME is not owned by this account"
 }
 
+offer_windows() {
+  local answer=''
+  [[ -n "${WSL_DISTRO_NAME:-}" && -z "${HOUSE_KIT_FROM_WINDOWS:-}" ]] || return 0
+  if [[ -t 0 ]]; then
+    printf 'Recommended: run this in Windows PowerShell instead, which keeps Kit running and starts it again after a restart:\n  %s\n' "$HOUSE_KIT_WINDOWS_COMMAND"
+    printf 'Install here anyway? Kit will then not start by itself: it runs only while a WSL terminal is open, and not after a restart. [y/N] '
+    read -r answer || true
+    case "$answer" in [yY]|[yY][eE][sS]) return 0 ;; esac
+  fi
+  refuse "from a WSL terminal Kit runs only while one is open, so nothing was installed; to keep it running, run this in Windows PowerShell: $HOUSE_KIT_WINDOWS_COMMAND"
+}
+
 notice_host() {
   local found=Linux contract distribution='' release=''
   if ((MACOS)); then
@@ -303,6 +315,7 @@ if ((PLACING)); then
   exit 0
 fi
 [[ "$HOUSE" == https://* || "$HOUSE" == http://127.0.0.1:* || "$HOUSE" == http://localhost:* ]] || refuse 'House origin must use HTTPS or local loopback HTTP'
+offer_windows
 notice_host
 ((MACOS)) || establish_native_packages
 prepare_home

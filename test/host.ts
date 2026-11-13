@@ -1,3 +1,4 @@
+import { spawn } from '@lydell/node-pty';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
@@ -45,10 +46,16 @@ export interface Ran {
   stderr: string;
 }
 
+export interface Asked {
+  status: number;
+  shown: string;
+}
+
 export interface Host {
   home: string;
   kitHome: string;
   run(argv?: string[], added?: Record<string, string>): Ran;
+  ask(argv: string[], added: Record<string, string>, answer: string): Promise<Asked>;
   shell(line: string): Ran;
   calls(tool: string): string[];
   forget(): Promise<void>;
@@ -145,6 +152,19 @@ export async function fakeHost(platform: Platform): Promise<Host> {
     home,
     kitHome: join(home, '.agents', 'house'),
     run: (argv = [], added = {}) => ran('bash', [bootstrap, ...argv], added),
+    ask: (argv, added, answer) =>
+      new Promise((resolve) => {
+        const terminal = spawn('bash', [bootstrap, ...argv], { cols: 200, rows: 24, env: { ...environment, ...added } });
+        let shown = '';
+        let answered = false;
+        terminal.onData((data) => {
+          shown += data;
+          if (answered || !shown.includes('[y/N] ')) return;
+          answered = true;
+          terminal.write(`${answer}\r`);
+        });
+        terminal.onExit(({ exitCode }) => resolve({ status: exitCode, shown: shown.replaceAll('\r\n', '\n') }));
+      }),
     shell: (line) => ran('sh', ['-c', line]),
     calls: (tool) =>
       readFileSync(join(fake, 'log'), { encoding: 'utf8', flag: 'a+' })
