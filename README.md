@@ -22,7 +22,7 @@ installer. When it starts and regularly after, Kit runs each CLI's own update co
 your conversations: a running conversation keeps its version and the next one runs the new release. A CLI older than
 the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version, that
 oldest release and its update command. Kit also gives every Agent on the Environment the agent skills of
-`@agentshouse/skills`, at the version each Kit release installs, unless `kit.json`'s `skills` is `false`.
+`@agentshouse/skills`, at the version each Kit release installs, unless its `skills` setting is off.
 
 ## Commands
 
@@ -34,6 +34,9 @@ login run a lone `house` command outside their sandbox. `kit logout` disconnects
 computer, stops the Kit process and ends your own agent's connection, so `house` and `git` no
 longer act as you here; a later `kit login` reconnects the same Environment, or connects
 this computer as a new one when House no longer holds it.
+
+`kit settings` prints Kit's two settings, which every update and every rerun of the install keep: `skills`, whether Kit places House's Skills, and `workspace`, the folder that holds `agents` and `local-copies`. `kit settings skills on|off` and `kit settings workspace <absolute path>` change one, as the Environment's page in House does.
+A new workspace must hold no `agents` or `local-copies` folder, and none is taken while an Agent works; Kit then ends its conversations' processes, moves both folders there, across filesystems copying and checking them before it deletes the old ones, and ends so its service starts it there.
 
 `kit resident` keeps the Environment connected and, as it connects, copies the text of each Room you chose for it as a
 Git repository in the workspace's `local-copies`, and keeps a Room's copy as it is, no longer refreshing it, once the

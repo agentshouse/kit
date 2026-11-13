@@ -5,6 +5,7 @@ import { login } from './login.ts';
 import { logout } from './logout.ts';
 import { proxyUnlessRelayed } from './relay.ts';
 import { resident } from './resident.ts';
+import { kitSettings, SETTINGS_USAGE } from './settings.ts';
 
 interface Command {
   usage: string;
@@ -13,7 +14,7 @@ interface Command {
   run(operands: string[]): Promise<void>;
 }
 
-const USAGE = 'usage: kit <connect|login|logout|resident>\n';
+const USAGE = 'usage: kit <connect|login|logout|resident|settings>\n';
 const COMMANDS = new Map<string, Command>([
   [
     'logout',
@@ -31,6 +32,15 @@ const COMMANDS = new Map<string, Command>([
       about: "keeps this Environment connected; Kit's service runs it",
       operands: 0,
       run: resident,
+    },
+  ],
+  [
+    'settings',
+    {
+      usage: SETTINGS_USAGE,
+      about: "prints Kit's settings, or changes whether Kit places House's Skills or where its workspace is",
+      operands: 2,
+      run: kitSettings,
     },
   ],
   [

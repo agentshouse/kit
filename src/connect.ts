@@ -7,7 +7,7 @@ import { KIT_RELEASE } from './clis.ts';
 import { takeOverEarlier } from './earlier.ts';
 import { kitHome, readEnrolment, storedConfiguration, writeConfiguration } from './home.ts';
 import { DEFAULT_HOUSE, enrol, placeConnection } from './login.ts';
-import { runningRelease } from './resident.ts';
+import { runningRelease } from './owner.ts';
 import { quoted } from './shell.ts';
 import { defineSupervisor, launcher, supervise, systemd } from './supervisor.ts';
 

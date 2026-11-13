@@ -49,15 +49,17 @@ async function opened(hosted: Hosted): Promise<void> {
   await hosted.result(lastCall());
 }
 
-it('places the release House names with its adapters beside the one it runs, writing nothing into that one, and ends with a failure once it is idle so its supervisor starts the new one', async () => {
+it('places the release House names with its adapters beside the one it runs, writing nothing into that one or its settings, and ends with a failure once it is idle so its supervisor starts the new one', async () => {
   const hosted = await hostKit();
   await serveRelease(hosted, await released(PLACED));
   const running = await entriesUnder(join(prefix(hosted), 'releases', KIT_RELEASE));
+  const settings = await readFile(join(hosted.home, 'kit.json'), 'utf8');
 
   callUpdate(hosted, 'update-1', PLACED);
 
   expect(await hosted.result('update-1')).toEqual({});
   expect(await hosted.kit.exited).toBe(1);
+  expect(await readFile(join(hosted.home, 'kit.json'), 'utf8')).toBe(settings);
   expect(hosted.kit.stderr()).toContain(`kit: Kit ${PLACED} is placed; its supervisor starts it\n`);
   expect(await current(hosted)).toBe(PLACED);
   expect(await placedReleases(hosted)).toEqual([KIT_RELEASE, PLACED].sort());
