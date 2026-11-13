@@ -104,7 +104,7 @@ const QUIET: SessionState = {
   cost: null,
   tokens: null,
   duration: null,
-  files: [],
+  files: { count: 0, added: 0, removed: 0 },
   branch: null,
   worktree: null,
   pull: null,

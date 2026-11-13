@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { idOf, settle, until, type Received } from './double.ts';
 import { emit, hostKit, lastCall, type Hosted, type RouteOverrides } from './environment.ts';
@@ -235,7 +236,7 @@ it.each([
   const { hosted, turns } = await replayed(fixture, 2);
 
   expect(turns[0]!.content.parts).toContainEqual(expect.objectContaining({ type: 'subagent', parent: null, task, status: 'running', report: null }));
-  expect(turns[0]!.content.state.running).toEqual([{ kind: 'subagent', label: task, progress: null, next: null }]);
+  expect(turns[0]!.content.state.running).toEqual([{ kind: 'subagent', count: 1 }]);
   expect(turns[1]!.content.parts[0]).toEqual(expect.objectContaining({ type: 'subagent', parent: null, task, status: 'done', report }));
   expect(turns[1]!.content.state.running).toEqual([]);
   expect(states(hosted).at(-1)!.running).toEqual([]);
@@ -248,7 +249,7 @@ it.each([
   const { turns } = await replayed(fixture, 2);
 
   expect(turns[0]!.content.parts).toContainEqual({ type: 'background', parent: null, kind: 'shell', label, status: 'running' });
-  expect(turns[0]!.content.state.running).toEqual([{ kind: 'shell', label, progress: null, next: null }]);
+  expect(turns[0]!.content.state.running).toEqual([{ kind: 'shell', count: 1 }]);
   expect(turns[1]!.content.parts[0]).toEqual({ type: 'background', parent: null, kind: 'shell', label, status: 'done' });
   expect(turns[1]!.content.state.running).toEqual([]);
 });
@@ -263,16 +264,98 @@ it("closes a recorded Codex command its background terminal took over, shows the
   expect(next.content.parts[0]).toEqual({ type: 'background', parent: null, kind: 'shell', label: 'sleep 25', status: 'done' });
 });
 
-it.each([
-  ['claude-schedule', '2027-01-01T03:30:00.000Z'],
-  ['grok-schedule', '2026-10-10T16:41:15.376Z'],
-])("shows the native schedule recorded in %s as background work, in the session's state with its next run until it is deleted", async (fixture, next) => {
+it.each(['claude-schedule', 'grok-schedule'])("shows the native schedule recorded in %s as background work, and in the session's state as one schedule until it is deleted", async (fixture) => {
   const { hosted, turns } = await replayed(fixture);
 
   expect(turns[0]!.content.parts).toContainEqual({ type: 'background', parent: null, kind: 'schedule', label: 'say hi', status: 'stopped' });
-  expect(states(hosted).map((state) => state.running)).toContainEqual([{ kind: 'schedule', label: 'say hi', progress: null, next }]);
+  expect(states(hosted).map((state) => state.running)).toContainEqual([{ kind: 'schedule', count: 1 }]);
   expect(turns[0]!.content.state.running).toEqual([]);
 });
+
+function events(fixture: string): string {
+  return fileURLToPath(new URL(`./fixtures/events/${fixture}.jsonl`, import.meta.url));
+}
+
+function linesOf(fixture: string): Record<string, any>[] {
+  return readFileSync(events(fixture), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+}
+
+function renamed(line: Record<string, any>, renames: [string, string][]): Record<string, any> {
+  let text = JSON.stringify(line);
+  for (const [from, to] of renames) text = text.split(from).join(to);
+  return JSON.parse(text);
+}
+
+async function derived(hosted: Hosted, name: string, lines: Record<string, any>[]): Promise<string> {
+  const path = join(hosted.home, `${name}.jsonl`);
+  await writeFile(path, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+  return path;
+}
+
+async function sessionOf(hosted: Hosted): Promise<string> {
+  const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new');
+  return opened!.sessionId as string;
+}
+
+const COMPOSED: Record<string, (hosted: Hosted) => Promise<string[]>> = {
+  'claude-agent-acp': async (hosted) => {
+    const edit = linesOf('claude-retry').slice(17, 25);
+    const other = edit.map((line) => renamed(line, [['toolu_01NBDhKngHkVZFa2MATnxChC', 'toolu_01NBDhKngHkVZFa2MATnxChD'], ['notes.txt', 'todo.txt']]));
+    return [
+      `@play ${events('claude-retry')} 17 25`,
+      `@play ${await derived(hosted, 'todo', other)}`,
+      `@play ${events('claude-background')} 8 21`,
+      `@play ${events('claude-subagents')} 28 37`,
+    ];
+  },
+  'codex-acp': async (hosted) => {
+    const { tap } = linesOf('codex-web').findLast((line) => line.tap?.method === 'turn/diff/updated')!;
+    const diff = tap.params.diff as string;
+    const turnDiff = { ...tap, params: { ...tap.params, threadId: await sessionOf(hosted), diff: `${diff}${diff.split('notes.txt').join('todo.txt')}` } };
+    return [
+      `@stream ${await derived(hosted, 'diff', [turnDiff])}`,
+      `@play ${events('codex-terminal')} 15 25`,
+      `@play ${events('codex-tools')} 113 114`,
+    ];
+  },
+  'grok-build': async (hosted) => {
+    const edit = linesOf('grok-edit').filter((_line, index) => [39, 40, 41, 42, 47].includes(index));
+    const other = edit.map((line) => renamed(line, [['8360-1', '8360-9'], ['notes.txt', 'todo.txt']]));
+    return [
+      `@play ${events('grok-edit')} 39 49`,
+      `@play ${await derived(hosted, 'todo', other)}`,
+      `@play ${events('grok-background')} 37 44`,
+      `@play ${events('grok-subagent')} 15 21`,
+    ];
+  },
+};
+
+it.each([
+  ['claude-agent-acp', { count: 2, added: 2, removed: 2 }],
+  ['codex-acp', { count: 2, added: 2, removed: 0 }],
+  ['grok-build', { count: 2, added: 3, removed: 3 }],
+])(
+  "counts in the session's state the two files a turn %s recorded edits with their lines, and the background shell and sub-agent it leaves running by kind, with no path or label",
+  async (kind, files) => {
+    const hosted = await hostKit([{ kind }]);
+    hosted.call({ kind: 'open' });
+    await hosted.result(lastCall());
+    hosted.watch(true);
+    hosted.call({ kind: 'message', text: (await COMPOSED[kind]!(hosted)).join('\n'), first: false });
+    await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
+    const state = await until(() => states(hosted).findLast((one) => one.files.count > 0 && one.running.length > 0));
+
+    expect(state.files).toEqual(files);
+    expect(state.running).toEqual([
+      { kind: 'shell', count: 1 },
+      { kind: 'subagent', count: 1 },
+    ]);
+    expect(states(hosted).every(isState)).toBe(true);
+  },
+);
 
 it('keeps each recorded call with its kind: a web search with how much it found, a fetched page, an MCP call and its result, a command and an edit with its diff', async () => {
   const claude = (await replayed('claude-web')).turns[0]!.content.parts.map(untimed);
@@ -296,7 +379,7 @@ it('keeps each recorded call with its kind: a web search with how much it found,
     status: 'done',
     files: [{ path: '/work/notes.txt', added: 1, removed: 0, diff: '@@ -3 +3,2 @@\n gamma\n+beta\n' }],
   });
-  expect(turns[0]!.content.state.files).toEqual([{ path: 'notes.txt', added: 1, removed: 0 }]);
+  expect(turns[0]!.content.state.files).toEqual({ count: 1, added: 1, removed: 0 });
   expect(edited.parts.map(untimed)).toContainEqual({
     type: 'call',
     parent: null,
@@ -305,7 +388,7 @@ it('keeps each recorded call with its kind: a web search with how much it found,
     status: 'done',
     files: [{ path: '/work/notes.txt', added: 1, removed: 1, diff: '@@ -1,3 +1,3 @@\n alpha\n beta\n-gamma\n+delta\n' }],
   });
-  expect(edited.state.files).toEqual([{ path: '/work/notes.txt', added: 1, removed: 1 }]);
+  expect(edited.state.files).toEqual({ count: 1, added: 1, removed: 1 });
 });
 
 it("keeps each recorded Grok Build edit of an existing file with its diff at the lines it changed, and a write over the whole file with what it replaced", async () => {
@@ -318,7 +401,7 @@ it("keeps each recorded Grok Build edit of an existing file with its diff at the
     { type: 'call', parent: null, kind: 'edit', line: 'Edit `/work/notes.txt`', status: 'done', files: notes(1, 1, '@@ -2,1 +2,1 @@\n-two\n+TWO\n') },
     { type: 'call', parent: null, kind: 'edit', line: 'Edit `/work/notes.txt`', status: 'done', files: notes(1, 1, '@@ -9,1 +9,1 @@\n-nine\n+NINE\n') },
   ]);
-  expect(edited.state.files).toEqual([{ path: '/work/notes.txt', added: 2, removed: 2 }]);
+  expect(edited.state.files).toEqual({ count: 1, added: 2, removed: 2 });
   const before = ['one', 'TWO', 'three', 'four', 'five', 'six', 'seven', 'eight', 'NINE', 'ten'].map((line) => `-${line}\n`).join('');
   expect(edits(written)).toEqual([
     { type: 'call', parent: null, kind: 'edit', line: 'Write `/work/notes.txt`', status: 'done', files: notes(2, 10, `@@ -1,10 +1,2 @@\n${before}+alpha\n+beta\n`) },
@@ -342,11 +425,11 @@ it("starts a recorded Grok Build edit that begins inside a line at that line's s
 
 it.each(['claude-retry', 'codex-web', 'grok-edit'])("clears the last turn's files in the session's state when the turn after %s edits nothing", async (fixture) => {
   const { hosted } = await replayed(fixture);
-  await until(() => states(hosted).at(-1)!.files.length > 0);
+  await until(() => states(hosted).at(-1)!.files.count > 0);
 
   hosted.call({ kind: 'message', text: '@say done', first: false });
   const next = await until(() => hosted.turns.filter((turn) => turn.path === '/kit/turns/end')[1]);
-  expect(endedOf(next).content.state.files).toEqual([]);
+  expect(endedOf(next).content.state.files).toEqual({ count: 0, added: 0, removed: 0 });
 });
 
 it("cuts a command's output to its last lines, a fetched page to its first part and an edit's diff beyond its size to its line counts", async () => {
@@ -429,7 +512,7 @@ it("reads a recorded Codex session's limits, its turn's duration and diff and it
         { name: null, minutes: 10_080, percent: 18, resets: '2026-11-08T17:13:19.000Z' },
       ],
       duration: 22_836,
-      files: [{ path: 'notes.txt', added: 1, removed: 0 }],
+      files: { count: 1, added: 1, removed: 0 },
       mode: 'agent-full-access',
     }),
   );

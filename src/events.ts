@@ -19,7 +19,9 @@ type Subagent = Extract<Placed, { type: 'subagent' }>;
 
 type Background = Extract<Placed, { type: 'background' }>;
 
-type Running = SessionState['running'][number];
+type Running = SessionState['running'][number]['kind'];
+
+type Files = SessionState['files'];
 
 type Limit = SessionState['limits'][number];
 
@@ -61,7 +63,7 @@ type Detail =
   | { kind: 'fetch' | 'tool' | 'other'; output: string };
 
 interface HouseMessage {
-  command: string;
+  command: Extract<Placed, { type: 'message' }>['command'];
   target: string | null;
 }
 
@@ -222,15 +224,23 @@ function replaced(entry: Fields): FileChange {
   };
 }
 
-function turnDiffFiles(diff: string): SessionState['files'] {
-  return diff
-    .split(/^diff --git /m)
-    .filter((section) => section.trim() !== '')
-    .map((section) => {
-      const header = section.split('\n')[0]!;
-      const path = /^\+\+\+ b\/(.+)$/m.exec(section)?.[1] ?? header.slice(header.indexOf(' b/') + 3);
-      return { path, ...changeCounts(section) };
-    });
+function changedFiles(files: ReadonlyMap<string, { added: number; removed: number }>): Files {
+  const changes = [...files.values()];
+  return {
+    count: files.size,
+    added: changes.reduce((sum, change) => sum + change.added, 0),
+    removed: changes.reduce((sum, change) => sum + change.removed, 0),
+  };
+}
+
+function turnDiffFiles(diff: string): Files {
+  const files = new Map<string, { added: number; removed: number }>();
+  for (const section of diff.split(/^diff --git /m).filter((one) => one.trim() !== '')) {
+    const header = section.split('\n')[0]!;
+    const path = /^\+\+\+ b\/(.+)$/m.exec(section)?.[1] ?? header.slice(header.indexOf(' b/') + 3);
+    files.set(path, changeCounts(section));
+  }
+  return changedFiles(files);
 }
 
 function merged(into: Fields, from: Fields | null | undefined): Fields {
@@ -381,12 +391,6 @@ abstract class Reader {
           ...this.handedOff(update.toolCallId),
           ...this.background(update.asyncTaskId, update.taskType === 'shell' || update.taskType === 'monitor' ? update.taskType : 'task', update.name ?? update.description ?? '', 'running'),
         ];
-      case 'async_task_progress': {
-        const held = this.backgrounds.get(update.asyncTaskId);
-        const progress = update.description ?? update.summary;
-        if (held === undefined || typeof progress !== 'string') return [];
-        return this.runs(backgroundKey(update.asyncTaskId), { kind: held.kind, label: held.label, progress, next: null });
-      }
       case 'async_task_state_update':
         if (this.turns.has(update.asyncTaskId)) {
           if (!RUNNING_JOB.has(update.state)) this.turns.delete(update.asyncTaskId);
@@ -419,13 +423,13 @@ abstract class Reader {
     return this.shown(held);
   }
 
-  protected background(id: string, kind: Background['kind'], label: string | null, status: Status, next: string | null = null): Event[] {
+  protected background(id: string, kind: Background['kind'], label: string | null, status: Status): Event[] {
     const part: Background = { type: 'background', kind, label: label ?? this.backgrounds.get(id)?.label ?? '', status };
     if (status === 'running') this.backgrounds.set(id, part);
     else this.backgrounds.delete(id);
     return [
       { kind: 'part', key: backgroundKey(id), parent: null, part },
-      ...this.runs(backgroundKey(id), status === 'running' ? { kind, label: part.label, progress: null, next } : null),
+      ...this.runs(backgroundKey(id), status === 'running' ? kind : null),
     ];
   }
 
@@ -435,11 +439,13 @@ abstract class Reader {
   }
 
   protected runs(key: string, running: Running | null): Event[] {
-    const before = JSON.stringify([...this.work.values()]);
+    const before = this.work.get(key) ?? null;
     if (running === null) this.work.delete(key);
     else this.work.set(key, running);
-    const now = [...this.work.values()];
-    return JSON.stringify(now) === before ? [] : [{ kind: 'state', state: { running: now } }];
+    if (before === running) return [];
+    const counts = new Map<Running, number>();
+    for (const kind of this.work.values()) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    return [{ kind: 'state', state: { running: [...counts].map(([kind, count]) => ({ kind, count })) } }];
   }
 
   private optionsChanged(options: Fields[]): Event[] {
@@ -496,7 +502,7 @@ abstract class Reader {
     else this.subagents.delete(key);
     return [
       { kind: 'part', key, parent: this.owners.get(key)!, part },
-      ...this.runs(key, part.status === 'running' ? { kind: 'subagent', label: part.task, progress: part.step, next: null } : null),
+      ...this.runs(key, part.status === 'running' ? 'subagent' : null),
     ];
   }
 
@@ -511,12 +517,12 @@ abstract class Reader {
   }
 
   private editedFiles(): Event[] {
-    const files = new Map<string, SessionState['files'][number]>();
+    const files = new Map<string, { added: number; removed: number }>();
     for (const change of [...this.edits.values()].flat()) {
       const held = files.get(change.path);
-      files.set(change.path, { path: change.path, added: (held?.added ?? 0) + change.added, removed: (held?.removed ?? 0) + change.removed });
+      files.set(change.path, { added: (held?.added ?? 0) + change.added, removed: (held?.removed ?? 0) + change.removed });
     }
-    return [{ kind: 'state', state: { files: [...files.values()] } }];
+    return [{ kind: 'state', state: { files: changedFiles(files) } }];
   }
 
   protected decideLine(line: string | undefined, final: boolean): Shown | null {
@@ -761,8 +767,7 @@ class ClaudeReader extends Reader {
     const result = this.answers.get(held.id)?.result ?? {};
     if (tool === 'CronCreate' && typeof result.id === 'string' && !this.crons.has(result.id)) {
       this.crons.set(result.id, held.id);
-      const next = typeof result.nextFireAt === 'number' ? instant(result.nextFireAt) : null;
-      return this.background(held.id, 'schedule', held.rawInput?.prompt ?? held.title ?? '', 'running', next);
+      return this.background(held.id, 'schedule', held.rawInput?.prompt ?? held.title ?? '', 'running');
     }
     if (tool === 'CronDelete' && typeof held.rawInput?.id === 'string' && this.crons.has(held.rawInput.id)) {
       const created = this.crons.get(held.rawInput.id)!;
@@ -779,7 +784,7 @@ class ClaudeReader extends Reader {
     if (seconds === undefined) return [];
     const next = Date.now() + Number(seconds) * 1000;
     this.wakeups.set(held.id, next);
-    return this.background(held.id, 'schedule', held.rawInput?.prompt ?? held.rawInput?.reason ?? held.title ?? '', 'running', instant(next));
+    return this.background(held.id, 'schedule', held.rawInput?.prompt ?? held.rawInput?.reason ?? held.title ?? '', 'running');
   }
 }
 
@@ -1012,8 +1017,7 @@ class GrokReader extends Reader {
       }
       case '_x.ai/scheduled_task_created': {
         this.schedules.add(update!.task_id);
-        const next = Date.parse(update!.next_fire_at);
-        return this.background(update!.task_id, 'schedule', update!.prompt ?? '', 'running', Number.isNaN(next) ? null : instant(next));
+        return this.background(update!.task_id, 'schedule', update!.prompt ?? '', 'running');
       }
       case '_x.ai/scheduled_task_deleted':
         return this.schedules.delete(update!.task_id) ? this.background(update!.task_id, 'schedule', null, 'stopped') : [];

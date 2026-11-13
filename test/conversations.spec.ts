@@ -1222,18 +1222,17 @@ it('ends a recorded Claude Code turn at its result while the sub-agent it starte
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
 });
 
-it("relays what a background Claude Code sub-agent is doing while it runs in the session's state, and that none runs once it ends", async () => {
+it("counts a background Claude Code sub-agent in the session's state while it runs, with nothing of what it does, and none once it ends", async () => {
   const hosted = await opened('claude-agent-acp');
   const release = gated(hosted, 'held');
   hosted.call({ kind: 'message', text: HOLDING, first: false });
   await ends(hosted, 1);
 
-  const subagent = (progress: string | null) => [{ kind: 'subagent', label: 'Sleep twice', progress, next: null }];
-  expect(running(hosted)).toEqual([[], subagent(null)]);
+  expect(running(hosted)).toEqual([[], [{ kind: 'subagent', count: 1 }]]);
   await release();
 
   await ends(hosted, 2);
-  expect(running(hosted)).toEqual([[], subagent(null), subagent('Running First sleep'), subagent('Running Second sleep'), []]);
+  expect(running(hosted)).toEqual([[], [{ kind: 'subagent', count: 1 }], []]);
 });
 
 const SECOND_SLEEP = HELD_LINES.findIndex((line) => line.params?.message?.message?.content?.[0]?.input?.description === 'Second sleep');
@@ -1298,7 +1297,7 @@ it.each([
     expect(ended[0]!.parts).toContainEqual(expect.objectContaining({ type: 'subagent', parent: null, task: 'Sleep twice', status: 'running' }));
     for (const [later, text] of [[ended[1]!, 'next'], [ended[2]!, 'compacted']] as const) {
       expect(later.parts).toEqual([{ type: 'text', parent: null, text }]);
-      expect(later.state.running).toEqual([expect.objectContaining({ kind: 'subagent', label: 'Sleep twice' })]);
+      expect(later.state.running).toEqual([{ kind: 'subagent', count: 1 }]);
     }
     expect(hosted.images).toEqual([]);
     expect(ended[3]!.parts[0]).toEqual(expect.objectContaining({ type: 'subagent', parent: null, task: 'Sleep twice', status: 'done', report: 'slept' }));
