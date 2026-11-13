@@ -21,7 +21,7 @@ it('prints its usage on standard output for kit --help', async () => {
   const kit = runKit(['--help'], { HOME: accountOf(await temporaryHome()) });
 
   expect(await kit.exited).toBe(0);
-  expect(kit.stdout()).toBe('usage: kit <connect|login|logout|resident>\n');
+  expect(kit.stdout()).toBe('usage: kit <connect|login|logout|resident|settings>\n');
   expect(kit.stderr()).toBe('');
 });
 
@@ -33,7 +33,7 @@ it.each(['codex', 'chatgpt'])('prints its usage on standard error for kit %s, a 
 
   expect(await kit.exited).toBe(2);
   expect(kit.stdout()).toBe('');
-  expect(kit.stderr()).toBe('usage: kit <connect|login|logout|resident>\n');
+  expect(kit.stderr()).toBe('usage: kit <connect|login|logout|resident|settings>\n');
   expect(house.requests).toEqual([]);
   expect(await readdir(home)).toEqual([]);
 });

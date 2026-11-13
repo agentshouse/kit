@@ -114,7 +114,7 @@ it('pins in its package only the Codex and Claude Code adapters, no CLI and no G
   expect(Object.keys({ ...KIT_PACKAGE.dependencies, ...PINNED }).join(' ')).not.toMatch(/grok|@openai\/codex|claude-code/);
 });
 
-it("reports the release of each CLI the login shell finds, its sign-in state, the models its session options name, each with its name and efforts and none for the CLI's own default, the model and the effort the CLI starts with, the modes and its full-access mode, with the operating system, the Kit release, its wire and its transcription engine", async () => {
+it("reports the release of each CLI the login shell finds, its sign-in state, the models its session options name, each with its name and efforts and none for the CLI's own default, the model and the effort the CLI starts with, the modes and its full-access mode, with the operating system, the Kit release, its wire, its settings and its transcription engine", async () => {
   desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   await signIn(...desired);
   await start();
@@ -127,6 +127,7 @@ it("reports the release of each CLI the login shell finds, its sign-in state, th
     kit_release: KIT_PACKAGE.version,
     wire: KIT_WIRE,
     agent_base: join(home, 'agents'),
+    settings: { skills: true, workspace: home },
     agents: [
       {
         kind: 'codex-acp',
@@ -446,6 +447,7 @@ it('creates and reports the agents folder of the native workspace root as its Ag
   const report = await until(() => completeReports()[0]);
 
   expect(report.agent_base).toBe(join(workspace, 'agents'));
+  expect(report.settings).toEqual({ skills: false, workspace });
   expect((await stat(join(workspace, 'agents'))).isDirectory()).toBe(true);
 });
 

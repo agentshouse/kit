@@ -395,7 +395,11 @@ export class Conversations {
   }
 
   quiet(): boolean {
-    return this.idle() && [...this.conversations.values()].every((conversation) => conversation.turns.size === 0);
+    return this.idle() && !this.turnOpen();
+  }
+
+  turnOpen(): boolean {
+    return [...this.conversations.values()].some((conversation) => conversation.turns.size > 0);
   }
 
   private look(): void {

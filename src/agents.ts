@@ -6,6 +6,7 @@ import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
 import { CLIS, KIT_RELEASE, below, installCli, locate, run, updateCli, versionOf } from './clis.ts';
 import { agentBase, kitHome, reinstall } from './home.ts';
+import { heldSettings } from './settings.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
 
 type Model = ReportedAgentKind['models'][number];
@@ -470,6 +471,7 @@ export class Agents {
       wire: KIT_WIRE,
       agent_base: agentBase(),
       ...(reinstall() === undefined ? {} : { reinstall: reinstall() }),
+      settings: await heldSettings(),
       agents,
       transcription: transcriptionReport(),
       ...(hostKey === null ? {} : { ssh_host_key: hostKey }),

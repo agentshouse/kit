@@ -22,6 +22,8 @@ export class Calls {
   private readonly results: Map<string, KitCallResult>;
   private readonly returned = new Set<string>();
   private readonly released = new Set<string>();
+  private readonly carrying = new Map<string, number>();
+  private readonly settings = new Set<string>();
   private open = 0;
 
   constructor(house: House, changed: () => void) {
@@ -42,6 +44,15 @@ export class Calls {
     return this.open === 0;
   }
 
+  busy(): boolean {
+    return [...this.carrying.keys()].some((callId) => !this.settings.has(callId));
+  }
+
+  carrySettings(callId: string, work: () => Promise<Carried>): Promise<void> {
+    this.settings.add(callId);
+    return this.carry(callId, work);
+  }
+
   carry(callId: string, work: () => Promise<Carried>): Promise<void> {
     if (this.released.has(callId)) return Promise.resolve();
     const known = this.carried.get(callId);
@@ -52,6 +63,7 @@ export class Calls {
       carried.catch(() => this.carried.delete(callId));
     }
     this.open++;
+    this.carrying.set(callId, (this.carrying.get(callId) ?? 0) + 1);
     this.changed();
     return carried
       .then(async ({ result, returned, release }) => {
@@ -71,6 +83,11 @@ export class Calls {
       .catch(logged)
       .finally(() => {
         this.open--;
+        const left = this.carrying.get(callId)! - 1;
+        if (left === 0) {
+          this.carrying.delete(callId);
+          this.settings.delete(callId);
+        } else this.carrying.set(callId, left);
         this.changed();
       });
   }

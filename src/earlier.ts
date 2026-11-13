@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { cp, lstat, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -9,6 +9,7 @@ import { restart } from './end.ts';
 import { awaitsTakeover, desktopPrefix, earlierHome, earlierPrefix, oneFolder } from './home.ts';
 import { defineSupervisor, launchAgent, linger, manage, required, systemd, userUnit } from './supervisor.ts';
 import { placeServedRelease } from './update.ts';
+import { followRoot, merged, removeFolder } from './workspace.ts';
 
 type Kind = 'desktop' | 'server' | 'container' | 'windows';
 
@@ -118,95 +119,11 @@ function defaulted(earlier: Earlier): boolean {
   return earlier.kind === 'server' || earlier.workspace === desktopWorkspace();
 }
 
-async function present(path: string) {
-  try {
-    return await lstat(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-async function listed(path: string): Promise<string[]> {
-  const entries = await readdir(path, { recursive: true, withFileTypes: true });
-  const shown = await Promise.all(
-    entries.map(async (entry) => {
-      const at = join(entry.parentPath, entry.name);
-      return `${at.slice(path.length)} ${entry.isFile() ? (await lstat(at)).size : entry.isDirectory() ? 'folder' : 'link'}`;
-    }),
-  );
-  return shown.sort();
-}
-
-async function moved(source: string, target: string): Promise<void> {
-  try {
-    await rename(source, target);
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
-  }
-  const copy = `${target}.moving`;
-  await rm(copy, { recursive: true, force: true });
-  await cp(source, copy, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
-  const folder = (await lstat(source)).isDirectory();
-  if (folder && JSON.stringify(await listed(source)) !== JSON.stringify(await listed(copy))) {
-    throw new Error(`${source} could not be copied to ${target} whole`);
-  }
-  await rename(copy, target);
-  await rm(source, { recursive: true, force: true });
-}
-
-async function merged(from: string, to: string, skipped: readonly string[] = []): Promise<void> {
-  const found = await present(from);
-  if (found === null || !found.isDirectory()) return;
-  await mkdir(to, { recursive: true, mode: 0o700 });
-  for (const entry of await readdir(from, { withFileTypes: true })) {
-    if (skipped.includes(entry.name)) continue;
-    const source = join(from, entry.name);
-    const target = join(to, entry.name);
-    const held = await present(target);
-    if (held === null) await moved(source, target);
-    else if (entry.isDirectory() && held.isDirectory()) await merged(source, target);
-    else await rm(source, { recursive: true, force: true });
-  }
-  await rmdir(from).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error;
-  });
-}
-
-function rewritten(value: unknown, from: string, to: string): unknown {
-  if (typeof value === 'string') return value === from || value.startsWith(`${from}/`) ? `${to}${value.slice(from.length)}` : value;
-  if (Array.isArray(value)) return value.map((item) => rewritten(item, from, to));
-  if (typeof value === 'object' && value !== null) {
-    return Object.fromEntries(Object.entries(value).map(([name, held]) => [name, rewritten(held, from, to)]));
-  }
-  return value;
-}
-
-async function followRoot(from: string, to: string): Promise<void> {
-  if (from === to) return;
-  const records = join(oneFolder(), RECORDS);
-  for (const name of await readdir(records).catch(() => [])) {
-    if (!name.endsWith('.json')) continue;
-    const path = join(records, name);
-    const text = await readFile(path, 'utf8');
-    const next = `${JSON.stringify(rewritten(JSON.parse(text), from, to))}\n`;
-    if (next.trim() === text.trim()) continue;
-    await writeFile(`${path}.new`, next, { mode: 0o600 });
-    await rename(`${path}.new`, path);
-  }
-}
-
-async function removeFolder(path: string): Promise<void> {
-  await rmdir(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error;
-  });
-}
-
 async function relocate(earlier: Earlier): Promise<void> {
   const folder = oneFolder();
   const copied = earlier.kind === 'windows';
-  await merged(earlier.home, folder, copied ? [RELEASES, PLACEMENT, WINDOWS_WORKSPACE] : [RELEASES]);
+  const kept = (copied ? [RELEASES, PLACEMENT, WINDOWS_WORKSPACE] : [RELEASES]).map((name) => join(earlier.home, name));
+  await merged(earlier.home, folder, (source) => (kept.includes(source) ? 'stays' : 'moves'));
   if (earlier.kind === 'container') await rm(join(earlier.home, RELEASES), { recursive: true, force: true });
   if (!copied) await removeFolder(earlier.home);
   const command = join(folder, 'install-command');
@@ -224,7 +141,7 @@ async function relocate(earlier: Earlier): Promise<void> {
       await rename(`${settings}.new`, settings);
     }
   }
-  await followRoot(earlier.seen, workspace);
+  await followRoot(join(folder, RECORDS), earlier.seen, workspace);
   if (copied) await rm(earlier.home, { recursive: true, force: true });
 }
 

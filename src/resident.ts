@@ -1,9 +1,9 @@
 import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { createServer, get } from 'node:http';
+import { createServer } from 'node:http';
 import { dirname, extname, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
@@ -11,12 +11,14 @@ import { received } from './bridge.ts';
 import { Conversations } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
 import { restart } from './end.ts';
-import { agentBase, enrolled, kitHome, ownerLock, ownerSocket, readEnrolment } from './home.ts';
+import { agentBase, enrolled, kitHome, ownerSocket, readEnrolment } from './home.ts';
 import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
+import { holdOwner } from './owner.ts';
 import { killDescendants } from './scope.ts';
 import { removeInputs, Scripts } from './scripts.ts';
+import { applySettings, enrolledRoutes, resumeWorkspaceMove, type Applied, type SettingsChange } from './settings.ts';
 import { quoted } from './shell.ts';
 import { SignIns } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
@@ -39,29 +41,16 @@ async function installShim(path: string, module: string): Promise<void> {
   await writeFile(path, `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(main)} "$@"\n`, { mode: 0o755 });
 }
 
-function claimed(lock: DatabaseSync): boolean {
-  try {
-    lock.exec('BEGIN EXCLUSIVE');
-    return true;
-  } catch (error) {
-    if ((error as { errcode?: number }).errcode === 5) return false;
-    throw error;
-  }
+interface Settling {
+  settle(change: SettingsChange): Promise<Applied>;
+  answered(applied: Applied): void;
 }
 
-async function serveOwner(copies: LocalCopies): Promise<void> {
-  const lock = new DatabaseSync(ownerLock());
-  if (!claimed(lock)) {
-    lock.close();
-    const running = await runningResident();
-    throw new Error(
-      `${running === null ? 'another Kit process' : `Kit process ${running}`} already runs this Environment from Kit home ${kitHome()}; stop it first to run another Kit process here`,
-    );
-  }
+async function serveOwner(lock: DatabaseSync, copies: LocalCopies, settling: Settling): Promise<void> {
   const server = createServer(async (request, response) => {
     try {
       const text = await received(request);
-      let answered: Pushed;
+      let answered: Pushed | Applied;
       if (request.url === '/resident') {
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ pid: process.pid, release: KIT_RELEASE }));
         return;
@@ -71,6 +60,10 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
       } else if (request.url === '/git/push') {
         const { cwd, commit } = JSON.parse(text) as { cwd: string; commit: string };
         answered = await copies.push(cwd, commit, copies.owner);
+      } else if (request.url === '/settings') {
+        const applied = await settling.settle(JSON.parse(text) as SettingsChange);
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(applied), () => settling.answered(applied));
+        return;
       } else {
         response.writeHead(404).end();
         return;
@@ -84,31 +77,6 @@ async function serveOwner(copies: LocalCopies): Promise<void> {
   await rm(ownerSocket(), { force: true });
   server.listen(ownerSocket());
   await once(server, 'listening');
-}
-
-interface Running {
-  pid: number;
-  release?: string;
-}
-
-function askResident(): Promise<Running | null> {
-  return new Promise((resolve, reject) => {
-    get({ socketPath: ownerSocket(), path: '/resident' }, (answer) => {
-      received(answer).then((text) => resolve(JSON.parse(text) as Running), reject);
-    }).on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT' || error.code === 'ECONNREFUSED') resolve(null);
-      else reject(error);
-    });
-  });
-}
-
-async function runningResident(): Promise<number | null> {
-  return (await askResident())?.pid ?? null;
-}
-
-export async function runningRelease(): Promise<string | null> {
-  const running = await askResident();
-  return running === null ? null : (running.release ?? '');
 }
 
 function connected(): Promise<void> {
@@ -138,9 +106,43 @@ async function started(): Promise<void> {
 export async function resident(): Promise<void> {
   await moveEarlier();
   await mkdir(kitHome(), { recursive: true, mode: 0o700 });
+  const lock = await holdOwner();
+  await resumeWorkspaceMove();
   const copies = new LocalCopies(house);
   await copies.load();
-  await serveOwner(copies);
+  let running: { conversations: Conversations; agents: Agents; calls: Calls; stop(then: () => void): Promise<void> } | null = null;
+  let settings: Promise<unknown> = Promise.resolve();
+  const settle = (change: SettingsChange): Promise<Applied> => {
+    const applied = settings.then(() =>
+      applySettings(change, {
+        working: () => running !== null && (running.conversations.turnOpen() || running.calls.busy()),
+        end: () => {
+          running?.conversations.stopped();
+          killDescendants();
+        },
+        routes: async () => {
+          if (running === null) return enrolledRoutes();
+          await running.agents.read();
+          return running.agents.desired.routes;
+        },
+      }),
+    );
+    settings = applied.catch(() => undefined);
+    return applied.then((answer) => {
+      if ('settings' in answer && !answer.moved) running?.agents.report().catch(report);
+      return answer;
+    });
+  };
+  const answered = (applied: Applied) => {
+    if ('settings' in applied ? !applied.moved : !applied.ended) return;
+    const ended =
+      'settings' in applied
+        ? `the workspace moved to ${applied.settings.workspace}; its supervisor starts Kit there`
+        : 'the workspace stays where it was; its supervisor starts Kit again';
+    if (running === null) restart(ended);
+    else void running.stop(() => restart(ended));
+  };
+  await serveOwner(lock, copies, { settle, answered });
   await copies.swept();
   await started().catch((error: unknown) => {
     report(error);
@@ -185,6 +187,7 @@ export async function resident(): Promise<void> {
   takeUnservedRelease((release) => logged(update.takeRefused(release)));
   removeInputs();
   const scripts = new Scripts(calls, (oneWayCall) => connection?.send(oneWayCall) ?? false);
+  running = { conversations, agents, calls, stop };
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
       void stop(() => {
@@ -213,6 +216,15 @@ export async function resident(): Promise<void> {
     call: (call) => {
       if (call.kind === 'sign_in') signIns.start(call);
       else if (call.kind === 'update') update.take(call);
+      else if (call.kind === 'settings') {
+        void calls.carrySettings(call.input_id, async () => {
+          const applied = await settle(call);
+          const result = 'refused' in applied ? { refused: applied.refused } : { settings: applied.settings };
+          if ('settings' in applied ? !applied.moved : !applied.ended) return { result };
+          calls.keepResult(call.input_id, result);
+          return new Promise<never>(() => answered(applied));
+        });
+      }
       else if (call.kind === 'run_wizard' || call.kind === 'run_function') scripts.start(call);
       else conversations.call(call);
     },
