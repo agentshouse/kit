@@ -63,7 +63,7 @@ it('connects a fresh Linux account with a login code, writes the absent settings
     'WantedBy=default.target',
     '',
   ]);
-  expect(tools.calls('loginctl')).toEqual(['enable-linger']);
+  expect(tools.calls('loginctl')).toEqual([`enable-linger ${process.getuid!()}`]);
   expect(managed(tools)).toEqual(['--user daemon-reload', '--user --quiet enable house-kit.service', '--user start house-kit.service']);
   expect(tools.calls('sudo')).toEqual([]);
 });
@@ -165,6 +165,24 @@ it('redeems the login code a run carries when House refuses the stored credentia
   await expect(readFile(join(home, 'held-enrolment', 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+it('keeps the stored credential and leaves the login code unused when House does not answer', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const tools = await supervision();
+  await tools.systemd();
+  await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }));
+  house.route('POST', '/kit/agents/desired/list', () => ({ status: 503, body: { error: { code: 'unavailable', retryable: true } } }));
+  redeems(house);
+
+  const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one']);
+
+  expect(ran.status).toBe(0);
+  expect(ran.stderr).toContain('kit: House did not answer, so the stored credential stands: ');
+  expect(ran.stdout.split('\n').at(-2)).toBe('Kit connected for Environment environment-one.');
+  expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_held' });
+});
+
 it('starts nothing on a Linux without systemd and names the kit resident command to supervise', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
@@ -191,7 +209,7 @@ it("runs root's Kit under root's own lingering user unit, starting root's servic
   const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one'], ROOTED, { KIT_TEST_UID0: '1' });
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
-  expect(tools.calls('loginctl')).toEqual(['enable-linger']);
+  expect(tools.calls('loginctl')).toEqual(['enable-linger 0']);
   expect(managed(tools)).toEqual(['start user@0.service', '--user daemon-reload', '--user --quiet enable house-kit.service', '--user start house-kit.service']);
   expect(tools.calls('sudo')).toEqual([]);
 });

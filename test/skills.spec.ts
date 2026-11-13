@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -82,14 +81,6 @@ function skills(home: string, name = ''): string {
 
 function claude(home: string, name = ''): string {
   return join(accountOf(home), '.claude', 'skills', name);
-}
-
-function configure(home: string, argv: string[]): { status: number | null; stdout: string; stderr: string } {
-  const ran = spawnSync(process.execPath, [fileURLToPath(new URL('../src/configure-main.ts', import.meta.url)), ...argv], {
-    env: { ...process.env, HOME: accountOf(home), HOUSE_KIT_HOME: home },
-    encoding: 'utf8',
-  });
-  return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
 }
 
 it("installs every Skill of the package at the version the Kit pins, file for file, for the home it launches agent CLIs with, with a relative Claude link resolving to each", async () => {
@@ -275,23 +266,6 @@ it('removes every recorded skill and the record and installs nothing when the Sk
   expect(await recorded(hosted.home)).toBeNull();
 });
 
-it('keeps the bootstrap choice in Kit configuration, says when a run changed it, and the next start honors it', async () => {
-  const home = await temporaryHome();
-
-  expect(configure(home, [])).toEqual({ status: 0, stdout: '', stderr: '' });
-  let hosted = await host({ home });
-  expect((await readdir(skills(home))).sort()).toEqual(NAMES);
-
-  expect(configure(home, ['--no-skills'])).toEqual({ status: 0, stdout: 'changed\n', stderr: '' });
-  expect(configure(home, ['--no-skills'])).toEqual({ status: 0, stdout: '', stderr: '' });
-  hosted = await restart(hosted, {});
-  expect(await readdir(skills(home))).toEqual([]);
-
-  expect(configure(home, [])).toEqual({ status: 0, stdout: 'changed\n', stderr: '' });
-  await restart(hosted, {});
-  expect((await readdir(skills(home))).sort()).toEqual(NAMES);
-});
-
 it('places every skill at kit login in the home of whoever runs it, with no resident, under the same record', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
@@ -312,7 +286,7 @@ it('places no skill at kit login when the Skill set is declined', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
-  expect(configure(home, ['--no-skills']).status).toBe(0);
+  await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false }));
 
   const { exit } = await logIn(house, home, planted);
 

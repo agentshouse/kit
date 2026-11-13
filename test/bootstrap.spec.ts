@@ -19,7 +19,7 @@ function bootstrap(script: string, argv: string[]) {
   return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
 }
 
-it('leaves the release exactly one Kit release, one Kit archive digest and one list of adapter digests to fill, and the Windows script its image', async () => {
+it('leaves the release exactly one Kit release, one Kit archive digest and one list of adapter digests to fill, and nothing in the Windows script', async () => {
   const linux = await readFile(LINUX, 'utf8');
   const windows = await readFile(WINDOWS, 'utf8');
 
@@ -28,8 +28,7 @@ it('leaves the release exactly one Kit release, one Kit archive digest and one l
   expect(linux.split('__KIT_RELEASE__')).toHaveLength(2);
   expect(linux.split('__KIT_SHA256__')).toHaveLength(2);
   expect(linux.split('__ADAPTERS__')).toHaveLength(2);
-  expect(windows.split('__IMAGE_DIGEST__')).toHaveLength(2);
-  expect(windows.split('__KIT_RELEASE__')).toHaveLength(2);
+  expect(windows).not.toMatch(/__[A-Z_]+__/);
   expect(windows).toMatch(/^[\x09\x0a\x20-\x7e]*$/);
   expect(linux).toMatch(/^[\x09\x0a\x20-\x7e]*$/);
 });

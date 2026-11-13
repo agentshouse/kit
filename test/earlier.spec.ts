@@ -110,7 +110,7 @@ it("moves a Linux desktop's Kit home and its default workspace into ~/.agents/ho
   expect(unit).toContain(`ExecStart="${join(earlier.folder, 'bin', 'kit')}" resident\n`);
   expect(unit).toContain('WantedBy=default.target\n');
   expect(unit).not.toContain('HOUSE_KIT');
-  expect(tools.calls('loginctl')).toEqual(['enable-linger']);
+  expect(tools.calls('loginctl')).toEqual([`enable-linger ${process.getuid!()}`]);
   expect(tools.calls('systemctl')).toEqual(['--user daemon-reload', '--user --quiet reenable house-kit.service']);
 });
 
@@ -174,7 +174,7 @@ it("moves a VPS's root Kit and /agents/house into root's ~/.agents/house, starts
   await absent(join(tools.root, 'usr', 'local', 'bin', 'kit'));
   await absent(join(tools.root, 'etc', 'systemd', 'system', 'house-kit.service'));
   await absent(join(tools.root, 'agents'));
-  expect(tools.calls('loginctl')).toEqual(['enable-linger']);
+  expect(tools.calls('loginctl')).toEqual(['enable-linger 0']);
   expect(tools.calls('systemctl')).toEqual([
     'start user@0.service',
     '--user daemon-reload',
@@ -251,9 +251,33 @@ it("takes over a system unit's Kit run by another account than root through sudo
   ]);
 });
 
+it("takes over the Kit home the Windows command copied out of its container as the same Environment, keeping its Windows workspace and following its Local copies there", async () => {
+  const house = await startHouse();
+  const tools = await supervision();
+  const account = await temporaryDirectory();
+  const home = join(account, '.house-kit-home');
+  const workspace = join(account, 'mnt', 'c', 'Users', 'owner', 'AgentsHouse');
+  const earlier = await earlierKit(house, account, home, workspace, 'windows');
+  await put(join(home, 'workspace'), `${workspace}\n`);
+  await copyRecord(home, '/agents/house/local-copies/rooms/notes');
+  await tools.systemd();
+
+  const kit = connecting(house, earlier, tools);
+
+  expect(await kit.exited).toBe(0);
+  expect(kit.stdout().split('\n')[0]).toBe(`Moving the Kit installed before into ${earlier.folder}.`);
+  expect(kit.stdout().split('\n').at(-2)).toBe('Kit connected for Environment environment-one.');
+  await moved(earlier, workspace);
+  expect(JSON.parse(await readFile(join(earlier.folder, 'kit.json'), 'utf8'))).toEqual({ skills: false, workspace });
+  await absent(join(earlier.folder, 'placement'));
+  await absent(join(earlier.folder, 'workspace'));
+  expect(tools.calls('docker')).toEqual([]);
+  expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
+});
+
 it.each([
   ['a container Kit', 'container', 'linux'],
-  ['a Windows Kit, whose command still installs the container', 'windows', undefined],
+  ['a Windows container Kit', 'windows', 'windows'],
 ])('reports %s that waits for its takeover with the command to run again', async (_name, placement, reinstall) => {
   const tools = await supervision();
   const home = join(await temporaryDirectory(), 'kit-home');
