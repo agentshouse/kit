@@ -4,7 +4,6 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { CLIS, adapterArchive } from '../src/clis.ts';
 import { temporaryHome } from './kit.ts';
@@ -179,19 +178,4 @@ it("downloads through the authorities NODE_EXTRA_CA_CERTS names beside the compu
   expect(untrusted).toMatchObject({ status: 1, stderr: expect.stringContaining(`kit_bootstrap_refused: Node.js could not be downloaded from ${house.origin}\n`) });
   expect(trusted).toMatchObject({ status: 0, stderr: '' });
   expect(await readFile(join(work, 'trusted', 'current'), 'utf8')).toBe(`${one.version}\n`);
-});
-
-const DOCKERFILE = fileURLToPath(new URL('../Dockerfile', import.meta.url));
-
-it('builds the image as a base system that carries no Kit release and no Node runtime and starts the release Kit home holds', async () => {
-  const dockerfile = await readFile(DOCKERFILE, 'utf8');
-
-  expect(/^FROM (\S+)$/m.exec(dockerfile)?.[1]).toMatch(/^mirror\.gcr\.io\/library\/debian:trixie-slim@sha256:[0-9a-f]{64}$/);
-  expect(dockerfile).not.toMatch(/^(COPY|ADD) /m);
-  expect(dockerfile).not.toMatch(/\bnpm\b/);
-  expect(dockerfile).toContain("dpkg --compare-versions \"$(dpkg-query -W -f='${Version}' libbrotli1)\" ge 1.1.0-2+deb13u1");
-  expect(JSON.parse(/^ENTRYPOINT (.+)$/m.exec(dockerfile)![1]!)).toEqual(['tini', '--', '/kit-home/kit/bin/kit']);
-  expect(/^ +PATH=(\S+)$/m.exec(dockerfile)?.[1]?.split(':')[0]).toBe('/kit-home/kit/bin');
-  const profile = /printf '([^']*)' > \/etc\/profile\.d\/kit\.sh/.exec(dockerfile)?.[1];
-  expect(spawnSync('sh', ['-c', `${profile!.replace('\\n', '\n')}printf %s "$PATH"`], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).stdout).toBe('/kit-home/kit/bin:/usr/bin:/bin');
 });

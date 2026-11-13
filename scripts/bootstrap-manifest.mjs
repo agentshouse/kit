@@ -8,9 +8,9 @@ const MANIFEST = 'bootstrap.json';
 const HOSTS = { linux: 'connect-linux.sh', macos: 'connect-linux.sh', windows: 'connect-windows.ps1' };
 const NODE_PIN = /NODE_PLATFORM=(\S+)\s+NODE_SHA256=([0-9a-f]{64})/g;
 
-const [given, image] = process.argv.slice(2);
-if (given === undefined || !/^sha256:[0-9a-f]{64}$/.test(image ?? '')) {
-  process.stderr.write('usage: node scripts/bootstrap-manifest.mjs <release directory> sha256:<image index digest>\n');
+const [given, ...extra] = process.argv.slice(2);
+if (given === undefined || extra.length > 0) {
+  process.stderr.write('usage: node scripts/bootstrap-manifest.mjs <release directory>\n');
   process.exit(2);
 }
 const release = resolve(given);
@@ -32,4 +32,4 @@ for (const artifact of [...Object.values(ENGINES).flatMap(({ decoder, engine }) 
 for (const name of new Set([...Object.values(HOSTS), `kit-${version}.tar.gz`])) {
   if (files[name]?.from !== undefined || files[name] === undefined) throw new Error(`${release} holds no ${name}`);
 }
-await writeFile(join(release, MANIFEST), `${JSON.stringify({ schemaVersion: 3, version, wire: KIT_WIRE, hosts: HOSTS, image, files }, null, 2)}\n`);
+await writeFile(join(release, MANIFEST), `${JSON.stringify({ schemaVersion: 3, version, wire: KIT_WIRE, hosts: HOSTS, files }, null, 2)}\n`);
