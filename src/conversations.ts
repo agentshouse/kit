@@ -32,8 +32,8 @@ import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
-import { Content, type Placed } from './content.ts';
-import { answeredFailure, readerFor, type Event, type Message, type Reader, type Stop } from './events.ts';
+import { Content } from './content.ts';
+import { answeredFailure, readerFor, type CallEvent, type Event, type Message, type Reader, type Stop } from './events.ts';
 import { inspectedFile, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, type GrokPlan, type GrokQuestions } from './grok.ts';
 import { agentBase } from './home.ts';
@@ -171,10 +171,6 @@ function addedTokens(sum: Tokens | null, tokens: Tokens): Tokens {
   };
 }
 
-function workRuns(part: Placed): boolean | null {
-  return part.type === 'subagent' || part.type === 'background' ? part.status === 'running' : null;
-}
-
 function cliSaid(error: unknown): string {
   const details = (error as { data?: { details?: unknown } } | null)?.data?.details;
   return typeof details === 'string' && details !== '' ? `${causeOf(error)}: ${details}` : causeOf(error);
@@ -250,12 +246,6 @@ class Turn {
   }
 }
 
-interface Keyed {
-  key: string;
-  parent: string | null;
-  part: Placed;
-}
-
 interface Running {
   adapter: Adapter;
   bridging: Promise<Bridge>;
@@ -302,8 +292,7 @@ class Conversation {
   readonly waiting: Waiting[] = [];
   done = false;
   sending: Promise<void> | null = null;
-  readonly work = new Map<string, Keyed>();
-  readonly held: Keyed[] = [];
+  readonly subagents = new Set<string>();
   opening: Bridge | null = null;
   bridge: Promise<Bridge> | null = null;
   launch: Launch | null = null;
@@ -962,7 +951,7 @@ export class Conversations {
     conversation.running = null;
     conversation.commands = null;
     conversation.options = null;
-    conversation.work.clear();
+    conversation.subagents.clear();
     this.stated(conversation, { running: [] });
     for (const [id, question] of this.questions) {
       if (question.conversation === conversation) this.questions.delete(id);
@@ -1046,7 +1035,6 @@ export class Conversations {
     conversation.turn = turn;
     this.stated(conversation, { suggestion: null });
     for (const event of conversation.reader?.began() ?? []) this.event(conversation, event);
-    for (const held of conversation.held.splice(0)) this.place(turn, held);
     this.kit.changed();
     return turn;
   }
@@ -1054,10 +1042,8 @@ export class Conversations {
   private end(conversation: Conversation, turn: Turn, failed: Failed | null, notice: string | null = null): void {
     if (turn.ended) return;
     if (failed !== null) logged(new Error(`conversation ${conversation.id} turn ${turn.id} failed: ${failed.cause}`));
-    if (conversation.turn === turn) {
-      for (const event of conversation.reader?.closeTurn() ?? []) this.event(conversation, event);
-    }
-    if (notice !== null) turn.content.add(null, { type: 'notice', kind: 'error', text: notice });
+    if (conversation.turn === turn) conversation.reader?.closeTurn();
+    if (notice !== null) turn.content.add({ type: 'notice', kind: 'error', text: notice });
     turn.ended = true;
     conversation.turns.delete(turn);
     conversation.running?.adapter.turn(conversation.turns.size > 0);
@@ -1115,17 +1101,14 @@ export class Conversations {
   private ended(conversation: Conversation, stop: Stop | null): void {
     const turn = conversation.turn;
     if (turn === null) return;
-    const held =
-      stop !== null &&
-      !turn.steered &&
-      [...conversation.work.values()].some((work) => work.part.type === 'subagent' && turn.content.index(work.key) !== undefined);
+    const held = stop !== null && !turn.steered && [...conversation.subagents].some((key) => turn.content.holds(key));
     if (!turn.prompted || held) {
       this.took(turn);
       this.end(conversation, turn, stop === 'refusal' ? { failure: 'refused', cause: REFUSED } : null);
       return;
     }
     if (stop !== null) return;
-    for (const event of conversation.reader?.closeTurn() ?? []) this.event(conversation, event);
+    conversation.reader?.closeTurn();
     conversation.turn = null;
     this.kit.changed();
   }
@@ -1221,16 +1204,12 @@ export class Conversations {
       case 'tokens':
         conversation.tokens = addedTokens(conversation.tokens, event.tokens);
         return;
-      case 'part':
-        this.keyed(conversation, event);
+      case 'call':
+        this.called(conversation, event);
         return;
       case 'notice':
       case 'image':
         if (conversation.turn === null) return;
-        break;
-      case 'text':
-      case 'reasoning':
-        if (event.parent !== null && conversation.turn === null) return;
         break;
     }
     this.apply(conversation, this.started(conversation), event);
@@ -1245,56 +1224,35 @@ export class Conversations {
   private apply(conversation: Conversation, turn: Turn, event: Event): void {
     switch (event.kind) {
       case 'text':
-      case 'reasoning': {
-        const parent = this.parentIn(turn, event.parent);
-        if (parent !== undefined) turn.content.write(event.kind, event.id, parent, event.text);
+        turn.content.write(event.id, event.text);
         return;
-      }
       case 'notice':
-        turn.content.add(null, { type: 'notice', kind: event.notice, text: event.text });
+        turn.content.add({ type: 'notice', kind: event.notice, text: event.text });
         return;
-      case 'plan':
-        turn.content.plan(event.entries);
-        return;
-      case 'image': {
-        const parent = this.parentIn(turn, event.parent);
-        if (parent === undefined) return;
-        turn.uploads.push(this.image(conversation, turn, parent, event.data, event.mediaType));
+      case 'image':
+        turn.uploads.push(this.image(conversation, turn, event.data, event.mediaType));
         this.kit.changed();
         return;
-      }
     }
   }
 
-  private keyed(conversation: Conversation, keyed: Keyed): void {
-    const running = workRuns(keyed.part);
-    const earlier = running !== null && conversation.work.has(keyed.key) && conversation.turn?.content.index(keyed.key) === undefined;
-    if (running === true) conversation.work.set(keyed.key, keyed);
-    if (running === false) conversation.work.delete(keyed.key);
+  // A sub-agent's calls count only in the turn that holds the call that started it, and a call's later changes only in the turn that counted it.
+  private called(conversation: Conversation, event: CallEvent): void {
+    if (event.running === true) conversation.subagents.add(event.key);
+    if (event.running === false) conversation.subagents.delete(event.key);
     const turn = conversation.turn;
-    if (earlier) {
-      if (running) return;
-      if (turn === null) conversation.held.push(keyed);
-      else this.place(turn, keyed);
+    if (!event.first) {
+      if (turn?.content.holds(event.key)) turn.content.call(event.key, event.parent, event.call);
       return;
     }
-    if (keyed.parent !== null && turn === null) return;
-    this.place(this.started(conversation), keyed);
+    if (event.parent !== null) {
+      turn?.content.call(event.key, event.parent, event.call);
+      return;
+    }
+    this.started(conversation).content.call(event.key, null, event.call);
   }
 
-  private place(turn: Turn, keyed: Keyed): void {
-    const parent = this.parentIn(turn, keyed.parent);
-    if (parent !== undefined) turn.content.put(keyed.key, parent, keyed.part);
-  }
-
-  // A sub-agent's card lives only in the turn keyed() placed it in, so its steps, text, images and sub-agents join a turn only under a card that turn holds.
-  private parentIn(turn: Turn, key: string | null): number | null | undefined {
-    if (key === null) return null;
-    const index = turn.content.index(key);
-    return index !== undefined && turn.content.parts[index]!.type === 'subagent' ? index : undefined;
-  }
-
-  private async image(conversation: Conversation, turn: Turn, parent: number | null, data: string, mediaType: string): Promise<void> {
+  private async image(conversation: Conversation, turn: Turn, data: string, mediaType: string): Promise<void> {
     const bytes = Buffer.from(data, 'base64');
     const name = `image-${++turn.images}.${mediaType.split('/')[1]}`;
     const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -1315,10 +1273,10 @@ export class Conversations {
         finish: (upload, partSha256) =>
           this.kit.house.deliver('uploads/finish', { upload, part_sha256: partSha256 }) as Promise<Finished<SavedImage>>,
       });
-      turn.content.arrived(parent, { type: 'image', file: saved.path, name, media_type: mediaType });
+      turn.content.arrived({ type: 'image', file: saved.path, name, media_type: mediaType });
     } catch (error) {
       const cause = error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error);
-      turn.content.arrived(null, { type: 'notice', kind: 'error', text: `${name} was not saved: ${cause}` });
+      turn.content.arrived({ type: 'notice', kind: 'error', text: `${name} was not saved: ${cause}` });
     }
   }
 }

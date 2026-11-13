@@ -457,8 +457,9 @@ async function directive(
     await client.notify(method as 'session/update', params as never);
   }
   if (name === 'play') {
-    for (const { method, params } of lines(rest[0]!, rest[1], rest[2]).filter((line) => line.method !== undefined)) {
-      await client.notify(method as 'session/update', { ...params, sessionId } as never);
+    for (const { method, params, tap } of lines(rest[0]!, rest[1], rest[2])) {
+      if (tap !== undefined) await codex({ messages: [{ ...tap, params: { ...tap.params, threadId: sessionId } }] });
+      else if (method !== undefined) await client.notify(method as 'session/update', { ...params, sessionId } as never);
     }
   }
   if (name === 'codex') await codex(JSON.parse(argument) as unknown);

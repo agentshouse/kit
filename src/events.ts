@@ -1,6 +1,6 @@
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk';
-import { firstPart, keptDiff, lastLines, type FileChange, type SessionState, type Status, type Tokens } from '@agentshouse/session-content';
-import type { PlanEntry, Placed } from './content.ts';
+import type { PartOf, SessionState, Tokens } from '@agentshouse/session-content';
+import type { Called, FileLines, Kind } from './content.ts';
 
 type Fields = Record<string, any>;
 
@@ -13,11 +13,9 @@ export interface Message {
 
 export type Stop = 'end_turn' | 'refusal';
 
-export type NoticeKind = Extract<Placed, { type: 'notice' }>['kind'];
+export type NoticeKind = PartOf<'notice'>['kind'];
 
-type Subagent = Extract<Placed, { type: 'subagent' }>;
-
-type Background = Extract<Placed, { type: 'background' }>;
+type Status = 'running' | 'done' | 'failed' | 'stopped';
 
 type Running = SessionState['running'][number]['kind'];
 
@@ -25,25 +23,33 @@ type Files = SessionState['files'];
 
 type Limit = SessionState['limits'][number];
 
+export interface CallEvent {
+  kind: 'call';
+  key: string;
+  parent: string | null;
+  first: boolean;
+  call: Called;
+  running: boolean | null;
+}
+
 export type Event =
   | { kind: 'started' }
   | { kind: 'ended'; stop: Stop | null }
-  | { kind: 'text' | 'reasoning'; id: string | null; parent: string | null; text: string }
-  | { kind: 'part'; key: string; parent: string | null; part: Placed }
+  | { kind: 'text'; id: string | null; text: string }
+  | CallEvent
   | { kind: 'notice'; notice: NoticeKind; text: string }
-  | { kind: 'plan'; entries: PlanEntry[] }
-  | { kind: 'image'; data: string; mediaType: string; parent: string | null }
+  | { kind: 'image'; data: string; mediaType: string }
   | { kind: 'state'; state: Partial<SessionState> }
   | { kind: 'tokens'; tokens: Tokens }
   | { kind: 'commands'; commands: AvailableCommand[] }
   | { kind: 'options'; options: SessionConfigOption[] };
 
-type Shown = 'call' | 'subagent' | 'message';
+type Counting = Kind | 'subagent' | 'plan';
 
 interface Call {
   id: string;
   parent: string | null;
-  shown: Shown | null;
+  counted: Counting | null;
   kind?: string;
   title?: string;
   status: string;
@@ -51,103 +57,28 @@ interface Call {
   rawOutput?: any;
   content?: Fields[];
   meta: Fields;
-  output: string;
-  exit: number | null;
   imaged: boolean;
-}
-
-type Detail =
-  | { kind: 'command' }
-  | { kind: 'read' | 'search'; returned: number | null }
-  | { kind: 'edit'; files: FileChange[] }
-  | { kind: 'fetch' | 'tool' | 'other'; output: string };
-
-interface HouseMessage {
-  command: Extract<Placed, { type: 'message' }>['command'];
-  target: string | null;
 }
 
 const AUTONOMOUS_ORIGINS = new Set(['task-notification', 'peer', 'coordinator', 'observer', 'observer-activity']);
 
 const FINISHED = new Set(['completed', 'failed', 'stopped']);
 export const RUNNING_JOB = new Set(['running', 'paused']);
-const MESSAGE_TARGETS = new Map([
-  ['agent-functions/send', ['agent_function', 'agent']],
-  ['agent-functions/cancel', ['request']],
-  ['agent-functions/mail/send', ['conversation', 'request']],
-]);
-const PLANNED: Record<string, PlanEntry['status']> = { pending: 'pending', in_progress: 'running', completed: 'done' };
 const ENDED: Record<string, Status> = { completed: 'done', failed: 'failed', stopped: 'stopped', killed: 'stopped', cancelled: 'stopped' };
 const NOTICES: Record<string, NoticeKind> = { info: 'info', warning: 'warning', error: 'error' };
 // Claude Code names its limit windows without their length, so the Kit holds the length each name stands for.
 const WINDOW_MINUTES: Record<string, number> = { five_hour: 300, seven_day: 10_080 };
 const WAKEUP = /Next wakeup scheduled for \d\d:\d\d:\d\d \(in (\d+)s\)/;
-const CHILD_UPDATES = new Set(['tool_call', 'tool_call_update', 'agent_message_chunk', 'agent_thought_chunk']);
+const CHILD_UPDATES = new Set(['tool_call', 'tool_call_update']);
 
 function counted(reports: Tokens[]): Event[] {
   const whole = reports.every((tokens) => Object.values(tokens).every((count) => Number.isSafeInteger(count) && count >= 0));
   return whole ? reports.map((tokens) => ({ kind: 'tokens', tokens })) : [];
 }
 
-function words(line: string): string[] {
-  const found: string[] = [];
-  let word: string | null = null;
-  let quote: string | null = null;
-  for (let index = 0; index < line.length; index++) {
-    const character = line[index]!;
-    if (quote !== null) {
-      if (character === quote) quote = null;
-      else if (character === '\\' && quote === '"') word += line[++index] ?? '';
-      else word += character;
-    } else if (character === "'" || character === '"') {
-      quote = character;
-      word ??= '';
-    } else if (character === '\\') {
-      word = (word ?? '') + (line[++index] ?? '');
-    } else if (/\s/.test(character)) {
-      if (word !== null) found.push(word);
-      word = null;
-    } else {
-      word = (word ?? '') + character;
-    }
-  }
-  if (word !== null) found.push(word);
-  return found;
-}
-
-function houseMessage(line: string): HouseMessage | null {
-  const [program, verb, json] = words(line.trim());
-  if (program !== 'house' || verb !== 'run_command' || json === undefined) return null;
-  let call: Fields | null;
-  try {
-    call = JSON.parse(json) as Fields | null;
-  } catch {
-    return null;
-  }
-  if (call === null) return null;
-  const targets = MESSAGE_TARGETS.get(call.command);
-  if (targets === undefined) return null;
-  const target = targets.map((argument) => call.arguments?.[argument]).find((value) => typeof value === 'string');
-  return { command: call.command, target: target ?? null };
-}
-
-function lineOf(command: unknown): string | undefined {
-  const line = typeof command === 'string' ? command : Array.isArray(command) ? command.at(-1) : undefined;
-  return typeof line === 'string' ? line : undefined;
-}
-
 function contentText(content: Fields[] | undefined): string {
   return (content ?? [])
     .map((entry) => (entry.type === 'content' && entry.content?.type === 'text' ? entry.content.text : ''))
-    .filter((part: string) => part !== '')
-    .join('\n');
-}
-
-function blocksText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((block: Fields) => (block.type === 'text' ? block.text : ''))
     .filter((part: string) => part !== '')
     .join('\n');
 }
@@ -158,12 +89,6 @@ function linesOf(text: string): string[] {
 
 function count(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function statusOf(acp: string): Status {
-  if (acp === 'completed') return 'done';
-  if (acp === 'failed' || acp === 'stopped') return acp;
-  return 'running';
 }
 
 function instant(milliseconds: number): string {
@@ -180,47 +105,38 @@ function changeCounts(diff: string): { added: number; removed: number } {
   return { added, removed };
 }
 
-function fileChange(path: string, diff: string): FileChange {
-  return { path, ...changeCounts(diff), diff: keptDiff(diff) };
+function wholeFile(path: string, sign: '+' | '-', text: string): FileLines {
+  const lines = linesOf(text).length;
+  return sign === '+' ? { path, added: lines, removed: 0 } : { path, added: 0, removed: lines };
 }
 
-function wholeFile(path: string, sign: '+' | '-', text: string): FileChange {
-  const lines = linesOf(text);
-  const range = sign === '+' ? `-0,0 +1,${lines.length}` : `-1,${lines.length} +0,0`;
-  return fileChange(path, lines.length === 0 ? '' : `@@ ${range} @@\n${lines.map((line) => `${sign}${line}\n`).join('')}`);
+function patched(path: string, patch: Fields[]): FileLines {
+  let added = 0;
+  let removed = 0;
+  for (const line of patch.flatMap((hunk) => hunk.lines as string[])) {
+    if (line.startsWith('+')) added++;
+    if (line.startsWith('-')) removed++;
+  }
+  return { path, added, removed };
 }
 
-function hunks(patch: Fields[]): string {
-  return patch
-    .map((hunk) => `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n${(hunk.lines as string[]).join('\n')}\n`)
-    .join('');
-}
-
-function replacement(site: Fields): { added: number; removed: number; diff: string } {
+function replacement(site: Fields): { added: number; removed: number } {
   const before = linesOf((site.line_prefix ?? '') + (site.old_string ?? ''));
   const after = linesOf((site.line_prefix ?? '') + (site.new_string ?? ''));
   let head = 0;
   while (head < before.length && head < after.length && before[head] === after[head]) head++;
   let tail = 0;
   while (tail < before.length - head && tail < after.length - head && before.at(-1 - tail) === after.at(-1 - tail)) tail++;
-  const removed = before.slice(head, before.length - tail);
-  const added = after.slice(head, after.length - tail);
-  const lines = [...removed.map((line) => `-${line}\n`), ...added.map((line) => `+${line}\n`)].join('');
-  const from = (line: number | undefined, kept: string[]) => (line ?? 1) + head - (kept.length === 0 ? 1 : 0);
-  const header = `@@ -${from(site.old_line, removed)},${removed.length} +${from(site.new_line, added)},${added.length} @@\n`;
-  return { added: added.length, removed: removed.length, diff: lines === '' ? '' : header + lines };
+  return { added: after.length - head - tail, removed: before.length - head - tail };
 }
 
-function replaced(entry: Fields): FileChange {
-  const sites: Fields[] = entry._meta?.details ?? [
-    { old_string: entry.oldText, new_string: entry.newText, old_line: entry._meta?.old_line, new_line: entry._meta?.new_line },
-  ];
+function replaced(entry: Fields): FileLines {
+  const sites: Fields[] = entry._meta?.details ?? [{ old_string: entry.oldText, new_string: entry.newText }];
   const hunks = sites.map(replacement);
   return {
     path: entry.path,
     added: hunks.reduce((sum, hunk) => sum + hunk.added, 0),
     removed: hunks.reduce((sum, hunk) => sum + hunk.removed, 0),
-    diff: keptDiff(hunks.map((hunk) => hunk.diff).join('')),
   };
 }
 
@@ -255,23 +171,9 @@ function merged(into: Fields, from: Fields | null | undefined): Fields {
   return result;
 }
 
-function call(held: Pick<Call, 'status' | 'exit' | 'output'>, line: string, detail: Detail, duration: number | null = null): Placed {
-  const base = { type: 'call' as const, line, status: statusOf(held.status), duration };
-  switch (detail.kind) {
-    case 'command':
-      return { ...base, kind: 'command', exit: held.exit, output: held.output };
-    case 'read':
-    case 'search':
-      return { ...base, kind: detail.kind, returned: detail.returned };
-    case 'edit':
-      return { ...base, kind: 'edit', files: detail.files };
-    default:
-      return { ...base, kind: detail.kind, output: firstPart(detail.output) };
-  }
-}
-
-function startedAgent(task: string, name: string | null = null): Subagent {
-  return { type: 'subagent', kind: 'agent', name, task, status: 'running', step: null, report: null, tokens: null, calls: null, duration: null };
+function heldStatus(held: Call): Status {
+  if (!FINISHED.has(held.status)) return 'running';
+  return held.status === 'failed' ? 'failed' : 'done';
 }
 
 function backgroundKey(id: string): string {
@@ -281,15 +183,14 @@ function backgroundKey(id: string): string {
 abstract class Reader {
   session: string | null = null;
   protected readonly calls = new Map<string, Call>();
-  protected readonly subagents = new Map<string, Subagent>();
   private readonly owners = new Map<string, string | null>();
-  private readonly backgrounds = new Map<string, Background>();
+  private readonly backgrounds = new Map<string, Running>();
   private readonly work = new Map<string, Running>();
   private readonly seenOptions = new Map<string, unknown>();
   private readonly requestedOptions = new Map<string, unknown>();
   private readonly compactions = new Set<string>();
   private readonly turns = new Set<string>();
-  private readonly edits = new Map<string, readonly FileChange[]>();
+  private readonly edits = new Map<string, readonly FileLines[]>();
   protected abstract readonly watchedOptions: Record<string, NoticeKind>;
 
   read(message: Message): Event[] {
@@ -318,16 +219,8 @@ abstract class Reader {
     return this.editedFiles();
   }
 
-  closeTurn(): Event[] {
-    const events: Event[] = [];
-    for (const [id, held] of this.calls) {
-      if (held.shown === 'subagent') continue;
-      this.calls.delete(id);
-      held.shown ??= this.decide(held, true);
-      if (!FINISHED.has(held.status)) held.status = 'stopped';
-      events.push(...this.shown(held));
-    }
-    return events;
+  closeTurn(): void {
+    for (const [id, held] of this.calls) if (held.counted !== 'subagent') this.calls.delete(id);
   }
 
   protected answered(result: Fields | undefined): Event[] {
@@ -355,15 +248,12 @@ abstract class Reader {
   protected update(update: Fields, parent: string | null): Event[] {
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
-        if (update.content.type === 'image') return [{ kind: 'image', data: update.content.data, mediaType: update.content.mimeType, parent }];
-        return update.content.type === 'text' ? [{ kind: 'text', id: update.messageId ?? null, parent, text: update.content.text }] : [];
-      case 'agent_thought_chunk':
-        return update.content.type === 'text' ? [{ kind: 'reasoning', id: update.messageId ?? null, parent, text: update.content.text }] : [];
+        if (parent !== null) return [];
+        if (update.content.type === 'image') return [{ kind: 'image', data: update.content.data, mediaType: update.content.mimeType }];
+        return update.content.type === 'text' ? [{ kind: 'text', id: update.messageId ?? null, text: update.content.text }] : [];
       case 'tool_call':
       case 'tool_call_update':
         return this.tool(update, parent);
-      case 'plan':
-        return [{ kind: 'plan', entries: (update.entries as Fields[]).map((entry) => ({ content: entry.content, status: PLANNED[entry.status] ?? 'pending' })) }];
       case 'usage_update':
         return [{ kind: 'state', state: this.used(update) }];
       case 'current_mode_update':
@@ -387,17 +277,15 @@ abstract class Reader {
           this.turns.add(update.asyncTaskId);
           return [];
         }
-        return [
-          ...this.handedOff(update.toolCallId),
-          ...this.background(update.asyncTaskId, update.taskType === 'shell' || update.taskType === 'monitor' ? update.taskType : 'task', update.name ?? update.description ?? '', 'running'),
-        ];
+        this.handedOff(update.toolCallId);
+        return this.background(update.asyncTaskId, update.taskType === 'shell' || update.taskType === 'monitor' ? update.taskType : 'task', 'running');
       case 'async_task_state_update':
         if (this.turns.has(update.asyncTaskId)) {
           if (!RUNNING_JOB.has(update.state)) this.turns.delete(update.asyncTaskId);
           return [];
         }
         if (RUNNING_JOB.has(update.state) || !this.backgrounds.has(update.asyncTaskId)) return [];
-        return this.background(update.asyncTaskId, this.backgrounds.get(update.asyncTaskId)!.kind, null, ENDED[update.state] ?? 'done');
+        return this.background(update.asyncTaskId, this.backgrounds.get(update.asyncTaskId)!, ENDED[update.state] ?? 'done');
       default:
         return [];
     }
@@ -416,21 +304,15 @@ abstract class Reader {
     return Object.keys(state).length === 0 ? [] : [{ kind: 'state', state }];
   }
 
-  protected handedOff(id: string | undefined): Event[] {
+  protected handedOff(id: string | undefined): void {
     const held = id === undefined ? undefined : this.calls.get(id);
-    if (held === undefined || FINISHED.has(held.status)) return [];
-    held.status = 'completed';
-    return this.shown(held);
+    if (held !== undefined && !FINISHED.has(held.status)) held.status = 'completed';
   }
 
-  protected background(id: string, kind: Background['kind'], label: string | null, status: Status): Event[] {
-    const part: Background = { type: 'background', kind, label: label ?? this.backgrounds.get(id)?.label ?? '', status };
-    if (status === 'running') this.backgrounds.set(id, part);
+  protected background(id: string, kind: Running, status: Status): Event[] {
+    if (status === 'running') this.backgrounds.set(id, kind);
     else this.backgrounds.delete(id);
-    return [
-      { kind: 'part', key: backgroundKey(id), parent: null, part },
-      ...this.runs(backgroundKey(id), status === 'running' ? kind : null),
-    ];
+    return this.runs(backgroundKey(id), status === 'running' ? kind : null);
   }
 
   protected forget(id: string): Event[] {
@@ -468,7 +350,7 @@ abstract class Reader {
     let held = this.calls.get(update.toolCallId);
     if (held === undefined) {
       if (update.sessionUpdate !== 'tool_call') return [];
-      held = { id: update.toolCallId, parent, shown: null, meta: {}, output: '', exit: null, imaged: false, status: 'in_progress' };
+      held = { id: update.toolCallId, parent, counted: null, meta: {}, imaged: false, status: 'in_progress' };
       this.calls.set(held.id, held);
     }
     if (update.kind !== undefined) held.kind = update.kind;
@@ -477,42 +359,46 @@ abstract class Reader {
     if (update.rawInput !== undefined) held.rawInput = merged(held.rawInput ?? {}, update.rawInput as Fields);
     if (update.rawOutput !== undefined) held.rawOutput = update.rawOutput;
     if (update.content !== undefined) held.content = update.content;
-    const meta = (update._meta ?? {}) as Fields;
-    if (typeof meta.terminal_output?.data === 'string') held.output = lastLines(held.output + meta.terminal_output.data);
-    if (meta.terminal_exit !== undefined) held.exit = meta.terminal_exit.exit_code ?? null;
-    held.meta = merged(held.meta, meta);
+    held.meta = merged(held.meta, (update._meta ?? {}) as Fields);
     return this.shown(held);
   }
 
   protected shown(held: Call): Event[] {
-    held.shown ??= this.decide(held, FINISHED.has(held.status));
-    if (held.shown === null) return [];
-    if (held.shown === 'subagent') return this.subagent(held.id, held.parent, this.subagentOf(held));
-    if (held.shown === 'message') {
-      const message = houseMessage(lineOf(held.rawInput?.command) ?? held.title ?? '')!;
-      return [{ kind: 'part', key: held.id, parent: held.parent, part: { type: 'message', command: message.command, target: message.target } }];
-    }
-    const part = this.callOf(held);
-    return [{ kind: 'part', key: held.id, parent: held.parent, part }, ...this.edited(held.id, part), ...this.produced(held)];
+    const first = held.counted === null;
+    held.counted ??= this.kindOf(held);
+    if (held.counted === 'plan') return [];
+    if (held.counted === 'subagent') return this.subagent(held.id, held.parent, this.subagentStatus(held), first);
+    const call: Called = { kind: held.counted, files: held.counted === 'edit' ? this.filesOf(held) : [], failed: this.failed(held) };
+    return [{ kind: 'call', key: held.id, parent: held.parent, first, call, running: null }, ...this.edited(held.id, call), ...this.produced(held)];
   }
 
-  protected subagent(key: string, parent: string | null, part: Subagent): Event[] {
+  protected subagent(key: string, parent: string | null, status: Status, first: boolean): Event[] {
     if (!this.owners.has(key)) this.owners.set(key, parent);
-    if (part.status === 'running') this.subagents.set(key, part);
-    else this.subagents.delete(key);
+    const running = status === 'running';
+    const call: Called = { kind: 'other', files: [], failed: status === 'failed' };
     return [
-      { kind: 'part', key, parent: this.owners.get(key)!, part },
-      ...this.runs(key, part.status === 'running' ? 'subagent' : null),
+      { kind: 'call', key, parent: this.owners.get(key)!, first, call, running },
+      ...this.runs(key, running ? 'subagent' : null),
     ];
+  }
+
+  protected subagentStatus(held: Call): Status {
+    return heldStatus(held);
+  }
+
+  private failed(held: Call): boolean {
+    if (held.status === 'failed') return true;
+    const exit = held.rawOutput?.exit_code;
+    return held.counted === 'command' && FINISHED.has(held.status) && typeof exit === 'number' && exit !== 0;
   }
 
   protected filesFromEdits(): boolean {
     return true;
   }
 
-  private edited(key: string, part: Placed): Event[] {
-    if (part.type !== 'call' || part.kind !== 'edit' || !this.filesFromEdits()) return [];
-    this.edits.set(key, part.files);
+  private edited(key: string, call: Called): Event[] {
+    if (call.kind !== 'edit' || !this.filesFromEdits()) return [];
+    this.edits.set(key, call.files);
     return this.editedFiles();
   }
 
@@ -525,33 +411,19 @@ abstract class Reader {
     return [{ kind: 'state', state: { files: changedFiles(files) } }];
   }
 
-  protected decideLine(line: string | undefined, final: boolean): Shown | null {
-    if (line === undefined) return final ? 'call' : null;
-    return houseMessage(line) === null ? 'call' : 'message';
-  }
-
   protected produced(_call: Call): Event[] {
     return [];
   }
 
-  protected abstract decide(call: Call, final: boolean): Shown | null;
+  protected abstract kindOf(call: Call): Counting;
 
-  protected abstract callOf(call: Call): Placed;
-
-  protected abstract subagentOf(call: Call): Subagent;
-}
-
-interface Answered {
-  result: Fields;
-  content: unknown;
-  at: number;
+  protected abstract filesOf(call: Call): FileLines[];
 }
 
 class ClaudeReader extends Reader {
   protected override readonly watchedOptions: Record<string, NoticeKind> = { model: 'model' };
-  private readonly figures = new Map<string, Partial<Subagent>>();
-  private readonly answers = new Map<string, Answered>();
-  private readonly asked = new Map<string, number>();
+  private readonly settled = new Map<string, Status>();
+  private readonly answers = new Map<string, Fields>();
   private readonly windows = new Map<string, Limit>();
   private readonly crons = new Map<string, string>();
   private readonly wakeups = new Map<string, number>();
@@ -619,51 +491,22 @@ class ClaudeReader extends Reader {
       case 'rate_limit_event':
         return this.limited(sdk.rate_limit_info as Fields);
     }
-    if (typeof sdk.tool_use_id !== 'string') return [];
-    switch (sdk.subtype) {
-      case 'task_started':
-        return typeof sdk.subagent_type === 'string' ? this.figured(sdk.tool_use_id, { name: sdk.subagent_type }) : [];
-      case 'task_progress':
-        return this.figured(sdk.tool_use_id, { step: typeof sdk.description === 'string' ? sdk.description : null, ...this.usage(sdk.usage) });
-      case 'task_notification':
-        return this.figured(sdk.tool_use_id, {
-          status: ENDED[sdk.status] ?? 'done',
-          ...(typeof sdk.summary === 'string' ? { report: sdk.summary } : {}),
-          ...this.usage(sdk.usage),
-        });
-      default:
-        return [];
-    }
+    if (typeof sdk.tool_use_id !== 'string' || sdk.subtype !== 'task_notification') return [];
+    return this.settle(sdk.tool_use_id, ENDED[sdk.status] ?? 'done');
   }
 
-  private usage(usage: Fields | undefined): Partial<Subagent> {
-    if (usage === undefined) return {};
-    return { tokens: count(usage.total_tokens), calls: count(usage.tool_uses), duration: count(usage.duration_ms) };
-  }
-
-  private figured(key: string, figures: Partial<Subagent>): Event[] {
+  private settle(key: string, status: Status): Event[] {
     const held = this.calls.get(key);
-    if (held?.shown !== 'subagent' && held !== undefined) return [];
-    this.figures.set(key, { ...this.figures.get(key), ...figures });
+    if (held?.counted !== 'subagent' && held !== undefined) return [];
+    this.settled.set(key, status);
     return held === undefined ? [] : this.shown(held);
   }
 
   private assistant(sdk: Fields): Event[] {
-    const at = Date.parse(sdk.timestamp);
-    const events: Event[] = [];
     const usage = sdk.context_usage as Fields | undefined;
-    if (usage !== undefined) {
-      this.breakdown = (usage.categories as Fields[]).map((category) => ({ name: category.name, tokens: category.tokens }));
-      events.push({ kind: 'state', state: { context: { used: usage.total_tokens, window: usage.raw_max_tokens, breakdown: this.breakdown } } });
-    }
-    const parent = sdk.parent_tool_use_id as string | null;
-    for (const block of (sdk.message?.content ?? []) as Fields[]) {
-      if (block.type === 'tool_use' && !Number.isNaN(at)) this.asked.set(block.id, at);
-      if (parent === null) continue;
-      if (block.type === 'text') events.push({ kind: 'text', id: sdk.message.id ?? null, parent, text: block.text });
-      if (block.type === 'thinking') events.push({ kind: 'reasoning', id: sdk.message.id ?? null, parent, text: block.thinking });
-    }
-    return events;
+    if (usage === undefined) return [];
+    this.breakdown = (usage.categories as Fields[]).map((category) => ({ name: category.name, tokens: category.tokens }));
+    return [{ kind: 'state', state: { context: { used: usage.total_tokens, window: usage.raw_max_tokens, breakdown: this.breakdown } } }];
   }
 
   private user(sdk: Fields): Event[] {
@@ -672,7 +515,7 @@ class ClaudeReader extends Reader {
     const events: Event[] = [];
     for (const block of content as Fields[]) {
       if (block.type !== 'tool_result') continue;
-      this.answers.set(block.tool_use_id, { result: (sdk.tool_use_result ?? {}) as Fields, content: block.content, at: Date.parse(sdk.timestamp) });
+      this.answers.set(block.tool_use_id, (sdk.tool_use_result ?? {}) as Fields);
       const held = this.calls.get(block.tool_use_id);
       if (held !== undefined) events.push(...this.shown(held));
     }
@@ -697,100 +540,62 @@ class ClaudeReader extends Reader {
     return (held.meta.claudeCode?.toolName as string | undefined) ?? '';
   }
 
-  protected override decide(held: Call, final: boolean): Shown | null {
+  protected override kindOf(held: Call): Counting {
     const tool = this.toolName(held);
-    if (tool === 'Agent' || tool === 'Task' || held.meta.jetbrains?.air?.subagent === true) {
-      return held.rawInput?.description === undefined && !final ? null : 'subagent';
-    }
-    if (tool === 'Bash') return this.decideLine(lineOf(held.rawInput?.command), final);
-    return 'call';
+    if (tool === 'Agent' || tool === 'Task' || held.meta.jetbrains?.air?.subagent === true) return 'subagent';
+    if (tool.startsWith('mcp__')) return 'other';
+    if (tool === 'Bash') return 'command';
+    return held.kind === 'edit' ? 'edit' : 'other';
   }
 
-  protected override subagentOf(held: Call): Subagent {
-    const answered = this.answers.get(held.id)?.result;
-    const launched = held.meta.claudeCode?.toolResponse?.isAsync === true || answered?.status === 'async_launched';
-    const reported = (Array.isArray(answered?.content) ? (answered.content as Fields[]) : []).filter((block) => block.type === 'text').at(-1)?.text;
-    const finished: Partial<Subagent> =
-      launched || (!FINISHED.has(held.status) && answered === undefined)
-        ? {}
-        : {
-            status: held.status === 'failed' ? 'failed' : 'done',
-            report: reported ?? (contentText(held.content) || null),
-            tokens: count(answered?.totalTokens),
-            calls: count(answered?.totalToolUseCount),
-            duration: count(answered?.totalDurationMs),
-          };
-    return { ...startedAgent(held.rawInput?.description ?? held.title ?? '', held.rawInput?.subagent_type ?? null), ...finished, ...this.figures.get(held.id) };
-  }
-
-  protected override callOf(held: Call): Placed {
-    const tool = this.toolName(held);
-    const title = held.title ?? tool;
+  protected override subagentStatus(held: Call): Status {
+    const settled = this.settled.get(held.id);
+    if (settled !== undefined) return settled;
     const answered = this.answers.get(held.id);
-    const result = answered?.result ?? {};
-    const output = contentText(held.content) || blocksText(answered?.content);
-    const asked = this.asked.get(held.id);
-    const took = answered === undefined || asked === undefined || Number.isNaN(answered.at) ? null : Math.max(0, answered.at - asked);
-    if (tool.startsWith('mcp__')) return call(held, title, { kind: 'tool', output }, took);
-    switch (tool) {
-      case 'Bash':
-        return call(held, lineOf(held.rawInput?.command) ?? title, { kind: 'command' }, took);
-      case 'Read':
-        return call(held, title, { kind: 'read', returned: count(result.file?.numLines) }, took);
-      case 'Grep':
-      case 'Glob':
-        return call(held, title, { kind: 'search', returned: count(result.numLines) ?? count(result.numFiles) }, took);
-      case 'WebSearch': {
-        const found = Array.isArray(result.results) ? (result.results as Fields[]).flatMap((entry) => (Array.isArray(entry?.content) ? entry.content : [])).length : null;
-        return call(held, title, { kind: 'search', returned: found }, typeof result.durationSeconds === 'number' ? Math.round(result.durationSeconds * 1000) : took);
-      }
-      case 'WebFetch':
-        return call(held, title, { kind: 'fetch', output: typeof result.result === 'string' ? result.result : output }, count(result.durationMs) ?? took);
-    }
-    if (held.kind === 'edit') return call(held, title, { kind: 'edit', files: this.claudeFiles(held, result) }, took);
-    if (held.kind === 'read' || held.kind === 'search') return call(held, title, { kind: held.kind, returned: null }, took);
-    if (held.kind === 'fetch') return call(held, title, { kind: 'fetch', output }, took);
-    return call(held, title, { kind: 'other', output }, took);
+    const launched = held.meta.claudeCode?.toolResponse?.isAsync === true || answered?.status === 'async_launched';
+    if (launched || (!FINISHED.has(held.status) && answered === undefined)) return 'running';
+    return held.status === 'failed' ? 'failed' : 'done';
   }
 
-  private claudeFiles(held: Call, result: Fields): FileChange[] {
+  protected override filesOf(held: Call): FileLines[] {
+    const result = this.answers.get(held.id) ?? {};
     const path = result.filePath ?? held.rawInput?.file_path;
     if (typeof path !== 'string') return [];
-    if (Array.isArray(result.structuredPatch) && result.structuredPatch.length > 0) return [fileChange(path, hunks(result.structuredPatch))];
+    if (Array.isArray(result.structuredPatch) && result.structuredPatch.length > 0) return [patched(path, result.structuredPatch)];
     if (result.type === 'create' && typeof result.content === 'string') return [wholeFile(path, '+', result.content)];
-    return [];
+    return [{ path, added: 0, removed: 0 }];
   }
 
   protected override produced(held: Call): Event[] {
     if (held.status !== 'completed') return [];
     const tool = this.toolName(held);
-    const result = this.answers.get(held.id)?.result ?? {};
+    const result = this.answers.get(held.id) ?? {};
     if (tool === 'CronCreate' && typeof result.id === 'string' && !this.crons.has(result.id)) {
       this.crons.set(result.id, held.id);
-      return this.background(held.id, 'schedule', held.rawInput?.prompt ?? held.title ?? '', 'running');
+      return this.background(held.id, 'schedule', 'running');
     }
     if (tool === 'CronDelete' && typeof held.rawInput?.id === 'string' && this.crons.has(held.rawInput.id)) {
       const created = this.crons.get(held.rawInput.id)!;
       this.crons.delete(held.rawInput.id);
-      return this.background(created, 'schedule', null, 'stopped');
+      return this.background(created, 'schedule', 'stopped');
     }
     if (tool !== 'ScheduleWakeup' || this.wakeups.has(held.id)) return [];
     if (held.rawInput?.stop === true) {
       const stopped = [...this.wakeups.keys()];
       this.wakeups.clear();
-      return stopped.flatMap((id) => this.background(id, 'schedule', null, 'stopped'));
+      return stopped.flatMap((id) => this.background(id, 'schedule', 'stopped'));
     }
     const seconds = WAKEUP.exec(contentText(held.content))?.[1];
     if (seconds === undefined) return [];
     const next = Date.now() + Number(seconds) * 1000;
     this.wakeups.set(held.id, next);
-    return this.background(held.id, 'schedule', held.rawInput?.prompt ?? held.rawInput?.reason ?? held.title ?? '', 'running');
+    return this.background(held.id, 'schedule', 'running');
   }
 }
 
 class CodexReader extends Reader {
   protected override readonly watchedOptions: Record<string, NoticeKind> = { mode: 'mode', collaboration_mode: 'mode' };
-  private readonly children = new Map<string, { id: string | null; text: string }>();
+  private readonly children = new Set<string>();
   private readonly items = new Map<string, Fields>();
 
   protected override answered(result: Fields | undefined): Event[] {
@@ -863,100 +668,55 @@ class CodexReader extends Reader {
         if (codex?.error !== undefined) return [{ kind: 'notice', notice: 'retry', text: codex.error.message ?? '' }];
         return super.update(update, parent);
       }
-      case 'subagent_spawned':
-        this.children.set(update.subagentSessionId, { id: null, text: '' });
-        return this.subagent(update.subagentSessionId, parent, startedAgent(update.name));
-      case 'subagent_state_update': {
-        const held = this.subagents.get(update.subagentSessionId);
-        if (held === undefined) return [];
-        const report = this.children.get(update.subagentSessionId)?.text || null;
-        return this.subagent(update.subagentSessionId, parent, { ...held, status: ENDED[update.state] ?? 'failed', report });
+      case 'subagent_spawned': {
+        const first = !this.children.has(update.subagentSessionId);
+        this.children.add(update.subagentSessionId);
+        return this.subagent(update.subagentSessionId, parent, 'running', first);
       }
+      case 'subagent_state_update':
+        if (!this.children.has(update.subagentSessionId)) return [];
+        return this.subagent(update.subagentSessionId, parent, ENDED[update.state] ?? 'failed', false);
       default:
         return super.update(update, parent);
     }
   }
 
   protected override elsewhere(session: string, message: Message): Event[] {
-    const child = this.children.get(session);
     const update = message.params?.update as Fields | undefined;
-    if (child === undefined || update === undefined) return [];
-    if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
-      const id = update.messageId ?? null;
-      if (child.id !== id) child.text = '';
-      child.id = id;
-      child.text += update.content.text;
-    }
+    if (!this.children.has(session) || update === undefined) return [];
     if (update.sessionUpdate === 'subagent_spawned' || update.sessionUpdate === 'subagent_state_update') return this.update(update, session);
-    if (!CHILD_UPDATES.has(update.sessionUpdate)) return [];
-    const events = this.update(update, session);
-    const step = events.findLast((event) => event.kind === 'part' && event.part.type === 'call');
-    const held = this.subagents.get(session);
-    if (step?.kind !== 'part' || step.part.type !== 'call' || held === undefined || held.step === step.part.line) return events;
-    return [...events, ...this.subagent(session, null, { ...held, step: step.part.line })];
+    return CHILD_UPDATES.has(update.sessionUpdate) ? this.update(update, session) : [];
   }
 
-  protected override decide(held: Call): Shown | null {
-    if (held.kind === 'execute' && held.meta.is_mcp_tool_call !== true) return this.decideLine(lineOf(held.rawInput?.command) ?? held.title, true);
-    return 'call';
+  protected override kindOf(held: Call): Counting {
+    if (held.meta.is_mcp_tool_call === true) return 'other';
+    if (held.kind === 'execute') return 'command';
+    return held.kind === 'edit' ? 'edit' : 'other';
   }
 
-  protected override subagentOf(held: Call): Subagent {
-    return startedAgent(held.title ?? '');
-  }
-
-  protected override callOf(held: Call): Placed {
+  protected override filesOf(held: Call): FileLines[] {
     const item = this.items.get(held.id);
-    const title = held.title ?? '';
-    const took = count(item?.durationMs) ?? (count(item?.startedAtMs) !== null && count(item?.completedAtMs) !== null ? item!.completedAtMs - item!.startedAtMs : null);
-    if (held.meta.is_mcp_tool_call === true) {
-      return call(held, title, { kind: 'tool', output: blocksText(held.rawOutput?.result?.content) || contentText(held.content) }, took);
-    }
-    switch (held.kind) {
-      case 'execute':
-        return call(held, lineOf(held.rawInput?.command) ?? title, { kind: 'command' }, took);
-      case 'read':
-        return call(held, title, { kind: 'read', returned: typeof item?.aggregatedOutput === 'string' ? linesOf(item.aggregatedOutput).length : null }, took);
-      case 'search':
-        return call(held, title, this.searched(held, item), took);
-      case 'edit':
-        return call(held, title, { kind: 'edit', files: this.codexFiles(item) }, took);
-      default:
-        return call(held, title, { kind: 'other', output: contentText(held.content) }, took);
-    }
-  }
-
-  private searched(held: Call, item: Fields | undefined): Detail {
-    if (item?.type !== 'webSearch') return { kind: 'search', returned: typeof held.rawOutput === 'string' ? linesOf(held.rawOutput).length : null };
-    const results = Array.isArray(item.results) ? (item.results as Fields[]) : null;
-    if (item.action?.type === 'openPage' || item.action?.type === 'findInPage') {
-      return { kind: 'fetch', output: (results ?? []).map((found) => found.snippet ?? found.title ?? '').join('\n') };
-    }
-    return { kind: 'search', returned: results === null ? null : results.length };
-  }
-
-  private codexFiles(item: Fields | undefined): FileChange[] {
     if (item?.type !== 'fileChange') return [];
     return (item.changes as Fields[]).map((change) => {
       if (change.kind?.type === 'add') return wholeFile(change.path, '+', change.diff);
       if (change.kind?.type === 'delete') return wholeFile(change.path, '-', change.diff);
-      return fileChange(change.kind?.move_path ?? change.path, change.diff);
+      return { path: change.kind?.move_path ?? change.path, ...changeCounts(change.diff) };
     });
   }
 
   protected override produced(held: Call): Event[] {
-    if (held.imaged || held.kind === 'read') return [];
+    if (held.imaged || held.kind === 'read' || held.parent !== null) return [];
     const image = (held.content ?? []).find((entry) => entry.type === 'content' && entry.content?.type === 'image');
     if (image === undefined) return [];
     held.imaged = true;
-    return [{ kind: 'image', data: image.content.data, mediaType: image.content.mimeType, parent: held.parent }];
+    return [{ kind: 'image', data: image.content.data, mediaType: image.content.mimeType }];
   }
 }
 
 class GrokReader extends Reader {
   protected override readonly watchedOptions: Record<string, NoticeKind> = {};
   private readonly children = new Map<string, string | null>();
-  private readonly figures = new Map<string, Partial<Subagent>>();
+  private readonly settled = new Map<string, Status>();
   private readonly schedules = new Set<string>();
   private models: Fields[] = [];
   private model: string | null = null;
@@ -1010,17 +770,18 @@ class GrokReader extends Reader {
     const update = message.params?.update as Fields | undefined;
     switch (message.method) {
       case '_x.ai/task_backgrounded':
-        return [...this.handedOff(update!.tool_call_id), ...this.background(update!.task_id, 'shell', update!.description ?? update!.command ?? '', 'running')];
+        this.handedOff(update!.tool_call_id);
+        return this.background(update!.task_id, 'shell', 'running');
       case '_x.ai/task_completed': {
         const snapshot = update!.task_snapshot as Fields;
-        return this.background(snapshot.task_id, 'shell', null, snapshot.exit_code === 0 ? 'done' : 'failed');
+        return this.background(snapshot.task_id, 'shell', snapshot.exit_code === 0 ? 'done' : 'failed');
       }
       case '_x.ai/scheduled_task_created': {
         this.schedules.add(update!.task_id);
-        return this.background(update!.task_id, 'schedule', update!.prompt ?? '', 'running');
+        return this.background(update!.task_id, 'schedule', 'running');
       }
       case '_x.ai/scheduled_task_deleted':
-        return this.schedules.delete(update!.task_id) ? this.background(update!.task_id, 'schedule', null, 'stopped') : [];
+        return this.schedules.delete(update!.task_id) ? this.background(update!.task_id, 'schedule', 'stopped') : [];
       case '_x.ai/session_notification':
         return this.notification(update!);
       default:
@@ -1040,25 +801,17 @@ class GrokReader extends Reader {
       }
       case 'subagent_spawned': {
         const linked = [...this.children.values()];
-        const unlinked = [...this.calls.values()].filter((candidate) => candidate.shown === 'subagent' && !linked.includes(candidate.id));
+        const unlinked = [...this.calls.values()].filter((candidate) => candidate.counted === 'subagent' && !linked.includes(candidate.id));
         const held = unlinked.find((candidate) => candidate.rawInput?.description === update.description);
         this.children.set(update.child_session_id, held?.id ?? null);
-        return held === undefined ? [] : this.figured(held.id, { name: update.subagent_type ?? null });
-      }
-      case 'subagent_progress': {
-        const key = this.children.get(update.child_session_id);
-        return typeof key === 'string' ? this.figured(key, { tokens: count(update.tokens_used), calls: count(update.tool_call_count), duration: count(update.duration_ms) }) : [];
+        return [];
       }
       case 'subagent_finished': {
         const key = this.children.get(update.child_session_id);
         if (typeof key !== 'string') return [];
-        return this.figured(key, {
-          status: ENDED[update.status] ?? 'failed',
-          report: update.output ?? null,
-          tokens: count(update.tokens_used),
-          calls: count(update.tool_calls),
-          duration: count(update.duration_ms),
-        });
+        this.settled.set(key, ENDED[update.status] ?? 'failed');
+        const held = this.calls.get(key);
+        return held === undefined ? [] : this.shown(held);
       }
       case 'auto_compact_completed':
         return [{ kind: 'notice', notice: 'compaction', text: '' }];
@@ -1072,50 +825,26 @@ class GrokReader extends Reader {
     }
   }
 
-  private figured(key: string, figures: Partial<Subagent>): Event[] {
-    this.figures.set(key, { ...this.figures.get(key), ...figures });
-    const held = this.calls.get(key);
-    return held === undefined ? [] : this.shown(held);
-  }
-
   private xai(held: Call): Fields {
     return (held.meta['x.ai/tool'] ?? {}) as Fields;
   }
 
-  protected override decide(held: Call): Shown | null {
+  protected override kindOf(held: Call): Counting {
     const tool = this.xai(held);
     if (tool.name === 'spawn_subagent' || tool.kind === 'task') return 'subagent';
-    if (tool.name === 'run_terminal_command') return this.decideLine(lineOf(held.rawInput?.command), true);
-    return 'call';
+    if (tool.kind === 'plan') return 'plan';
+    if (tool.name === 'run_terminal_command') return 'command';
+    const kind = tool.kind ?? held.kind;
+    if (kind === 'execute') return 'command';
+    return kind === 'write' || kind === 'edit' ? 'edit' : 'other';
   }
 
-  protected override subagentOf(held: Call): Subagent {
-    return { ...startedAgent(held.rawInput?.description ?? held.title ?? ''), ...this.figures.get(held.id) };
+  protected override subagentStatus(held: Call): Status {
+    return this.settled.get(held.id) ?? (held.status === 'failed' ? 'failed' : 'running');
   }
 
-  protected override callOf(held: Call): Placed {
-    const tool = this.xai(held);
-    const title = held.title ?? tool.name ?? '';
-    const output = contentText(held.content);
-    switch (tool.kind ?? held.kind) {
-      case 'execute': {
-        const exit = typeof held.rawOutput?.exit_code === 'number' && FINISHED.has(held.status) ? held.rawOutput.exit_code : null;
-        return call({ status: held.status, exit, output: lastLines(output) }, lineOf(held.rawInput?.command) ?? title, { kind: 'command' });
-      }
-      case 'read':
-        return call(held, title, { kind: 'read', returned: count(held.rawOutput?.FileContent?.total_lines) });
-      case 'search':
-        return call(held, title, { kind: 'search', returned: null });
-      case 'write':
-      case 'edit': {
-        const diffs = (held.content ?? []).filter((entry) => entry.type === 'diff');
-        return call(held, title, { kind: 'edit', files: diffs.map(replaced) });
-      }
-      case 'fetch':
-        return call(held, title, { kind: 'fetch', output });
-      default:
-        return call(held, title, { kind: 'other', output });
-    }
+  protected override filesOf(held: Call): FileLines[] {
+    return (held.content ?? []).filter((entry) => entry.type === 'diff').map(replaced);
   }
 }
 
