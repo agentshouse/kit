@@ -206,7 +206,7 @@ function supervised(): boolean {
 
 async function ready(): Promise<boolean> {
   try {
-    if (supervised() && process.platform !== 'darwin') linger();
+    if (supervised() && process.platform !== 'darwin') await linger();
   } catch (error) {
     process.stderr.write(`kit: Kit stays where it was installed and moves at its next start: ${(error as Error).message}\n`);
     return false;

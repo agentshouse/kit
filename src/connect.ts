@@ -98,6 +98,6 @@ export async function connect(argv: string[]): Promise<void> {
   }
   const changed = await defineSupervisor();
   const running = await runningRelease();
-  supervise(changed, running !== null && running !== KIT_RELEASE);
+  await supervise(changed, running !== null && running !== KIT_RELEASE);
   process.stdout.write(`Kit connected for Environment ${environment}.\n`);
 }

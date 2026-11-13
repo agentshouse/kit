@@ -3,12 +3,15 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { oneFolder } from './home.ts';
 
 const SERVICE = 'house-kit';
 const UNIT = `${SERVICE}.service`;
-// launchctl, loginctl and systemctl answer at once, so ten seconds only bounds a stuck service manager.
+// launchctl, loginctl and systemctl answer at once and lingering starts the account's service manager within a second, so ten seconds only bound a stuck one.
 const MANAGER_MS = 10_000;
+// The service manager lingering starts answers within a second, so a check every tenth of a second starts Kit as soon as it does.
+const MANAGER_CHECK_MS = 100;
 // A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
 const RESTART_SECONDS = 5;
 
@@ -108,9 +111,16 @@ export function defineSupervisor(): Promise<boolean> {
   return process.platform === 'darwin' ? define(launchAgent(), plistText()) : define(userUnit(), unitText());
 }
 
-export function linger(): void {
+export async function linger(): Promise<void> {
   required('loginctl', ['enable-linger', String(process.getuid!())], 'lingering could not be turned on for this account');
   if (process.getuid!() === 0) required('systemctl', ['start', 'user@0.service'], "root's service manager could not be started");
+  const stuck = Date.now() + MANAGER_MS;
+  while (manage('systemctl', ['--user', 'show-environment']).status !== 0) {
+    if (Date.now() >= stuck) {
+      throw new Error(`this account's service manager did not start within ${MANAGER_MS / 1000} seconds; restart this computer, then run this command again`);
+    }
+    await delay(MANAGER_CHECK_MS);
+  }
 }
 
 function macos(): { target: string; service: string } {
@@ -118,7 +128,7 @@ function macos(): { target: string; service: string } {
   return { target, service: `${target}/${SERVICE}` };
 }
 
-export function supervise(changed: boolean, restart: boolean): void {
+export async function supervise(changed: boolean, restart: boolean): Promise<void> {
   if (process.platform === 'darwin') {
     const { target, service } = macos();
     const printed = manage('launchctl', ['print', service]);
@@ -134,7 +144,7 @@ export function supervise(changed: boolean, restart: boolean): void {
     }
     return;
   }
-  linger();
+  await linger();
   if (changed) required('systemctl', ['--user', 'daemon-reload'], 'systemd could not read the Kit service');
   required('systemctl', ['--user', '--quiet', 'enable', UNIT], 'the Kit service could not be enabled');
   if (manage('systemctl', ['--user', '--quiet', 'is-active', UNIT]).status !== 0) {
