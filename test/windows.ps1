@@ -157,6 +157,7 @@ function Reset-Fake {
     'install-command' = 'irm agents.house/kit.ps1 | iex'
     'local-copies/rooms/r_notes.json' = '{"key":"rooms/r_notes","repository":"/agents/house/local-copies/rooms/notes"}'
     'kit/current' = '0.2.1'
+    'certificates.pem' = '-----BEGIN CERTIFICATE-----'
     '.claude/.credentials.json' = '{}'
   }
   foreach ($name in $files.Keys) { [IO.File]::WriteAllText((Join-Path $volume $name), "$($files[$name])`n") }

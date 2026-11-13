@@ -11,7 +11,7 @@ $CopyScript = @'
 set -eu
 rm -rf "$0.new"
 mkdir -m 700 "$0.new"
-tar -x -C "$0.new" --strip-components=1 --anchored --exclude=kit-home/kit --exclude='kit-home/.*'
+tar -x -C "$0.new" --strip-components=1 --anchored --exclude=kit-home/kit --exclude=kit-home/certificates.pem --exclude='kit-home/.*'
 '@
 $KeepScript = @'
 set -eu
