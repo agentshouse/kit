@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-const RELEASED = ['Dockerfile', 'bin/connect-linux.sh', 'bin/connect-windows.ps1'];
+const RELEASED = ['bin/connect-linux.sh', 'bin/connect-windows.ps1'];
 
 const [packed] = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { encoding: 'utf8' }));
 const content = createHash('sha256');

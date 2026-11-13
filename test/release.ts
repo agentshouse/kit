@@ -71,7 +71,6 @@ export async function placing(release: Released, kitSha256 = sha256(release.kit)
   await writeFile(
     script,
     (await readFile(LINUX, 'utf8'))
-      .replace('__IMAGE_DIGEST__', 'a'.repeat(64))
       .replace('__KIT_RELEASE__', release.version)
       .replace('__KIT_SHA256__', kitSha256)
       .replace('__ADAPTERS__', ADAPTED.map((kind) => `${adapterArchive(kind)}=${adapterSha256(kind)}`).join(' '))

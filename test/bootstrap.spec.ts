@@ -24,7 +24,6 @@ it('leaves the release exactly one Kit release, one Kit archive digest and one l
   const windows = await readFile(WINDOWS, 'utf8');
 
   expect(spawnSync('bash', ['-n', LINUX]).status).toBe(0);
-  expect(linux).not.toContain('__IMAGE_DIGEST__');
   expect(linux.split('__KIT_RELEASE__')).toHaveLength(2);
   expect(linux.split('__KIT_SHA256__')).toHaveLength(2);
   expect(linux.split('__ADAPTERS__')).toHaveLength(2);
@@ -205,7 +204,7 @@ it('ends a Node.js download that has not arrived within its deadline and downloa
   expect(await readFile(join(home, 'curl.log'), 'utf8')).toBe(`http://127.0.0.1:${port}/kit-installer/node-v24.22.1-linux-x64.tar.gz\n`);
 });
 
-it('writes the release manifest naming the Kit wire the release was built for, every file Kit installs by name and sha256, the image by digest and where a deploy takes each file the release does not carry', async () => {
+it('writes the release manifest naming the Kit wire the release was built for, every file Kit installs by name and sha256 and where a deploy takes each file the release does not carry, and no image', async () => {
   const release = await temporaryDirectory();
   const own: Record<string, string> = {
     'connect-linux.sh': '#!/usr/bin/env bash\n',
@@ -215,20 +214,19 @@ it('writes the release manifest naming the Kit wire the release was built for, e
     'claude-agent-acp-0.100.0.tar.gz': 'the Claude Code adapter archive',
   };
   for (const [name, content] of Object.entries(own)) await writeFile(join(release, name), content);
-  const image = `sha256:${'c'.repeat(64)}`;
   const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
   if (version !== '0.2.1') await writeFile(join(release, `kit-${version}.tar.gz`), 'the Kit archive');
 
-  expect(spawnSync(process.execPath, [MANIFEST, release, image], { encoding: 'utf8' })).toMatchObject({ status: 0, stderr: '' });
+  expect(spawnSync(process.execPath, [MANIFEST, release], { encoding: 'utf8' })).toMatchObject({ status: 0, stderr: '' });
 
   const written = JSON.parse(await readFile(join(release, 'bootstrap.json'), 'utf8')) as { files: Record<string, { sha256: string; from?: string }> };
+  expect(Object.keys(written).sort()).toEqual(['files', 'hosts', 'schemaVersion', 'version', 'wire']);
   const sha256 = (content: string) => createHash('sha256').update(content).digest('hex');
   expect(written).toMatchObject({
     schemaVersion: 3,
     version,
     wire: KIT_WIRE,
     hosts: { linux: 'connect-linux.sh', macos: 'connect-linux.sh', windows: 'connect-windows.ps1' },
-    image,
   });
   for (const [name, content] of Object.entries(own)) expect(written.files[name]).toEqual({ sha256: sha256(content) });
   expect(written.files['node-v24.22.1-linux-x64.tar.gz']).toEqual({
@@ -249,7 +247,7 @@ it('refuses to write a release manifest for a release directory without its Kit 
   await writeFile(join(release, 'connect-linux.sh'), '#!/usr/bin/env bash\n');
   await writeFile(join(release, 'connect-windows.ps1'), "$ErrorActionPreference = 'Stop'\n");
 
-  const ran = spawnSync(process.execPath, [MANIFEST, release, `sha256:${'c'.repeat(64)}`], { encoding: 'utf8' });
+  const ran = spawnSync(process.execPath, [MANIFEST, release], { encoding: 'utf8' });
 
   expect(ran.status).not.toBe(0);
   expect(ran.stderr).toContain(`${release} holds no kit-`);
