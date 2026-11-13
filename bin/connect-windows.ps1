@@ -142,12 +142,19 @@ function Get-LinuxName([string] $WindowsName) {
   $name
 }
 
+function Test-FirstLaunch([string] $Ubuntu) {
+  $held = @(Get-ChildItem -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DistributionName -eq $Ubuntu })
+  $held.Count -eq 1 -and $held[0].RunOOBE -eq 1
+}
+
 function Initialize-User([string] $Ubuntu) {
+  if (-not (Test-FirstLaunch $Ubuntu)) { return }
   if ((Get-LastLine (Invoke-Ubuntu $Ubuntu @('id', '-u'))) -ne '0') { return }
-  if ((Invoke-Ubuntu $Ubuntu @('getent', 'passwd', '1000') 'root').Status -eq 0) { return }
   $name = Get-LinuxName $env:USERNAME
-  $created = Invoke-Ubuntu $Ubuntu @('/usr/sbin/useradd', '--create-home', '--shell', '/bin/bash', '--groups', 'sudo', $name) 'root'
-  if ($created.Status -ne 0) { Stop-Bootstrap "the Ubuntu user $name could not be created: $(Get-LastLine $created)" }
+  if ((Invoke-Ubuntu $Ubuntu @('getent', 'passwd', $name) 'root').Status -ne 0) {
+    $created = Invoke-Ubuntu $Ubuntu @('/usr/sbin/useradd', '--create-home', '--shell', '/bin/bash', '--groups', 'sudo', $name) 'root'
+    if ($created.Status -ne 0) { Stop-Bootstrap "the Ubuntu user $name could not be created: $(Get-LastLine $created)" }
+  }
   $chosen = Invoke-Native wsl.exe @('--manage', $Ubuntu, '--set-default-user', $name)
   if ($chosen.Status -ne 0) { Stop-Bootstrap "$name could not be made Ubuntu's default user: $(Get-LastLine $chosen)" }
 }
@@ -247,7 +254,7 @@ function Invoke-Docker([string] $Docker, [string[]] $DockerArguments) {
 }
 
 function Move-ContainerKit([string] $Ubuntu) {
-  if ((Invoke-Ubuntu $Ubuntu @('test', '-e', '.agents/house/credential.json')).Status -eq 0) { return }
+  if ((Invoke-Ubuntu $Ubuntu @('test', '-e', '.agents/house/credential.json', '-o', '-e', '.agents/house/kit.json', '-o', '-e', $Copied)).Status -eq 0) { return }
   $docker = Find-Docker
   if (-not $docker) { return }
   if ((Invoke-Native $docker @('info')).Status -ne 0) {

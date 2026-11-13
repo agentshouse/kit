@@ -103,7 +103,7 @@ while [ "$1" != --exec ]; do shift; done
 shift
 case "$1" in
   id) if [ -e "$FAKE/root-default" ]; then echo 0; else echo 1001; fi; exit 0 ;;
-  getent) [ -e "$FAKE/user-1000" ]; exit ;;
+  getent) [ -e "$FAKE/user-exists" ]; exit ;;
   /usr/sbin/useradd) exit 0 ;;
 esac
 for name in $(printf '%s' "${WSLENV:-}" | tr ':' ' '); do
@@ -213,6 +213,8 @@ if ((Get-Copied) -cne 'nothing') { $findings += "a failed copy left in Ubuntu: $
 
 foreach ($case in @(
   @{ Name = 'an Ubuntu whose Kit holds a credential'; Prepare = { [void][IO.Directory]::CreateDirectory((Join-Path $ubuntuHome '.agents/house')); [IO.File]::WriteAllText((Join-Path $ubuntuHome '.agents/house/credential.json'), '{}') }; Docker = '' },
+  @{ Name = 'an Ubuntu whose Kit logged out, with Docker Desktop stopped and the workspace it took over'; Prepare = { [void][IO.Directory]::CreateDirectory((Join-Path $ubuntuHome '.agents/house')); [IO.File]::WriteAllText((Join-Path $ubuntuHome '.agents/house/kit.json'), '{}'); [IO.File]::WriteAllText((Join-Path $fake 'docker-down'), ''); [void][IO.Directory]::CreateDirectory((Join-Path $profileFolder 'AgentsHouse')) }; Docker = '' },
+  @{ Name = 'an Ubuntu holding a copy its Linux install has not taken over, with Docker Desktop stopped'; Prepare = { [void][IO.Directory]::CreateDirectory((Join-Path $ubuntuHome '.house-kit-home')); [IO.File]::WriteAllText((Join-Path $fake 'docker-down'), ''); [void][IO.Directory]::CreateDirectory((Join-Path $profileFolder 'AgentsHouse')) }; Docker = ''; Copied = '' },
   @{ Name = 'a computer with no Kit container'; Prepare = { Remove-Item -LiteralPath (Join-Path $fake 'mounts') }; Docker = 'info|container inspect --format {{json .Mounts}} house-kit' },
   @{ Name = 'Docker Desktop not answering on a computer that never ran Kit in it'; Prepare = { [IO.File]::WriteAllText((Join-Path $fake 'docker-down'), '') }; Docker = 'info' }
 )) {
@@ -221,9 +223,12 @@ foreach ($case in @(
   & $case.Prepare
   $refused = Refusal { Move-ContainerKit $distribution }
   if ($refused -cne 'no refusal') { $findings += "$($case.Name) refused with: $refused" }
-  if ((Get-Copied) -cne 'nothing') { $findings += "$($case.Name) copied: $(Get-Copied)" }
+  $expected = 'nothing'
+  if ($case.ContainsKey('Copied')) { $expected = $case.Copied }
+  if ((Get-Copied) -cne $expected) { $findings += "$($case.Name) copied: $(Get-Copied)" }
   $ran = (Read-Fake 'docker.log') -join '|'
   if ($ran -cne $case.Docker) { $findings += "$($case.Name) ran docker as: $ran" }
+  Remove-Item -LiteralPath (Join-Path $profileFolder 'AgentsHouse') -ErrorAction Ignore
 }
 
 Reset-Fake
@@ -262,21 +267,26 @@ if ($refused -cne 'kit_bootstrap_refused: the install in Ubuntu ended with statu
 function Test-Host { }
 function Register-Start([string] $Ubuntu) { $script:Registered += , $Ubuntu }
 function Get-CimInstance([string] $ClassName, [string] $Filter) { [pscustomobject]@{ InstallState = $script:Platform } }
+function Test-FirstLaunch([string] $Ubuntu) { $script:FirstLaunch }
 function Start-Process([string] $FilePath, [string[]] $ArgumentList, [string] $Verb, [switch] $Wait, [switch] $PassThru) {
   $script:Elevated += , "$Verb $FilePath $($ArgumentList -join ' ')"
   [IO.File]::WriteAllText((Join-Path $fake 'installed'), '')
   [pscustomobject]@{ ExitCode = 0 }
 }
 foreach ($case in @(
-  @{ Name = 'a computer without WSL whose virtual machine platform is off'; NoWsl = $true; Platform = 2; Distributions = ''; Root = $false; Refusal = 'kit_bootstrap_refused: WSL is installed and Windows needs a restart; restart Windows, then run this command again'; Elevated = 'RunAs wsl.exe --install --no-distribution'; Wsl = @('--status'); Users = '' },
-  @{ Name = 'a computer without WSL whose virtual machine platform is on'; NoWsl = $true; Platform = 1; Distributions = "Ubuntu`n"; Root = $false; Refusal = 'no refusal'; Elevated = 'RunAs wsl.exe --install --no-distribution'; Wsl = @('--status', '--list --quiet', '--distribution Ubuntu --cd ~ --exec id -u', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json', '--shutdown'); Users = 'Ubuntu' },
-  @{ Name = 'a computer without Ubuntu'; NoWsl = $false; Platform = 1; Distributions = "docker-desktop`n"; Root = $true; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--status', '--list --quiet', '--install --distribution Ubuntu --no-launch', '--distribution Ubuntu --cd ~ --exec id -u', '--distribution Ubuntu --user root --cd ~ --exec getent passwd 1000', '--distribution Ubuntu --user root --cd ~ --exec /usr/sbin/useradd --create-home --shell /bin/bash --groups sudo anton', '--manage Ubuntu --set-default-user anton', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json', '--shutdown'); Users = 'Ubuntu' },
-  @{ Name = 'a computer whose Ubuntu has its own default user'; NoWsl = $false; Platform = 1; Distributions = "Ubuntu-24.04`ndocker-desktop`n"; Root = $false; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--status', '--list --quiet', '--distribution Ubuntu-24.04 --cd ~ --exec id -u', '--distribution Ubuntu-24.04 --cd ~ --exec test -e .agents/house/credential.json', '--shutdown'); Users = 'Ubuntu-24.04' }
+  @{ Name = 'a computer without WSL whose virtual machine platform is off'; NoWsl = $true; Platform = 2; Distributions = ''; FirstLaunch = $false; Root = $false; UserExists = $false; Refusal = 'kit_bootstrap_refused: WSL is installed and Windows needs a restart; restart Windows, then run this command again'; Elevated = 'RunAs wsl.exe --install --no-distribution'; Wsl = @('--status'); Users = '' },
+  @{ Name = 'a computer without WSL whose virtual machine platform is on'; NoWsl = $true; Platform = 1; Distributions = "Ubuntu`n"; FirstLaunch = $false; Root = $false; UserExists = $false; Refusal = 'no refusal'; Elevated = 'RunAs wsl.exe --install --no-distribution'; Wsl = @('--status', '--list --quiet', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json -o -e .agents/house/kit.json -o -e .house-kit-home', '--shutdown'); Users = 'Ubuntu' },
+  @{ Name = 'a computer without Ubuntu'; NoWsl = $false; Platform = 1; Distributions = "docker-desktop`n"; FirstLaunch = $true; Root = $true; UserExists = $false; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--status', '--list --quiet', '--install --distribution Ubuntu --no-launch', '--distribution Ubuntu --cd ~ --exec id -u', '--distribution Ubuntu --user root --cd ~ --exec getent passwd anton', '--distribution Ubuntu --user root --cd ~ --exec /usr/sbin/useradd --create-home --shell /bin/bash --groups sudo anton', '--manage Ubuntu --set-default-user anton', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json -o -e .agents/house/kit.json -o -e .house-kit-home', '--shutdown'); Users = 'Ubuntu' },
+  @{ Name = 'a run again after the user was made and before it became the default'; NoWsl = $false; Platform = 1; Distributions = "Ubuntu`n"; FirstLaunch = $true; Root = $true; UserExists = $true; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--status', '--list --quiet', '--distribution Ubuntu --cd ~ --exec id -u', '--distribution Ubuntu --user root --cd ~ --exec getent passwd anton', '--manage Ubuntu --set-default-user anton', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json -o -e .agents/house/kit.json -o -e .house-kit-home', '--shutdown'); Users = 'Ubuntu' },
+  @{ Name = 'a computer whose Ubuntu was launched before and runs as root'; NoWsl = $false; Platform = 1; Distributions = "Ubuntu`n"; FirstLaunch = $false; Root = $true; UserExists = $false; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--status', '--list --quiet', '--distribution Ubuntu --cd ~ --exec test -e .agents/house/credential.json -o -e .agents/house/kit.json -o -e .house-kit-home', '--shutdown'); Users = 'Ubuntu' },
+  @{ Name = 'a computer whose Ubuntu has its own default user'; NoWsl = $false; Platform = 1; Distributions = "Ubuntu-24.04`ndocker-desktop`n"; FirstLaunch = $true; Root = $false; UserExists = $true; Refusal = 'no refusal'; Elevated = ''; Wsl = @('--status', '--list --quiet', '--distribution Ubuntu-24.04 --cd ~ --exec id -u', '--distribution Ubuntu-24.04 --cd ~ --exec test -e .agents/house/credential.json -o -e .agents/house/kit.json -o -e .house-kit-home', '--shutdown'); Users = 'Ubuntu-24.04' }
 )) {
   Reset-Fake
   if ($case.NoWsl) { [IO.File]::WriteAllText((Join-Path $fake 'no-wsl'), '') }
   if ($case.Distributions) { [IO.File]::WriteAllText((Join-Path $fake 'distributions'), $case.Distributions) }
   if ($case.Root) { [IO.File]::WriteAllText((Join-Path $fake 'root-default'), '') }
+  if ($case.UserExists) { [IO.File]::WriteAllText((Join-Path $fake 'user-exists'), '') }
+  $script:FirstLaunch = $case.FirstLaunch
   $script:Platform = $case.Platform
   [IO.File]::Delete($wslconfig)
   $script:Elevated = @()
