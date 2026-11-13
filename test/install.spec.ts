@@ -136,6 +136,57 @@ it('warns in one line off its host contract and installs anyway', async () => {
   expect(host.calls('kit')).toEqual(['connect --house https://agents.house']);
 });
 
+const WINDOWS_COMMAND = 'irm agents.house/kit.ps1 | iex';
+const WSL = { WSL_DISTRO_NAME: 'Ubuntu', HOUSE_KIT_WINDOWS_COMMAND: WINDOWS_COMMAND };
+const WSL_RECOMMENDED = `Recommended: run this in Windows PowerShell instead, which keeps Kit running and starts it again after a restart:\n  ${WINDOWS_COMMAND}\nInstall here anyway? Kit will then not start by itself: it runs only while a WSL terminal is open, and not after a restart. [y/N] `;
+const WSL_REFUSED = `kit_bootstrap_refused: from a WSL terminal Kit runs only while one is open, so nothing was installed; to keep it running, run this in Windows PowerShell: ${WINDOWS_COMMAND}\n`;
+
+it('recommends the Windows command in a WSL terminal and installs and starts Kit there only once the person agrees that it then runs only while a WSL terminal is open', async () => {
+  const host = await fakeHost(LINUX);
+
+  const asked = await host.ask(['--house', 'https://agents.house', '--code', 'ahk_code_one'], WSL, 'y');
+
+  expect(asked.status).toBe(0);
+  expect(asked.shown.startsWith(WSL_RECOMMENDED)).toBe(true);
+  expect(host.calls('kit')).toEqual(['connect --house https://agents.house --code ahk_code_one']);
+});
+
+it.each([
+  ['declines', 'n'],
+  ['answers nothing', ''],
+])('installs nothing in a WSL terminal where the person %s, naming the Windows command', async (_name, answer) => {
+  const host = await fakeHost(LINUX);
+
+  const asked = await host.ask(['--house', 'https://agents.house'], WSL, answer);
+
+  expect(asked.status).toBe(1);
+  expect(asked.shown.startsWith(WSL_RECOMMENDED)).toBe(true);
+  expect(host.calls('curl')).toEqual([]);
+  expect(host.calls('kit')).toEqual([]);
+  await expect(lstat(host.kitHome)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('installs nothing in WSL where it has no terminal to ask in, in one line naming the Windows command', async () => {
+  const host = await fakeHost(LINUX);
+
+  const ran = host.run(['--house', 'https://agents.house', '--code', 'ahk_code_one'], WSL);
+
+  expect(ran).toEqual({ status: 1, stdout: '', stderr: WSL_REFUSED });
+  expect(host.calls('curl')).toEqual([]);
+  expect(host.calls('kit')).toEqual([]);
+  await expect(lstat(host.kitHome)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('asks nothing in a WSL terminal the Windows command hands its install to, and installs and starts Kit', async () => {
+  const host = await fakeHost(LINUX);
+
+  const asked = await host.ask(['--house', 'https://agents.house'], { ...WSL, HOUSE_KIT_FROM_WINDOWS: '1' }, 'n');
+
+  expect(asked.status).toBe(0);
+  expect(asked.shown).not.toContain('Install here anyway?');
+  expect(host.calls('kit')).toEqual(['connect --house https://agents.house']);
+});
+
 it('passes the Kit relay through to kit connect and downloads through it', async () => {
   const relay = 'https://kit-relay.example';
   const host = await fakeHost({ ...LINUX, environment: { HOUSE_KIT_RELAY: relay } });

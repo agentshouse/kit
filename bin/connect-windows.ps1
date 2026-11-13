@@ -24,7 +24,7 @@ set -eu
 bootstrap=$(mktemp)
 trap 'rm -f "$bootstrap"' EXIT
 curl -fsSL -o "$bootstrap" "$0"
-bash "$bootstrap" "$@"
+HOUSE_KIT_FROM_WINDOWS=1 bash "$bootstrap" "$@"
 '@
 
 function Stop-Bootstrap([string] $Cause) {
