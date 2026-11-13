@@ -42,7 +42,7 @@ async function installShim(path: string, module: string): Promise<void> {
 }
 
 interface Settling {
-  settle(change: SettingsChange, carried?: string): Promise<Applied>;
+  settle(change: SettingsChange): Promise<Applied>;
   answered(applied: Applied): void;
 }
 
@@ -112,10 +112,10 @@ export async function resident(): Promise<void> {
   await copies.load();
   let running: { conversations: Conversations; agents: Agents; calls: Calls; stop(then: () => void): Promise<void> } | null = null;
   let settings: Promise<unknown> = Promise.resolve();
-  const settle = (change: SettingsChange, carried?: string): Promise<Applied> => {
+  const settle = (change: SettingsChange): Promise<Applied> => {
     const applied = settings.then(() =>
       applySettings(change, {
-        working: () => running !== null && (running.conversations.turnOpen() || running.calls.busy(carried)),
+        working: () => running !== null && (running.conversations.turnOpen() || running.calls.busy()),
         end: () => {
           running?.conversations.stopped();
           killDescendants();
@@ -217,8 +217,8 @@ export async function resident(): Promise<void> {
       if (call.kind === 'sign_in') signIns.start(call);
       else if (call.kind === 'update') update.take(call);
       else if (call.kind === 'settings') {
-        void calls.carry(call.input_id, async () => {
-          const applied = await settle(call, call.input_id);
+        void calls.carrySettings(call.input_id, async () => {
+          const applied = await settle(call);
           const result = 'refused' in applied ? { refused: applied.refused } : { settings: applied.settings };
           if ('settings' in applied ? !applied.moved : !applied.ended) return { result };
           calls.keepResult(call.input_id, result);

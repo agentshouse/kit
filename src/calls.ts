@@ -23,6 +23,7 @@ export class Calls {
   private readonly returned = new Set<string>();
   private readonly released = new Set<string>();
   private readonly carrying = new Map<string, number>();
+  private readonly settings = new Set<string>();
   private open = 0;
 
   constructor(house: House, changed: () => void) {
@@ -43,8 +44,13 @@ export class Calls {
     return this.open === 0;
   }
 
-  busy(except?: string): boolean {
-    return [...this.carrying.keys()].some((callId) => callId !== except);
+  busy(): boolean {
+    return [...this.carrying.keys()].some((callId) => !this.settings.has(callId));
+  }
+
+  carrySettings(callId: string, work: () => Promise<Carried>): Promise<void> {
+    this.settings.add(callId);
+    return this.carry(callId, work);
   }
 
   carry(callId: string, work: () => Promise<Carried>): Promise<void> {
@@ -78,8 +84,10 @@ export class Calls {
       .finally(() => {
         this.open--;
         const left = this.carrying.get(callId)! - 1;
-        if (left === 0) this.carrying.delete(callId);
-        else this.carrying.set(callId, left);
+        if (left === 0) {
+          this.carrying.delete(callId);
+          this.settings.delete(callId);
+        } else this.carrying.set(callId, left);
         this.changed();
       });
   }

@@ -326,6 +326,34 @@ it('refuses to move the workspace while another Kit call is carried, a function 
   expect(alive(hosted.kit.pid)).toBe(true);
 });
 
+it('moves the workspace for a change House sends as a skills and a workspace Kit call, while the skills call still returns its Result', async () => {
+  const workspace = join(await temporaryDirectory(), 'workspace');
+  const hosted = await hostKit();
+  const first = hosted.kit;
+  const skills = `settings-${randomUUID()}`;
+  hosted.house.route('POST', '/kit/kit-calls/results/return', async (request) => {
+    if ((request.body as { call: string }).call === skills) await first.exited;
+    else hosted.results.push(request);
+    return { body: {} };
+  });
+
+  callSettings(hosted, { skills: true }, skills);
+  const move = callSettings(hosted, { workspace });
+
+  expect(await hosted.kit.exited).toBe(1);
+  expect(JSON.parse(await readFile(join(hosted.home, 'kit.json'), 'utf8'))).toEqual({ skills: true, workspace });
+  hosted.house.route('POST', '/kit/kit-calls/results/return', (request) => {
+    hosted.results.push(request);
+    return { body: {} };
+  });
+  await hosted.restart();
+  callSettings(hosted, { skills: true }, skills);
+  callSettings(hosted, { workspace }, move);
+  expect(await hosted.result(skills)).toEqual({ settings: { skills: true, workspace } });
+  expect(await hosted.result(move)).toEqual({ settings: { skills: true, workspace } });
+  expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ origin: hosted.house.origin });
+});
+
 it('refuses to move the workspace while a turn is open, saying an Agent is working, and keeps the turn running', async () => {
   const workspace = join(await temporaryDirectory(), 'workspace');
   const hosted = await hostKit();
