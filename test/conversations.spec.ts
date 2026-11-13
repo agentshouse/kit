@@ -104,15 +104,14 @@ it.each([
   hosted.call({ kind: 'open' });
 
   await hosted.result(lastCall());
-  expect((await hosted.adapterLog()).find((entry) => entry.method === 'initialize')!.params).toMatchObject({
-    clientCapabilities: {
-      fs: { readTextFile: false, writeTextFile: false },
-      terminal: false,
-      elicitation: { form: {} },
-      session: { compaction: {}, notices: {} },
-      _meta: { jetbrains: { air: { version: 1, capabilities: air } } },
-    },
+  const { clientCapabilities } = (await hosted.adapterLog()).find((entry) => entry.method === 'initialize')!.params as { clientCapabilities: Record<string, unknown> };
+  expect(clientCapabilities).toMatchObject({
+    fs: { readTextFile: false, writeTextFile: false },
+    terminal: false,
+    elicitation: { form: {} },
+    session: { compaction: {}, notices: {} },
   });
+  expect(clientCapabilities._meta).toEqual({ jetbrains: { air: { version: 1, capabilities: air } } });
 });
 
 it('starts Grok approving every tool, since it offers no mode', async () => {
