@@ -7,7 +7,7 @@ import { isState, isTurn, type Operation, type Part, type SessionState, type Tur
 import { agentInstructions } from '@agentshouse/skills';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
-import { attached, bridgeSockets, inspected } from './attachments.ts';
+import { attached, bridgeSockets, infoCalls } from './attachments.ts';
 import { idOf, settle, until, without, type Received } from './double.ts';
 import { conversationCredential, emit, hostKit, installHeld, lastCall, lastMessage, outcome, userBin, type Hosted } from './environment.ts';
 import { accountOf, alive, placeHostKey, runKit, temporaryHome } from './kit.ts';
@@ -444,7 +444,7 @@ it("prepares a new conversation's first message, reading what it links and House
   hosted.call({ kind: 'message', text, first: true });
 
   await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/new'));
-  await until(() => inspected(hosted).length > 0);
+  await until(() => infoCalls(hosted).length > 0);
   await until(() => hosted.mcp.find((received) => (received.body as { params?: { name?: string } }).params?.name === 'shell'));
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
   await rm(join(hosted.home, 'hold-new'));
@@ -797,7 +797,7 @@ it('closes the connection a message opened to read its links when its CLI does n
   hosted.call({ kind: 'message', text: 'read [plan.md](/rooms/notes/plan.md)', first: false });
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
-  expect(inspected(hosted)).toEqual([{ path: '/rooms/notes/plan.md' }]);
+  expect(infoCalls(hosted)).toEqual([{ path: '/rooms/notes/plan.md' }]);
   await until(async () => (await bridgeSockets(hosted)).length === 0);
 });
 

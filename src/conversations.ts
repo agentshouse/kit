@@ -34,7 +34,7 @@ import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
 import { Content } from './content.ts';
 import { answeredFailure, readerFor, type CallEvent, type Event, type Message, type Reader, type Stop } from './events.ts';
-import { inspectedFile, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
+import { fileInfo, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, type GrokPlan, type GrokQuestions } from './grok.ts';
 import { agentBase } from './home.ts';
 import type { Calls } from './calls.ts';
@@ -216,7 +216,7 @@ function refusal(conversation: Conversation, error: unknown): string {
 
 function audioOf(result: ToolResult): Address | null {
   if (result.isError === true) return null;
-  const file = inspectedFile(result.content.map((content) => content.text).join('\n'));
+  const file = fileInfo(result.content.map((content) => content.text).join('\n'));
   return file?.media_type?.startsWith('audio/') === true ? file : null;
 }
 
@@ -695,7 +695,7 @@ export class Conversations {
     const blocks: ContentBlock[] = [];
     try {
       const bridge = await step(unbridged, unlessAborted(this.bridged(conversation), killed));
-      const read = async (path: string) => audioOf(await step(unbridged, unlessAborted(bridge.tool('inspect', { path }), signal)));
+      const read = async (path: string) => audioOf(await step(unbridged, unlessAborted(bridge.tool('info', { path }), signal)));
       for (const path of paths) {
         let answered = await read(path);
         if (answered === null) continue;

@@ -31,7 +31,7 @@ export interface Address {
   sha256: string;
 }
 
-export interface InspectedFile extends Address {
+export interface FileInfo extends Address {
   media_type: string | null;
 }
 
@@ -50,15 +50,15 @@ export function linkedPaths(text: string): string[] {
   return [...new Set(Array.from(text.matchAll(LINK), (link) => link[1]!))];
 }
 
-export function inspectedFile(answer: string): InspectedFile | null {
+export function fileInfo(answer: string): FileInfo | null {
   const document = parseDocument(answer);
   if (document.errors.length > 0) return null;
-  const inspected = document.toJS() as { download?: unknown; sha256?: unknown; media_type?: unknown } | null;
-  if (typeof inspected?.download !== 'string') return null;
+  const details = document.toJS() as { download?: unknown; sha256?: unknown; media_type?: unknown } | null;
+  if (typeof details?.download !== 'string') return null;
   return {
-    download: inspected.download,
-    sha256: String(inspected.sha256),
-    media_type: typeof inspected.media_type === 'string' ? inspected.media_type : null,
+    download: details.download,
+    sha256: String(details.sha256),
+    media_type: typeof details.media_type === 'string' ? details.media_type : null,
   };
 }
 

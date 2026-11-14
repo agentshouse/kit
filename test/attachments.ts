@@ -34,7 +34,7 @@ export function attached(hosted: Hosted, attachments: Attachment[], documents: s
     held.set(path, { ...attachment, key });
     return { path, link: link(path), key };
   });
-  hosted.tools.inspect = (args) => {
+  hosted.tools.info = (args) => {
     const path = String(args.path);
     const refusal = refusals[path];
     if (refusal !== undefined) return { isError: true, content: [{ type: 'text', text: refusal }] };
@@ -57,10 +57,10 @@ export function attached(hosted: Hosted, attachments: Attachment[], documents: s
   return files;
 }
 
-export function inspected(hosted: Hosted): unknown[] {
+export function infoCalls(hosted: Hosted): unknown[] {
   return hosted.mcp
     .map((received: Received) => (received.body as McpCall).params)
-    .filter((params) => params.name === 'inspect')
+    .filter((params) => params.name === 'info')
     .map((params) => params.arguments);
 }
 

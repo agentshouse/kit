@@ -263,8 +263,8 @@ it('sends each part and reads each download at its store address through the Kit
   store.objects.set('binary/cover', content);
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
-    const inspected = `sha256: ${createHash('sha256').update(content).digest('hex')}\ndownload: ${store.address('GET', 'binary/cover')}`;
-    return { body: { jsonrpc: '2.0', id: message.id, result: shelled(inspected) } };
+    const details = `sha256: ${createHash('sha256').update(content).digest('hex')}\ndownload: ${store.address('GET', 'binary/cover')}`;
+    return { body: { jsonrpc: '2.0', id: message.id, result: shelled(details) } };
   });
   const fetched = await runHouse(home, ['download', JSON.stringify({ path: '/rooms/room/covers/cover.bin', file: join(home, 'back.bin') })], undefined, [], relayed);
 
@@ -495,7 +495,7 @@ it('lists a Tool without a description in house --help with its top-level argume
       'records_append: Add a record to a Room, stored as given.',
     ].join('\n'),
   );
-  expect(help.stdout).toContain('inspect: Provenance and revisions; `shell` reads current file text.\nfiles_batch\n');
+  expect(help.stdout).toContain('info: Provenance and revisions; `shell` reads current file text.\nfiles_batch\n');
   expect(help.stdout.endsWith('\nabout_house\n')).toBe(true);
 });
 
@@ -518,9 +518,9 @@ it.each([
     ],
   ],
   [
-    'inspect',
+    'info',
     [
-      'inspect: Provenance and revisions; `shell` reads current file text.',
+      'info: Provenance and revisions; `shell` reads current file text.',
       '  path (required): A file path.',
       '  view "sources" | "history": Optional `history`, or `sources` for a captured item.',
     ],

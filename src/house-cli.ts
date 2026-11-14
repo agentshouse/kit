@@ -6,7 +6,7 @@ import { extname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ToolResult } from './bridge.ts';
-import { downloaded, inspectedFile, storeRefusal, uploaded, type UploadParts } from './files.ts';
+import { downloaded, fileInfo, storeRefusal, uploaded, type UploadParts } from './files.ts';
 import { HOUSE_REF } from './git.ts';
 import { ownerSocket, readOwnAgent } from './home.ts';
 import { callHouse, rpc, UNREACHABLE, Unsettled, type Message } from './mcp.ts';
@@ -192,7 +192,7 @@ async function download(args: string[]): Promise<string> {
   const written = resolve(file);
   await downloaded(
     async () => {
-      const file = inspectedFile(await called('inspect', selected));
+      const file = fileInfo(await called('info', selected));
       if (file === null) throw new Error(`${String(selected.path)} holds no binary file; shell reads its text`);
       return file;
     },

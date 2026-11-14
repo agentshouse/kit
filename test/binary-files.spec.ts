@@ -156,8 +156,8 @@ it('downloads the head or a named revision of a binary Path to the file the call
   expect(await readFile(head)).toEqual(REDRAWN);
   expect(await readFile(earlier)).toEqual(JPEG);
   expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
-    [`Bearer ${conversationCredential('conversation-1')}`, 'inspect', { path: '/rooms/notes/photo.jpg' }],
-    [`Bearer ${conversationCredential('conversation-1')}`, 'inspect', { path: '/rooms/notes/photo.jpg', ref: first }],
+    [`Bearer ${conversationCredential('conversation-1')}`, 'info', { path: '/rooms/notes/photo.jpg' }],
+    [`Bearer ${conversationCredential('conversation-1')}`, 'info', { path: '/rooms/notes/photo.jpg', ref: first }],
   ]);
   expect(storeCalls(hosted)).toEqual([
     ['GET', null, REDRAWN.length, 200],
@@ -177,8 +177,8 @@ it('replaces a download address the store refuses as expired by asking House aga
   expect(fetched).toMatchObject({ status: 0, stdout: `${target}\n`, stderr: '' });
   expect(await readFile(target)).toEqual(JPEG);
   expect(hosted.mcp.map((received) => [called(received).name, called(received).arguments])).toEqual([
-    ['inspect', { path: '/rooms/notes/photo.jpg' }],
-    ['inspect', { path: '/rooms/notes/photo.jpg' }],
+    ['info', { path: '/rooms/notes/photo.jpg' }],
+    ['info', { path: '/rooms/notes/photo.jpg' }],
   ]);
   expect(storeCalls(hosted)).toEqual([
     ['GET', null, 0, 403],
@@ -202,13 +202,13 @@ it("refuses a download whose bytes do not match House's SHA-256 and one of a tex
   expect(hosted.mcp.map((received) => received.headers.authorization)).toEqual(['Bearer ahp_own', 'Bearer ahp_own']);
 });
 
-it('refuses a download of a document whose inspect answer House cut as one of a text file, and writes nothing', async () => {
+it('refuses a download of a document whose info answer House cut as one of a text file, and writes nothing', async () => {
   const { hosted } = await copied();
   await writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' }));
-  const read = hosted.tools.inspect!;
-  hosted.tools.inspect = async (args, request) => {
+  const read = hosted.tools.info!;
+  hosted.tools.info = async (args, request) => {
     const result = (await read(args, request))!;
-    const cut = `inspect: output_cut 1 newest revisions; continue with: inspect ref=rev-1 path=${String(args.path)} view=history`;
+    const cut = `info: output_cut 1 newest revisions; continue with: info ref=rev-1 path=${String(args.path)} view=history`;
     return { content: [{ type: 'text', text: `${result.content[0]!.text}${cut}` }] };
   };
   const target = join(hosted.workingDirectory, 'plan.copy');
