@@ -227,6 +227,23 @@ it('reads the CLI again at every Conversation process start, its sign-in and eve
   expect(reported(hosted)).toHaveLength(count);
 });
 
+it("reports a CLI's API key and provider no more once a person removed them from its settings, from its next Conversation process start", async () => {
+  const settings = (home: string) => join(accountOf(home), '.claude', 'settings.json');
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
+    prepare: async (home) => {
+      await mkdir(dirname(settings(home)), { recursive: true });
+      await writeFile(settings(home), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'stand-in-key', ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic' } }));
+    },
+  });
+  await report(hosted, ([claude]) => claude?.api_key === true && claude.provider === 'api.z.ai');
+  await signIn(hosted.home, 'claude-agent-acp');
+  await writeFile(settings(hosted.home), JSON.stringify({ env: {} }));
+
+  await open(hosted, 'conversation-1');
+
+  await report(hosted, ([claude]) => claude?.signed_in === true && !('api_key' in claude) && !('provider' in claude));
+});
+
 it('reports the read of the latest Conversation process start when an earlier read of the same CLI ends after it', async () => {
   const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => signIn(home, 'grok-build') });
   await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));

@@ -11,7 +11,10 @@ import { holdTranscription, transcriptionReport } from './transcription.ts';
 
 type Model = ReportedAgentKind['models'][number];
 
-type Offer = Pick<ReportedAgentKind, 'signed_in' | 'models' | 'modes'> & { default_model: string | null; default_effort: string | null };
+type Offer = Pick<ReportedAgentKind, 'signed_in' | 'api_key' | 'provider' | 'models' | 'modes'> & {
+  default_model: string | null;
+  default_effort: string | null;
+};
 
 type Reading = Offer & Pick<ReportedAgentKind, 'release' | 'failure' | 'installing'>;
 
@@ -123,24 +126,34 @@ function ended(signal: AbortSignal): Promise<never> {
   });
 }
 
+function keyedOf({ api_key, provider }: Pick<Offer, 'api_key' | 'provider'>): Pick<Offer, 'api_key' | 'provider'> {
+  return { ...(api_key === undefined ? {} : { api_key }), ...(provider === undefined ? {} : { provider }) };
+}
+
 async function offer(kind: string, cli: string, known: Offer, signal?: AbortSignal): Promise<Offer> {
-  const probe = CLIS[kind]!.signedIn;
+  const { signedIn: probe, key } = CLIS[kind]!;
+  const keyed = await key.read();
   // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
-  if ('command' in probe && (await run(cli, probe.command, 30_000, false, signal)).status !== 0) return SIGNED_OUT;
+  if ('command' in probe && !keyed.api_key && (await run(cli, probe.command, 30_000, false, signal)).status !== 0) {
+    return { ...SIGNED_OUT, ...keyed };
+  }
   let adapter: Adapter | undefined;
   try {
     adapter = await startAdapter(kind, cli, kitHome(), client({ name: '@agentshouse/kit' }), () => undefined, {}, signal);
     signal?.throwIfAborted();
     if ('initializeMeta' in probe) {
       const method = adapter.initialized._meta?.[probe.initializeMeta];
-      if (typeof method !== 'string' || method.length === 0) return SIGNED_OUT;
+      if (typeof method !== 'string' || method.length === 0) return { ...SIGNED_OUT, ...keyed };
+      if (method === probe.apiKey) keyed.api_key = true;
     }
-    return { signed_in: true, ...(await models(kind, adapter, known.models)) };
+    return { signed_in: true, ...keyed, ...(await models(kind, adapter, known.models)) };
   } catch (error) {
     if (!signal?.aborted) process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
-    if (signedOut(error)) return SIGNED_OUT;
+    if (signedOut(error)) return { ...SIGNED_OUT, ...keyed };
+    const unread = adapter === undefined && 'initializeMeta' in probe;
     return {
-      signed_in: adapter === undefined && 'initializeMeta' in probe ? known.signed_in : true,
+      signed_in: unread ? known.signed_in : true,
+      ...keyedOf({ api_key: unread ? known.api_key : keyed.api_key, provider: keyed.provider }),
       models: known.models,
       default_model: known.default_model,
       default_effort: known.default_effort,
@@ -160,6 +173,7 @@ function reported(kind: string, reading: Reading): ReportedAgentKind {
     failure: reading.failure,
     ...(reading.installing === undefined ? {} : { installing: reading.installing }),
     signed_in: reading.signed_in,
+    ...keyedOf(reading),
     models: reading.models,
     modes: reading.modes,
     full_access: CLIS[kind]!.fullAccess,
@@ -285,6 +299,7 @@ export class Agents {
           release,
           failure: null,
           signed_in: kept.signed_in,
+          ...keyedOf(kept),
           models: kept.models,
           default_model: kept.default_model,
           default_effort: kept.default_effort,
@@ -295,7 +310,7 @@ export class Agents {
       this.quietOffer(kind, cli, kept)
         .then((offered) => {
           const current = this.readings.get(kind);
-          if (this.reads.get(kind) === read && current?.release === release) this.update(kind, { ...current, ...offered });
+          if (this.reads.get(kind) === read && current?.release === release) this.update(kind, { release, failure: current.failure, ...offered });
         })
         .catch(logged);
       return cli;

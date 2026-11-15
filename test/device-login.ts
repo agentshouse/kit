@@ -17,6 +17,8 @@ const CLAUDE_LINK =
   '&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference' +
   '&code_challenge=synthetic-challenge&code_challenge_method=S256&state=synthetic-state';
 
+export const CODEX_KEY_LOGIN = ['login', '--with-api-key'];
+
 export const DEVICE_LOGINS: Record<string, DeviceLogin> = {
   'codex-acp': {
     argv: ['login', '--device-auth'],
@@ -76,6 +78,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const log = (entry: Record<string, unknown>) =>
     appendFileSync(join(home, 'login.log'), `${JSON.stringify({ kind, ...entry })}\n`);
   log({ pid: process.pid, argv });
+  if (kind === 'codex-acp' && argv.join(' ') === CODEX_KEY_LOGIN.join(' ')) {
+    const key = await new Promise<string>((resolve) => {
+      let given = '';
+      process.stdin.setEncoding('utf8').on('data', (chunk: string) => (given += chunk)).on('end', () => resolve(given.trim()));
+    });
+    const codex = process.env.CODEX_HOME || join(process.env.HOME!, '.codex');
+    mkdirSync(codex, { recursive: true });
+    writeFileSync(join(codex, 'auth.json'), `${JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: key }, undefined, 2)}\n`, { mode: 0o600 });
+    process.stderr.write('Reading API key from stdin...\n');
+    process.exit(0);
+  }
   if (argv.join(' ') !== login.argv.join(' ')) {
     process.stderr.write(`unknown arguments: ${argv.join(' ')}\n`);
     process.exit(2);

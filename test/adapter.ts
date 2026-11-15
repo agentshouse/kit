@@ -508,6 +508,11 @@ async function replay(client: AgentContext, sessionId: string, fixture: string):
   return entries[answer]!.result;
 }
 
+function authMethod(): { defaultAuthMethodId?: string } {
+  if (signedIn()) return { defaultAuthMethodId: 'device' };
+  return kind === 'grok-build' && process.env.XAI_API_KEY ? { defaultAuthMethodId: 'xai.api_key' } : {};
+}
+
 const app = agent({ name: 'adapter-double' })
   .onRequest('initialize', ({ params }) => {
     log({ method: 'initialize', params, env: process.env, argv: process.argv, cli });
@@ -516,7 +521,7 @@ const app = agent({ name: 'adapter-double' })
       protocolVersion: params.protocolVersion,
       agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
       authMethods: [],
-      _meta: { ...(steers ? { steering: { supported: true } } : {}), ...(signedIn() ? { defaultAuthMethodId: 'device' } : {}) },
+      _meta: { ...(steers ? { steering: { supported: true } } : {}), ...authMethod() },
     };
   })
   .onRequest('session/new', async ({ params, client }) => {
