@@ -44,7 +44,7 @@ export function placeUserCli(directory: string, kind: string, release = RELEASES
     [
       '#!/bin/sh',
       `export ADAPTER_KIND=${kind} CLI_PATH="$0" CLI_RELEASE=${release}`,
-      `if [ "$1" = --version ]; then [ -z "$XAI_API_KEY" ] || ${process.execPath} ${STARTED} version; echo '${VERSION_LINES[kind]!(release)}'; exit 0; fi`,
+      `if [ "$1" = --version ]; then ${kind === 'grok-build' ? `${process.execPath} ${STARTED} version; ` : ''}echo '${VERSION_LINES[kind]!(release)}'; exit 0; fi`,
       `if [ "$1" = update ]; then exec ${process.execPath} ${CLI} update ${kind} "$0"; fi`,
       `case " $* " in *" --device-auth "*|*" --claudeai "*|*" --with-api-key "*) exec ${process.execPath} ${DEVICE_LOGIN} "$@" ;; esac`,
       `case " $* " in *" app-server "*) exec ${process.execPath} ${APP_SERVER} "$@" ;; esac`,
