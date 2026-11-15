@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
+import { updatesRun } from './cli.ts';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { idOf, settle, until, without } from './double.ts';
 import { hostKit, lastCall, userBin, type Hosted } from './environment.ts';
 import { accountOf, alive, filesUnder, temporaryHome } from './kit.ts';
+import type { Started } from './started.ts';
 
 interface Hold {
   subject: string;
@@ -554,6 +556,23 @@ it('names a Grok Build key Kit home holds as no JSON in its log, quoting none of
 
   await until(() => hosted.kit.stderr().includes('grok-key.json in Kit home holds no JSON'));
   expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(STAND_IN_KEY);
+});
+
+async function keyedStarts(hosted: Hosted, name: string): Promise<string[]> {
+  const log = await readFile(join(hosted.home, 'started.log'), 'utf8');
+  const started = log.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Started);
+  return started.filter((entry) => entry.name === name).map((entry) => entry.keyed.sort().join(' '));
+}
+
+it("runs Grok Build's update in the person's login shell without the key Kit home holds, and reads its version with the key and its endpoint", async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], {
+    prepare: (home) => writeFile(join(home, 'grok-key.json'), JSON.stringify({ key: STAND_IN_KEY, endpoint: ENDPOINT })),
+  });
+
+  await until(() => updatesRun(hosted.home).find((update) => update.kind === 'grok-build' && update.ended));
+
+  expect(await keyedStarts(hosted, 'update')).toEqual(['']);
+  expect(new Set(await keyedStarts(hosted, 'version'))).toEqual(new Set(['GROK_MODELS_BASE_URL XAI_API_KEY']));
 });
 
 it('ends a sign-in by key whose CLI settings it cannot read with their cause, writing nothing and naming no key', async () => {

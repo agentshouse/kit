@@ -246,25 +246,16 @@ interface HeldKey {
 
 const GROK_HELD_KEY = 'grok-key.json';
 
-async function heldGrokKey(): Promise<HeldKey | null> {
-  try {
-    return await readHome<HeldKey>(GROK_HELD_KEY);
-  } catch (error) {
-    if (error instanceof SyntaxError) throw new Error(`${GROK_HELD_KEY} in Kit home holds no JSON`);
-    throw error;
-  }
-}
-
 export const GROK_KEY: KeySettings = {
   read: quietly(async () => {
-    const held = await heldGrokKey();
+    const held = await readHome<HeldKey>(GROK_HELD_KEY);
     if (held?.endpoint !== undefined) return keyed(true, held.endpoint, 'api.x.ai');
     const config = await tomlSettings(join(process.env.GROK_HOME || join(homedir(), '.grok'), 'config.toml'));
     return keyed(held !== null, table(config.endpoints).models_base_url, 'api.x.ai');
   }),
   write: (key, endpoint) => writeHome(GROK_HELD_KEY, { key, ...(endpoint === null ? {} : { endpoint }) } satisfies HeldKey),
   environment: async () => {
-    const held = await heldGrokKey();
+    const held = await readHome<HeldKey>(GROK_HELD_KEY);
     if (held === null) return {};
     return { XAI_API_KEY: held.key, ...(held.endpoint === undefined ? {} : { GROK_MODELS_BASE_URL: held.endpoint }) };
   },

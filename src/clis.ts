@@ -296,8 +296,8 @@ const FOUND = 'house-kit-cli ';
 const LOOKUP = `found=$(command -v "$1") || exit 0; case $found in /*) ;; *) found=$(pwd -P)/$found ;; esac; printf "${FOUND}%s\\n" "$found"`;
 const USER_BIN = 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin" ;; esac; export PATH';
 
-function inLoginShell(script: string, argument = '', signal?: AbortSignal, timeoutMs = READ_MS, env?: NodeJS.ProcessEnv): Promise<Ran> {
-  return run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${USER_BIN}; ${script}' sh ${argument}`], timeoutMs, true, signal, env);
+function inLoginShell(script: string, argument = '', signal?: AbortSignal, timeoutMs = READ_MS): Promise<Ran> {
+  return run(loginShell(), ['-l', '-i', '-c', `exec /bin/sh -c '${USER_BIN}; ${script}' sh ${argument}`], timeoutMs, true, signal);
 }
 
 export async function onLoginPath(program: string, signal?: AbortSignal): Promise<string | null> {
@@ -309,9 +309,8 @@ export function locate(kind: string, signal?: AbortSignal): Promise<string | nul
   return onLoginPath(CLIS[kind]!.bin, signal);
 }
 
-export async function updateCli(kind: string): Promise<string | null> {
-  const env = await cliEnvironment(kind);
-  return bounded('the update', (within) => inLoginShell(CLIS[kind]!.update, '', within, INSTALL_MS, env));
+export function updateCli(kind: string): Promise<string | null> {
+  return bounded('the update', (within) => inLoginShell(CLIS[kind]!.update, '', within, INSTALL_MS));
 }
 
 export async function loginPath(): Promise<string> {
