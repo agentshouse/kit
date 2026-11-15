@@ -451,3 +451,74 @@ it('creates and reports the agents folder of the native workspace root as its Ag
   expect((await stat(join(workspace, 'agents'))).isDirectory()).toBe(true);
 });
 
+
+async function placeSettings(path: string, text: string): Promise<void> {
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, text);
+}
+
+function reported(report: Record<string, unknown>, kind: string): Record<string, unknown> {
+  return (report.agents as Record<string, unknown>[]).find((agent) => agent.kind === kind)!;
+}
+
+it('reports each CLI a person set to an API key and another provider by hand signed in, on a key and with that provider’s host, and Codex on its provider with its models', async () => {
+  desired = ['codex-acp', 'claude-agent-acp', 'grok-build'];
+  const account = accountOf(home);
+  await start(
+    async () => {
+      await placeSettings(
+        join(account, '.claude', 'settings.json'),
+        JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 'stand-in-token', ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic' } }),
+      );
+      await placeSettings(
+        join(account, '.codex', 'config.toml'),
+        ['model_provider = "router"', '', '[model_providers.router]', 'name = "Router"', 'base_url = "https://openrouter.ai/api/v1"', 'env_key = "ROUTER_KEY"', ''].join('\n'),
+      );
+      await placeSettings(join(account, '.grok', 'config.toml'), '[endpoints]\nmodels_base_url = "https://api.groq.com/openai/v1"\n');
+    },
+    [],
+    { ROUTER_KEY: 'stand-in-router-key', XAI_API_KEY: 'stand-in-xai-key' },
+  );
+
+  const report = await until(() => completeReports().find((one) => (one.agents as { signed_in: boolean }[]).every((agent) => agent.signed_in)));
+
+  expect(reported(report, 'claude-agent-acp')).toMatchObject({ signed_in: true, api_key: true, provider: 'api.z.ai' });
+  expect(reported(report, 'codex-acp')).toMatchObject({
+    signed_in: true,
+    api_key: true,
+    provider: 'openrouter.ai',
+    models: expect.arrayContaining([expect.objectContaining({ model: 'gpt-5.5' })]),
+  });
+  expect(reported(report, 'grok-build')).toMatchObject({ signed_in: true, api_key: true, provider: 'api.groq.com' });
+});
+
+it("reports a CLI a person set to an API key on its maker's own endpoint signed in, on a key and with no provider", async () => {
+  desired = ['codex-acp', 'claude-agent-acp'];
+  const account = accountOf(home);
+  await start(async () => {
+    await placeSettings(join(account, '.codex', 'auth.json'), JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: 'stand-in-openai-key' }));
+    await placeSettings(
+      join(account, '.claude', 'settings.json'),
+      JSON.stringify({ env: { ANTHROPIC_API_KEY: 'stand-in-anthropic-key', ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } }),
+    );
+  });
+
+  const report = await until(() => completeReports().find((one) => (one.agents as { signed_in: boolean }[]).every((agent) => agent.signed_in)));
+
+  for (const kind of desired) {
+    expect(reported(report, kind)).toMatchObject({ signed_in: true, api_key: true });
+    expect(reported(report, kind)).not.toHaveProperty('provider');
+  }
+});
+
+it('reports a CLI on its maker’s own sign-in with no key and no provider', async () => {
+  desired = ['codex-acp'];
+  await signIn('codex-acp');
+  await placeSettings(join(accountOf(home), '.codex', 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: { id_token: 'stand-in' } }));
+  await start();
+
+  const report = await until(() => completeReports().find((one) => reported(one, 'codex-acp').signed_in));
+
+  expect(reported(report, 'codex-acp')).not.toHaveProperty('api_key');
+  expect(reported(report, 'codex-acp')).not.toHaveProperty('provider');
+});

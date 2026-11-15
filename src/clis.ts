@@ -5,10 +5,12 @@ import { constants, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { CLAUDE_KEY, CODEX_KEY, GROK_KEY, type KeySettings } from './keys.ts';
 import { releaseDirectory } from './placement.ts';
 import { childEnvironment } from './relay.ts';
 
 export interface Cli {
+  name: string;
   bin: string;
   minimum: string;
   install: string;
@@ -20,8 +22,9 @@ export interface Cli {
   unknownSession(error: unknown): boolean;
   allowHouse(path: string): Promise<void>;
   questionFields(request: CreateElicitationRequest): string[];
-  signedIn: { command: string[] } | { initializeMeta: string };
+  signedIn: { command: string[] } | { initializeMeta: string; apiKey: string };
   login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
+  key: KeySettings;
   air: string[];
 }
 
@@ -120,6 +123,7 @@ function bridgeInClaudeSandbox(bridge: string): Record<string, unknown> {
 
 export const CLIS: Record<string, Cli> = {
   'codex-acp': {
+    name: 'Codex',
     bin: 'codex',
     minimum: '0.165.0',
     install: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
@@ -141,9 +145,11 @@ export const CLIS: Record<string, Cli> = {
     questionFields: codexQuestionFields,
     signedIn: { command: ['login', 'status'] },
     login: { args: ['login', '--device-auth'], code: 'show' },
+    key: CODEX_KEY,
     air: ['asyncTasks', 'nativeSubagentSessions'],
   },
   'claude-agent-acp': {
+    name: 'Claude Code',
     bin: 'claude',
     minimum: '2.1.316',
     install: 'curl -fsSL https://claude.ai/install.sh | bash',
@@ -171,9 +177,11 @@ export const CLIS: Record<string, Cli> = {
     questionFields: claudeQuestionFields,
     signedIn: { command: ['auth', 'status'] },
     login: { args: ['auth', 'login', '--claudeai'], code: 'collect', rejected: 'Invalid code' },
+    key: CLAUDE_KEY,
     air: ['asyncTasks', 'sessionFailure'],
   },
   'grok-build': {
+    name: 'Grok Build',
     bin: 'grok',
     minimum: '1.0.46',
     install: 'curl -fsSL https://x.ai/cli/install.sh | bash',
@@ -185,8 +193,9 @@ export const CLIS: Record<string, Cli> = {
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
     allowHouse: nothing,
     questionFields: () => [],
-    signedIn: { initializeMeta: 'defaultAuthMethodId' },
+    signedIn: { initializeMeta: 'defaultAuthMethodId', apiKey: 'xai.api_key' },
     login: { args: ['login', '--device-auth'], code: 'show' },
+    key: GROK_KEY,
     air: ['asyncTasks'],
   },
 };

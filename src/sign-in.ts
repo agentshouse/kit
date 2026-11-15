@@ -19,6 +19,32 @@ function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function keySteps(name: string): SecretCeremonyStep[] {
+  return [
+    { kind: 'collect', label: 'API key', name: 'key' },
+    {
+      kind: 'collect',
+      label: 'Endpoint, for another provider',
+      name: 'endpoint',
+      description: `Leave Endpoint empty for ${name}’s own. Both stay on this computer.`,
+      optional: true,
+    },
+  ];
+}
+
+function endpointOf(given: string): string | null {
+  const endpoint = given.trim();
+  if (endpoint === '') return null;
+  let protocol: string;
+  try {
+    protocol = new URL(endpoint).protocol;
+  } catch {
+    protocol = '';
+  }
+  if (protocol !== 'https:' && protocol !== 'http:') throw new Error('the endpoint is no http or https address');
+  return endpoint;
+}
+
 function endOf(signal: AbortSignal): Promise<true> {
   return new Promise((resolve) => signal.addEventListener('abort', () => resolve(true), { once: true }));
 }
@@ -49,9 +75,29 @@ export class SignIns {
   }
 
   private async signedIn(call: SignInCall, signal: AbortSignal): Promise<false> {
-    await this.login(call, signal);
+    await (call.api_key === true ? this.keyed(call, signal) : this.login(call, signal));
     if (!signal.aborted) await this.agents.recheck(call.cli, signal);
     return false;
+  }
+
+  private async keyed(call: SignInCall, signal: AbortSignal): Promise<void> {
+    const { name, key } = CLIS[call.cli]!;
+    const write = key.write;
+    if (typeof write !== 'function') {
+      process.stderr.write(`kit: the ${call.cli} sign-in failed: ${write.refused}\n`);
+      return;
+    }
+    let secret = '';
+    try {
+      const cli = await this.agents.located(call.cli, signal);
+      const given = await holdSecretInput(this.house, call.input_id, keySteps(name), () => !signal.aborted);
+      if (given === null || signal.aborted) return;
+      secret = given.key!.trim();
+      await write(secret, endpointOf(given.endpoint!), cli, signal);
+    } catch (error) {
+      const cause = secret === '' ? causeOf(error) : causeOf(error).replaceAll(secret, 'the key');
+      if (!signal.aborted) process.stderr.write(`kit: the ${call.cli} sign-in failed: ${cause}\n`);
+    }
   }
 
   private async login(call: SignInCall, signal: AbortSignal): Promise<void> {

@@ -335,3 +335,184 @@ it('ends the install a sign-in started when the time House gave the sign-in runs
   await expect(access(join(hosted.home, 'login.log'))).rejects.toThrow();
   expect(hosted.kit.stderr()).not.toContain('claude-agent-acp did not install');
 });
+
+const STAND_IN_KEY = 'stand-in-api-key-0000';
+
+const ENDPOINT = 'https://openrouter.ai/api/v1';
+
+function keyCeremony(name: string) {
+  return {
+    steps: [
+      { kind: 'collect', label: 'API key', name: 'key' },
+      {
+        kind: 'collect',
+        label: 'Endpoint, for another provider',
+        name: 'endpoint',
+        description: `Leave Endpoint empty for ${name}’s own. Both stay on this computer.`,
+        optional: true,
+      },
+    ],
+  };
+}
+
+async function signingInByKey(kind: string, endpoint: string, prepare: (account: string) => Promise<void> = async () => undefined) {
+  const hosted = await hostKit([{ kind }], { prepare: (home) => prepare(accountOf(home)) });
+  const holds: Hold[] = [];
+  hosted.house.route('POST', '/kit/secret-inputs/await', (request) => {
+    holds.push({ subject: idOf(request, 'subject'), body: without(request, 'subject') });
+    return { body: { outcome: 'collected', content: { key: STAND_IN_KEY, endpoint } } };
+  });
+  hosted.call({ kind: 'sign_in', conversation_id: null, cli: kind, ends_in: 600, api_key: true });
+  return { hosted, holds, call: lastCall() };
+}
+
+async function placeFile(path: string, text: string): Promise<void> {
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, text);
+}
+
+async function keptNowhere(hosted: Hosted): Promise<void> {
+  for (const file of await filesUnder(hosted.home)) {
+    expect(await readFile(file, 'utf8')).not.toContain(STAND_IN_KEY);
+  }
+  expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(STAND_IN_KEY);
+  expect(JSON.stringify(hosted.connection.oneWayCalls)).not.toContain(STAND_IN_KEY);
+  expect(JSON.stringify(hosted.house.requests)).not.toContain(STAND_IN_KEY);
+}
+
+const CLAUDE_SETTINGS = {
+  model: 'opus',
+  env: { DISABLE_TELEMETRY: '1', ANTHROPIC_AUTH_TOKEN: 'stand-in-earlier-token', ANTHROPIC_BASE_URL: 'https://earlier.example/api' },
+  permissions: { allow: ['Bash(ls:*)'] },
+};
+
+const CODEX_CONFIG = ['# kept as it was', 'model = "gpt-5.5"', '', '[mcp_servers.docs]', 'command = "docs-mcp"', ''].join('\n');
+
+it('writes the API key and the endpoint a sign-in by key collects into Claude Code’s user settings, keeping its other settings, and reports it on a key and another provider', async () => {
+  const settings = (account: string) => join(account, '.claude', 'settings.json');
+  const { hosted, holds, call } = await signingInByKey('claude-agent-acp', ENDPOINT, (account) =>
+    placeFile(settings(account), JSON.stringify(CLAUDE_SETTINGS)),
+  );
+
+  expect(await hosted.result(call)).toEqual({});
+
+  expect(holds).toEqual([{ subject: call, body: keyCeremony('Claude Code') }]);
+  expect(JSON.parse(await readFile(settings(accountOf(hosted.home)), 'utf8'))).toEqual({
+    ...CLAUDE_SETTINGS,
+    env: { DISABLE_TELEMETRY: '1', ANTHROPIC_API_KEY: STAND_IN_KEY, ANTHROPIC_BASE_URL: ENDPOINT },
+  });
+  expect(reportBeforeResult(hosted, call)).toMatchObject({
+    agents: [{ kind: 'claude-agent-acp', signed_in: true, api_key: true, provider: 'openrouter.ai' }],
+  });
+  await keptNowhere(hosted);
+});
+
+it('writes a key with an empty endpoint into Claude Code’s user settings for Claude’s own endpoint, and reports it on a key and no other provider', async () => {
+  const settings = (account: string) => join(account, '.claude', 'settings.json');
+  const { hosted, call } = await signingInByKey('claude-agent-acp', '', (account) => placeFile(settings(account), JSON.stringify(CLAUDE_SETTINGS)));
+
+  expect(await hosted.result(call)).toEqual({});
+
+  expect(JSON.parse(await readFile(settings(accountOf(hosted.home)), 'utf8'))).toEqual({
+    ...CLAUDE_SETTINGS,
+    env: { DISABLE_TELEMETRY: '1', ANTHROPIC_API_KEY: STAND_IN_KEY },
+  });
+  const report = reportBeforeResult(hosted, call) as { agents: Record<string, unknown>[] };
+  expect(report.agents[0]).toMatchObject({ kind: 'claude-agent-acp', signed_in: true, api_key: true });
+  expect(report.agents[0]).not.toHaveProperty('provider');
+});
+
+it('writes the endpoint and the key a sign-in by key collects into a Codex model provider it selects, keeping every other line, and reports Codex signed in with its models on a key and another provider', async () => {
+  const config = (account: string) => join(account, '.codex', 'config.toml');
+  const { hosted, holds, call } = await signingInByKey('codex-acp', ENDPOINT, (account) => placeFile(config(account), CODEX_CONFIG));
+
+  expect(await hosted.result(call)).toEqual({});
+
+  expect(holds).toEqual([{ subject: call, body: keyCeremony('Codex') }]);
+  expect(await readFile(config(accountOf(hosted.home)), 'utf8')).toBe(
+    [
+      '# kept as it was',
+      'model = "gpt-5.5"',
+      'model_provider = "openrouter.ai"',
+      '',
+      '[mcp_servers.docs]',
+      'command = "docs-mcp"',
+      '',
+      '[model_providers."openrouter.ai"]',
+      'name = "openrouter.ai"',
+      `base_url = "${ENDPOINT}"`,
+      `experimental_bearer_token = "${STAND_IN_KEY}"`,
+      '',
+    ].join('\n'),
+  );
+  expect(reportBeforeResult(hosted, call)).toMatchObject({
+    agents: [
+      {
+        kind: 'codex-acp',
+        signed_in: true,
+        api_key: true,
+        provider: 'openrouter.ai',
+        models: expect.arrayContaining([expect.objectContaining({ model: 'gpt-5.5' })]),
+      },
+    ],
+  });
+  await keptNowhere(hosted);
+});
+
+it("saves a key with an empty endpoint through Codex's own login by key, selects Codex's own provider again, and reports it on a key and no other provider", async () => {
+  const config = (account: string) => join(account, '.codex', 'config.toml');
+  const earlier = ['model_provider = "openrouter.ai"', 'model = "gpt-5.5"', '', '[model_providers."openrouter.ai"]', 'name = "openrouter.ai"', `base_url = "${ENDPOINT}"`, ''];
+  const { hosted, call } = await signingInByKey('codex-acp', '', (account) => placeFile(config(account), earlier.join('\n')));
+
+  expect(await hosted.result(call)).toEqual({});
+
+  const account = accountOf(hosted.home);
+  expect(await readFile(config(account), 'utf8')).toBe(earlier.slice(1).join('\n'));
+  expect(JSON.parse(await readFile(join(account, '.codex', 'auth.json'), 'utf8'))).toEqual({ auth_mode: 'apikey', OPENAI_API_KEY: STAND_IN_KEY });
+  expect((await logins(hosted)).map((entry) => entry.argv)).toEqual([['login', '--with-api-key']]);
+  const report = reportBeforeResult(hosted, call) as { agents: Record<string, unknown>[] };
+  expect(report.agents[0]).toMatchObject({ kind: 'codex-acp', signed_in: true, api_key: true });
+  expect(report.agents[0]).not.toHaveProperty('provider');
+});
+
+it('ends a Grok Build sign-in by key at once with no ceremony, naming in the log that Grok Build takes its key only from its environment', async () => {
+  const { hosted, holds, call } = await signingInByKey('grok-build', '');
+
+  expect(await hosted.result(call)).toEqual({});
+
+  expect(holds).toEqual([]);
+  expect(hosted.kit.stderr()).toContain('kit: the grok-build sign-in failed: Grok Build takes an API key for all its models only from XAI_API_KEY');
+});
+
+it('ends a sign-in by key whose CLI settings it cannot read with their cause, writing nothing and naming no key', async () => {
+  const settings = (account: string) => join(account, '.claude', 'settings.json');
+  const { hosted, call } = await signingInByKey('claude-agent-acp', ENDPOINT, (account) => placeFile(settings(account), '{ "model": "opus", '));
+
+  expect(await hosted.result(call)).toEqual({});
+
+  expect(await readFile(settings(accountOf(hosted.home)), 'utf8')).toBe('{ "model": "opus", ');
+  await until(() => hosted.kit.stderr().includes('settings.json holds no JSON object'));
+  expect(reportBeforeResult(hosted, call)).toMatchObject({ agents: [{ kind: 'claude-agent-acp', signed_in: false }] });
+  await keptNowhere(hosted);
+});
+
+it('ends a sign-in by key whose Codex settings name its provider in a way it cannot extend with their cause, changing nothing', async () => {
+  const config = (account: string) => join(account, '.codex', 'config.toml');
+  const inline = 'model_providers = { "openrouter.ai" = { name = "Router" } }\n';
+  const { hosted, call } = await signingInByKey('codex-acp', ENDPOINT, (account) => placeFile(config(account), inline));
+
+  expect(await hosted.result(call)).toEqual({});
+
+  expect(await readFile(config(accountOf(hosted.home)), 'utf8')).toBe(inline);
+  await until(() => hosted.kit.stderr().includes('config.toml could not take the key without changing its other settings'));
+  await keptNowhere(hosted);
+});
+
+it('ends a sign-in by key whose endpoint is no web address with that cause, writing nothing', async () => {
+  const { hosted, call } = await signingInByKey('codex-acp', 'openrouter.ai/api/v1');
+
+  expect(await hosted.result(call)).toEqual({});
+
+  await expect(access(join(accountOf(hosted.home), '.codex', 'config.toml'))).rejects.toThrow();
+  await until(() => hosted.kit.stderr().includes('kit: the codex-acp sign-in failed: the endpoint is no http or https address'));
+});

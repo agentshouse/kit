@@ -23,6 +23,9 @@ your conversations: a running conversation keeps its version and the next one ru
 the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version, that
 oldest release and its update command. Kit also gives every Agent on the Environment the agent skills of
 `@agentshouse/skills`, at the version each Kit release installs, unless its `skills` setting is off.
+An API key you give a CLI on House's page, with an endpoint for another provider, goes into that CLI's own settings on
+this computer, where you use the CLI too: Claude Code's `settings.json`, or Codex's login and `config.toml`. Grok Build
+takes a key only from `XAI_API_KEY`, so Kit writes none for it.
 
 ## Commands
 
