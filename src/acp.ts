@@ -9,9 +9,8 @@ import {
 } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_RELEASE, adapterCommand } from './clis.ts';
+import { CLIS, KIT_RELEASE, adapterCommand, cliEnvironment } from './clis.ts';
 import type { Message } from './events.ts';
-import { childEnvironment } from './relay.ts';
 import { killTree, type Scope } from './scope.ts';
 import { Silence } from './silence.ts';
 
@@ -53,7 +52,7 @@ export async function startAdapter(
   const [command, args] = scope?.command(...started) ?? started;
   const child = spawn(command, args, {
     cwd,
-    env: { ...childEnvironment(), ...(adapter === null ? {} : { ...adapter.env, [adapter.executable]: cli }), ...added },
+    env: { ...(await cliEnvironment(kind)), ...(adapter === null ? {} : { ...adapter.env, [adapter.executable]: cli }), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });

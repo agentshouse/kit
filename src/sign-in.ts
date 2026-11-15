@@ -3,9 +3,8 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { Agents } from './agents.ts';
 import type { House } from './api.ts';
-import { CLIS } from './clis.ts';
+import { CLIS, cliEnvironment } from './clis.ts';
 import type { Calls, Carried } from './calls.ts';
-import { childEnvironment } from './relay.ts';
 import { killTree } from './scope.ts';
 import { holdSecretInput } from './secret-input.ts';
 
@@ -82,18 +81,13 @@ export class SignIns {
 
   private async keyed(call: SignInCall, signal: AbortSignal): Promise<void> {
     const { name, key } = CLIS[call.cli]!;
-    const write = key.write;
-    if (typeof write !== 'function') {
-      process.stderr.write(`kit: the ${call.cli} sign-in failed: ${write.refused}\n`);
-      return;
-    }
     let secret = '';
     try {
       const cli = await this.agents.located(call.cli, signal);
       const given = await holdSecretInput(this.house, call.input_id, keySteps(name), () => !signal.aborted);
       if (given === null || signal.aborted) return;
       secret = given.key!.trim();
-      await write(secret, endpointOf(given.endpoint!), cli, signal);
+      await key.write(secret, endpointOf(given.endpoint!), cli, signal);
     } catch (error) {
       const cause = secret === '' ? causeOf(error) : causeOf(error).replaceAll(secret, 'the key');
       if (!signal.aborted) process.stderr.write(`kit: the ${call.cli} sign-in failed: ${cause}\n`);
@@ -102,8 +96,10 @@ export class SignIns {
 
   private async login(call: SignInCall, signal: AbortSignal): Promise<void> {
     let cli: string;
+    let env: NodeJS.ProcessEnv;
     try {
       cli = await this.agents.located(call.cli, signal);
+      env = await cliEnvironment(call.cli);
     } catch (error) {
       if (!signal.aborted) process.stderr.write(`kit: the ${call.cli} sign-in failed: ${causeOf(error)}\n`);
       return;
@@ -113,7 +109,7 @@ export class SignIns {
     const child = spawn(cli, login.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
-      env: childEnvironment(),
+      env,
     });
     const running = () => child.exitCode === null && child.signalCode === null;
     const stop = () => killTree(child);

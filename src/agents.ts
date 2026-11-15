@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
-import { CLIS, KIT_RELEASE, below, installCli, locate, run, updateCli, versionOf } from './clis.ts';
+import { CLIS, KIT_RELEASE, below, cliEnvironment, installCli, locate, run, updateCli, versionOf } from './clis.ts';
 import { agentBase, kitHome, reinstall } from './home.ts';
 import { heldSettings } from './settings.ts';
 import { holdTranscription, transcriptionReport } from './transcription.ts';
@@ -134,7 +134,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
   const { signedIn: probe, key } = CLIS[kind]!;
   const keyed = await key.read();
   // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
-  if ('command' in probe && !keyed.api_key && (await run(cli, probe.command, 30_000, false, signal)).status !== 0) {
+  if ('command' in probe && !keyed.api_key && (await run(cli, probe.command, 30_000, false, signal, await cliEnvironment(kind))).status !== 0) {
     return { ...SIGNED_OUT, ...keyed };
   }
   let adapter: Adapter | undefined;
@@ -411,7 +411,7 @@ export class Agents {
       process.stderr.write(`kit: ${kind} did not install: ${failure}\n`);
       return { release: null, failure, ...SIGNED_OUT };
     }
-    const release = await versionOf(cli, signal);
+    const release = await versionOf(kind, cli, signal);
     if (release === null) return { release: null, failure: `${cli} --version names no version`, ...SIGNED_OUT };
     return { cli, release };
   }
@@ -451,7 +451,7 @@ export class Agents {
 
   private async readVersion(kind: string): Promise<void> {
     const cli = await locate(kind);
-    const release = cli === null ? null : await versionOf(cli);
+    const release = cli === null ? null : await versionOf(kind, cli);
     const current = this.readings.get(kind);
     if (release === null || !current?.release || current.release === release) return;
     this.update(kind, { ...current, release });
