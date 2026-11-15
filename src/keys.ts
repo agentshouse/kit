@@ -175,15 +175,18 @@ export const CLAUDE_KEY: KeySettings = {
   write: async (key, endpoint) => {
     const file = claudeSettings();
     const settings = await jsonSettings(file);
-    const { ANTHROPIC_AUTH_TOKEN: _token, ANTHROPIC_BASE_URL: _endpoint, ...env } = table(settings.env);
-    const written = { ...env, ANTHROPIC_API_KEY: key, ...(endpoint === null ? {} : { ANTHROPIC_BASE_URL: endpoint }) };
+    const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ANTHROPIC_BASE_URL: _endpoint, ...env } = table(settings.env);
+    const written =
+      endpoint === null
+        ? { ...env, ANTHROPIC_API_KEY: key }
+        : { ...env, ANTHROPIC_AUTH_TOKEN: key, ANTHROPIC_API_KEY: '', ANTHROPIC_BASE_URL: endpoint };
     await replaceFile(file, `${JSON.stringify({ ...settings, env: written }, undefined, 2)}\n`);
   },
 };
 
 const CODEX_PROVIDER = 'model_provider';
 
-function codexHome(): string {
+export function codexHome(): string {
   return process.env.CODEX_HOME || join(homedir(), '.codex');
 }
 

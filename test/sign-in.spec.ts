@@ -388,7 +388,7 @@ const CLAUDE_SETTINGS = {
 
 const CODEX_CONFIG = ['# kept as it was', 'model = "gpt-5.5"', '', '[mcp_servers.docs]', 'command = "docs-mcp"', ''].join('\n');
 
-it('writes the API key and the endpoint a sign-in by key collects into Claude Code’s user settings, keeping its other settings, and reports it on a key and another provider', async () => {
+it('writes the API key a sign-in by key collects as the bearer token for the endpoint it collects into Claude Code’s user settings, keeping its other settings, and reports it on a key and another provider', async () => {
   const settings = (account: string) => join(account, '.claude', 'settings.json');
   const { hosted, holds, call } = await signingInByKey('claude-agent-acp', ENDPOINT, (account) =>
     placeFile(settings(account), JSON.stringify(CLAUDE_SETTINGS)),
@@ -399,7 +399,7 @@ it('writes the API key and the endpoint a sign-in by key collects into Claude Co
   expect(holds).toEqual([{ subject: call, body: keyCeremony('Claude Code') }]);
   expect(JSON.parse(await readFile(settings(accountOf(hosted.home)), 'utf8'))).toEqual({
     ...CLAUDE_SETTINGS,
-    env: { DISABLE_TELEMETRY: '1', ANTHROPIC_API_KEY: STAND_IN_KEY, ANTHROPIC_BASE_URL: ENDPOINT },
+    env: { DISABLE_TELEMETRY: '1', ANTHROPIC_AUTH_TOKEN: STAND_IN_KEY, ANTHROPIC_API_KEY: '', ANTHROPIC_BASE_URL: ENDPOINT },
   });
   expect(reportBeforeResult(hosted, call)).toMatchObject({
     agents: [{ kind: 'claude-agent-acp', signed_in: true, api_key: true, provider: 'openrouter.ai' }],

@@ -310,7 +310,7 @@ export class Agents {
       this.quietOffer(kind, cli, kept)
         .then((offered) => {
           const current = this.readings.get(kind);
-          if (this.reads.get(kind) === read && current?.release === release) this.update(kind, { ...current, ...offered });
+          if (this.reads.get(kind) === read && current?.release === release) this.update(kind, { release, failure: current.failure, ...offered });
         })
         .catch(logged);
       return cli;

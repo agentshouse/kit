@@ -3,9 +3,9 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { homedir, userInfo } from 'node:os';
+import { userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
-import { CLAUDE_KEY, CODEX_KEY, GROK_KEY, type KeySettings } from './keys.ts';
+import { CLAUDE_KEY, CODEX_KEY, GROK_KEY, codexHome, type KeySettings } from './keys.ts';
 import { releaseDirectory } from './placement.ts';
 import { childEnvironment } from './relay.ts';
 
@@ -76,7 +76,7 @@ export async function allowHouseInCodex(path: string): Promise<void> {
   const candidates = [...new Set(path.split(delimiter).filter((directory) => isAbsolute(directory)))].map((directory) =>
     join(directory, 'house'),
   );
-  const rules = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'rules');
+  const rules = join(codexHome(), 'rules');
   const file = join(rules, 'house.rules');
   const houses: string[] = [];
   for (const house of [...(await listedHouses(file)), ...candidates]) {
