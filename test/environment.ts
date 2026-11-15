@@ -79,7 +79,7 @@ export const LISTING: Listed[] = [
     inputSchema: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' } } },
   },
   {
-    name: 'inspect',
+    name: 'info',
     description: 'Provenance and revisions; `shell` reads current file text.',
     inputSchema: {
       type: 'object',

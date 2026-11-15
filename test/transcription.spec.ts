@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
 import { agentInstructions } from '@agentshouse/skills';
 import { beforeAll, expect, it, onTestFinished } from 'vitest';
-import { attached, bridgeSockets, inspected, posted } from './attachments.ts';
+import { attached, bridgeSockets, infoCalls, posted } from './attachments.ts';
 import { KIT_FILE_CORRUPT, KIT_FILE_DROPPED_ONCE, KIT_FILE_OVERSIZE, KIT_FILE_STALL, cacheArtifacts, kitFileRequests, pinnedArtifacts } from './building.ts';
 import { idOf, until, type Answer } from './double.ts';
 import { ENGINES } from '../src/transcription.ts';
@@ -160,7 +160,7 @@ it("posts the transcript of each audio file a message links in the order it link
     ['conversation-1', lastMessage(), { path: note!.path, text: expect.stringMatching(ENGLISH) }],
     ['conversation-1', lastMessage(), { path: voice!.path, text: expect.stringMatching(RUSSIAN) }],
   ]);
-  expect(inspected(hosted)).toEqual(files.map((file) => ({ path: file.path })));
+  expect(infoCalls(hosted)).toEqual(files.map((file) => ({ path: file.path })));
   expect(hosted.store.requests.map((request) => request.key)).toEqual([note!.key, voice!.key]);
   expect(await readdir(hosted.workingDirectory)).toEqual([]);
   expect(await readdir(temporary)).toEqual([]);
@@ -183,7 +183,7 @@ it("writes a first message as House's instructions, then the primer it carries, 
     block(text),
     transcribed(note!.path, ENGLISH),
   ]);
-  expect(inspected(hosted)).toEqual([{ path: note!.path }]);
+  expect(infoCalls(hosted)).toEqual([{ path: note!.path }]);
   expect(posted(hosted)).toEqual([['conversation-1', lastMessage(), { path: note!.path, text: expect.stringMatching(ENGLISH) }]]);
   expect(hosted.store.requests.map((request) => request.key)).toEqual([note!.key]);
 });
@@ -292,7 +292,7 @@ it('closes the connection a message opened to read its links once it refuses tha
   hosted.call({ kind: 'message', text: linked('off', [voice!]), first: false });
 
   await refusedUnprompted(hosted, OFF);
-  expect(inspected(hosted)).toEqual([{ path: voice!.path }]);
+  expect(infoCalls(hosted)).toEqual([{ path: voice!.path }]);
   await until(async () => (await bridgeSockets(hosted)).length === 0);
 });
 
@@ -461,14 +461,14 @@ it('posts the transcript of the first audio file of a message whose second it ca
   expect(hosted.store.requests.map((request) => request.key)).toEqual([files[0]!.key, files[1]!.key]);
 });
 
-it.each<[string, (inspect: string) => string]>([
+it.each<[string, (answer: string) => string]>([
   ['does not arrive whole', (text) => text.replace(/sha256: \w+/, `sha256: ${'0'.repeat(64)}`)],
   ['has an address the store refuses each time it is asked', (text) => text.replace(/expires=\d+/, 'expires=1')],
 ])('refuses a message whose audio file %s, posting no transcript and writing no prompt', async (_case, answered) => {
   const hosted = await transcribing();
   const [file] = attached(hosted, [{ name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') }]);
-  const read = hosted.tools.inspect!;
-  hosted.tools.inspect = async (args, request) => {
+  const read = hosted.tools.info!;
+  hosted.tools.info = async (args, request) => {
     const result = (await read(args, request))!;
     return { content: [{ type: 'text', text: answered(result.content[0]!.text) }] };
   };
@@ -482,9 +482,9 @@ it.each<[string, (inspect: string) => string]>([
 it('asks House again for an audio file whose download address the store refuses as expired, and transcribes it from the new one', async () => {
   const hosted = await transcribing();
   const [file] = attached(hosted, [{ name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') }]);
-  const read = hosted.tools.inspect!;
+  const read = hosted.tools.info!;
   let reads = 0;
-  hosted.tools.inspect = async (args, request) => {
+  hosted.tools.info = async (args, request) => {
     const result = (await read(args, request))!;
     if (++reads > 1) return result;
     const answer = parse(result.content[0]!.text) as Record<string, unknown>;
@@ -494,7 +494,7 @@ it('asks House again for an audio file whose download address the store refuses 
   hosted.call({ kind: 'message', text: linked('listen', [file!]), first: false });
 
   expect(await prompted(hosted, 0)).toEqual([block(linked('listen', [file!])), transcribed(file!.path, ENGLISH)]);
-  expect(inspected(hosted)).toEqual([{ path: file!.path }, { path: file!.path }]);
+  expect(infoCalls(hosted)).toEqual([{ path: file!.path }, { path: file!.path }]);
   expect(hosted.store.requests.map((request) => request.status)).toEqual([403, 200]);
 });
 

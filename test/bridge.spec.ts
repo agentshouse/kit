@@ -78,7 +78,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   const hosted = await hostKit();
   await opened(hosted);
 
-  directed(hosted, '@house --help\n@house inspect --help\n@house search {"query":"notes"}');
+  directed(hosted, '@house --help\n@house info --help\n@house search {"query":"notes"}');
 
   const [help, toolHelp, search] = await runs(hosted, 3);
   expect(help!.stdout).toBe(
@@ -91,7 +91,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       'search',
       '  query',
       'shell: Read-only shell over `/rooms/<handle>`.',
-      'inspect: Provenance and revisions; `shell` reads current file text.',
+      'info: Provenance and revisions; `shell` reads current file text.',
       'files_batch',
       '  changes (required): The changes, each with an `op`.',
       '  mount: An empty folder; every change creates a document in it, all or none.',
@@ -108,7 +108,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   );
   expect(toolHelp!.stdout).toBe(
     [
-      'inspect: Provenance and revisions; `shell` reads current file text.',
+      'info: Provenance and revisions; `shell` reads current file text.',
       '  path (required): A file path.',
       '  view "sources" | "history": Optional `history`, or `sources` for a captured item.',
     ].join('\n') + '\n',
@@ -215,7 +215,7 @@ it("prints House's own line for a refused call, and no route, status or body", a
   await opened(hosted);
   hosted.house.route('POST', '/', (request) => {
     const message = request.body as McpCall & { id: string };
-    if (message.params.name !== 'inspect') {
+    if (message.params.name !== 'info') {
       return { body: { jsonrpc: '2.0', id: message.id, result: hosted.tools.search!(message.params.arguments ?? {}, request) } };
     }
     return {
@@ -232,7 +232,7 @@ it("prints House's own line for a refused call, and no route, status or body", a
     };
   });
 
-  directed(hosted, '@house search {"query":"one"}\n@house inspect {"path":"/rooms/private"}');
+  directed(hosted, '@house search {"query":"one"}\n@house info {"path":"/rooms/private"}');
 
   expect((await runs(hosted, 2)).map((ran) => [ran.status, ran.stderr])).toEqual([
     [1, 'house: room_not_found: you have no Room with that room_ref; pass an r_… ref from rooms_list, not a handle\n'],

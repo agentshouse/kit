@@ -517,7 +517,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       body: { ...rest, contents: answered(writes).map((write) => ({ path: write.path, content: write.content, revision: write.revision })) },
     };
   });
-  hosted.tools.inspect = (args) => {
+  hosted.tools.info = (args) => {
     const path = String(args.path);
     const room = roomOf(path);
     const relative = path.slice(room.root.length + 1);
