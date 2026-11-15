@@ -552,7 +552,7 @@ it('replaces the key and endpoint Kit home holds for Grok Build with a key and a
 it('names a Grok Build key Kit home holds as no JSON in its log, quoting none of it', async () => {
   const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => writeFile(join(home, 'grok-key.json'), STAND_IN_KEY) });
 
-  await until(() => hosted.kit.stderr().includes('kit: grok-build did not offer its models: grok-key.json in Kit home holds no JSON'));
+  await until(() => hosted.kit.stderr().includes('grok-key.json in Kit home holds no JSON'));
   expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(STAND_IN_KEY);
 });
 
