@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
+import { updatesRun } from './cli.ts';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { idOf, settle, until, without } from './double.ts';
 import { hostKit, lastCall, userBin, type Hosted } from './environment.ts';
 import { accountOf, alive, filesUnder, temporaryHome } from './kit.ts';
+import type { Started } from './started.ts';
 
 interface Hold {
   subject: string;
@@ -475,13 +477,102 @@ it("saves a key with an empty endpoint through Codex's own login by key, selects
   expect(report.agents[0]).not.toHaveProperty('provider');
 });
 
-it('ends a Grok Build sign-in by key at once with no ceremony, naming in the log that Grok Build takes its key only from its environment', async () => {
-  const { hosted, holds, call } = await signingInByKey('grok-build', '');
+const GROK_CONFIG = ['# kept as it was', 'theme = "dark"', '', '[features]', 'telemetry = false', ''].join('\n');
+
+const SHELL_FILES = ['.profile', '.bashrc', '.zshrc', '.config/fish/config.fish'];
+
+function grokAndShell(account: string): Promise<Record<string, string>> {
+  return Promise.all(
+    [join('.grok', 'config.toml'), ...SHELL_FILES].map(async (file) => [file, await readFile(join(account, file), 'utf8')] as const),
+  ).then(Object.fromEntries);
+}
+
+async function placeGrokAndShell(account: string): Promise<Record<string, string>> {
+  await placeFile(join(account, '.grok', 'config.toml'), GROK_CONFIG);
+  for (const file of SHELL_FILES.slice(1)) await placeFile(join(account, file), `# ${file} kept as it was\n`);
+  return grokAndShell(account);
+}
+
+async function grokEnvironment(hosted: Hosted, cwd: string): Promise<Record<string, string | undefined>> {
+  const log = await hosted.adapterLog();
+  const opened = log.findLast((entry) => entry.method === 'session/new' && (entry.params as { cwd: string }).cwd === cwd)!;
+  return log.find((entry) => entry.method === 'initialize' && entry.pid === opened.pid)!.env as Record<string, string | undefined>;
+}
+
+async function grokAgentEnvironment(hosted: Hosted): Promise<Record<string, string | undefined>> {
+  hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
+  return grokEnvironment(hosted, hosted.workingDirectory);
+}
+
+it('keeps the API key and the endpoint a Grok Build sign-in by key collects in Kit home alone, reports it on a key and another provider, and starts every Grok Agent with them', async () => {
+  let placed: Record<string, string> = {};
+  const { hosted, holds, call } = await signingInByKey('grok-build', ENDPOINT, async (account) => {
+    placed = await placeGrokAndShell(account);
+  });
 
   expect(await hosted.result(call)).toEqual({});
 
-  expect(holds).toEqual([]);
-  expect(hosted.kit.stderr()).toContain('kit: the grok-build sign-in failed: Grok Build takes an API key for all its models only from XAI_API_KEY');
+  expect(holds).toEqual([{ subject: call, body: keyCeremony('Grok Build') }]);
+  const kept = join(hosted.home, 'grok-key.json');
+  expect(JSON.parse(await readFile(kept, 'utf8'))).toEqual({ key: STAND_IN_KEY, endpoint: ENDPOINT });
+  expect((await stat(kept)).mode & 0o777).toBe(0o600);
+  expect(reportBeforeResult(hosted, call)).toMatchObject({
+    agents: [{ kind: 'grok-build', signed_in: true, api_key: true, provider: 'openrouter.ai' }],
+  });
+  expect(await grokEnvironment(hosted, hosted.home)).toMatchObject({ XAI_API_KEY: STAND_IN_KEY, GROK_MODELS_BASE_URL: ENDPOINT });
+  expect(await grokAgentEnvironment(hosted)).toMatchObject({ XAI_API_KEY: STAND_IN_KEY, GROK_MODELS_BASE_URL: ENDPOINT });
+  const account = accountOf(hosted.home);
+  expect(await grokAndShell(account)).toEqual(placed);
+  for (const file of await filesUnder(account)) {
+    if (file !== kept && file !== join(hosted.home, 'adapter.log')) expect(await readFile(file, 'utf8')).not.toContain(STAND_IN_KEY);
+  }
+  expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(STAND_IN_KEY);
+  expect(JSON.stringify(hosted.connection.oneWayCalls)).not.toContain(STAND_IN_KEY);
+  expect(JSON.stringify(hosted.house.requests)).not.toContain(STAND_IN_KEY);
+});
+
+it('replaces the key and endpoint Kit home holds for Grok Build with a key and an empty endpoint, reports it on a key and no other provider, and starts its Grok Agents on xAI with no endpoint', async () => {
+  let placed: Record<string, string> = {};
+  const { hosted, call } = await signingInByKey('grok-build', '', async (account) => {
+    placed = await placeGrokAndShell(account);
+    await placeFile(join(account, '.agents', 'house', 'grok-key.json'), JSON.stringify({ key: 'stand-in-earlier-key', endpoint: 'https://earlier.example/v1' }));
+  });
+
+  expect(await hosted.result(call)).toEqual({});
+
+  expect(JSON.parse(await readFile(join(hosted.home, 'grok-key.json'), 'utf8'))).toEqual({ key: STAND_IN_KEY });
+  const report = reportBeforeResult(hosted, call) as { agents: Record<string, unknown>[] };
+  expect(report.agents[0]).toMatchObject({ kind: 'grok-build', signed_in: true, api_key: true });
+  expect(report.agents[0]).not.toHaveProperty('provider');
+  const environment = await grokAgentEnvironment(hosted);
+  expect(environment.XAI_API_KEY).toBe(STAND_IN_KEY);
+  expect(environment).not.toHaveProperty('GROK_MODELS_BASE_URL');
+  expect(await grokAndShell(accountOf(hosted.home))).toEqual(placed);
+});
+
+it('names a Grok Build key Kit home holds as no JSON in its log, quoting none of it', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => writeFile(join(home, 'grok-key.json'), STAND_IN_KEY) });
+
+  await until(() => hosted.kit.stderr().includes('grok-key.json in Kit home holds no JSON'));
+  expect(hosted.kit.stdout() + hosted.kit.stderr()).not.toContain(STAND_IN_KEY);
+});
+
+async function keyedStarts(hosted: Hosted, name: string): Promise<string[]> {
+  const log = await readFile(join(hosted.home, 'started.log'), 'utf8');
+  const started = log.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Started);
+  return started.filter((entry) => entry.name === name).map((entry) => entry.keyed.sort().join(' '));
+}
+
+it("runs Grok Build's update in the person's login shell without the key Kit home holds, and reads its version with the key and its endpoint", async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], {
+    prepare: (home) => writeFile(join(home, 'grok-key.json'), JSON.stringify({ key: STAND_IN_KEY, endpoint: ENDPOINT })),
+  });
+
+  await until(() => updatesRun(hosted.home).find((update) => update.kind === 'grok-build' && update.ended));
+
+  expect(await keyedStarts(hosted, 'update')).toEqual(['']);
+  expect(new Set(await keyedStarts(hosted, 'version'))).toEqual(new Set(['GROK_MODELS_BASE_URL XAI_API_KEY']));
 });
 
 it('ends a sign-in by key whose CLI settings it cannot read with their cause, writing nothing and naming no key', async () => {

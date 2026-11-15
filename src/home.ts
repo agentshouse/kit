@@ -106,13 +106,23 @@ export function agentBase(): string {
   return join(workspaceRoot(), 'agents');
 }
 
-export async function readHome<T>(name: string): Promise<T | null> {
+function parsed<T>(name: string, text: string): T {
   try {
-    return JSON.parse(await readFile(join(kitHome(), name), 'utf8')) as T;
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${name} in Kit home holds no JSON`);
+  }
+}
+
+export async function readHome<T>(name: string): Promise<T | null> {
+  let text: string;
+  try {
+    text = await readFile(join(kitHome(), name), 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
+  return parsed<T>(name, text);
 }
 
 export async function writeHome(name: string, value: unknown): Promise<void> {
@@ -159,7 +169,7 @@ export async function forgetRejected(rejected: string): Promise<void> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw error;
   }
-  if ((JSON.parse(readFileSync(taken, 'utf8')) as Enrolment).credential !== rejected) {
+  if (parsed<Enrolment>(ENROLMENT, readFileSync(taken, 'utf8')).credential !== rejected) {
     try {
       linkSync(taken, enrolment);
     } catch (error) {
@@ -187,13 +197,14 @@ export function forgetOwnAgent(): Promise<void> {
 }
 
 function configuredWorkspace(): string | undefined {
+  let text: string;
   try {
-    const { workspace } = JSON.parse(readFileSync(join(kitHome(), CONFIGURATION), 'utf8')) as Partial<Configuration>;
-    return workspace;
+    text = readFileSync(join(kitHome(), CONFIGURATION), 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+  return parsed<Partial<Configuration>>(CONFIGURATION, text).workspace;
 }
 
 export async function readConfiguration(): Promise<Configuration> {

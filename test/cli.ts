@@ -1,10 +1,12 @@
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { recordStart } from './started.ts';
 
 const ADAPTER = fileURLToPath(new URL('./adapter.ts', import.meta.url));
 const APP_SERVER = fileURLToPath(new URL('./app-server.ts', import.meta.url));
 const DEVICE_LOGIN = fileURLToPath(new URL('./device-login.ts', import.meta.url));
+const STARTED = fileURLToPath(new URL('./started.ts', import.meta.url));
 const CLI = fileURLToPath(import.meta.url);
 
 export const BINS: Record<string, string> = {
@@ -42,7 +44,7 @@ export function placeUserCli(directory: string, kind: string, release = RELEASES
     [
       '#!/bin/sh',
       `export ADAPTER_KIND=${kind} CLI_PATH="$0" CLI_RELEASE=${release}`,
-      `if [ "$1" = --version ]; then echo '${VERSION_LINES[kind]!(release)}'; exit 0; fi`,
+      `if [ "$1" = --version ]; then ${kind === 'grok-build' ? `${process.execPath} ${STARTED} version; ` : ''}echo '${VERSION_LINES[kind]!(release)}'; exit 0; fi`,
       `if [ "$1" = update ]; then exec ${process.execPath} ${CLI} update ${kind} "$0"; fi`,
       `case " $* " in *" --device-auth "*|*" --claudeai "*|*" --with-api-key "*) exec ${process.execPath} ${DEVICE_LOGIN} "$@" ;; esac`,
       `case " $* " in *" app-server "*) exec ${process.execPath} ${APP_SERVER} "$@" ;; esac`,
@@ -77,6 +79,7 @@ export function updatesRun(home: string): Updated[] {
 function updateUserCli(kind: string, path: string): void {
   const home = join(process.env.HOME!, '.agents', 'house');
   const log = (entry: Updated) => appendFileSync(join(home, 'updates.log'), `${JSON.stringify(entry)}\n`);
+  recordStart('update');
   log({ kind, path });
   if (existsSync(join(home, 'update-hold'))) log({ kind, path, held: true, pid: process.pid });
   while (existsSync(join(home, 'update-hold'))) {

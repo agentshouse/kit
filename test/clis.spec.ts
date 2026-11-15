@@ -79,7 +79,7 @@ it.each(KINDS)('runs the %s its login shell finds, through its adapter or itself
   expect(env.CODEX_PATH).toBe(kind === 'codex-acp' ? join(hosted.home, 'launchers', 'codex') : undefined);
   expect(env.CLAUDE_CODE_ENTRYPOINT).toBe(kind === 'claude-agent-acp' ? 'claude-agent-acp' : undefined);
   expect(env.HOME).toBe(accountOf(hosted.home));
-  for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GROK_HOME']) expect(env[variable]).toBeUndefined();
+  for (const variable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GROK_HOME', 'XAI_API_KEY', 'GROK_MODELS_BASE_URL']) expect(env[variable]).toBeUndefined();
 });
 
 it('opens and resumes Claude sessions under the adapter entrypoint instead of an inherited SDK entrypoint', async () => {

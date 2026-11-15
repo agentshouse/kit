@@ -6,15 +6,15 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse } from 'smol-toml';
+import { readHome, writeHome } from './home.ts';
 import { childEnvironment } from './relay.ts';
 
-export type Keyed = Pick<ReportedAgentKind, 'api_key' | 'provider'>;
-
-export type KeyWrite = (key: string, endpoint: string | null, cli: string, signal: AbortSignal) => Promise<void>;
+type Keyed = Pick<ReportedAgentKind, 'api_key' | 'provider'>;
 
 export interface KeySettings {
   read(): Promise<Keyed>;
-  write: KeyWrite | { refused: string };
+  write(key: string, endpoint: string | null, cli: string, signal: AbortSignal): Promise<void>;
+  environment?(): Promise<Record<string, string>>;
 }
 
 type Table = Record<string, unknown>;
@@ -239,10 +239,24 @@ export const CODEX_KEY: KeySettings = {
   },
 };
 
+interface HeldKey {
+  key: string;
+  endpoint?: string;
+}
+
+const GROK_HELD_KEY = 'grok-key.json';
+
 export const GROK_KEY: KeySettings = {
   read: quietly(async () => {
+    const held = await readHome<HeldKey>(GROK_HELD_KEY);
+    if (held?.endpoint !== undefined) return keyed(true, held.endpoint, 'api.x.ai');
     const config = await tomlSettings(join(process.env.GROK_HOME || join(homedir(), '.grok'), 'config.toml'));
-    return keyed(false, table(config.endpoints).models_base_url, 'api.x.ai');
+    return keyed(held !== null, table(config.endpoints).models_base_url, 'api.x.ai');
   }),
-  write: { refused: 'Grok Build takes an API key for all its models only from XAI_API_KEY in its environment, not from its settings' },
+  write: (key, endpoint) => writeHome(GROK_HELD_KEY, { key, ...(endpoint === null ? {} : { endpoint }) } satisfies HeldKey),
+  environment: async () => {
+    const held = await readHome<HeldKey>(GROK_HELD_KEY);
+    if (held === null) return {};
+    return { XAI_API_KEY: held.key, ...(held.endpoint === undefined ? {} : { GROK_MODELS_BASE_URL: held.endpoint }) };
+  },
 };

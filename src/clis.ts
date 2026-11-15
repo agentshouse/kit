@@ -224,18 +224,23 @@ export interface Ran {
   output: string;
 }
 
+export async function cliEnvironment(kind: string): Promise<NodeJS.ProcessEnv> {
+  return { ...childEnvironment(), ...(await CLIS[kind]!.key.environment?.()) };
+}
+
 export function run(
   command: string,
   args: string[],
   timeoutMs: number,
   detached = false,
   signal?: AbortSignal,
+  env = childEnvironment(),
 ): Promise<Ran> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: timeoutMs,
-      env: childEnvironment(),
+      env,
       detached,
       signal: detached ? undefined : signal,
     });
@@ -321,8 +326,8 @@ export async function writeCodexRule(): Promise<void> {
   });
 }
 
-export async function versionOf(path: string, signal?: AbortSignal): Promise<string | null> {
-  return VERSION.exec((await run(path, ['--version'], READ_MS, false, signal)).stdout)?.[0] ?? null;
+export async function versionOf(kind: string, path: string, signal?: AbortSignal): Promise<string | null> {
+  return VERSION.exec((await run(path, ['--version'], READ_MS, false, signal, await cliEnvironment(kind))).stdout)?.[0] ?? null;
 }
 
 function numbers(version: string): number[] {

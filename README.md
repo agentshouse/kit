@@ -25,7 +25,8 @@ oldest release and its update command. Kit also gives every Agent on the Environ
 `@agentshouse/skills`, at the version each Kit release installs, unless its `skills` setting is off.
 An API key you give a CLI on House's page, with an endpoint for another provider, goes into that CLI's own settings on
 this computer, where you use the CLI too: Claude Code's `settings.json`, or Codex's login and `config.toml`. Grok Build
-takes a key only from `XAI_API_KEY`, so Kit writes none for it.
+has no setting for a key that serves all its models, so Kit keeps its key in `~/.agents/house/grok-key.json` and sets
+it, with the endpoint, as `XAI_API_KEY` and `GROK_MODELS_BASE_URL` on the Grok Build it runs, never on yours.
 
 ## Commands
 
