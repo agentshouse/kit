@@ -83,7 +83,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   const [help, toolHelp, search] = await runs(hosted, 3);
   expect(help!.stdout).toBe(
     [
-      "usage: house <tool> ['<arguments as JSON>']; house help <tool>: its arguments",
+      "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments",
       'help [tool]',
       "push [commit]: sends the Local copy's committed changes to House",
       "fetch: records House's changes on each Local copy's refs/house/received",
@@ -275,7 +275,7 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
     ].join('\n'),
   );
 
-  const form = `house: the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'\n`;
+  const form = `house: the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'\n`;
   expect((await runs(hosted, 7)).map((ran) => ran.stderr)).toEqual([
     form,
     form,

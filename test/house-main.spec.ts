@@ -18,7 +18,9 @@ import { RELAYED, startStore, uploadTool, type Store } from './store.ts';
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const MEMORY = fileURLToPath(new URL('./memory.ts', import.meta.url));
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
-const USAGE = "usage: house <tool> ['<arguments as JSON>']; house help <tool>: its arguments";
+const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
+const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
+const UPLOAD_USAGE = `usage: house upload '{"file":"<local file>","room_ref":"r_…","path":"<path in the Room>"}', adding "base", the revision it replaces`;
 
 function runHouse(
   home: string,
@@ -26,12 +28,15 @@ function runHouse(
   bridge?: string,
   node: string[] = [],
   ambient: Record<string, string> = {},
+  input = '',
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const environment: NodeJS.ProcessEnv = { ...process.env, HOME: accountOf(home), ...ambient };
     delete environment.HOUSE_BRIDGE;
     if (bridge !== undefined) environment.HOUSE_BRIDGE = bridge;
     const child = spawn(process.execPath, [...node, HOUSE, ...argv], { env: environment });
+    child.stdin.on('error', () => undefined);
+    child.stdin.end(input);
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
@@ -62,6 +67,30 @@ it("sends a Tool call outside a conversation to House's root under the User's ow
   const [call] = house.requests;
   expect(call).toMatchObject({ path: '/', headers: { authorization: 'Bearer ahp_own' } });
   expect((call!.body as McpCall).params).toMatchObject({ name: 'search', arguments: { query: 'invoice' } });
+});
+
+it("reads a Tool's arguments from stdin after -, so a files_batch larger than one Linux argument holds reaches House whole", async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+  house.route('POST', '/', ({ body }) => ({ body: { jsonrpc: '2.0', id: (body as { id: string }).id, result: shelled('applied') } }));
+  const changes = [{ op: 'create', path: '/rooms/notes/long.md', content: 'line\n'.repeat(1024 * 1024 / 5) }];
+  const piped = JSON.stringify({ changes });
+  expect(Buffer.byteLength(piped)).toBeGreaterThan(1024 * 1024);
+
+  const ran = await runHouse(home, ['files_batch', '-'], undefined, [], {}, piped);
+
+  expect(ran).toEqual({ status: 0, stdout: 'applied\n', stderr: '' });
+  expect((house.requests[0]!.body as McpCall).params).toMatchObject({ name: 'files_batch', arguments: { changes } });
+});
+
+it('refuses arguments on stdin that are no JSON object with the form they take', async () => {
+  const house = await startHouse();
+  const home = await connected(house, true);
+
+  const ran = await runHouse(home, ['search', '-'], undefined, [], {}, 'invoice');
+
+  expect(ran).toEqual({ status: 1, stdout: '', stderr: `house: ${ARGUMENTS}\n` });
+  expect(house.requests).toEqual([]);
 });
 
 it("names the Kit's wire in a header on its call to House's MCP door", async () => {
@@ -628,6 +657,8 @@ it.each([
   [['help', 'fetch'], 'usage: house fetch'],
   [['help', 'download'], `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`],
   [['download', '--help'], `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`],
+  [['help', 'upload'], UPLOAD_USAGE],
+  [['upload', '--help'], UPLOAD_USAGE],
 ])('prints house %j as the usage of the command it names and calls nothing', async (argv, usage) => {
   const house = await startHouse();
   const home = await connected(house, true);

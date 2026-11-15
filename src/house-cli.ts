@@ -4,6 +4,7 @@ import { request, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { extname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
+import { text as textOf } from 'node:stream/consumers';
 import { pipeline } from 'node:stream/promises';
 import type { ToolResult } from './bridge.ts';
 import { downloaded, fileInfo, storeRefusal, uploaded, type UploadParts } from './files.ts';
@@ -40,7 +41,7 @@ interface Description {
 
 type Finishing = { upload: UploadParts } | { text: string };
 
-const USAGE = "usage: house <tool> ['<arguments as JSON>']; house help <tool>: its arguments";
+const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const HELP = 'help [tool]';
 const PUSH_USAGE = 'usage: house push [commit] [--owner]';
 const PUSH = "push [commit]: sends the Local copy's committed changes to House";
@@ -48,7 +49,8 @@ const FETCH_USAGE = 'usage: house fetch';
 const FETCH = `fetch: records House's changes on each Local copy's ${HOUSE_REF}`;
 const DOWNLOAD_USAGE = `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 const DOWNLOAD = 'download: writes a binary file of a Room to the local file named by file';
-const ARGUMENTS = `the arguments are one JSON object in single quotes, like house search '{"query":"invoice"}'`;
+const UPLOAD_USAGE = `usage: house upload '{"file":"<local file>","room_ref":"r_…","path":"<path in the Room>"}', adding "base", the revision it replaces`;
+const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
@@ -187,7 +189,7 @@ async function sentPart(url: string, file: string, start: number, end: number, h
 async function download(args: string[]): Promise<string> {
   const { flags, positionals: [argument] } = accepted(args, ['--help'], 1, DOWNLOAD_USAGE);
   if (flags.has('--help')) return DOWNLOAD_USAGE;
-  const { file, ...selected } = argumentsOf(argument);
+  const { file, ...selected } = await argumentsOf(argument);
   if (typeof file !== 'string' || file === '') throw new Error('download needs "file", the local file to write');
   const written = resolve(file);
   await downloaded(
@@ -252,7 +254,7 @@ function accepted(args: string[], flags: string[], positionals: number, usage: s
   const given = { flags: new Set<string>(), positionals: [] as string[] };
   for (const arg of args) {
     if (flags.includes(arg)) given.flags.add(arg);
-    else if (!arg.startsWith('-') && given.positionals.length < positionals) given.positionals.push(arg);
+    else if ((arg === '-' || !arg.startsWith('-')) && given.positionals.length < positionals) given.positionals.push(arg);
     else throw unexpected(arg, usage);
   }
   return given;
@@ -281,11 +283,12 @@ async function fetched(args: string[]): Promise<string> {
   return answer.text;
 }
 
-function argumentsOf(argument: string | undefined): Record<string, unknown> {
+async function argumentsOf(argument: string | undefined): Promise<Record<string, unknown>> {
   if (argument === undefined) return {};
+  const given = argument === '-' ? await textOf(process.stdin) : argument;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(argument);
+    parsed = JSON.parse(given);
   } catch {
     throw new Error(ARGUMENTS);
   }
@@ -363,8 +366,8 @@ async function house(args: string[]): Promise<string> {
     );
     return [USAGE, HELP, PUSH, FETCH, DOWNLOAD, ...listing].join('\n');
   }
-  if (flags.has('--help')) return toolHelp(verb);
-  const parsed = argumentsOf(argument);
+  if (flags.has('--help')) return verb === 'upload' ? UPLOAD_USAGE : toolHelp(verb);
+  const parsed = await argumentsOf(argument);
   return verb === 'upload' ? upload(parsed) : called(verb, parsed);
 }
 
