@@ -11,7 +11,7 @@ import {
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
@@ -425,7 +425,7 @@ export class Room {
         for (const [other, file] of next) {
           const link = destination(basename(path));
           if (other !== to && dirname(other) === dirname(path) && file.content.includes(link)) {
-            set(other, 'replace', file.content.replaceAll(link, destination(basename(to!))), true);
+            set(other, 'replace', file.content.replaceAll(link, destination(relative(dirname(path), to!))), true);
           }
         }
       } else {

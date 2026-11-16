@@ -617,8 +617,8 @@ it('ends a push whose new binary file meets text another writer put at its Path 
   clean(room);
 });
 
-it('renames a binary file a conversation moved with git mv in the Room, keeping its revision and sending no bytes, and the copy, clean after house fetch, holds it at its new Path', async () => {
-  const { hosted, room } = await copied();
+it('renames a binary file a conversation moved with git mv into a folder, keeping its revision and sending no bytes, and the copy, clean after house fetch, holds it at its new Path and links it there', async () => {
+  const { hosted, room } = await copied((setup) => setup.put('index.md', 'See ![a photo](photo.jpg).\n'));
   await placed(room, { 'photo.jpg': JPEG });
   commitAll(room.repository, 'a photo');
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
@@ -629,13 +629,14 @@ it('renames a binary file a conversation moved with git mv in the Room, keeping 
   const moved = await ran(hosted, `@sh cd ${room.repository} && mkdir archive && git mv photo.jpg archive/photo.jpg && git commit -qm move && house push`);
   const fetched = await house(hosted, '/', 'fetch');
 
-  expect(moved).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  expect(moved).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}; main is at [0-9a-f]{12}\.\n$/) });
   expect(hosted.mcp.map((received) => [called(received).name, called(received).arguments])).toEqual([
     ['files_batch', { changes: [{ op: 'rename', path: '/rooms/notes/photo.jpg', to: '/rooms/notes/archive/photo.jpg', base: revision }] }],
   ]);
   expect(puts(hosted)).toHaveLength(sent);
   expect(room.binaries.has('photo.jpg')).toBe(false);
   expect(room.binaries.get('archive/photo.jpg')).toEqual({ revision, bytes: JPEG });
+  expect(await readFile(join(room.repository, 'index.md'), 'utf8')).toBe('See ![a photo](archive/photo.jpg).\n');
   expect(fetched.status).toBe(0);
   expect(gets(hosted)).toBe(0);
   clean(room);
@@ -716,6 +717,96 @@ it('finishes a push renaming a binary file whose operation expired once House ho
   expect(room.batches).toHaveLength(2);
   expect(room.binaries.get('cover.jpg')).toEqual({ revision, bytes: JPEG });
   expect(gets(hosted)).toBe(0);
+  clean(room);
+});
+
+it.each<[string, (room: Room) => unknown, Record<string, Buffer>]>([
+  ['redraws it', (room) => room.upload('cover.jpg', REDRAWN), { 'cover.jpg': REDRAWN }],
+  ['puts text at its old Path', (room) => room.put('photo.jpg', 'a caption\n'), { 'cover.jpg': JPEG, 'photo.jpg': Buffer.from('a caption\n') }],
+  ['removes it', (room) => room.remove('cover.jpg'), {}],
+])('finishes a push renaming a binary file when another writer %s before the Kit reads House back, and the House ref holds what the Room does', async (_, writer, after) => {
+  const { hosted, rooms, room } = await copied();
+  await placed(room, { 'photo.jpg': JPEG });
+  commitAll(room.repository, 'a photo');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  await rename(join(room.repository, 'photo.jpg'), join(room.repository, 'cover.jpg'));
+  const commit = commitAll(room.repository, 'renamed');
+  rooms.dropping = 1;
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
+  await ownAgent(hosted);
+  writer(room);
+
+  const finished = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(finished).toEqual({ status: 0, stdout: expect.stringMatching(new RegExp(`^House accepted ${short(commit)}(; main is at [0-9a-f]{12})?\\.\\n$`)), stderr: '' });
+  expect((await record(hosted, room)).push).toBeUndefined();
+  git(room.repository, 'merge', '-q', '--ff-only', 'refs/house/received');
+  const held = async (path: string) => (existsSync(join(room.repository, path)) ? await readFile(join(room.repository, path)) : undefined);
+  expect({ 'cover.jpg': await held('cover.jpg'), 'photo.jpg': await held('photo.jpg') }).toEqual(after);
+  clean(room);
+});
+
+it.each<[string, Record<string, Buffer | string>, string[], Record<string, Buffer | string>, (revisions: Record<string, string>) => Record<string, unknown>[]]>([
+  [
+    'one removed path and two added ones',
+    { 'photo.jpg': JPEG },
+    ['photo.jpg'],
+    { 'copy.jpg': JPEG, 'cover.jpg': JPEG },
+    (revisions) => [
+      part('copy.jpg', JPEG, 'image/jpeg'),
+      part('cover.jpg', JPEG, 'image/jpeg'),
+      { op: 'remove', path: '/rooms/notes/photo.jpg', base: revisions['photo.jpg'] },
+    ],
+  ],
+  [
+    'two removed paths and one added one',
+    { 'a.jpg': JPEG, 'b.jpg': JPEG },
+    ['a.jpg', 'b.jpg'],
+    { 'c.jpg': JPEG },
+    (revisions) => [
+      { op: 'remove', path: '/rooms/notes/a.jpg', base: revisions['a.jpg'] },
+      { op: 'remove', path: '/rooms/notes/b.jpg', base: revisions['b.jpg'] },
+      part('c.jpg', JPEG, 'image/jpeg'),
+    ],
+  ],
+  [
+    'a removed path, an added one and a binary file turned to text',
+    { 'photo.jpg': JPEG, 'scan.jpg': JPEG },
+    ['photo.jpg'],
+    { 'cover.jpg': JPEG, 'scan.jpg': 'now text\n' },
+    (revisions) => [
+      part('cover.jpg', JPEG, 'image/jpeg'),
+      { op: 'remove', path: '/rooms/notes/photo.jpg', base: revisions['photo.jpg'] },
+      { op: 'remove', path: '/rooms/notes/scan.jpg', base: revisions['scan.jpg'] },
+      { op: 'create', path: '/rooms/notes/scan.jpg', content: 'now text\n' },
+    ],
+  ],
+  [
+    'a removed path, an added one and a text turned to a binary file',
+    { 'photo.jpg': JPEG, 'cover.jpg': 'a caption\n' },
+    ['photo.jpg'],
+    { 'copy.jpg': JPEG, 'cover.jpg': JPEG },
+    (revisions) => [
+      part('copy.jpg', JPEG, 'image/jpeg'),
+      { op: 'remove', path: '/rooms/notes/cover.jpg', base: revisions['cover.jpg'] },
+      part('cover.jpg', JPEG, 'image/jpeg'),
+      { op: 'remove', path: '/rooms/notes/photo.jpg', base: revisions['photo.jpg'] },
+    ],
+  ],
+])('removes and creates binary files, renaming none, when %s hold the same bytes', async (_, before, removed, after, sent) => {
+  const { hosted, room } = await copied();
+  await placed(room, before);
+  commitAll(room.repository, 'before');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  const revisions = Object.fromEntries(Object.keys(before).map((path) => [path, room.binaries.get(path)?.revision ?? room.revision(path)]));
+  for (const path of removed) await rm(join(room.repository, path));
+  await placed(room, after);
+  const commit = commitAll(room.repository, 'after');
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(pushed).toEqual({ status: 0, stdout: `House accepted ${short(commit)}.\n`, stderr: '' });
+  expect(batches(hosted).at(-1)!.changes).toEqual(sent(revisions));
   clean(room);
 });
 

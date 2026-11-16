@@ -484,6 +484,28 @@ function binaryParts(changes: readonly Edit[]): BinaryPart[] {
   return changes.filter((change): change is BinaryPart => change.op === 'upload');
 }
 
+function pushedBinary(copy: Copy, push: Push): Map<string, Held> {
+  const sent = new Map<string, Held>();
+  for (const change of push.changes) {
+    if (change.op === 'upload') sent.set(relative(change.path), { bytes: change.bytes, sha256: change.sha256 });
+    else if (change.op === 'rename') {
+      const held = heldAt(copy, push.base, relative(change.path));
+      if (held !== undefined) sent.set(relative(change.to), held);
+    }
+  }
+  return sent;
+}
+
+async function writtenAt(copy: Copy, house: ReadonlyMap<string, string>, path: string): Promise<Written> {
+  const named = `${rootOf(copy.room_handle)}/${path}`;
+  const entry = house.get(path);
+  if (entry === undefined) return { path: named, revision: null, content: null };
+  const revision = revisionAt(copy, copy.house, path) ?? null;
+  return heldAt(copy, copy.house, path) === undefined
+    ? { path: named, revision, content: await blobText(copy.repository, entry) }
+    : { path: named, revision };
+}
+
 function without(copy: Copy): Copy {
   const { push, ...settled } = copy;
   return settled;
@@ -977,12 +999,10 @@ export class LocalCopies {
   }
 
   private async pushing(copy: Copy): Promise<Map<string, Held & { blob: string }>> {
-    const parts = binaryParts(copy.push?.changes ?? []);
-    if (parts.length === 0) return new Map();
+    const sent = copy.push === undefined ? new Map<string, Held>() : pushedBinary(copy, copy.push);
+    if (sent.size === 0) return new Map();
     const commit = await tree(copy.repository, copy.push!.commit);
-    return new Map(
-      parts.map(({ path, bytes, sha256 }) => [relative(path), { bytes, sha256, blob: commit.get(relative(path))! }]),
-    );
+    return new Map([...sent].map(([path, held]) => [path, { ...held, blob: commit.get(path)! }]));
   }
 
   private async binaryIn(
@@ -996,7 +1016,7 @@ export class LocalCopies {
     const pushed = pushing.get(change.path);
     if (pushed !== undefined && heldKey(pushed) === heldKey(change)) return pushed.blob;
     const moved = leaving.get(heldKey(change));
-    const kept = heldAt(copy, copy.house, change.path);
+    const kept = heldAt(copy, copy.house, change.path) ?? pushed;
     if (kept === undefined) return moved ?? null;
     if (heldKey(kept) === heldKey(change)) return houseTree.get(change.path)!;
     return moved ?? this.revisionBlob(copy, change.path, change.revision, caller);
@@ -1337,21 +1357,12 @@ export class LocalCopies {
     const push = copy.push!;
     const current = (await this.caughtUp([copy], true, caller))[0]!;
     const house = await tree(copy.repository, current.house);
-    const root = rootOf(current.room_handle);
     const model = await modelOf(current, house);
     if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit), model))) {
       return unheld(current);
     }
     const written: Written[] = [];
-    for (const path of changedPaths(push.changes).map(relative)) {
-      const entry = house.get(path);
-      const revision = entry === undefined ? null : (revisionAt(current, current.house, path) ?? null);
-      written.push(
-        entry !== undefined && heldAt(current, current.house, path) !== undefined
-          ? { path: `${root}/${path}`, revision }
-          : { path: `${root}/${path}`, revision, content: entry === undefined ? null : await blobText(copy.repository, entry) },
-      );
-    }
+    for (const path of changedPaths(push.changes).map(relative)) written.push(await writtenAt(current, house, path));
     return this.finished(await this.save({ ...current, push: { ...push, state: 'accepted', written } }), caller);
   }
 
@@ -1375,32 +1386,26 @@ export class LocalCopies {
     let copy = start;
     const push = copy.push!;
     let written = push.written!;
-    if (push.changes.some((change) => change.op === 'rename')) {
+    const read = push.changes.some((change) => change.op === 'rename');
+    if (read) {
       copy = (await this.caughtUp([copy], true, caller))[0]!;
       const house = await tree(copy.repository, copy.house);
       const sent = await tree(copy.repository, push.house);
-      if (push.changes.some((change) => change.op === 'rename' && !house.has(relative(change.to)))) {
-        throw new Error(`House's result for ${short(push.commit)} is not readable yet`);
-      }
+      const unread = push.changes.some(
+        (change) =>
+          change.op === 'rename' &&
+          house.get(relative(change.path)) === sent.get(relative(change.path)) &&
+          !house.has(relative(change.to)),
+      );
+      if (unread) throw new Error(`House's result for ${short(push.commit)} is not readable yet`);
       const known = new Set(written.map((entry) => relative(entry.path)));
       for (const path of new Set([...sent.keys(), ...house.keys()])) {
-        const entry = house.get(path);
-        if (known.has(path) || sent.get(path) === entry) continue;
-        written = [
-          ...written,
-          entry === undefined || heldAt(copy, copy.house, path) === undefined
-            ? {
-                path: `${rootOf(copy.room_handle)}/${path}`,
-                revision: entry === undefined ? null : (revisionAt(copy, copy.house, path) ?? null),
-                content: entry === undefined ? null : await blobText(copy.repository, entry),
-              }
-            : { path: `${rootOf(copy.room_handle)}/${path}`, revision: revisionAt(copy, copy.house, path) ?? null },
-        ];
+        if (!known.has(path) && sent.get(path) !== house.get(path)) written = [...written, await writtenAt(copy, house, path)];
       }
     }
     const selected = await tree(copy.repository, push.commit);
     const houseTree = await tree(copy.repository, copy.house);
-    const parts = new Map(binaryParts(push.changes).map((part) => [relative(part.path), part]));
+    const parts = pushedBinary(copy, push);
     const files = new Map<string, Content | null>();
     const revisions: Record<string, string | null> = {};
     const binary: Record<string, Held> = {};
@@ -1417,7 +1422,7 @@ export class LocalCopies {
       if (entry.revision === null) files.set(path, null);
       else if (part !== undefined) {
         files.set(path, { blob: selected.get(path)! });
-        binary[path] = { bytes: part.bytes, sha256: part.sha256 };
+        binary[path] = part;
       } else if (kept !== undefined && revisionAt(copy, copy.house, path) === entry.revision) {
         files.set(path, { blob: houseTree.get(path)! });
         binary[path] = kept;
@@ -1426,9 +1431,9 @@ export class LocalCopies {
     const edits = new Map(
       [...files].filter(([path, content]) => (content === null ? selected.has(path) : selected.get(path) !== blobId(content))),
     );
-    const received = [...files.keys()].filter(
-      (path) => revisionAt(copy, copy.house, path) === revisionAt(copy, push.house, path),
-    );
+    const received = read
+      ? []
+      : [...files.keys()].filter((path) => revisionAt(copy, copy.house, path) === revisionAt(copy, push.house, path));
     const accepted = `House ${rootOf(copy.room_handle)} with ${push.commit} accepted`;
     const house = await importCommits(copy.repository, [
       ...(edits.size === 0 ? [] : [{ message: accepted, from: push.commit, files: edits }]),
