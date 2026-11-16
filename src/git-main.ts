@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, constants, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { request } from 'node:http';
 import { constants as system } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -56,11 +56,12 @@ function nativeGit(): string | null {
   return null;
 }
 
-function captured(git: string, args: string[]): string | null {
+function captured(git: string, args: string[], { input, index }: { input?: string; index?: string } = {}): string | null {
   const ran = spawnSync(git, args, {
-    stdio: ['ignore', 'pipe', 'ignore'],
+    input,
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'ignore'],
     maxBuffer: Infinity,
-    env: { ...process.env, LC_ALL: 'C' },
+    env: { ...process.env, LC_ALL: 'C', ...(index === undefined ? {} : { GIT_INDEX_FILE: index }) },
   });
   return ran.status === 0 ? ran.stdout.toString('utf8') : null;
 }
@@ -82,29 +83,24 @@ function delegated(git: string, args: string[]): Promise<Outcome> {
   });
 }
 
-function staged(listing: string | null): Map<string, string> {
-  const entries = new Map<string, string>();
-  for (const record of (listing ?? '').split('\0')) {
-    const tab = record.indexOf('\t');
-    if (tab >= 0) entries.set(record.slice(tab + 1), record.slice(0, tab).split(' ')[1]!);
+function merged(git: string, copy: string[], common: string): string | undefined {
+  const staged = (captured(git, [...copy, 'ls-files', '--stage', '-z']) ?? '').split('\0');
+  const input = staged.filter((entry) => /^\d+ [0-9a-f]+ 0\t/.test(entry)).map((entry) => `${entry}\0`).join('');
+  const scratch = mkdtempSync(join(common, 'house-index-'));
+  try {
+    const index = join(scratch, 'index');
+    captured(git, [...copy, 'update-index', '-z', '--index-info'], { input, index });
+    return captured(git, [...copy, 'write-tree'], { index })?.trim();
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
-  return entries;
 }
 
-function moved(planned: string, before: Map<string, string>, after: Map<string, string>): { from: string; to: string }[] {
+function moved(git: string, copy: string[], before: string): { from: string; to: string }[] {
+  const renames = ['diff-index', '--cached', '-z', '--name-status', '--find-renames=100%', '--diff-filter=R', before];
+  const fields = (captured(git, [...copy, ...renames]) ?? '').split('\0');
   const moves: { from: string; to: string }[] = [];
-  for (const line of planned.split('\n')) {
-    if (!line.startsWith('Renaming ')) continue;
-    const renaming = line.slice('Renaming '.length);
-    for (let at = renaming.indexOf(' to '); at >= 0; at = renaming.indexOf(' to ', at + 1)) {
-      const from = renaming.slice(0, at);
-      const to = renaming.slice(at + 4);
-      if (before.has(from) && !after.has(from) && after.get(to) === before.get(from)) {
-        moves.push({ from, to });
-        break;
-      }
-    }
-  }
+  for (let at = 0; at + 2 < fields.length; at += 3) moves.push({ from: fields[at + 1]!, to: fields[at + 2]! });
   return moves;
 }
 
@@ -131,11 +127,10 @@ async function observed(git: string, args: string[]): Promise<Outcome> {
   if (common === undefined || worktree === undefined || !dirname(common).startsWith(`${localCopies()}/`)) {
     return delegated(git, args);
   }
-  const listing = [...globals, '-C', worktree, 'ls-files', '--stage', '-z'];
-  const before = name === 'mv' ? staged(captured(git, listing)) : null;
-  const planned = name === 'mv' ? (captured(git, [...globals, 'mv', '--dry-run', ...args.slice(index + 1)]) ?? '') : '';
+  const copy = [...globals, '-C', worktree];
+  const before = name === 'mv' ? merged(git, copy, common) : undefined;
   const outcome = await delegated(git, args);
-  const moves = before !== null && outcome.status === 0 ? moved(planned, before, staged(captured(git, listing))) : [];
+  const moves = before !== undefined && outcome.status === 0 ? moved(git, copy, before) : [];
   await reported(bridge, { common, worktree, moves });
   return outcome;
 }

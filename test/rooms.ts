@@ -45,12 +45,15 @@ interface Write {
   rewrite?: true;
 }
 
-type Refused = { code: string; path?: string; conflicts?: Record<string, unknown>[] };
+type Refused = { code: string; path?: string; held?: string; conflicts?: Record<string, unknown>[] };
 
 type Edited = { writes: Write[] } | { refusal: Refused };
 
 function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
+  if (refusal.code === 'invalid_authored_path') {
+    return `invalid_authored_path: ${refusal.path} differs from ${refusal.held} only in letter case, and a folder holds one name in any case; write to ${refusal.held} or choose another name`;
+  }
   const conflicts = stringify({ conflicts: refusal.conflicts }).trimEnd();
   return `edit_conflict: nothing was written; fix each conflict listed, then send the edit again\n${conflicts}`;
 }
@@ -274,6 +277,11 @@ export class Room {
       if (!this.writable(path) || (to !== undefined && !this.writable(to))) {
         return { refusal: { code: 'protected_path', path: change.path } };
       }
+      const named = to ?? path;
+      const twin = [...next.keys()].find((held) => held !== named && held !== path && held.toLowerCase() === named.toLowerCase());
+      if (twin !== undefined && (change.op === 'create' || change.op === 'rename')) {
+        return { refusal: { code: 'invalid_authored_path', path: change.to ?? change.path, held: `${this.root}/${twin}` } };
+      }
       const current = next.get(path);
       const stale = (code: string) =>
         conflicts.push({ path: change.path, code, ...(current === undefined ? {} : { revision: current.revision }) });
@@ -300,10 +308,11 @@ export class Room {
           next.delete(path);
           next.set(to!, current!);
           writes.set(to!, { path: to!, op: 'rename', content: current!.content, revision: current!.revision, from: path });
+          const destination = (name: string) => (name.includes(' ') ? `(<${name}>)` : `(${name})`);
           for (const [other, file] of next) {
-            const link = `(${basename(path)})`;
+            const link = destination(basename(path));
             if (other !== to && dirname(other) === dirname(path) && file.content.includes(link)) {
-              set(other, 'replace', file.content.replaceAll(link, `(${basename(to!)})`), true);
+              set(other, 'replace', file.content.replaceAll(link, destination(basename(to!))), true);
             }
           }
         }

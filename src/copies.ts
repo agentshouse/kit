@@ -667,6 +667,7 @@ export class LocalCopies {
     let copy: Copy;
     try {
       await git(staging, ['init', '-q', '-b', BRANCH]);
+      await git(staging, ['config', 'core.precomposeUnicode', 'true']);
       const read = await whole(join(staging, '.git', STAGED_CHUNKS));
       const readOnly = await readOnlyFiles(staging, []);
       const { house, revisions } = await importedWhole(staging, scope, read.texts, { message: `House ${rootOf(handle)}`, from: null }, readOnly);
