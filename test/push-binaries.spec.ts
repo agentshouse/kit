@@ -342,6 +342,24 @@ it('lands a push of more binary files than House opens at once in turns under it
   expect([...room.binaries.keys()].sort()).toEqual(['a.jpg', 'b.pdf', 'c.bin']);
 });
 
+it('sends at most ten binary files of a push to the store at once', async () => {
+  const { hosted, rooms, room } = await copied();
+  rooms.openUploads = 20;
+  await placed(room, Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`scans/${index}.bin`, Buffer.from([0xff, index])])));
+  commitAll(room.repository, 'twelve binary files');
+  const release = hosted.store.holdWrites();
+
+  const pushing = house(hosted, room.repository, 'push', '--owner');
+  await until(() => hosted.store.writing === 10);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const writing = hosted.store.writing;
+  release();
+
+  expect(writing).toBe(10);
+  expect(await pushing).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  expect(room.binaries.size).toBe(12);
+});
+
 it('keeps a push a failed transfer stops, and resumes it after the Kit restarts under its operation, sending only the part the store lacks', async () => {
   const { hosted, room } = await copied(undefined, ['--import', FAST_TIMEOUTS]);
   hosted.store.failing.add(2);

@@ -28,7 +28,11 @@ export interface Sorted {
   markdown: string[];
 }
 
-const AT_ONCE = 10;
+const SENT_AT_ONCE = 10;
+
+const UPLOADS = 'house-uploads';
+
+const DOWNLOADS = 'house-downloads';
 
 const OCTET_STREAM = 'application/octet-stream';
 
@@ -63,7 +67,7 @@ export async function eachAtOnce<T>(items: readonly T[], work: (item: T) => Prom
   const working = async () => {
     while (next < items.length) await work(items[next++]!);
   };
-  await Promise.all(Array.from({ length: Math.min(AT_ONCE, items.length) }, working));
+  await Promise.all(Array.from({ length: Math.min(SENT_AT_ONCE, items.length) }, working));
 }
 
 export async function sentBinary(
@@ -74,7 +78,7 @@ export async function sentBinary(
   upload: StagedUpload,
   finish: (upload: string, partSha256: string[]) => Promise<Finished<Staged>>,
 ): Promise<void> {
-  const directory = join(repository, '.git', 'house-uploads');
+  const directory = join(repository, '.git', UPLOADS);
   await mkdir(directory, { recursive: true });
   const copy = join(directory, randomUUID());
   try {
@@ -96,11 +100,15 @@ export async function sentBinary(
 }
 
 export async function receivedBinary(repository: string, name: string, address: () => Promise<Address>): Promise<string> {
-  const file = join(repository, '.git', 'house-downloads', randomUUID());
+  const file = join(repository, '.git', DOWNLOADS, randomUUID());
   try {
     await downloaded(address, (url) => fetched(url), file, name);
     return await storedFile(repository, file);
   } finally {
     await rm(file, { force: true });
   }
+}
+
+export async function sweptTransfers(repository: string): Promise<void> {
+  for (const directory of [UPLOADS, DOWNLOADS]) await rm(join(repository, '.git', directory), { recursive: true, force: true });
 }

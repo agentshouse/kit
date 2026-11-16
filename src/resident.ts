@@ -142,8 +142,8 @@ export async function resident(): Promise<void> {
     if (running === null) restart(ended);
     else void running.stop(() => restart(ended));
   };
-  await serveOwner(lock, copies, { settle, answered });
   await copies.swept();
+  await serveOwner(lock, copies, { settle, answered });
   await started().catch((error: unknown) => {
     report(error);
     process.exit(1);

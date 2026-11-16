@@ -35,8 +35,10 @@ export interface Store {
   requests: StoreRequest[];
   objects: Map<string, Buffer>;
   reading: number;
+  writing: number;
   failing: Set<number>;
   holdReads(): () => void;
+  holdWrites(): () => void;
   refuseReads(count: number): void;
   address(method: 'GET' | 'PUT', key: string, fields?: Record<string, string>, expired?: boolean): string;
   cut(part: number): void;
@@ -69,6 +71,8 @@ export async function startStore(tls?: Certificate): Promise<Store> {
   const failing = new Set<number>();
   let revisions = 0;
   let held: Promise<void> | null = null;
+  let heldWrites: Promise<void> | null = null;
+  let writing = 0;
   let reading = 0;
   let refused = 0;
   const signature = (method: string, address: URL, checksum: string) =>
@@ -111,6 +115,9 @@ export async function startStore(tls?: Certificate): Promise<Store> {
       request.once('data', () => request.socket.destroy());
       return;
     }
+    writing++;
+    await heldWrites;
+    writing--;
     const chunks: Buffer[] = [];
     for await (const chunk of request as AsyncIterable<Buffer>) chunks.push(chunk);
     const content = Buffer.concat(chunks);
@@ -154,6 +161,9 @@ export async function startStore(tls?: Certificate): Promise<Store> {
     get reading() {
       return reading;
     },
+    get writing() {
+      return writing;
+    },
     failing,
     refuseReads: (count) => {
       refused = count;
@@ -163,6 +173,16 @@ export async function startStore(tls?: Certificate): Promise<Store> {
       held = new Promise((resolve) => {
         release = () => {
           held = null;
+          resolve();
+        };
+      });
+      return release;
+    },
+    holdWrites: () => {
+      let release = () => {};
+      heldWrites = new Promise((resolve) => {
+        release = () => {
+          heldWrites = null;
           resolve();
         };
       });

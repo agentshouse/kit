@@ -4,7 +4,16 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
-import { eachAtOnce, receivedBinary, sentBinary, sorted, type Described, type Staged, type StagedUpload } from './binaries.ts';
+import {
+  eachAtOnce,
+  receivedBinary,
+  sentBinary,
+  sorted,
+  sweptTransfers,
+  type Described,
+  type Staged,
+  type StagedUpload,
+} from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
 import {
   blobId,
@@ -34,7 +43,7 @@ const ROOMS = 'rooms/';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
 const STAGED_CHUNKS = 'house-chunks';
 const SCHEMA = 'settings/schema.yaml';
-const NO_OWN_AGENT = "this computer's own agent has no House connection, which brings a binary file's new bytes; run kit login";
+const NO_OWN_AGENT = "a binary file's new bytes come through this computer's own agent, which has no House connection; run kit login";
 
 // A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
 const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
@@ -367,7 +376,7 @@ async function importedWhole(
   async function* tracked(): AsyncGenerator<readonly [string, Content]> {
     for await (const entry of entries) {
       if (!('content' in entry)) {
-        const blob = await kept(entry);
+        const blob = declaredWritable(entry.path, scope) ? await kept(entry) : null;
         if (blob === null) continue;
         revisions[entry.path] = entry.revision;
         binary[entry.path] = { bytes: entry.bytes, sha256: entry.sha256 };
@@ -557,6 +566,7 @@ export class LocalCopies {
     for (const name of await readdir(rooms).catch(() => [])) {
       if (name.startsWith(stagingPrefix())) await rm(join(rooms, name), { recursive: true, force: true });
     }
+    for (const copy of this.copies.values()) await sweptTransfers(copy.repository);
   }
 
   connected(): Promise<void> {
