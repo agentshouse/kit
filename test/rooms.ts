@@ -404,17 +404,28 @@ export class Room {
           writes.set(path, { path, op: 'remove', content: null, revision: null });
         }
       } else if (change.op === 'rename') {
-        if (current?.revision !== change.base || next.has(to!)) stale('base_revision_stale');
-        else {
+        const moving = current ?? binaries.get(path);
+        if (moving === undefined || moving.revision !== change.base || next.has(to!)) {
+          stale('base_revision_stale');
+          continue;
+        }
+        if (current === undefined) {
+          const file = binaries.get(path)!;
+          binaries.delete(path);
+          binaries.set(to!, file);
+          const held = { bytes: file.bytes.length, sha256: digest(file.bytes) };
+          writes.set(to!, { path: to!, op: 'rename', content: null, revision: file.revision, from: path, binary: held });
+        } else {
           next.delete(path);
-          next.set(to!, current!);
-          writes.set(to!, { path: to!, op: 'rename', content: current!.content, revision: current!.revision, from: path });
-          const destination = (name: string) => (name.includes(' ') ? `(<${name}>)` : `(${name})`);
-          for (const [other, file] of next) {
-            const link = destination(basename(path));
-            if (other !== to && dirname(other) === dirname(path) && file.content.includes(link)) {
-              set(other, 'replace', file.content.replaceAll(link, destination(basename(to!))), true);
-            }
+          next.set(to!, current);
+          writes.set(to!, { path: to!, op: 'rename', content: current.content, revision: current.revision, from: path });
+        }
+        removed.add(path);
+        const destination = (name: string) => (name.includes(' ') ? `(<${name}>)` : `(${name})`);
+        for (const [other, file] of next) {
+          const link = destination(basename(path));
+          if (other !== to && dirname(other) === dirname(path) && file.content.includes(link)) {
+            set(other, 'replace', file.content.replaceAll(link, destination(basename(to!))), true);
           }
         }
       } else {
@@ -442,7 +453,7 @@ export class Room {
     this.files = next;
     this.binaries = binaries;
     this.batches.push(changes);
-    this.advance([...new Set([...writes.values()].flatMap((write) => (write.from === undefined ? [write.path] : [write.path, write.from])))]);
+    this.advance([...new Set([...[...writes.values()].map((write) => write.path), ...removed])]);
     return { writes: [...writes.values()] };
   }
 }

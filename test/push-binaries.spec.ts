@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -614,6 +614,144 @@ it('ends a push whose new binary file meets text another writer put at its Path 
   ]);
   expect(digest(room.binaries.get('caption.txt')!.bytes)).toBe(digest(RECORDING));
   expect(room.files.has('caption.txt')).toBe(false);
+  clean(room);
+});
+
+it('renames a binary file a conversation moved with git mv in the Room, keeping its revision and sending no bytes, and the copy, clean after house fetch, holds it at its new Path', async () => {
+  const { hosted, room } = await copied();
+  await placed(room, { 'photo.jpg': JPEG });
+  commitAll(room.repository, 'a photo');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  const revision = room.binaries.get('photo.jpg')!.revision;
+  const sent = puts(hosted).length;
+  await opened(hosted);
+
+  const moved = await ran(hosted, `@sh cd ${room.repository} && mkdir archive && git mv photo.jpg archive/photo.jpg && git commit -qm move && house push`);
+  const fetched = await house(hosted, '/', 'fetch');
+
+  expect(moved).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  expect(hosted.mcp.map((received) => [called(received).name, called(received).arguments])).toEqual([
+    ['files_batch', { changes: [{ op: 'rename', path: '/rooms/notes/photo.jpg', to: '/rooms/notes/archive/photo.jpg', base: revision }] }],
+  ]);
+  expect(puts(hosted)).toHaveLength(sent);
+  expect(room.binaries.has('photo.jpg')).toBe(false);
+  expect(room.binaries.get('archive/photo.jpg')).toEqual({ revision, bytes: JPEG });
+  expect(fetched.status).toBe(0);
+  expect(gets(hosted)).toBe(0);
+  clean(room);
+  await ownAgent(hosted);
+  room.upload('archive/photo.jpg', REDRAWN);
+  expect((await house(hosted, '/', 'fetch')).status).toBe(0);
+  git(room.repository, 'merge', '-q', '--ff-only', 'refs/house/received');
+  expect(await readFile(join(room.repository, 'archive/photo.jpg'))).toEqual(REDRAWN);
+  clean(room);
+});
+
+it('sends a binary file a conversation moved with git mv and then redrew as its rename and its new bytes against the revision it had', async () => {
+  const { hosted, room } = await copied();
+  await placed(room, { 'photo.jpg': JPEG });
+  commitAll(room.repository, 'a photo');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  const revision = room.binaries.get('photo.jpg')!.revision;
+  await opened(hosted);
+  expect((await ran(hosted, `@sh cd ${room.repository} && git mv photo.jpg cover.jpg`)).status).toBe(0);
+  await placed(room, { 'cover.jpg': REDRAWN });
+
+  const pushed = await ran(hosted, `@sh cd ${room.repository} && git commit -qam redrawn && house push`);
+  const fetched = await house(hosted, '/', 'fetch');
+
+  expect(pushed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  const changes = [
+    { op: 'rename', path: '/rooms/notes/photo.jpg', to: '/rooms/notes/cover.jpg', base: revision },
+    part('cover.jpg', REDRAWN, 'image/jpeg', revision),
+  ];
+  expect(toolBatches(hosted).map((received) => called(received).arguments!.changes)).toEqual([changes, changes]);
+  expect(room.binaries.has('photo.jpg')).toBe(false);
+  expect(digest(room.binaries.get('cover.jpg')!.bytes)).toBe(digest(REDRAWN));
+  expect(fetched.status).toBe(0);
+  expect(gets(hosted)).toBe(0);
+  clean(room);
+});
+
+it('renames a binary file moved with a plain mv and committed, and the document linking it links its new Path once the push lands', async () => {
+  const { hosted, room } = await copied((setup) => setup.put('index.md', 'See ![a photo](photo.jpg).\n'));
+  await placed(room, { 'photo.jpg': JPEG });
+  commitAll(room.repository, 'a photo');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  const revision = room.binaries.get('photo.jpg')!.revision;
+  const sent = puts(hosted).length;
+  await rename(join(room.repository, 'photo.jpg'), join(room.repository, 'cover.jpg'));
+  const commit = commitAll(room.repository, 'renamed');
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+  const fetched = await house(hosted, '/', 'fetch');
+
+  expect(pushed).toEqual({ status: 0, stdout: expect.stringMatching(new RegExp(`^House accepted ${short(commit)}; main is at [0-9a-f]{12}\\.\\n$`)), stderr: '' });
+  expect(batches(hosted).at(-1)!.changes).toEqual([{ op: 'rename', path: '/rooms/notes/photo.jpg', to: '/rooms/notes/cover.jpg', base: revision }]);
+  expect(puts(hosted)).toHaveLength(sent);
+  expect(room.binaries.get('cover.jpg')).toEqual({ revision, bytes: JPEG });
+  expect(room.files.get('index.md')!.content).toBe('See ![a photo](cover.jpg).\n');
+  expect(await readFile(join(room.repository, 'index.md'), 'utf8')).toBe('See ![a photo](cover.jpg).\n');
+  expect(fetched.status).toBe(0);
+  expect(gets(hosted)).toBe(0);
+  clean(room);
+});
+
+it('finishes a push renaming a binary file whose operation expired once House holds the rename, sending nothing again', async () => {
+  const { hosted, rooms, room } = await copied();
+  await placed(room, { 'photo.jpg': JPEG });
+  commitAll(room.repository, 'a photo');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  const revision = room.binaries.get('photo.jpg')!.revision;
+  await rename(join(room.repository, 'photo.jpg'), join(room.repository, 'cover.jpg'));
+  const commit = commitAll(room.repository, 'renamed');
+  rooms.dropping = 1;
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
+  hosted.house.route('POST', '/kit/door/files/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
+
+  const recovered = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(recovered).toEqual({ status: 0, stdout: `House accepted ${short(commit)}.\n`, stderr: '' });
+  expect(room.batches.at(-1)).toEqual([{ op: 'rename', path: '/rooms/notes/photo.jpg', to: '/rooms/notes/cover.jpg', base: revision }]);
+  expect(room.batches).toHaveLength(2);
+  expect(room.binaries.get('cover.jpg')).toEqual({ revision, bytes: JPEG });
+  expect(gets(hosted)).toBe(0);
+  clean(room);
+});
+
+it('removes and creates binary files when two removed and two added paths hold the same bytes, and a moved text file, while the one removed and added pair of equal bytes is a rename', async () => {
+  const { hosted, room } = await copied((setup) => setup.put('notes.txt', 'some notes\n'));
+  await placed(room, { 'a.jpg': JPEG, 'b.jpg': JPEG, 'report.pdf': PDF });
+  commitAll(room.repository, 'binary files');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  const revisions = Object.fromEntries(['a.jpg', 'b.jpg', 'report.pdf'].map((path) => [path, room.binaries.get(path)!.revision]));
+  const notes = room.revision('notes.txt');
+  const moves: [string, string][] = [
+    ['a.jpg', 'c.jpg'],
+    ['b.jpg', 'd.jpg'],
+    ['report.pdf', 'scan.pdf'],
+    ['notes.txt', 'notes-old.txt'],
+  ];
+  for (const [from, to] of moves) await rename(join(room.repository, from), join(room.repository, to));
+  const commit = commitAll(room.repository, 'moved');
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+  const fetched = await house(hosted, '/', 'fetch');
+
+  expect(pushed).toEqual({ status: 0, stdout: `House accepted ${short(commit)}.\n`, stderr: '' });
+  expect(batches(hosted).at(-1)!.changes).toEqual([
+    { op: 'remove', path: '/rooms/notes/a.jpg', base: revisions['a.jpg'] },
+    { op: 'remove', path: '/rooms/notes/b.jpg', base: revisions['b.jpg'] },
+    part('c.jpg', JPEG, 'image/jpeg'),
+    part('d.jpg', JPEG, 'image/jpeg'),
+    { op: 'create', path: '/rooms/notes/notes-old.txt', content: 'some notes\n' },
+    { op: 'remove', path: '/rooms/notes/notes.txt', base: notes },
+    { op: 'rename', path: '/rooms/notes/report.pdf', to: '/rooms/notes/scan.pdf', base: revisions['report.pdf'] },
+  ]);
+  expect([...room.binaries.keys()].sort()).toEqual(['c.jpg', 'd.jpg', 'scan.pdf']);
+  expect(room.binaries.get('scan.pdf')).toEqual({ revision: revisions['report.pdf'], bytes: PDF });
+  expect(fetched.status).toBe(0);
+  expect(gets(hosted)).toBe(0);
   clean(room);
 });
 

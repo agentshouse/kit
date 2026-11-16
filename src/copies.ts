@@ -506,6 +506,34 @@ function movedPaths(moves: readonly Move[], before: Map<string, string>, after: 
   );
 }
 
+function sameBytesMoved(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+  held: (path: string) => Held | undefined,
+  binary: ReadonlyMap<string, Described>,
+  intended: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const arriving = new Set(intended.values());
+  const leaving = new Map<string, string[]>();
+  const added = new Map<string, string[]>();
+  const listed = (paths: Map<string, string[]>, file: Held, path: string) => {
+    paths.set(heldKey(file), [...(paths.get(heldKey(file)) ?? []), path]);
+  };
+  for (const [path, entry] of before) {
+    const file = held(path);
+    if (file !== undefined && !intended.has(path) && !binary.has(path) && after.get(path) !== entry) listed(leaving, file, path);
+  }
+  for (const [path, file] of binary) {
+    if (!arriving.has(path) && held(path) === undefined) listed(added, file, path);
+  }
+  const moved = new Map<string, string>();
+  for (const [key, [from, ...others]] of leaving) {
+    const [to, ...more] = added.get(key) ?? [];
+    if (others.length === 0 && more.length === 0 && to !== undefined && !after.has(from!) && !before.has(to)) moved.set(from!, to);
+  }
+  return moved;
+}
+
 export class LocalCopies {
   readonly owner: Caller;
   private readonly house: House;
@@ -1127,10 +1155,12 @@ export class LocalCopies {
       copy,
       [...after].filter(([path, entry]) => before.get(path) !== entry),
     );
-    const heldBinary = (path: string) => heldAt(copy, base, path) !== undefined;
-    const moved = new Map(
-      [...movedPaths(copy.moves, before, after)].filter(([from, to]) => !heldBinary(from) && !binary.has(to)),
+    const held = (path: string) => heldAt(copy, base, path);
+    const heldBinary = (path: string) => held(path) !== undefined;
+    const intended = new Map(
+      [...movedPaths(copy.moves, before, after)].filter(([from, to]) => heldBinary(from) === binary.has(to)),
     );
+    const moved = new Map([...intended, ...sameBytesMoved(before, after, held, binary, intended)]);
     const arrived = new Set(moved.values());
     const text = (entry: string) => blobText(copy.repository, entry);
     const created = async (path: string, entry: string): Promise<Edit> => {
@@ -1150,8 +1180,13 @@ export class LocalCopies {
       if (to !== undefined) {
         changes.push({ op: 'rename', path: `${root}/${path}`, to: `${root}/${to}`, base: known });
         const moving = after.get(to)!;
+        const part = binary.get(to);
         if (moving !== prior) {
-          changes.push({ op: 'replace', path: `${root}/${to}`, base: known, content: await text(moving) });
+          changes.push(
+            part === undefined
+              ? { op: 'replace', path: `${root}/${to}`, base: known, content: await text(moving) }
+              : { op: 'upload', path: `${root}/${to}`, base: known, ...part },
+          );
         }
         continue;
       }
@@ -1307,13 +1342,12 @@ export class LocalCopies {
     if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit), model))) {
       return unheld(current);
     }
-    const parts = new Set(binaryParts(push.changes).map(({ path }) => relative(path)));
     const written: Written[] = [];
     for (const path of changedPaths(push.changes).map(relative)) {
       const entry = house.get(path);
       const revision = entry === undefined ? null : (revisionAt(current, current.house, path) ?? null);
       written.push(
-        entry !== undefined && parts.has(path)
+        entry !== undefined && heldAt(current, current.house, path) !== undefined
           ? { path: `${root}/${path}`, revision }
           : { path: `${root}/${path}`, revision, content: entry === undefined ? null : await blobText(copy.repository, entry) },
       );
@@ -1431,24 +1465,25 @@ export class LocalCopies {
     selected: Map<string, string>,
     model: VerifiedModel,
   ): Promise<boolean> {
-    const text = async (path: string) => {
-      const entry = house.get(relative(path));
-      return entry === undefined ? undefined : blobText(repository, entry);
-    };
     const created = new Set(changes.flatMap((change) => (change.op === 'create' || change.op === 'upload' ? [change.path] : [])));
     for (const change of changes) {
+      const path = relative(change.path);
       if (change.op === 'upload') {
-        if (house.get(relative(change.path)) === selected.get(relative(change.path))) continue;
+        if (house.get(path) === selected.get(path)) continue;
         return false;
       }
-      if (change.op === 'remove' && created.has(change.path)) continue;
-      const current = await text(change.path);
-      if (change.op === 'remove' && current === undefined) continue;
-      if (change.op === 'rename' && current === undefined && house.get(relative(change.to)) === selected.get(relative(change.to))) {
-        continue;
+      if (change.op === 'remove') {
+        if (created.has(change.path) || !house.has(path)) continue;
+        return false;
       }
+      if (change.op === 'rename') {
+        if (!house.has(path) && house.get(relative(change.to)) === selected.get(relative(change.to))) continue;
+        return false;
+      }
+      const entry = house.get(path);
+      const current = entry === undefined ? undefined : await blobText(repository, entry);
       if ((change.op === 'create' || change.op === 'replace') && current === change.content) continue;
-      const document = current === undefined ? undefined : readDocument(current, relative(change.path), model)?.document;
+      const document = current === undefined ? undefined : readDocument(current, path, model)?.document;
       if (document === undefined) return false;
       if (change.op === 'set_field' && JSON.stringify(document.fields[change.field]) === JSON.stringify(change.value)) continue;
       if (change.op === 'replace_section' && document.sections[change.section] === change.content) continue;
