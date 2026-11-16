@@ -20,7 +20,9 @@ export interface Ran {
   stderr: string;
 }
 
-type ImportedFile = readonly [string, string | null];
+export type Content = string | { blob: string };
+
+type ImportedFile = readonly [string, Content | null];
 
 export interface Imported {
   message: string;
@@ -80,12 +82,50 @@ export async function blobText(repository: string, object: string): Promise<stri
   return (await blob(repository, object)).toString('utf8');
 }
 
-export async function isText(repository: string, object: string, maxBytes: number): Promise<boolean> {
-  const bytes = await blob(repository, object);
-  return bytes.length <= maxBytes && isUtf8(bytes) && !bytes.includes(0);
+export async function blobSizes(repository: string, objects: readonly string[]): Promise<Map<string, number>> {
+  if (objects.length === 0) return new Map();
+  const listed = await git(repository, ['cat-file', '--batch-check=%(objectname) %(objectsize)'], `${[...new Set(objects)].join('\n')}\n`);
+  return new Map(
+    listed
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => {
+        const [object, size] = line.split(' ');
+        return [object!, Number(size)];
+      }),
+  );
 }
 
-export function blobId(content: string): string {
+export async function isText(repository: string, object: string, size: number, maxBytes: number): Promise<boolean> {
+  if (size > maxBytes) return false;
+  const bytes = await blob(repository, object);
+  return isUtf8(bytes) && !bytes.includes(0);
+}
+
+export async function* blobBytes(repository: string, object: string): AsyncGenerator<Buffer> {
+  const child = spawn('git', ['cat-file', 'blob', object], { cwd: repository, env: childEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString('utf8');
+  });
+  const closed = new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', resolve);
+  });
+  try {
+    yield* child.stdout as AsyncIterable<Buffer>;
+  } finally {
+    if (child.exitCode === null) child.kill();
+  }
+  if ((await closed) !== 0) throw new Error(`git cat-file failed: ${stderr.trim()}`);
+}
+
+export async function storedFile(repository: string, file: string): Promise<string> {
+  return (await git(repository, ['hash-object', '-w', '--no-filters', '--', file])).trim();
+}
+
+export function blobId(content: Content): string {
+  if (typeof content !== 'string') return content.blob;
   const bytes = Buffer.from(content, 'utf8');
   return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
 }
@@ -123,7 +163,9 @@ async function imported(stream: Writable, commits: readonly Imported[]): Promise
         stream,
         content === null
           ? Buffer.from(`D ${quoted(path)}\n`)
-          : Buffer.concat([Buffer.from(`M 100644 inline ${quoted(path)}\n`), ...data(content)]),
+          : typeof content === 'string'
+            ? Buffer.concat([Buffer.from(`M 100644 inline ${quoted(path)}\n`), ...data(content)])
+            : Buffer.from(`M 100644 ${content.blob} ${quoted(path)}\n`),
       );
     }
     await written(stream, Buffer.from('\n'));

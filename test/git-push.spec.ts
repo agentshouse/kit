@@ -730,7 +730,9 @@ it('pushes as the owner only with --owner outside a conversation and explains it
 
   expect(bare).toMatchObject({ status: 1, stderr: 'house: outside an Agent conversation, house push needs --owner\n' });
   expect(help.status).toBe(0);
-  expect(help.stdout).toBe('usage: house push [commit] [--owner]\n');
+  expect(help.stdout).toBe(
+    "usage: house push [commit] [--owner]\npush [commit]: sends the Local copy's committed changes to House; one commit and one push carry text and binary files alike\n",
+  );
   expect(old.status).toBe(1);
   expect(old.stderr).not.toContain('push');
   expect(outside).toMatchObject({

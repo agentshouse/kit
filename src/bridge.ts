@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { delimiter, dirname, join } from 'node:path';
 import { parse } from 'yaml';
 import { finalRefusal, HouseRefusal, retryDelay, retrying, type House } from './api.ts';
+import type { Staged } from './binaries.ts';
 import { loginPath } from './clis.ts';
 import {
   changedPaths,
@@ -16,17 +17,13 @@ import {
   type Submitted,
   type Upload,
 } from './copies.ts';
+import { fileInfo, type Finished } from './files.ts';
 import { kitHome, readEnrolment, socketDirectory } from './home.ts';
-import { callHouse, mcpBody, rpc, UNREACHABLE, type Forwarded, type Message } from './mcp.ts';
+import { callHouse, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
-import { refusalOf, retryable, type Refusal } from './refusals.ts';
+import { refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
 import { relayed } from './relay.ts';
-
-export interface ToolResult {
-  content: { type: string; text: string }[];
-  isError?: boolean;
-}
 
 export interface Bridge {
   env: Record<string, string>;
@@ -61,18 +58,6 @@ function relay(request: IncomingMessage, response: ServerResponse, house: URL, a
   request.pipe(forwarded);
 }
 
-function refusalIn(text: string, status: number): Refusal {
-  return refusalOf(text) ?? { code: '', text: text === '' ? `House refused it with ${status}` : text, conflicts: [] };
-}
-
-function answered(forwarded: Forwarded): { text: string } | { refused: Refusal } {
-  if (forwarded.status !== 200) return { refused: refusalIn(forwarded.text, forwarded.status) };
-  const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
-  if (answer.error !== undefined) return { refused: refusalIn(answer.error.message, forwarded.status) };
-  const text = answer.result!.content.map((content) => content.text).join('\n');
-  return answer.result!.isError === true ? { refused: refusalIn(text, forwarded.status) } : { text };
-}
-
 function pendingSeconds(forwarded: Forwarded): number | null {
   if (forwarded.status !== 200) return null;
   const { result } = JSON.parse(forwarded.text) as { result?: ToolResult };
@@ -83,15 +68,18 @@ function pendingSeconds(forwarded: Forwarded): number | null {
   return typeof seconds === 'number' ? seconds : null;
 }
 
-function resendAfter(forwarded: Forwarded | null, attempt: number): number | null {
+function resendAfter(forwarded: Forwarded | null, attempt: number, pushing: boolean): number | null {
   if (forwarded === null) return retryDelay(attempt);
-  if (forwarded.status !== 200) return retryable(forwarded.text) === false ? null : retryDelay(attempt);
+  if (forwarded.status !== 200) {
+    if (pushing && stopsPush(refusalOf(forwarded.text))) return null;
+    return retryable(forwarded.text) === false ? null : retryDelay(attempt);
+  }
   const seconds = pendingSeconds(forwarded);
   return seconds === null ? null : seconds * 1000;
 }
 
 function editAnswer(forwarded: Forwarded): Submitted {
-  const answer = answered(forwarded);
+  const answer = toolAnswer(forwarded);
   if ('refused' in answer) return answer;
   const { results } = parse(answer.text) as { results: { path: string; revision?: string; from?: string }[] };
   return {
@@ -119,14 +107,14 @@ export async function openBridge(
   const sent = (message: Message, operation: string | null): Promise<Forwarded> =>
     callHouse(origin, credential, message, operation, closed.signal);
 
-  const send = async (message: Message, operation: string | null): Promise<Forwarded> => {
+  const send = async (message: Message, operation: string | null, pushing = false): Promise<Forwarded> => {
     if (operation === null) return sent(message, null);
     for (let attempt = 0; ; attempt++) {
       const forwarded = await sent(message, operation).catch((error: unknown) => {
         if (closed.signal.aborted) throw error;
         return null;
       });
-      const after = resendAfter(forwarded, attempt);
+      const after = resendAfter(forwarded, attempt, pushing);
       if (after === null) return forwarded!;
       // A Tool call House did not settle is sent again on the jittered curve, or after the wait House names for a pending one.
       await delay(after, undefined, { signal: closed.signal });
@@ -138,7 +126,7 @@ export async function openBridge(
   const staged = async (operation: string, changes: Edit[]): Promise<Upload | { refused: Refusal }> => {
     const bytes = Buffer.from(JSON.stringify({ changes }));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const prepared = answered(
+    const prepared = toolAnswer(
       await send(
         call('run_command', {
           command: 'files/batch-upload',
@@ -187,8 +175,20 @@ export async function openBridge(
         await retain(upload);
       }
       return editAnswer(
-        await send(upload === undefined ? inline : call('files_batch', { paths: changedPaths(changes), upload }), operation),
+        await send(upload === undefined ? inline : call('files_batch', { paths: changedPaths(changes), upload }), operation, true),
       );
+    },
+    finish: async (upload, room, partSha256) => {
+      const answer = toolAnswer(
+        await send(call('upload', { upload, room_ref: room, part_sha256: partSha256 }), operationId(), true),
+      );
+      if ('refused' in answer) throw new Error(answer.refused.text);
+      return parse(answer.text) as Finished<Staged>;
+    },
+    info: async (path, revision) => {
+      const answer = toolAnswer(await send(call('info', { path, ...(revision === undefined ? {} : { ref: revision }) }), operationId()));
+      if ('refused' in answer) throw new Error(answer.refused.text);
+      return fileInfo(answer.text);
     },
   };
 
@@ -197,7 +197,7 @@ export async function openBridge(
       const { cwd, commit } = JSON.parse(text) as { cwd: string; commit: string };
       return { status: 200, text: JSON.stringify(await copies.push(cwd, commit, caller)) };
     }
-    if (path === '/git/fetch') return { status: 200, text: JSON.stringify(await copies.fetch()) };
+    if (path === '/git/fetch') return { status: 200, text: JSON.stringify(await copies.fetch(caller)) };
     if (path === '/git/observed') {
       await copies.observed(JSON.parse(text) as Observed);
       return { status: 200, text: '{}' };

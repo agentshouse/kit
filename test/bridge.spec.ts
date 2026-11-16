@@ -85,7 +85,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
     [
       "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments",
       'help [tool]',
-      "push [commit]: sends the Local copy's committed changes to House",
+      "push [commit]: sends the Local copy's committed changes to House; one commit and one push carry text and binary files alike",
       "fetch: records House's changes on each Local copy's refs/house/received",
       'download: writes a binary file of a Room to the local file named by file',
       'search',

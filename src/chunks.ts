@@ -1,3 +1,4 @@
+import type { KitBinaryChange } from '@agentshouse/kit-wire';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { downloaded, fetched } from './files.ts';
@@ -50,14 +51,18 @@ export async function stagedChunks(directory: string, chunks: readonly Chunk[]):
   return failure;
 }
 
-export async function* chunkTexts(directory: string, chunks: readonly Chunk[], models: readonly Text[]): AsyncGenerator<Text> {
+export async function* chunkEntries(
+  directory: string,
+  chunks: readonly Chunk[],
+  models: readonly Text[],
+): AsyncGenerator<Text | KitBinaryChange> {
   yield* models;
   for (const { hash } of chunks) {
     const file = join(directory, hash);
     for (const line of (await readFile(file, 'utf8')).split('\n')) {
       if (line === '') continue;
-      const entry = JSON.parse(line) as Text | { content?: never };
-      if (entry.content !== undefined) yield entry;
+      const entry = JSON.parse(line) as Text | KitBinaryChange | { folder: string };
+      if (!('folder' in entry)) yield entry;
     }
     await rm(file);
   }

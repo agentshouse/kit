@@ -29,7 +29,7 @@ import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import { formAnswered, grokQuestionAnswered, permissionAllowed, PLAN_APPROVED } from './afk.ts';
 import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
-import { openBridge, type Bridge, type ToolResult } from './bridge.ts';
+import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
 import { Content } from './content.ts';
@@ -39,6 +39,7 @@ import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, typ
 import { agentBase } from './home.ts';
 import type { Calls } from './calls.ts';
 import { instructions } from './instructions.ts';
+import type { ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { killMarked, Scope } from './scope.ts';

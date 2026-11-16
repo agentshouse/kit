@@ -1,18 +1,24 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { request, type IncomingMessage } from 'node:http';
-import { request as httpsRequest } from 'node:https';
-import { extname, join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
+import { request } from 'node:http';
+import { resolve } from 'node:path';
 import { text as textOf } from 'node:stream/consumers';
-import { pipeline } from 'node:stream/promises';
-import type { ToolResult } from './bridge.ts';
-import { downloaded, fileInfo, storeRefusal, uploaded, type UploadParts } from './files.ts';
+import {
+  downloaded,
+  fileInfo,
+  fileRange,
+  mediaTypeOf,
+  opened,
+  sentPart,
+  storeRefusal,
+  uploaded,
+  type UploadParts,
+  type Way,
+} from './files.ts';
 import { HOUSE_REF } from './git.ts';
-import { ownerSocket, readOwnAgent } from './home.ts';
-import { callHouse, rpc, UNREACHABLE, Unsettled, type Message } from './mcp.ts';
-import { refusalOf, retryable } from './refusals.ts';
-import { proxyUnlessRelayed, relayed, selectRelay } from './relay.ts';
+import { ownerSocket } from './home.ts';
+import { ownAgentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
+import { refusalOf } from './refusals.ts';
 import { parse } from 'yaml';
 
 interface Tool {
@@ -44,7 +50,7 @@ type Finishing = { upload: UploadParts } | { text: string };
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const HELP = 'help [tool]';
 const PUSH_USAGE = 'usage: house push [commit] [--owner]';
-const PUSH = "push [commit]: sends the Local copy's committed changes to House";
+const PUSH = "push [commit]: sends the Local copy's committed changes to House; one commit and one push carry text and binary files alike";
 const FETCH_USAGE = 'usage: house fetch';
 const FETCH = `fetch: records House's changes on each Local copy's ${HOUSE_REF}`;
 const DOWNLOAD_USAGE = `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
@@ -54,37 +60,13 @@ const ARGUMENTS = `the arguments are one JSON object, in single quotes or on std
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
-const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
-const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
-const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 const socketPath = process.env.HOUSE_BRIDGE;
-const MEDIA_TYPES = new Map([
-  ['avif', 'image/avif'],
-  ['csv', 'text/csv'],
-  ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-  ['gif', 'image/gif'],
-  ['heic', 'image/heic'],
-  ['html', 'text/html'],
-  ['jpeg', 'image/jpeg'],
-  ['jpg', 'image/jpeg'],
-  ['json', 'application/json'],
-  ['m4a', 'audio/mp4'],
-  ['md', 'text/markdown'],
-  ['mov', 'video/quicktime'],
-  ['mp3', 'audio/mpeg'],
-  ['mp4', 'video/mp4'],
-  ['ogg', 'audio/ogg'],
-  ['pdf', 'application/pdf'],
-  ['png', 'image/png'],
-  ['pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
-  ['svg', 'image/svg+xml'],
-  ['txt', 'text/plain'],
-  ['wav', 'audio/wav'],
-  ['webm', 'video/webm'],
-  ['webp', 'image/webp'],
-  ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
-  ['zip', 'application/zip'],
-]);
+const WAY: Way = {
+  ...(socketPath === undefined ? {} : { socketPath }),
+  unreached: (error) =>
+    new Error(socketPath === undefined ? UNREACHABLE : error.code === 'EPERM' || error.code === 'EACCES' ? SANDBOXED : CLOSED),
+  refused: (status) => storeRefusal('upload', status),
+};
 
 function refused(path: string, status: number, text: string, local: boolean): string {
   const refusal = refusalOf(text);
@@ -92,10 +74,6 @@ function refused(path: string, status: number, text: string, local: boolean): st
   if (status === 401) return REVOKED;
   if (status === 502 && local) return text;
   return path === '/' ? unconfirmed(status) : `${path} answered ${status}`;
-}
-
-function unconfirmed(status: number): string {
-  return `House answered ${status} ${UNCONFIRMED}`;
 }
 
 function bridged(path: string, body: unknown, to = socketPath): Promise<string> {
@@ -116,22 +94,9 @@ function bridged(path: string, body: unknown, to = socketPath): Promise<string> 
   });
 }
 
-async function direct(message: Message): Promise<string> {
-  const ownAgent = await readOwnAgent();
-  if (ownAgent === null) throw new Error(UNCONNECTED);
-  selectRelay(process.env.HOUSE_KIT_RELAY || ownAgent.relay);
-  const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
-    throw new Unsettled(UNREACHABLE);
-  });
-  if (answer.status === 200) return answer.text;
-  if (answer.status === 401) throw new Error(DISCONNECTED);
-  const refusal = refusalOf(answer.text)?.text ?? unconfirmed(answer.status);
-  throw retryable(answer.text) === false ? new Error(refusal) : new Unsettled(refusal);
-}
-
 async function mcp<T>(method: string, params: Record<string, unknown>): Promise<T> {
   const message = rpc(method, params);
-  const answer = JSON.parse(socketPath === undefined ? await direct(message) : await bridged('/', message)) as {
+  const answer = JSON.parse(socketPath === undefined ? await ownAgentCall(message) : await bridged('/', message)) as {
     result?: T;
     error?: { message: string };
   };
@@ -151,40 +116,6 @@ function unreadable(path: string, error: unknown): Error {
   );
 }
 
-function opened(url: string, method: string, headers: Record<string, string>, body?: Readable): Promise<IncomingMessage> {
-  return new Promise((answered, failed) => {
-    const local = socketPath !== undefined;
-    const target = local ? null : relayed(url);
-    if (!local) proxyUnlessRelayed();
-    const sent =
-      target === null
-        ? request({ socketPath, path: url, method, headers }, answered)
-        : (target.protocol === 'https:' ? httpsRequest : request)(target, { method, headers }, answered);
-    sent.on('error', (error: NodeJS.ErrnoException) =>
-      failed(new Error(!local ? UNREACHABLE : error.code === 'EPERM' || error.code === 'EACCES' ? SANDBOXED : CLOSED)),
-    );
-    if (body === undefined) sent.end();
-    else pipeline(body, sent).catch(() => undefined);
-  });
-}
-
-function ranged(file: string, start: number, end: number): Readable | undefined {
-  return end === start ? undefined : createReadStream(file, { start, end: end - 1 });
-}
-
-async function* read(file: string, start: number, end: number): AsyncIterable<Buffer> {
-  try {
-    yield* ranged(file, start, end) ?? [];
-  } catch (error) {
-    throw unreadable(file, error);
-  }
-}
-
-async function sentPart(url: string, file: string, start: number, end: number, headers: Record<string, string>): Promise<void> {
-  const answer = await opened(url, 'PUT', { ...headers, 'content-length': String(end - start) }, ranged(file, start, end));
-  await answer.toArray();
-  if (answer.statusCode !== 200) throw storeRefusal('upload', answer.statusCode!);
-}
 
 async function download(args: string[]): Promise<string> {
   const { flags, positionals: [argument] } = accepted(args, ['--help'], 1, DOWNLOAD_USAGE);
@@ -199,7 +130,7 @@ async function download(args: string[]): Promise<string> {
       return file;
     },
     async (url) => {
-      const answer = await opened(url, 'GET', {});
+      const answer = await opened(url, 'GET', {}, WAY);
       return { status: answer.statusCode!, body: answer };
     },
     written,
@@ -219,7 +150,7 @@ async function described(file: string): Promise<Description> {
   } catch (error) {
     throw unreadable(file, error);
   }
-  const mediaType = MEDIA_TYPES.get(extname(file).slice(1).toLowerCase());
+  const mediaType = mediaTypeOf(file);
   return { bytes, sha256: digest.digest('hex'), ...(mediaType === undefined ? {} : { media_type: mediaType }) };
 }
 
@@ -239,8 +170,8 @@ async function upload({ file, ...destination }: Record<string, unknown>): Promis
     name: file,
     bytes: description.bytes,
     sha256: description.sha256,
-    read: (start, end) => read(file, start, end),
-    send: (url, start, end, headers) => sentPart(url, file, start, end, headers),
+    read: (start, end) => fileRange(file, start, end, (error) => unreadable(file, error)),
+    send: (url, start, end, headers) => sentPart(url, file, start, end, headers, WAY),
     finish: (id, partSha256) => finished(id, destination.room_ref, partSha256),
   });
   return accepted.text;
@@ -262,7 +193,7 @@ function accepted(args: string[], flags: string[], positionals: number, usage: s
 
 async function push(args: string[]): Promise<string> {
   const { flags, positionals: [commit = 'HEAD'] } = accepted(args, ['--help', '--owner'], 1, PUSH_USAGE);
-  if (flags.has('--help')) return PUSH_USAGE;
+  if (flags.has('--help')) return `${PUSH_USAGE}\n${PUSH}`;
   const owner = flags.has('--owner');
   if (owner && socketPath !== undefined) throw new Error('--owner is not for Agent conversations; run house push without it');
   if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house push needs --owner');
