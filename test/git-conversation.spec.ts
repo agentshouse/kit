@@ -89,6 +89,42 @@ it('sends a committed git mv the shim saw as a House rename that keeps identity 
   expect(git(room.repository, 'status', '--porcelain')).toBe('');
 });
 
+it('sends a committed git mv of names with spaces, any script and parentheses, and of a folder of identical files, as House renames', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('a b.md', 'Alpha\n');
+  room.put('Отчёт.md', 'Report\n');
+  room.put('Drafts/one.md', 'Empty\n');
+  room.put('Drafts/two.md', 'Empty\n');
+  await rooms.fetch([room]);
+  const [alpha, report, one, two] = ['a b.md', 'Отчёт.md', 'Drafts/one.md', 'Drafts/two.md'].map((path) => room.revision(path));
+
+  const moved = await shell(
+    hosted,
+    `cd ${room.repository} && git mv 'a b.md' 'c d.md' && git mv Отчёт.md 'Отчёт (old).md' && git mv Drafts 'Old drafts' && git commit -qm move && house push`,
+  );
+
+  expect(moved).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}\.\n$/) });
+  expect(rooms.edits().map(changesOf)).toEqual([
+    [
+      { op: 'rename', path: '/rooms/notes/Drafts/one.md', to: '/rooms/notes/Old drafts/one.md', base: one },
+      { op: 'rename', path: '/rooms/notes/Drafts/two.md', to: '/rooms/notes/Old drafts/two.md', base: two },
+      { op: 'rename', path: '/rooms/notes/a b.md', to: '/rooms/notes/c d.md', base: alpha },
+      { op: 'rename', path: '/rooms/notes/Отчёт.md', to: '/rooms/notes/Отчёт (old).md', base: report },
+    ],
+  ]);
+  expect(new Map([...room.files].map(([path, file]) => [path, file.revision]))).toEqual(
+    new Map([
+      ['Old drafts/one.md', one],
+      ['Old drafts/two.md', two],
+      ['c d.md', alpha],
+      ['Отчёт (old).md', report],
+    ]),
+  );
+  expect(git(room.repository, 'status', '--porcelain')).toBe('');
+});
+
 it('sends no rename for a failed, undone or uncommitted move', async () => {
   const { hosted, room, edits } = await copied();
   const plan = room.revision('plan.md');

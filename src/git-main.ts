@@ -82,29 +82,11 @@ function delegated(git: string, args: string[]): Promise<Outcome> {
   });
 }
 
-function staged(listing: string | null): Map<string, string> {
-  const entries = new Map<string, string>();
-  for (const record of (listing ?? '').split('\0')) {
-    const tab = record.indexOf('\t');
-    if (tab >= 0) entries.set(record.slice(tab + 1), record.slice(0, tab).split(' ')[1]!);
-  }
-  return entries;
-}
-
-function moved(planned: string, before: Map<string, string>, after: Map<string, string>): { from: string; to: string }[] {
+function moved(git: string, copy: string[], before: string): { from: string; to: string }[] {
+  const renames = ['diff-index', '--cached', '-z', '--name-status', '--find-renames=100%', '--diff-filter=R', before];
+  const fields = (captured(git, [...copy, ...renames]) ?? '').split('\0');
   const moves: { from: string; to: string }[] = [];
-  for (const line of planned.split('\n')) {
-    if (!line.startsWith('Renaming ')) continue;
-    const renaming = line.slice('Renaming '.length);
-    for (let at = renaming.indexOf(' to '); at >= 0; at = renaming.indexOf(' to ', at + 1)) {
-      const from = renaming.slice(0, at);
-      const to = renaming.slice(at + 4);
-      if (before.has(from) && !after.has(from) && after.get(to) === before.get(from)) {
-        moves.push({ from, to });
-        break;
-      }
-    }
-  }
+  for (let at = 0; at + 2 < fields.length; at += 3) moves.push({ from: fields[at + 1]!, to: fields[at + 2]! });
   return moves;
 }
 
@@ -131,11 +113,10 @@ async function observed(git: string, args: string[]): Promise<Outcome> {
   if (common === undefined || worktree === undefined || !dirname(common).startsWith(`${localCopies()}/`)) {
     return delegated(git, args);
   }
-  const listing = [...globals, '-C', worktree, 'ls-files', '--stage', '-z'];
-  const before = name === 'mv' ? staged(captured(git, listing)) : null;
-  const planned = name === 'mv' ? (captured(git, [...globals, 'mv', '--dry-run', ...args.slice(index + 1)]) ?? '') : '';
+  const copy = [...globals, '-C', worktree];
+  const before = name === 'mv' ? captured(git, [...copy, 'write-tree'])?.trim() : undefined;
   const outcome = await delegated(git, args);
-  const moves = before !== null && outcome.status === 0 ? moved(planned, before, staged(captured(git, listing))) : [];
+  const moves = before !== undefined && outcome.status === 0 ? moved(git, copy, before) : [];
   await reported(bridge, { common, worktree, moves });
   return outcome;
 }

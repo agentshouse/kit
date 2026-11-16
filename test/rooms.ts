@@ -45,12 +45,15 @@ interface Write {
   rewrite?: true;
 }
 
-type Refused = { code: string; path?: string; conflicts?: Record<string, unknown>[] };
+type Refused = { code: string; path?: string; held?: string; conflicts?: Record<string, unknown>[] };
 
 type Edited = { writes: Write[] } | { refusal: Refused };
 
 function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
+  if (refusal.code === 'invalid_authored_path') {
+    return `invalid_authored_path: ${refusal.path} differs from ${refusal.held} only in letter case, and a folder holds one name in any case; write to ${refusal.held} or choose another name`;
+  }
   const conflicts = stringify({ conflicts: refusal.conflicts }).trimEnd();
   return `edit_conflict: nothing was written; fix each conflict listed, then send the edit again\n${conflicts}`;
 }
@@ -273,6 +276,11 @@ export class Room {
       const to = change.to?.slice(this.root.length + 1);
       if (!this.writable(path) || (to !== undefined && !this.writable(to))) {
         return { refusal: { code: 'protected_path', path: change.path } };
+      }
+      const named = to ?? path;
+      const twin = [...next.keys()].find((held) => held !== named && held !== path && held.toLowerCase() === named.toLowerCase());
+      if (twin !== undefined && (change.op === 'create' || change.op === 'rename')) {
+        return { refusal: { code: 'invalid_authored_path', path: change.to ?? change.path, held: `${this.root}/${twin}` } };
       }
       const current = next.get(path);
       const stale = (code: string) =>

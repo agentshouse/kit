@@ -1,10 +1,10 @@
 import { parse } from '@agentshouse/mdmodel';
 import { existsSync } from 'node:fs';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { GIT_IDENTITY, hostKit, type Hosted } from './environment.ts';
+import { GIT_IDENTITY, hostKit, hostMac, type Hosted } from './environment.ts';
 import { accountOf, fakeBin, runKit } from './kit.ts';
 import { commitAll, git, house, serveRooms, tryGit, type Room, type Rooms } from './rooms.ts';
 
@@ -614,6 +614,102 @@ it('removes a file only through a committed deletion and sends a delete and add 
     { op: 'create', path: '/rooms/notes/docs/renamed.md', content: MEMO },
   ]);
   expect(existsSync(join(room.repository, 'docs/plan.md'))).toBe(false);
+});
+
+it('fetches and pushes names with spaces, any script, quotes, %, #, parentheses and a leading space as they are, and reports no change afterwards', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  const names = ['Meeting notes.md', 'Отчёт.md', "a 'b'.md", '100%.md', ' lead.md', 'C# (v2).md'];
+  for (const name of names) room.put(`Old notes/${name}`, `${name}\n`);
+  await rooms.fetch([room]);
+
+  expect(await Promise.all(names.map((name) => readFile(join(room.repository, 'Old notes', name), 'utf8')))).toEqual(names.map((name) => `${name}\n`));
+  expect(git(room.repository, 'status', '--porcelain')).toBe('');
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+
+  await mkdir(join(room.repository, 'New notes'));
+  for (const name of names) {
+    await writeFile(join(room.repository, 'Old notes', name), `${name}\nedited\n`);
+    await writeFile(join(room.repository, 'New notes', name), `new ${name}\n`);
+  }
+  const pushedCommit = commitAll(room.repository, 'names');
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(pushed).toMatchObject({ status: 0, stdout: `House accepted ${short(pushedCommit)}.\n` });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [
+      { op: 'create', path: '/rooms/notes/New notes/ lead.md', content: 'new  lead.md\n' },
+      { op: 'create', path: '/rooms/notes/New notes/100%.md', content: 'new 100%.md\n' },
+      { op: 'create', path: '/rooms/notes/New notes/C# (v2).md', content: 'new C# (v2).md\n' },
+      { op: 'create', path: '/rooms/notes/New notes/Meeting notes.md', content: 'new Meeting notes.md\n' },
+      { op: 'create', path: "/rooms/notes/New notes/a 'b'.md", content: "new a 'b'.md\n" },
+      { op: 'create', path: '/rooms/notes/New notes/Отчёт.md', content: 'new Отчёт.md\n' },
+      { op: 'replace_preamble', path: '/rooms/notes/Old notes/ lead.md', base: ' lead.md\n', content: ' lead.md\nedited\n' },
+      { op: 'replace_preamble', path: '/rooms/notes/Old notes/100%.md', base: '100%.md\n', content: '100%.md\nedited\n' },
+      { op: 'replace_preamble', path: '/rooms/notes/Old notes/C# (v2).md', base: 'C# (v2).md\n', content: 'C# (v2).md\nedited\n' },
+      { op: 'replace_preamble', path: '/rooms/notes/Old notes/Meeting notes.md', base: 'Meeting notes.md\n', content: 'Meeting notes.md\nedited\n' },
+      { op: 'replace_preamble', path: "/rooms/notes/Old notes/a 'b'.md", base: "a 'b'.md\n", content: "a 'b'.md\nedited\n" },
+      { op: 'replace_preamble', path: '/rooms/notes/Old notes/Отчёт.md', base: 'Отчёт.md\n', content: 'Отчёт.md\nedited\n' },
+    ],
+  ]);
+  expect(names.map((name) => room.files.get(`New notes/${name}`)?.content)).toEqual(names.map((name) => `new ${name}\n`));
+  expect(names.map((name) => room.files.get(`Old notes/${name}`)?.content)).toEqual(names.map((name) => `${name}\nedited\n`));
+  expect(git(room.repository, 'status', '--porcelain')).toBe('');
+  expect(git(room.repository, 'diff', '--name-only', 'HEAD', 'refs/house/received')).toBe('');
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({
+    status: 0,
+    stdout: `Nothing to submit: ${short(pushedCommit)} matches House.\n`,
+  });
+  expect(batches(hosted)).toHaveLength(1);
+});
+
+it("refuses a commit adding a name that differs from a held one only in letter case in House's words naming the held one, and leaves the commit unsent", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('README.md', 'Read me\n');
+  await rooms.fetch([room]);
+  const houseRef = git(room.repository, 'rev-parse', 'refs/house/received').trim();
+  await writeFile(join(room.repository, 'Readme.md'), 'Read me too\n');
+  const twin = commitAll(room.repository, 'twin');
+
+  const refused = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(refused).toMatchObject({
+    status: 1,
+    stderr:
+      'house: invalid_authored_path: /rooms/notes/Readme.md differs from /rooms/notes/README.md only in letter case, and a folder holds one name in any case; write to /rooms/notes/README.md or choose another name\n',
+  });
+  expect([...room.files.keys()]).toEqual(['README.md']);
+  expect(head(room)).toBe(twin);
+  expect(git(room.repository, 'rev-parse', 'refs/house/received').trim()).toBe(houseRef);
+  expect(git(room.repository, 'status', '--porcelain')).toBe('');
+
+  git(room.repository, 'mv', 'Readme.md', 'Read me too.md');
+  const renamed = commitAll(room.repository, 'another name');
+
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0, stdout: `House accepted ${short(renamed)}.\n` });
+  expect(room.files.get('Read me too.md')!.content).toBe('Read me too\n');
+});
+
+it('tells Git on a Mac to hold the names of a Local copy composed, as House stores them, so a fetched composed name committed pushes no change', async () => {
+  const hosted = await hostMac();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('Caf\u00e9.md', 'Menu\n');
+  await rooms.fetch([room]);
+  git(room.repository, 'add', '-A');
+  git(room.repository, 'commit', '-q', '--allow-empty', '-m', 'committed');
+
+  expect(git(room.repository, 'config', '--type=bool', '--get', 'core.precomposeUnicode')).toBe('true\n');
+  expect(git(room.repository, 'ls-files', '-z')).toBe('Caf\u00e9.md\0');
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({
+    status: 0,
+    stdout: `Nothing to submit: ${short(head(room))} matches House.\n`,
+  });
+  expect(batches(hosted)).toEqual([]);
 });
 
 it('pushes as the owner only with --owner outside a conversation and explains itself', async () => {
