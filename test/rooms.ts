@@ -16,14 +16,16 @@ import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import type { Answer, Received } from './double.ts';
-import { GIT_IDENTITY, type Hosted, type ToolResult } from './environment.ts';
+import { GIT_IDENTITY, ProtocolRefusal, type Hosted, type ToolResult } from './environment.ts';
 import { accountOf, stop } from './kit.ts';
-import type { Store } from './store.ts';
+import { uploadTool, type Store } from './store.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const LOG_EPOCH = '0192f0e4-1c2d-7000-8000-000000000001';
 const CHUNK_BYTES = 1024 * 1024;
 const BODY_BYTES = 4 * 1024 * 1024;
+const STAGED_PART_BYTES = 8;
+const RETRY_AT = '2026-11-17T00:00:00.000Z';
 
 interface Stored {
   content: string;
@@ -43,11 +45,50 @@ interface Write {
   revision: string | null;
   from?: string;
   rewrite?: true;
+  binary?: { bytes: number; sha256: string };
+}
+
+interface Missing {
+  bytes: number;
+  sha256: string;
 }
 
 type Refused = { code: string; path?: string; held?: string; conflicts?: Record<string, unknown>[] };
 
-type Edited = { writes: Write[] } | { refusal: Refused };
+type Edited = { writes: Write[] } | { refusal: Refused } | { missing: Missing[] } | { limited: true };
+
+interface Stopped {
+  status: number;
+  code: string;
+  message: string;
+  detail: Record<string, unknown>;
+  retryable: boolean;
+}
+
+function doorStopped(stopped: Stopped): Answer {
+  const { status, code, message, detail, retryable } = stopped;
+  return { status, body: { error: { code, ...detail, message, retryable } } };
+}
+
+function toolStopped({ status, code, message, retryable }: Stopped): ProtocolRefusal {
+  return new ProtocolRefusal(status, { code: -32000, message, data: { code, retryable } });
+}
+
+const LIMITED: Stopped = {
+  status: 429,
+  code: 'limit_reached',
+  message: `limit_reached: you reached today's Write limit; try again at ${RETRY_AT}`,
+  detail: { limit: 'writes', retry_at: RETRY_AT, retry_after: 3600 },
+  retryable: true,
+};
+
+const CAPPED: Stopped = {
+  status: 429,
+  code: 'cap_reached',
+  message: `cap_reached: you hold the most uploads open at once; try again at ${RETRY_AT}`,
+  detail: { cap: 'open_uploads', retry_at: RETRY_AT, retry_after: 3600 },
+  retryable: true,
+};
 
 function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
@@ -67,6 +108,13 @@ interface EditChange {
   field?: string;
   section?: string;
   value?: unknown;
+  bytes?: number;
+  sha256?: string;
+  media_type?: string;
+}
+
+function digest(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 let revisions = 0;
@@ -101,7 +149,7 @@ export class Room {
   write = [''];
   protected = ['capture', 'collaboration'];
   files = new Map<string, Stored>();
-  readonly binaries = new Map<string, Binary>();
+  binaries = new Map<string, Binary>();
   readonly history = new Map<string, string>();
   readonly binaryHistory = new Map<string, Binary & { path: string }>();
   readonly folders = new Set<string>();
@@ -156,7 +204,14 @@ export class Room {
 
   remove(path: string): void {
     this.files.delete(path);
+    this.binaries.delete(path);
     this.advance([path]);
+  }
+
+  move(from: string, to: string): void {
+    this.binaries.set(to, this.binaries.get(from)!);
+    this.binaries.delete(from);
+    this.advance([from, to]);
   }
 
   revision(path: string): string {
@@ -239,17 +294,20 @@ export class Room {
     for (const path of paths) {
       if (spent >= bodyBytes) break;
       const file = this.files.get(path);
+      const binary = this.binaries.get(path);
       spent += Buffer.byteLength(file?.content ?? '');
       changes.push(
-        file === undefined
-          ? { path, removed: true }
-          : {
+        file !== undefined
+          ? {
               path,
               content: file.content,
               revision: file.revision,
               sha256: 'unused',
               ...(file.provenance === undefined ? {} : { provenance: file.provenance }),
-            },
+            }
+          : binary !== undefined
+            ? { path, revision: binary.revision, bytes: binary.bytes.length, media_type: 'image/jpeg', sha256: digest(binary.bytes) }
+            : { path, removed: true },
       );
     }
     return {
@@ -262,10 +320,17 @@ export class Room {
     };
   }
 
-  edit(changes: EditChange[]): Edited {
+  edit(
+    changes: EditChange[],
+    staged: (sha256: string) => Buffer | undefined = () => undefined,
+    admitted: () => boolean = () => true,
+  ): Edited {
     const next = new Map(this.files);
+    const binaries = new Map(this.binaries);
     const writes = new Map<string, Write>();
     const conflicts: Record<string, unknown>[] = [];
+    const missing: Missing[] = [];
+    const removed = new Set<string>();
     const set = (path: string, op: string, content: string, rewrite = false) => {
       const stored = this.stored(content);
       next.set(path, stored);
@@ -285,9 +350,42 @@ export class Room {
       const current = next.get(path);
       const stale = (code: string) =>
         conflicts.push({ path: change.path, code, ...(current === undefined ? {} : { revision: current.revision }) });
-      const binary = this.binaries.get(to ?? path);
+      const binary = binaries.get(to ?? path);
+      if (change.op === 'upload') {
+        if (current !== undefined) {
+          conflicts.push({ path: change.path, code: 'text_file', revision: current.revision });
+          continue;
+        }
+        if (binary !== undefined && change.base !== binary.revision) {
+          conflicts.push({ path: change.path, code: change.base === undefined ? 'base_required' : 'base_revision_stale', revision: binary.revision });
+          continue;
+        }
+        if (binary === undefined && change.base !== undefined) {
+          conflicts.push({ path: change.path, code: 'path_absent' });
+          continue;
+        }
+        const bytes = staged(change.sha256!) ?? (binary !== undefined && digest(binary.bytes) === change.sha256 ? binary.bytes : undefined);
+        if (bytes === undefined) {
+          missing.push({ bytes: change.bytes!, sha256: change.sha256! });
+          continue;
+        }
+        revisions++;
+        const stored = { revision: `rev-${revisions}`, bytes };
+        binaries.set(path, stored);
+        this.binaryHistory.set(stored.revision, { ...stored, path });
+        writes.set(path, { path, op: 'upload', content: null, revision: stored.revision, binary: { bytes: bytes.length, sha256: digest(bytes) } });
+        continue;
+      }
       if (binary !== undefined) {
-        conflicts.push({ path: change.to ?? change.path, code: 'binary_file', revision: binary.revision });
+        if (change.op !== 'remove') {
+          conflicts.push({ path: change.to ?? change.path, code: 'binary_file', revision: binary.revision });
+        } else if (change.base !== binary.revision) {
+          conflicts.push({ path: change.path, code: 'base_revision_stale', revision: binary.revision });
+        } else {
+          binaries.delete(path);
+          removed.add(path);
+          writes.set(path, { path, op: 'remove', content: null, revision: null });
+        }
         continue;
       }
       if (change.op === 'create') {
@@ -300,6 +398,7 @@ export class Room {
         if (current?.revision !== change.base) stale('base_revision_stale');
         else {
           next.delete(path);
+          removed.add(path);
           writes.set(path, { path, op: 'remove', content: null, revision: null });
         }
       } else if (change.op === 'rename') {
@@ -336,12 +435,17 @@ export class Room {
       }
     }
     if (conflicts.length > 0) return { refusal: { code: 'edit_conflict', conflicts } };
+    if (missing.length > 0) return { missing };
+    if (!admitted()) return { limited: true };
     this.files = next;
+    this.binaries = binaries;
     this.batches.push(changes);
-    this.advance([...writes.values()].flatMap((write) => (write.from === undefined ? [write.path] : [write.path, write.from])));
+    this.advance([...new Set([...writes.values()].flatMap((write) => (write.from === undefined ? [write.path] : [write.path, write.from])))]);
     return { writes: [...writes.values()] };
   }
 }
+
+type Receipt = { refusal: Refused } | { authority: string; position: string; log_epoch: string; writes: Write[] };
 
 function answered(writes: Write[]): Write[] {
   return writes.filter((write) => write.rewrite === undefined);
@@ -372,6 +476,9 @@ export interface Rooms {
   expiringChunks: number;
   damagesChunks: boolean;
   unparsedChunks: boolean;
+  openUploads: number;
+  writeUnits: number;
+  partBytes: number;
   edits(): Received[];
 }
 
@@ -387,7 +494,7 @@ export const OVERLOADED = {
 
 export function serveRooms(hosted: Hosted): Rooms {
   const rooms: Room[] = [];
-  const receipts = new Map<string, unknown>();
+  const receipts = new Map<string, Receipt>();
   const state: Rooms = {
     answered: [],
     unreadable: new Set(),
@@ -411,6 +518,9 @@ export function serveRooms(hosted: Hosted): Rooms {
     expiringChunks: 0,
     damagesChunks: false,
     unparsedChunks: false,
+    openUploads: 10,
+    writeUnits: Infinity,
+    partBytes: STAGED_PART_BYTES,
     room: (handle) => {
       const room = new Room(handle, join(hosted.workspace, 'local-copies'));
       rooms.push(room);
@@ -428,19 +538,65 @@ export function serveRooms(hosted: Hosted): Rooms {
     edits: () => hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'files_batch'),
   };
   const roomOf = (path: string) => rooms.find((room) => path === room.root || path.startsWith(`${room.root}/`))!;
-  const edited = (room: Room, changes: EditChange[]) => {
-    const outcome = room.edit(changes);
-    if ('refusal' in outcome) return outcome;
+  const opened = new Map<string, { operation: string; sha256: string }>();
+  const open = (id: string) => !hosted.store.objects.has(`staged/${id}`);
+  const stagedBytes = (operation: string, sha256: string) => {
+    const id = [...opened].find(([held, upload]) => upload.operation === operation && upload.sha256 === sha256 && !open(held))?.[0];
+    return id === undefined ? undefined : hosted.store.objects.get(`staged/${id}`);
+  };
+  const unstaged = (operation: string, missing: Missing[]): Stopped => {
+    const files = [...new Map(missing.map((file) => [file.sha256, file])).values()];
+    const opening = [...opened].filter(([id]) => open(id));
+    const kept = new Map(opening.filter(([, upload]) => upload.operation === operation).map(([id, upload]) => [upload.sha256, id]));
+    const places = Math.max(0, state.openUploads - opening.length);
+    if (kept.size === 0 && places === 0) return CAPPED;
+    const fitting = files.filter((file) => !kept.has(file.sha256)).slice(0, places);
+    if (fitting.length > 0 && state.writeUnits <= 0) return LIMITED;
+    for (const file of fitting.slice(0, state.writeUnits)) {
+      const { upload } = hosted.store.declare({ bytes: file.bytes, sha256: file.sha256, staged: true }, state.partBytes);
+      opened.set(upload.id, { operation, sha256: file.sha256 });
+      kept.set(file.sha256, upload.id);
+      state.writeUnits--;
+    }
+    const upload = files.flatMap((file) => {
+      const id = kept.get(file.sha256);
+      return id === undefined ? [] : [{ sha256: file.sha256, id, part_bytes: state.partBytes, parts: [] }];
+    });
+    const waiting = files.filter((file) => !kept.has(file.sha256)).map((file) => ({ sha256: file.sha256 }));
     return {
-      authority: room.ref,
-      position: String(room.position),
-      log_epoch: room.logEpoch,
-      writes: outcome.writes.map((write) => ({
-        ...write,
-        path: `${room.root}/${write.path}`,
-        ...(write.from === undefined ? {} : { from: `${room.root}/${write.from}` }),
-      })),
+      status: 409,
+      code: 'files_unstaged',
+      message: `files_unstaged: nothing was written; finish each upload named, then send this batch again under the same operation\n${stringify({ upload, waiting }).trimEnd()}`,
+      detail: { upload, waiting },
+      retryable: false,
     };
+  };
+  const admitted = () => {
+    if (state.writeUnits <= 0) return false;
+    state.writeUnits--;
+    return true;
+  };
+  const edited = (room: Room, changes: EditChange[], operation: string): Receipt | { stopped: Stopped } => {
+    const receipt = receipts.get(operation);
+    if (receipt !== undefined) return receipt;
+    const outcome = room.edit(changes, (sha256) => stagedBytes(operation, sha256), admitted);
+    if ('missing' in outcome) return { stopped: unstaged(operation, outcome.missing) };
+    if ('limited' in outcome) return { stopped: LIMITED };
+    const kept: Receipt =
+      'refusal' in outcome
+        ? outcome
+        : {
+            authority: room.ref,
+            position: String(room.position),
+            log_epoch: room.logEpoch,
+            writes: outcome.writes.map((write) => ({
+              ...write,
+              path: `${room.root}/${write.path}`,
+              ...(write.from === undefined ? {} : { from: `${room.root}/${write.from}` }),
+            })),
+          };
+    receipts.set(operation, kept);
+    return kept;
   };
   hosted.house.route('POST', '/kit/local-copies/selection/read', () => ({
     body: { local_copy: { rooms: state.answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) } },
@@ -511,11 +667,8 @@ export function serveRooms(hosted: Hosted): Rooms {
     const refused = state.refusesBatches.shift();
     if (refused !== undefined) return refused;
     const { operation_id: operation, changes } = request.body as { operation_id: string; changes: EditChange[] };
-    if (!receipts.has(operation)) {
-      const outcome = edited(roomOf(changes[0]!.path), changes);
-      receipts.set(operation, outcome);
-    }
-    const outcome = receipts.get(operation) as ReturnType<typeof edited>;
+    const outcome = edited(roomOf(changes[0]!.path), changes, operation);
+    if ('stopped' in outcome) return doorStopped(outcome.stopped);
     if (state.dropping > 0) {
       state.dropping--;
       return { drop: true };
@@ -523,9 +676,18 @@ export function serveRooms(hosted: Hosted): Rooms {
     if ('refusal' in outcome) return { status: 409, body: { error: { ...outcome.refusal, message: said(outcome.refusal), retryable: false } } };
     const { writes, ...rest } = outcome;
     return {
-      body: { ...rest, contents: answered(writes).map((write) => ({ path: write.path, content: write.content, revision: write.revision })) },
+      body: {
+        ...rest,
+        contents: answered(writes).map((write) => ({
+          path: write.path,
+          content: write.content,
+          revision: write.revision,
+          ...(write.binary === undefined ? {} : { ...write.binary, media_type: 'image/jpeg' }),
+        })),
+      },
     };
   });
+  hosted.tools.upload = uploadTool(hosted.store, STAGED_PART_BYTES).answer;
   hosted.tools.info = (args) => {
     const path = String(args.path);
     const room = roomOf(path);
@@ -586,12 +748,12 @@ export function serveRooms(hosted: Hosted): Rooms {
     ) as EditChange[];
     const meta = (request.body as { params: { _meta: Record<string, string> } }).params._meta;
     const operation = meta['agents.house/agent-operation']!;
-    if (!receipts.has(operation)) receipts.set(operation, edited(roomOf(changes[0]!.path), changes));
+    const outcome = edited(roomOf(changes[0]!.path), changes, operation);
+    if ('stopped' in outcome) throw toolStopped(outcome.stopped);
     if (state.dropsEdits > 0) {
       state.dropsEdits--;
       return null;
     }
-    const outcome = receipts.get(operation) as ReturnType<typeof edited>;
     if ('refusal' in outcome) {
       return { isError: true, content: [{ type: 'text', text: `${said(outcome.refusal)}\n` }] } satisfies ToolResult;
     }

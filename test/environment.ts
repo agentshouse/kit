@@ -47,6 +47,17 @@ export interface ToolResult {
   isError?: boolean;
 }
 
+export class ProtocolRefusal extends Error {
+  readonly status: number;
+  readonly error: { code: number; message: string; data: { code: string; retryable: boolean } };
+
+  constructor(status: number, error: ProtocolRefusal['error']) {
+    super(error.message);
+    this.status = status;
+    this.error = error;
+  }
+}
+
 export type ToolAnswer = (args: Record<string, unknown>, request: Received) => ToolResult | null | Promise<ToolResult | null>;
 
 export function shelled(stdout: string, exit = 0, stderr: string[] = []): ToolResult {
@@ -306,7 +317,13 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     const message = request.body as { id: number } & McpCall;
     const name = message.params.name!;
     const answer = tools[name] ?? (() => ({ content: [{ type: 'text', text: `${name} answered` }] }));
-    const result = message.method === 'tools/list' ? { tools: LISTING } : await answer(message.params.arguments ?? {}, request);
+    let result: ToolResult | { tools: typeof LISTING } | null;
+    try {
+      result = message.method === 'tools/list' ? { tools: LISTING } : await answer(message.params.arguments ?? {}, request);
+    } catch (error) {
+      if (!(error instanceof ProtocolRefusal)) throw error;
+      return { status: error.status, body: { jsonrpc: '2.0', id: message.id, error: error.error } };
+    }
     return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });
   serveKitFiles(house, home);

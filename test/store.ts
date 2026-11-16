@@ -23,21 +23,25 @@ interface Upload {
   bytes: number;
   sha256: string;
   partBytes: number;
-  parts: Map<number, { bytes: number; sha256: string }>;
-  path: string;
+  parts: Map<number, { bytes: number; sha256: string; content: Buffer }>;
+  path?: string;
+  staged?: true;
 }
+
+type Declared = { bytes: number; sha256: string } & ({ path: string } | { staged: true });
 
 export interface Store {
   origin: string;
   requests: StoreRequest[];
   objects: Map<string, Buffer>;
   reading: number;
+  failing: Set<number>;
   holdReads(): () => void;
   refuseReads(count: number): void;
   address(method: 'GET' | 'PUT', key: string, fields?: Record<string, string>, expired?: boolean): string;
   cut(part: number): void;
-  declare(declared: { bytes: number; sha256: string; path: string }, partBytes: number): UploadAnswer;
-  finish(id: string, partSha256: unknown): Promise<UploadAnswer | { path: string; revision: string } | { mismatch: true }>;
+  declare(declared: Declared, partBytes: number): UploadAnswer;
+  finish(id: string, partSha256: unknown): Promise<UploadAnswer | { path: string; revision: string } | { staged: true } | { mismatch: true }>;
 }
 
 export interface UploadAnswer {
@@ -62,6 +66,7 @@ export async function startStore(tls?: Certificate): Promise<Store> {
   const objects = new Map<string, Buffer>();
   const requests: StoreRequest[] = [];
   const cuts = new Set<number>();
+  const failing = new Set<number>();
   let revisions = 0;
   let held: Promise<void> | null = null;
   let reading = 0;
@@ -97,20 +102,22 @@ export async function startStore(tls?: Certificate): Promise<Store> {
     }
     const upload = uploads.get(address.searchParams.get('upload') ?? '');
     if (upload === undefined || part === null) return answer(404);
+    if (failing.has(part)) {
+      for await (const _chunk of request as AsyncIterable<Buffer>);
+      return answer(500);
+    }
     if (cuts.delete(part)) {
       requests.push({ method: 'PUT', key, part, checksum, status: 0, bytes: 0, relayed, port });
       request.once('data', () => request.socket.destroy());
       return;
     }
-    const digest = createHash('sha256');
-    let bytes = 0;
-    for await (const chunk of request as AsyncIterable<Buffer>) {
-      digest.update(chunk);
-      bytes += chunk.length;
-    }
-    const sha256 = digest.digest();
+    const chunks: Buffer[] = [];
+    for await (const chunk of request as AsyncIterable<Buffer>) chunks.push(chunk);
+    const content = Buffer.concat(chunks);
+    const bytes = content.length;
+    const sha256 = createHash('sha256').update(content).digest();
     if (sha256.toString('base64') !== checksum) return answer(400, bytes);
-    upload.parts.set(part, { bytes, sha256: sha256.toString('hex') });
+    upload.parts.set(part, { bytes, sha256: sha256.toString('hex'), content });
     answer(200, bytes);
   };
   const serve = (request: IncomingMessage, response: ServerResponse) => {
@@ -147,6 +154,7 @@ export async function startStore(tls?: Certificate): Promise<Store> {
     get reading() {
       return reading;
     },
+    failing,
     refuseReads: (count) => {
       refused = count;
     },
@@ -181,7 +189,11 @@ export async function startStore(tls?: Certificate): Promise<Store> {
       });
       if (missing.length > 0) return addresses(id, upload, missing, listed);
       uploads.delete(id);
-      return { path: upload.path, revision: `fr_${++revisions}` };
+      if (upload.staged === true) {
+        objects.set(`staged/${id}`, Buffer.concat(all.map((part) => upload.parts.get(part)!.content)));
+        return { staged: true };
+      }
+      return { path: upload.path!, revision: `fr_${++revisions}` };
     },
   };
 }

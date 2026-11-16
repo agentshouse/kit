@@ -1,6 +1,7 @@
 import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { randomUUID } from 'node:crypto';
 import { KIT_RELEASE } from './clis.ts';
+import { refusalOf, type Refusal } from './refusals.ts';
 import { relayed } from './relay.ts';
 
 export interface Message {
@@ -13,6 +14,11 @@ export interface Message {
 export interface Forwarded {
   status: number;
   text: string;
+}
+
+export interface ToolResult {
+  content: { type: string; text: string }[];
+  isError?: boolean;
 }
 
 const MCP_PROTOCOL_VERSION = '2026-07-28';
@@ -63,4 +69,16 @@ export async function callHouse(
     signal,
   });
   return { status: answer.status, text: await answer.text() };
+}
+
+export function refusalIn(text: string, status: number): Refusal {
+  return refusalOf(text) ?? { code: '', text: text === '' ? `House refused it with ${status}` : text, conflicts: [], detail: {} };
+}
+
+export function toolAnswer(forwarded: Forwarded): { text: string } | { refused: Refusal } {
+  if (forwarded.status !== 200) return { refused: refusalIn(forwarded.text, forwarded.status) };
+  const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
+  if (answer.error !== undefined) return { refused: refusalIn(answer.error.message, forwarded.status) };
+  const text = answer.result!.content.map((content) => content.text).join('\n');
+  return answer.result!.isError === true ? { refused: refusalIn(text, forwarded.status) } : { text };
 }

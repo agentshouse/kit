@@ -17,7 +17,8 @@ export type Edit =
   | { op: 'rename'; path: string; to: string; base: string | undefined }
   | { op: 'set_field'; path: string; field: string; base?: unknown; value: unknown }
   | { op: 'replace_section'; path: string; section: string; base: string; content: string }
-  | { op: 'replace_preamble'; path: string; base: string; content: string };
+  | { op: 'replace_preamble'; path: string; base: string; content: string }
+  | { op: 'upload'; path: string; base?: string | undefined; bytes: number; sha256: string; media_type: string };
 
 function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);

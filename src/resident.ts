@@ -56,7 +56,7 @@ async function serveOwner(lock: DatabaseSync, copies: LocalCopies, settling: Set
         return;
       }
       if (request.url === '/git/fetch') {
-        answered = await copies.fetch();
+        answered = await copies.fetch(copies.owner);
       } else if (request.url === '/git/push') {
         const { cwd, commit } = JSON.parse(text) as { cwd: string; commit: string };
         answered = await copies.push(cwd, commit, copies.owner);

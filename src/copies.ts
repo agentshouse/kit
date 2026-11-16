@@ -1,16 +1,18 @@
+import type { KitBinaryChange } from '@agentshouse/kit-wire';
 import { HOUSE_ROOM_TYPES, readTypes, type VerifiedModel } from '@agentshouse/mdmodel';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
-import { chunkTexts, stagedChunks, type Chunk, type Text } from './chunks.ts';
+import { eachAtOnce, receivedBinary, sentBinary, sorted, type Described, type Staged, type StagedUpload } from './binaries.ts';
+import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
 import {
   blobId,
   blobText,
   git,
-  isText,
   HOUSE_REF,
   importCommits,
+  type Content,
   type Imported,
   localCopies,
   revision,
@@ -18,10 +20,11 @@ import {
   succeeded,
   tree,
 } from './git.ts';
-import { paused } from './files.ts';
-import { kitHome } from './home.ts';
+import { fileInfo, paused, type FileInfo, type Finished } from './files.ts';
+import { kitHome, readOwnAgent } from './home.ts';
+import { callHouse, rpc, toolAnswer, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
-import { refusalOf, type Refusal } from './refusals.ts';
+import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { changed, readDocument, type Edit } from './translate.ts';
 
 const BRANCH = 'main';
@@ -31,14 +34,23 @@ const ROOMS = 'rooms/';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
 const STAGED_CHUNKS = 'house-chunks';
 const SCHEMA = 'settings/schema.yaml';
+const NO_OWN_AGENT = "this computer's own agent has no House connection, which brings a binary file's new bytes; run kit login";
 
 // A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
 const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
 
+interface Held {
+  bytes: number;
+  sha256: string;
+}
+
 interface Manifest {
   parent: string | null;
   files: Record<string, string | null>;
+  binary?: Record<string, Held>;
 }
+
+type BinaryPart = Extract<Edit, { op: 'upload' }>;
 
 interface Move {
   worktree: string;
@@ -72,6 +84,7 @@ interface Push {
   upload?: Upload;
   written?: Written[];
   acknowledged?: string;
+  staged?: string[];
 }
 
 interface Copy {
@@ -104,7 +117,7 @@ interface Discovery {
   authorities: Authority[];
 }
 
-type Change = Text | { path: string; removed: true };
+type Change = Text | KitBinaryChange | { path: string; removed: true };
 
 interface Enumerated {
   authority: string;
@@ -118,10 +131,12 @@ type Listed =
   | { room_ref: string; ready: false }
   | { room_ref: string; ready: true; position: string; log_epoch: string; chunks: Chunk[]; models: Text[] };
 
+type Entry = Text | KitBinaryChange;
+
 interface Whole {
   position: string;
   log_epoch: string;
-  texts: Iterable<Text> | AsyncIterable<Text>;
+  entries: Iterable<Entry> | AsyncIterable<Entry>;
 }
 
 interface Wanted {
@@ -160,6 +175,8 @@ export interface Caller {
     upload: Upload | undefined,
     retain: (upload: Upload) => Promise<void>,
   ): Promise<Submitted>;
+  finish(upload: string, room: string, partSha256: string[]): Promise<Finished<Staged>>;
+  info(path: string, revision?: string): Promise<FileInfo | null>;
 }
 
 export interface Pushed {
@@ -192,15 +209,36 @@ const REBASED = new Set([
   'base_revision_stale',
   'path_exists',
   'path_absent',
+  'base_required',
+  'binary_file',
 ]);
 
 function rebaseFixes(refusal: Refusal): boolean {
-  return refusal.code === 'edit_conflict' && refusal.conflicts.some((code) => REBASED.has(code));
+  return refusal.code === 'edit_conflict' && refusal.conflicts.some(({ code }) => REBASED.has(code));
 }
 
-function textOnly(paths: string[]): string {
+function markdownOnly(paths: string[], maxBytes: number): string {
   const [named, them] = paths.length === 1 ? [`${paths[0]} is`, 'it'] : [`${paths.join(', ')} are`, 'them'];
-  return `${named} not text, and house push sends text only; remove ${them} from the commit and place ${them} with house upload`;
+  return `${named} Markdown, which holds text only: UTF-8 without NUL, at most ${maxBytes} bytes; commit ${them} as text and push again`;
+}
+
+async function stopping<T>(sent: Promise<T>): Promise<T | { refused: Refusal }> {
+  try {
+    return await sent;
+  } catch (error) {
+    const refusal = error instanceof HouseRefusal ? refusalOf(error.text) : null;
+    if (refusal === null || !stopsPush(refusal)) throw error;
+    return { refused: refusal };
+  }
+}
+
+function unstagedUploads(refusal: Refusal): StagedUpload[] {
+  const named = refusal.detail.upload;
+  return Array.isArray(named) ? (named as StagedUpload[]) : [];
+}
+
+function heldKey(file: Held): string {
+  return `${file.sha256}:${file.bytes}`;
 }
 
 function outside(path: string): Pushed {
@@ -319,13 +357,24 @@ async function readOnlyPlaced(
 async function importedWhole(
   repository: string,
   scope: Scope,
-  texts: Whole['texts'],
+  entries: Whole['entries'],
   commit: Pick<Imported, 'message' | 'from' | 'replaces'>,
   readOnly: ReadOnlyFiles,
-): Promise<{ house: string; revisions: Record<string, string> }> {
+  kept: (entry: KitBinaryChange) => Promise<string | null>,
+): Promise<{ house: string; revisions: Record<string, string>; binary: Record<string, Held> }> {
   const revisions: Record<string, string> = {};
-  async function* tracked(): AsyncGenerator<readonly [string, string]> {
-    for await (const { path, content, revision: held, provenance } of texts) {
+  const binary: Record<string, Held> = {};
+  async function* tracked(): AsyncGenerator<readonly [string, Content]> {
+    for await (const entry of entries) {
+      if (!('content' in entry)) {
+        const blob = await kept(entry);
+        if (blob === null) continue;
+        revisions[entry.path] = entry.revision;
+        binary[entry.path] = { bytes: entry.bytes, sha256: entry.sha256 };
+        yield [entry.path, { blob }];
+        continue;
+      }
+      const { path, content, revision: held, provenance } = entry;
       if (declaredWritable(path, scope)) {
         revisions[path] = held;
         yield [path, content];
@@ -335,7 +384,7 @@ async function importedWhole(
       if (provenance !== undefined) await readOnly.place(sidecar(path), provenance);
     }
   }
-  return { house: await importCommits(repository, [{ ...commit, files: tracked() }]), revisions };
+  return { house: await importCommits(repository, [{ ...commit, files: tracked() }]), revisions, binary };
 }
 
 async function ruled(path: string, rules: string): Promise<void> {
@@ -391,13 +440,34 @@ async function modelOf(copy: Copy, files: ReadonlyMap<string, string>): Promise<
   return readTypes(copy.read_only.includes(SCHEMA) ? await readFile(join(copy.repository, SCHEMA), 'utf8') : '', HOUSE_ROOM_TYPES);
 }
 
-function revisionAt(copy: Copy, commit: string, path: string): string | undefined {
+function entryAt(copy: Copy, commit: string, path: string): { revision: string; held?: Held } | undefined {
   let manifest: Manifest | undefined = copy.manifests[commit];
   while (manifest !== undefined) {
-    if (path in manifest.files) return manifest.files[path] ?? undefined;
+    if (path in manifest.files) {
+      const revision = manifest.files[path];
+      if (revision === null || revision === undefined) return undefined;
+      const held = manifest.binary?.[path];
+      return held === undefined ? { revision } : { revision, held };
+    }
     manifest = manifest.parent === null ? undefined : copy.manifests[manifest.parent];
   }
   return undefined;
+}
+
+function revisionAt(copy: Copy, commit: string, path: string): string | undefined {
+  return entryAt(copy, commit, path)?.revision;
+}
+
+function heldAt(copy: Copy, commit: string, path: string): Held | undefined {
+  return entryAt(copy, commit, path)?.held;
+}
+
+function manifest(parent: string | null, files: Record<string, string | null>, binary: Record<string, Held>): Manifest {
+  return Object.keys(binary).length === 0 ? { parent, files } : { parent, files, binary };
+}
+
+function binaryParts(changes: readonly Edit[]): BinaryPart[] {
+  return changes.filter((change): change is BinaryPart => change.op === 'upload');
 }
 
 function without(copy: Copy): Copy {
@@ -437,15 +507,36 @@ export class LocalCopies {
       submit: async (operation, changes) => {
         try {
           const outcome = await retrying(() =>
-            house.door<{ contents: Written[] }>('files/batch', { operation_id: operation, changes }),
+            stopping(house.door<{ contents: Written[] }>('files/batch', { operation_id: operation, changes })),
           );
-          return { accepted: outcome.contents };
+          return 'refused' in outcome ? outcome : { accepted: outcome.contents };
         } catch (error) {
           if (!finalRefusal(error)) throw error;
           return {
-            refused: refusalOf(error.text) ?? { code: '', text: `House refused it with ${error.status}`, conflicts: [] },
+            refused: refusalOf(error.text) ?? { code: '', text: `House refused it with ${error.status}`, conflicts: [], detail: {} },
           };
         }
+      },
+      finish: async (upload, _room, partSha256) => {
+        try {
+          return (await house.act('uploads/finish', { upload, part_sha256: partSha256 })) as Finished<Staged>;
+        } catch (error) {
+          if (!(error instanceof HouseRefusal)) throw new Unsettled(causeOf(error));
+          throw retryable(error.text) === false ? new Error(houseCause(error)) : new Unsettled(houseCause(error));
+        }
+      },
+      info: async (path, revision) => {
+        const ownAgent = await readOwnAgent();
+        if (ownAgent === null) throw new Error(NO_OWN_AGENT);
+        const read = toolAnswer(
+          await callHouse(
+            ownAgent.house,
+            ownAgent.credential,
+            rpc('tools/call', { name: 'info', arguments: { path, ...(revision === undefined ? {} : { ref: revision }) } }),
+          ),
+        );
+        if ('refused' in read) throw new Error(read.refused.text);
+        return fileInfo(read.text);
       },
     };
   }
@@ -472,12 +563,12 @@ export class LocalCopies {
     return this.selected();
   }
 
-  fetch(): Promise<Pushed> {
-    return this.answered(() => this.fetched(true));
+  fetch(caller: Caller): Promise<Pushed> {
+    return this.answered(() => this.fetched(true, caller));
   }
 
   private async selected(): Promise<void> {
-    const copied = await this.answered(() => this.fetched(false));
+    const copied = await this.answered(() => this.fetched(false, this.owner));
     if (copied.refused) logged(copied.text);
   }
 
@@ -487,7 +578,7 @@ export class LocalCopies {
     return answered;
   }
 
-  private async fetched(refreshing: boolean): Promise<Pushed> {
+  private async fetched(refreshing: boolean, caller: Caller): Promise<Pushed> {
     const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
     const synced = new Map(answer.rooms.map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
     return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
@@ -540,7 +631,7 @@ export class LocalCopies {
       }
       const reading = refreshing ? current : current.filter((copy) => this.waiting.has(copy.room_ref));
       if (reading.length > 0) {
-        const failed = await this.refreshed(reading, unready).then(() => null, houseCause);
+        const failed = await this.refreshed(reading, unready, caller).then(() => null, houseCause);
         for (const copy of reading) {
           said.push(...(unready.includes(copy.room_ref) ? [`${rootOf(copy.room_handle)}: ${NOT_READY}`] : moved(copy, this.copies.get(copy.key)!)));
         }
@@ -652,7 +743,7 @@ export class LocalCopies {
       const held = new Set(await readdir(directory));
       const failure = await stagedChunks(directory, list.chunks.filter(({ hash }) => !held.has(hash)));
       if (failure === undefined) {
-        return { position: list.position, log_epoch: list.log_epoch, texts: chunkTexts(directory, list.chunks, list.models) };
+        return { position: list.position, log_epoch: list.log_epoch, entries: chunkEntries(directory, list.chunks, list.models) };
       }
       if (renewed && (await readdir(directory)).length === held.size) throw failure;
     }
@@ -670,7 +761,8 @@ export class LocalCopies {
       await git(staging, ['config', 'core.precomposeUnicode', 'true']);
       const read = await whole(join(staging, '.git', STAGED_CHUNKS));
       const readOnly = await readOnlyFiles(staging, []);
-      const { house, revisions } = await importedWhole(staging, scope, read.texts, { message: `House ${rootOf(handle)}`, from: null }, readOnly);
+      const commit = { message: `House ${rootOf(handle)}`, from: null };
+      const { house, revisions } = await importedWhole(staging, scope, read.entries, commit, readOnly, async () => null);
       await git(staging, ['update-ref', `refs/heads/${BRANCH}`, house]);
       await git(staging, ['reset', '-q', '--hard']);
       copy = {
@@ -715,17 +807,17 @@ export class LocalCopies {
     const view = answer?.authorities.find((entry) => entry.authority === authority.room_ref);
     if (answer !== null && view === undefined) throw new Error('House serves nothing of it to copy');
     if (view !== undefined && view.next === undefined) {
-      const texts = view.changes.filter((change): change is Text => !('removed' in change));
-      const copy = await this.materialized(wanted, async () => ({ position: view.position, log_epoch: view.log_epoch, texts }));
+      const entries = view.changes.filter((change): change is Text => 'content' in change);
+      const copy = await this.materialized(wanted, async () => ({ position: view.position, log_epoch: view.log_epoch, entries }));
       return `${root}: copied to ${copy.repository}`;
     }
     const copy = await this.materialized(wanted, (directory) => this.chunked(root, authority.room_ref, directory));
-    const [caught] = await this.caughtUp([copy], true);
+    const [caught] = await this.caughtUp([copy], true, this.owner);
     await succeeded(copy.repository, ['merge', '--ff-only', '-q', caught!.house]);
     return `${root}: copied to ${copy.repository}`;
   }
 
-  private async received(copy: Copy, authority: Authority): Promise<Copy> {
+  private async received(copy: Copy, authority: Authority, caller: Caller): Promise<Copy> {
     const root = rootOf(copy.room_handle);
     const directory = join(copy.repository, '.git', STAGED_CHUNKS);
     const scope = { write: authority.operations.write, protected: authority.protected_paths };
@@ -734,7 +826,10 @@ export class LocalCopies {
       const readOnly = await readOnlyFiles(copy.repository, copy.read_only);
       for (const path of copy.read_only) await readOnly.remove(path);
       const commit = { message: `House ${root} at position ${read.position}`, from: copy.house, replaces: true };
-      const { house, revisions } = await importedWhole(copy.repository, scope, read.texts, commit, readOnly);
+      const houseTree = await tree(copy.repository, copy.house);
+      const pushing = await this.pushing(copy);
+      const kept = (entry: KitBinaryChange) => this.binaryIn(copy, houseTree, entry, pushing, new Map(), caller);
+      const { house, revisions, binary } = await importedWhole(copy.repository, scope, read.entries, commit, readOnly, kept);
       const next: Copy = {
         ...copy,
         ...scope,
@@ -742,7 +837,7 @@ export class LocalCopies {
         position: read.position,
         log_epoch: read.log_epoch,
         read_only: readOnly.held(),
-        manifests: { ...copy.manifests, [house]: { parent: null, files: revisions } },
+        manifests: { ...copy.manifests, [house]: manifest(null, revisions, binary) },
       };
       await ignoreRules(copy.repository, Object.keys(revisions), next);
       return next;
@@ -751,14 +846,14 @@ export class LocalCopies {
     }
   }
 
-  private async reread(copy: Copy): Promise<Copy> {
+  private async reread(copy: Copy, caller: Caller): Promise<Copy> {
     const { authorities } = await this.discovered([copy.room_handle]);
     const authority = authorities.find((entry) => entry.room_ref === copy.room_ref);
     if (authority === undefined) throw new NotReady([copy.room_ref]);
-    return this.received(copy, authority);
+    return this.received(copy, authority, caller);
   }
 
-  private async refreshed(copies: readonly Copy[], unready: string[]): Promise<void> {
+  private async refreshed(copies: readonly Copy[], unready: string[], caller: Caller): Promise<void> {
     const { bounds, authorities } = await this.discovered(copies.map((copy) => copy.room_handle));
     const read: Copy[] = [];
     const unchanged: Copy[] = [];
@@ -769,7 +864,7 @@ export class LocalCopies {
         JSON.stringify([authority.operations.write, authority.protected_paths]) !== JSON.stringify([copy.write, copy.protected])
       ) {
         try {
-          read.push(await this.save(await this.received(copy, authority)));
+          read.push(await this.save(await this.received(copy, authority, caller)));
         } catch (error) {
           if (!(error instanceof NotReady)) throw error;
           unready.push(...error.rooms);
@@ -778,11 +873,11 @@ export class LocalCopies {
         unchanged.push(copy);
       }
     }
-    for (const group of grouped(unchanged, bounds.max_prefixes)) await this.caughtUp(group, false, unready);
-    for (const group of grouped(read, bounds.max_prefixes)) await this.caughtUp(group, true, unready);
+    for (const group of grouped(unchanged, bounds.max_prefixes)) await this.caughtUp(group, false, caller, unready);
+    for (const group of grouped(read, bounds.max_prefixes)) await this.caughtUp(group, true, caller, unready);
   }
 
-  private async caughtUp(copies: readonly Copy[], whole: boolean, unready?: string[]): Promise<Copy[]> {
+  private async caughtUp(copies: readonly Copy[], whole: boolean, caller: Caller, unready?: string[]): Promise<Copy[]> {
     const caught = new Map(copies.map((copy) => [copy.key, copy]));
     const read = new Set<string>();
     const waiting: string[] = unready ?? [];
@@ -804,7 +899,7 @@ export class LocalCopies {
         }
         read.add(expired.key);
         try {
-          const next = await this.save(await this.reread(expired));
+          const next = await this.save(await this.reread(expired, caller));
           caught.set(expired.key, next);
           asking.push(next);
         } catch (refused) {
@@ -817,7 +912,7 @@ export class LocalCopies {
       for (const copy of asking) {
         const view = answer.authorities.find((entry) => entry.authority === copy.room_ref);
         if (view === undefined || (view.position === copy.position && view.log_epoch === copy.log_epoch)) continue;
-        const next = await this.save(await this.incorporated(copy, view.changes, view.position, view.log_epoch));
+        const next = await this.save(await this.incorporated(copy, view.changes, view.position, view.log_epoch, caller));
         caught.set(copy.key, next);
         advanced.push(next);
       }
@@ -827,14 +922,77 @@ export class LocalCopies {
     return copies.map((copy) => caught.get(copy.key)!);
   }
 
-  private async incorporated(copy: Copy, changes: readonly Change[], position: string, logEpoch: string): Promise<Copy> {
+  private async pushing(copy: Copy): Promise<Map<string, Held & { blob: string }>> {
+    const parts = binaryParts(copy.push?.changes ?? []);
+    if (parts.length === 0) return new Map();
+    const commit = await tree(copy.repository, copy.push!.commit);
+    return new Map(
+      parts.map(({ path, bytes, sha256 }) => [relative(path), { bytes, sha256, blob: commit.get(relative(path))! }]),
+    );
+  }
+
+  private async binaryIn(
+    copy: Copy,
+    houseTree: ReadonlyMap<string, string>,
+    change: KitBinaryChange,
+    pushing: ReadonlyMap<string, Held & { blob: string }>,
+    leaving: ReadonlyMap<string, string>,
+    caller: Caller,
+  ): Promise<string | null> {
+    const pushed = pushing.get(change.path);
+    if (pushed !== undefined && heldKey(pushed) === heldKey(change)) return pushed.blob;
+    const moved = leaving.get(heldKey(change));
+    if (!houseTree.has(change.path)) return moved ?? null;
+    const kept = heldAt(copy, copy.house, change.path);
+    if (kept !== undefined && heldKey(kept) === heldKey(change)) return houseTree.get(change.path)!;
+    return moved ?? this.revisionBlob(copy, change.path, change.revision, caller);
+  }
+
+  private revisionBlob(copy: Copy, path: string, revision: string, caller: Caller, first: FileInfo | null = null): Promise<string> {
+    const named = `${rootOf(copy.room_handle)}/${path}`;
+    let answered = first;
+    return receivedBinary(copy.repository, named, async () => {
+      const file = answered ?? (await caller.info(named, revision));
+      answered = null;
+      if (file === null) throw new Error(`House holds no binary file at ${named}`);
+      return file;
+    });
+  }
+
+  private async incorporated(copy: Copy, changes: readonly Change[], position: string, logEpoch: string, caller: Caller): Promise<Copy> {
     const houseTree = await tree(copy.repository, copy.house);
     const held = new Set(copy.read_only);
-    const files = new Map<string, string | null>();
+    const files = new Map<string, Content | null>();
     const revisions: Record<string, string | null> = {};
+    const binary: Record<string, Held> = {};
     const written = new Map<string, string>();
     const removed: string[] = [];
+    const pushing = await this.pushing(copy);
+    const leaving = new Map(
+      changes.flatMap((change) => {
+        const kept = 'removed' in change ? heldAt(copy, copy.house, change.path) : undefined;
+        return kept === undefined ? [] : [[heldKey(kept), houseTree.get(change.path)!] as const];
+      }),
+    );
     for (const change of changes) {
+      if (!('removed' in change) && !('content' in change)) {
+        const blob = await this.binaryIn(copy, houseTree, change, pushing, leaving, caller);
+        if (blob === null) {
+          if (held.has(change.path)) removed.push(change.path, sidecar(change.path));
+          continue;
+        }
+        const kept = heldAt(copy, copy.house, change.path);
+        const unchanged =
+          houseTree.get(change.path) === blob &&
+          kept !== undefined &&
+          heldKey(kept) === heldKey(change) &&
+          revisionAt(copy, copy.house, change.path) === change.revision;
+        if (unchanged) continue;
+        files.set(change.path, { blob });
+        revisions[change.path] = change.revision;
+        binary[change.path] = { bytes: change.bytes, sha256: change.sha256 };
+        continue;
+      }
       const gone = 'removed' in change;
       if (houseTree.has(change.path) || (!gone && !held.has(change.path) && declaredWritable(change.path, copy))) {
         const unchanged = gone
@@ -856,7 +1014,7 @@ export class LocalCopies {
       house = await importCommits(copy.repository, [
         { message: `House ${rootOf(copy.room_handle)} at position ${position}`, from: copy.house, files },
       ]);
-      manifests = { ...manifests, [house]: { parent: copy.house, files: revisions } };
+      manifests = { ...manifests, [house]: manifest(copy.house, revisions, binary) };
     }
     const next: Copy = {
       ...copy,
@@ -879,7 +1037,7 @@ export class LocalCopies {
     if (copy.push !== undefined) {
       const held = copy.push.acknowledged;
       if (held === undefined || !(await succeeded(worktree, ['merge-base', '--is-ancestor', held, commit]))) {
-        return this.finished(copy);
+        return this.finished(copy, caller);
       }
       copy = await this.save(without(copy));
     }
@@ -916,22 +1074,34 @@ export class LocalCopies {
     return this.settle(submitted, caller);
   }
 
+  private async binaryFiles(copy: Copy, arriving: readonly (readonly [string, string])[]): Promise<Map<string, Described>> {
+    if (arriving.length === 0) return new Map();
+    const { bounds } = await this.house.door<Discovery>('rooms/discover', { prefixes: [rootOf(copy.room_handle)] });
+    const { binary, markdown } = await sorted(copy.repository, arriving, bounds.max_authored_file_bytes);
+    if (markdown.length > 0) throw new Error(markdownOnly(markdown, bounds.max_authored_file_bytes));
+    return binary;
+  }
+
   private async derived(copy: Copy, base: string, commit: string): Promise<Edit[]> {
     const root = rootOf(copy.room_handle);
     const before = await tree(copy.repository, base);
     const after = await tree(copy.repository, commit);
-    const moved = movedPaths(copy.moves, before, after);
+    const binary = await this.binaryFiles(
+      copy,
+      [...after].filter(([path, entry]) => before.get(path) !== entry),
+    );
+    const heldBinary = (path: string) => heldAt(copy, base, path) !== undefined;
+    const moved = new Map(
+      [...movedPaths(copy.moves, before, after)].filter(([from, to]) => !heldBinary(from) && !binary.has(to)),
+    );
     const arrived = new Set(moved.values());
-    const arriving = [...after].filter(([path, entry]) => before.get(path) !== entry);
-    if (arriving.length > 0) {
-      const { bounds } = await this.house.door<Discovery>('rooms/discover', { prefixes: [root] });
-      const binary: string[] = [];
-      for (const [path, entry] of arriving) {
-        if (!(await isText(copy.repository, entry, bounds.max_authored_file_bytes))) binary.push(path);
-      }
-      if (binary.length > 0) throw new Error(textOnly(binary));
-    }
     const text = (entry: string) => blobText(copy.repository, entry);
+    const created = async (path: string, entry: string): Promise<Edit> => {
+      const part = binary.get(path);
+      return part === undefined
+        ? { op: 'create', path: `${root}/${path}`, content: await text(entry) }
+        : { op: 'upload', path: `${root}/${path}`, ...part };
+    };
     const model = await modelOf(copy, after);
     const changes: Edit[] = [];
     for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
@@ -949,8 +1119,12 @@ export class LocalCopies {
         continue;
       }
       if (prior === next) continue;
+      const part = binary.get(path);
       if (next === undefined) changes.push({ op: 'remove', path: `${root}/${path}`, base: known });
-      else if (prior === undefined) changes.push({ op: 'create', path: `${root}/${path}`, content: await text(next) });
+      else if (prior === undefined) changes.push(await created(path, next));
+      else if (heldBinary(path) !== (part !== undefined)) {
+        changes.push({ op: 'remove', path: `${root}/${path}`, base: known }, await created(path, next));
+      } else if (part !== undefined) changes.push({ op: 'upload', path: `${root}/${path}`, base: known, ...part });
       else changes.push(...changed(`${root}/${path}`, path, known, await text(prior), await text(next), model));
     }
     return changes;
@@ -958,31 +1132,43 @@ export class LocalCopies {
 
   private async settle(start: Copy, caller: Caller, restaged = false): Promise<Pushed> {
     let copy = start;
-    const push = copy.push!;
-    if (push.caller !== caller.key) return this.recovered(copy);
+    if (copy.push!.caller !== caller.key) return this.recovered(copy, caller, true);
+    const finished = new Set<string>();
     let outcome: Submitted;
-    try {
-      outcome = await caller.submit(push.operation_id, push.changes, push.upload, async (upload) => {
-        copy = await this.save({ ...copy, push: { ...push, upload } });
-      });
-    } catch (error) {
-      const refusal = error instanceof HouseRefusal ? refusalOf(error.text) : null;
-      return {
-        refused: true,
-        text: refusal?.text ?? `House's answer to ${short(push.commit)} did not arrive; run house push again`,
-      };
+    for (;;) {
+      const push = copy.push!;
+      try {
+        outcome = await caller.submit(push.operation_id, push.changes, push.upload, async (upload) => {
+          copy = await this.save({ ...copy, push: { ...copy.push!, upload } });
+        });
+      } catch (error) {
+        const refusal = error instanceof HouseRefusal ? refusalOf(error.text) : null;
+        return {
+          refused: true,
+          text: refusal?.text ?? `House's answer to ${short(push.commit)} did not arrive; run house push again`,
+        };
+      }
+      if (!('refused' in outcome) || outcome.refused.code !== 'files_unstaged') break;
+      const named = unstagedUploads(outcome.refused).filter(({ id }) => !finished.has(id));
+      if (named.length === 0) break;
+      for (const { id } of named) finished.add(id);
+      const failed = await this.sentUploads(copy, named, caller);
+      copy = this.copies.get(copy.key)!;
+      if (failed.size > 0) return this.stopped(copy, failed);
     }
     if ('refused' in outcome) {
+      if (stopsPush(outcome.refused)) return this.stopped(copy, firstLine(outcome.refused));
       if (outcome.refused.code === 'upload_unavailable' && copy.push!.upload !== undefined && !restaged) {
         const { upload, ...unstaged } = copy.push!;
         return this.settle(await this.save({ ...copy, push: unstaged }), caller, true);
       }
-      if (outcome.refused.code === 'expired') return this.recovered(copy);
+      if (outcome.refused.code === 'expired') return this.recovered(copy, caller, false);
       let settled = await this.save(without(copy));
       if (settled.unfollowed !== undefined) return { refused: true, text: outcome.refused.text };
       const rebased = rebaseFixes(outcome.refused);
       try {
-        settled = (await this.caughtUp([settled], true))[0]!;
+        settled = (await this.caughtUp([settled], true, caller))[0]!;
+        await this.save(await this.conflicted(settled, outcome.refused, copy.push!, caller));
       } catch {
         return {
           refused: true,
@@ -996,39 +1182,109 @@ export class LocalCopies {
           : outcome.refused.text,
       };
     }
-    return this.finished(await this.save({ ...copy, push: { ...copy.push!, state: 'accepted', written: outcome.accepted } }));
+    return this.finished(await this.save({ ...copy, push: { ...copy.push!, state: 'accepted', written: outcome.accepted } }), caller);
   }
 
-  private async recovered(copy: Copy): Promise<Pushed> {
+  private async sentUploads(start: Copy, named: readonly StagedUpload[], caller: Caller): Promise<Map<string, string>> {
+    let copy = start;
+    const parts = new Map(binaryParts(copy.push!.changes).map((part) => [part.sha256, part]));
+    const commit = await tree(copy.repository, copy.push!.commit);
+    const staged = new Set(copy.push!.staged ?? []);
+    const failed = new Map<string, string>();
+    let saving = Promise.resolve();
+    await eachAtOnce(named, async (upload) => {
+      const part = parts.get(upload.sha256)!;
+      const path = relative(part.path);
+      try {
+        await sentBinary(copy.repository, commit.get(path)!, path, part, upload, (id, partSha256) =>
+          caller.finish(id, copy.room_ref, partSha256),
+        );
+      } catch (error) {
+        failed.set(upload.sha256, `its transfer failed: ${causeOf(error)}`);
+        return;
+      }
+      staged.add(upload.sha256);
+      saving = saving.then(async () => {
+        copy = await this.save({ ...copy, push: { ...copy.push!, staged: [...staged] } });
+      });
+      await saving;
+    });
+    return failed;
+  }
+
+  private stopped(copy: Copy, reasons: ReadonlyMap<string, string> | string): Pushed {
     const push = copy.push!;
-    const current = (await this.caughtUp([copy], true))[0]!;
+    const staged = new Set(push.staged ?? []);
+    const unsent = binaryParts(push.changes).filter(({ sha256 }) => !staged.has(sha256));
+    const unchanged = `House holds nothing of ${short(push.commit)} yet, so ${rootOf(copy.room_handle)} is unchanged`;
+    const again = 'house push again resumes this push and sends only what it has not sent';
+    if (typeof reasons === 'string' && unsent.length === 0) return { refused: true, text: `${unchanged}: ${reasons}\n${again}` };
+    const why = (sha256: string) => (typeof reasons === 'string' ? reasons : (reasons.get(sha256) ?? 'not sent yet'));
+    return {
+      refused: true,
+      text: [`${unchanged}; these binary files are not sent:`, ...unsent.map(({ path, sha256 }) => `${relative(path)}: ${why(sha256)}`), again].join(
+        '\n',
+      ),
+    };
+  }
+
+  private async conflicted(copy: Copy, refusal: Refusal, push: Push, caller: Caller): Promise<Copy> {
+    const root = rootOf(copy.room_handle);
+    const touched = new Set(changedPaths(push.changes));
+    const houseTree = await tree(copy.repository, copy.house);
+    const paths = [
+      ...new Set(refusal.conflicts.filter(({ code, path }) => code !== 'path_absent' && touched.has(path)).map(({ path }) => relative(path))),
+    ].filter((path) => !houseTree.has(path));
+    const files = new Map<string, Content>();
+    const revisions: Record<string, string> = {};
+    const binary: Record<string, Held> = {};
+    for (const path of paths) {
+      const file = await caller.info(`${root}/${path}`);
+      if (file === null) continue;
+      files.set(path, { blob: await this.revisionBlob(copy, path, file.revision, caller, file) });
+      revisions[path] = file.revision;
+      binary[path] = { bytes: file.bytes, sha256: file.sha256 };
+    }
+    if (files.size === 0) return copy;
+    const house = await importCommits(copy.repository, [
+      { message: `House ${root}: the binary files ${short(push.commit)} conflicts with`, from: copy.house, files },
+    ]);
+    return { ...copy, house, manifests: { ...copy.manifests, [house]: manifest(copy.house, revisions, binary) } };
+  }
+
+  private async recovered(copy: Copy, caller: Caller, resumes: boolean): Promise<Pushed> {
+    const push = copy.push!;
+    const current = (await this.caughtUp([copy], true, caller))[0]!;
     const house = await tree(copy.repository, current.house);
     const root = rootOf(current.room_handle);
     const model = await modelOf(current, house);
     if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit), model))) {
+      if (resumes) return this.settle(await this.save({ ...current, push: { ...push, caller: caller.key } }), caller);
       await this.save(without(current));
       return {
         refused: true,
         text: `House does not hold ${short(push.commit)}; run house push again`,
       };
     }
+    const parts = new Set(binaryParts(push.changes).map(({ path }) => relative(path)));
     const written: Written[] = [];
     for (const path of changedPaths(push.changes).map(relative)) {
       const entry = house.get(path);
-      written.push({
-        path: `${root}/${path}`,
-        revision: entry === undefined ? null : (revisionAt(current, current.house, path) ?? null),
-        content: entry === undefined ? null : await blobText(copy.repository, entry),
-      });
+      const revision = entry === undefined ? null : (revisionAt(current, current.house, path) ?? null);
+      written.push(
+        entry !== undefined && parts.has(path)
+          ? { path: `${root}/${path}`, revision }
+          : { path: `${root}/${path}`, revision, content: entry === undefined ? null : await blobText(copy.repository, entry) },
+      );
     }
-    return this.finished(await this.save({ ...current, push: { ...push, state: 'accepted', written } }));
+    return this.finished(await this.save({ ...current, push: { ...push, state: 'accepted', written } }), caller);
   }
 
-  private async finished(start: Copy): Promise<Pushed> {
+  private async finished(start: Copy, caller: Caller): Promise<Pushed> {
     let copy = start;
     const { commit } = copy.push!;
     try {
-      if (copy.push!.acknowledged === undefined) copy = await this.save(await this.acknowledged(copy));
+      if (copy.push!.acknowledged === undefined) copy = await this.save(await this.acknowledged(copy, caller));
       const integrated = await this.integrated(copy.push!);
       if (integrated.done) await this.save(without(copy));
       return { refused: false, text: integrated.text };
@@ -1040,12 +1296,12 @@ export class LocalCopies {
     }
   }
 
-  private async acknowledged(start: Copy): Promise<Copy> {
+  private async acknowledged(start: Copy, caller: Caller): Promise<Copy> {
     let copy = start;
     const push = copy.push!;
     let written = push.written!;
     if (push.changes.some((change) => change.op === 'rename')) {
-      copy = (await this.caughtUp([copy], true))[0]!;
+      copy = (await this.caughtUp([copy], true, caller))[0]!;
       const house = await tree(copy.repository, copy.house);
       const sent = await tree(copy.repository, push.house);
       if (push.changes.some((change) => change.op === 'rename' && !house.has(relative(change.to)))) {
@@ -1057,23 +1313,40 @@ export class LocalCopies {
         if (known.has(path) || sent.get(path) === entry) continue;
         written = [
           ...written,
-          {
-            path: `${rootOf(copy.room_handle)}/${path}`,
-            revision: entry === undefined ? null : (revisionAt(copy, copy.house, path) ?? null),
-            content: entry === undefined ? null : await blobText(copy.repository, entry),
-          },
+          entry === undefined || heldAt(copy, copy.house, path) === undefined
+            ? {
+                path: `${rootOf(copy.room_handle)}/${path}`,
+                revision: entry === undefined ? null : (revisionAt(copy, copy.house, path) ?? null),
+                content: entry === undefined ? null : await blobText(copy.repository, entry),
+              }
+            : { path: `${rootOf(copy.room_handle)}/${path}`, revision: revisionAt(copy, copy.house, path) ?? null },
         ];
       }
     }
     const selected = await tree(copy.repository, push.commit);
     const houseTree = await tree(copy.repository, copy.house);
-    const files = new Map<string, string | null>();
+    const parts = new Map(binaryParts(push.changes).map((part) => [relative(part.path), part]));
+    const files = new Map<string, Content | null>();
     const revisions: Record<string, string | null> = {};
+    const binary: Record<string, Held> = {};
+    const settled = new Map<string, Written>();
     for (const entry of written) {
       const path = relative(entry.path);
+      if (entry.revision !== null || !settled.has(path)) settled.set(path, entry);
+    }
+    for (const [path, entry] of settled) {
       if (!selected.has(path) && !houseTree.has(path) && !declaredWritable(path, copy)) continue;
-      files.set(path, entry.revision === null ? null : (entry.content ?? (await this.revisionText(entry.path, entry.revision))));
       revisions[path] = entry.revision;
+      const part = parts.get(path);
+      const kept = heldAt(copy, copy.house, path);
+      if (entry.revision === null) files.set(path, null);
+      else if (part !== undefined) {
+        files.set(path, { blob: selected.get(path)! });
+        binary[path] = { bytes: part.bytes, sha256: part.sha256 };
+      } else if (kept !== undefined && revisionAt(copy, copy.house, path) === entry.revision) {
+        files.set(path, { blob: houseTree.get(path)! });
+        binary[path] = kept;
+      } else files.set(path, entry.content ?? (await this.revisionText(entry.path, entry.revision)));
     }
     const edits = new Map(
       [...files].filter(([path, content]) => (content === null ? selected.has(path) : selected.get(path) !== blobId(content))),
@@ -1098,8 +1371,12 @@ export class LocalCopies {
       house,
       manifests: {
         ...copy.manifests,
-        [acknowledged]: { parent: push.base, files: revisions },
-        [house]: { parent: copy.house, files: Object.fromEntries(received.map((path) => [path, revisions[path] ?? null])) },
+        [acknowledged]: manifest(push.base, revisions, binary),
+        [house]: manifest(
+          copy.house,
+          Object.fromEntries(received.map((path) => [path, revisions[path] ?? null])),
+          Object.fromEntries(received.flatMap((path) => (binary[path] === undefined ? [] : [[path, binary[path]]]))),
+        ),
       },
       moves: copy.moves.filter(({ from, to }) => !(after.has(to) && !after.has(from))),
       push: { ...push, acknowledged },
@@ -1117,7 +1394,13 @@ export class LocalCopies {
       const entry = house.get(relative(path));
       return entry === undefined ? undefined : blobText(repository, entry);
     };
+    const created = new Set(changes.flatMap((change) => (change.op === 'create' || change.op === 'upload' ? [change.path] : [])));
     for (const change of changes) {
+      if (change.op === 'upload') {
+        if (house.get(relative(change.path)) === selected.get(relative(change.path))) continue;
+        return false;
+      }
+      if (change.op === 'remove' && created.has(change.path)) continue;
       const current = await text(change.path);
       if (change.op === 'remove' && current === undefined) continue;
       if (change.op === 'rename' && current === undefined && house.get(relative(change.to)) === selected.get(relative(change.to))) {

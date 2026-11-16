@@ -1,13 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, rm } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { request, type IncomingMessage } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { basename, dirname, extname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { parseDocument } from 'yaml';
 import { retryDelay } from './api.ts';
 import { Unsettled } from './mcp.ts';
-import { relayed } from './relay.ts';
+import { proxyUnlessRelayed, relayed } from './relay.ts';
 
 export interface UploadParts {
   id: string;
@@ -32,7 +34,15 @@ export interface Address {
 }
 
 export interface FileInfo extends Address {
+  revision: string;
+  bytes: number;
   media_type: string | null;
+}
+
+export interface Way {
+  socketPath?: string;
+  unreached(error: NodeJS.ErrnoException): Error;
+  refused(status: number): Error;
 }
 
 export interface Answered {
@@ -46,6 +56,38 @@ const PART_CHECKSUM = 'x-amz-checksum-sha256';
 
 const LINK = /\]\((\/rooms\/[^/)\s]+\/[^)\s]+)\)/gu;
 
+const MEDIA_TYPES = new Map([
+  ['avif', 'image/avif'],
+  ['csv', 'text/csv'],
+  ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['gif', 'image/gif'],
+  ['heic', 'image/heic'],
+  ['html', 'text/html'],
+  ['jpeg', 'image/jpeg'],
+  ['jpg', 'image/jpeg'],
+  ['json', 'application/json'],
+  ['m4a', 'audio/mp4'],
+  ['md', 'text/markdown'],
+  ['mov', 'video/quicktime'],
+  ['mp3', 'audio/mpeg'],
+  ['mp4', 'video/mp4'],
+  ['ogg', 'audio/ogg'],
+  ['pdf', 'application/pdf'],
+  ['png', 'image/png'],
+  ['pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  ['svg', 'image/svg+xml'],
+  ['txt', 'text/plain'],
+  ['wav', 'audio/wav'],
+  ['webm', 'video/webm'],
+  ['webp', 'image/webp'],
+  ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ['zip', 'application/zip'],
+]);
+
+export function mediaTypeOf(path: string): string | undefined {
+  return MEDIA_TYPES.get(extname(path).slice(1).toLowerCase());
+}
+
 export function linkedPaths(text: string): string[] {
   return [...new Set(Array.from(text.matchAll(LINK), (link) => link[1]!))];
 }
@@ -53,11 +95,13 @@ export function linkedPaths(text: string): string[] {
 export function fileInfo(answer: string): FileInfo | null {
   const document = parseDocument(answer);
   if (document.errors.length > 0) return null;
-  const details = document.toJS() as { download?: unknown; sha256?: unknown; media_type?: unknown } | null;
+  const details = document.toJS() as { download?: unknown; sha256?: unknown; revision?: unknown; bytes?: unknown; media_type?: unknown } | null;
   if (typeof details?.download !== 'string') return null;
   return {
     download: details.download,
     sha256: String(details.sha256),
+    revision: String(details.revision),
+    bytes: Number(details.bytes),
     media_type: typeof details.media_type === 'string' ? details.media_type : null,
   };
 }
@@ -68,6 +112,38 @@ export function paused(milliseconds: number): Promise<void> {
 
 export function storeRefusal(act: 'upload' | 'download', status: number): Error {
   return new Error(`the ${act} answered ${status}; ${act} the file again`);
+}
+
+export function opened(url: string, method: string, headers: Record<string, string>, way: Way, body?: Readable): Promise<IncomingMessage> {
+  return new Promise((answered, failed) => {
+    const target = way.socketPath === undefined ? relayed(url) : null;
+    if (target !== null) proxyUnlessRelayed();
+    const sent =
+      target === null
+        ? request({ socketPath: way.socketPath, path: url, method, headers }, answered)
+        : (target.protocol === 'https:' ? httpsRequest : request)(target, { method, headers }, answered);
+    sent.on('error', (error: NodeJS.ErrnoException) => failed(way.unreached(error)));
+    if (body === undefined) sent.end();
+    else pipeline(body, sent).catch(() => undefined);
+  });
+}
+
+function ranged(file: string, start: number, end: number): Readable | undefined {
+  return end === start ? undefined : createReadStream(file, { start, end: end - 1 });
+}
+
+export async function* fileRange(file: string, start: number, end: number, unreadable: (error: unknown) => Error): AsyncIterable<Buffer> {
+  try {
+    yield* ranged(file, start, end) ?? [];
+  } catch (error) {
+    throw unreadable(error);
+  }
+}
+
+export async function sentPart(url: string, file: string, start: number, end: number, headers: Record<string, string>, way: Way): Promise<void> {
+  const answer = await opened(url, 'PUT', { ...headers, 'content-length': String(end - start) }, way, ranged(file, start, end));
+  await answer.toArray();
+  if (answer.statusCode !== 200) throw way.refused(answer.statusCode!);
 }
 
 async function partDigests<T extends object>(uploading: Uploading<T>, partBytes: number): Promise<Buffer[]> {
@@ -176,7 +252,7 @@ export async function downloaded(
   }
 }
 
-export async function fetched(url: string, signal: AbortSignal): Promise<Answered> {
+export async function fetched(url: string, signal?: AbortSignal): Promise<Answered> {
   const answer = await fetch(relayed(url), { signal });
   return { status: answer.status, body: answer.body === null ? Readable.from([]) : Readable.fromWeb(answer.body) };
 }
