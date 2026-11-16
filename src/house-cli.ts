@@ -16,10 +16,9 @@ import {
   type Way,
 } from './files.ts';
 import { HOUSE_REF } from './git.ts';
-import { ownerSocket, readOwnAgent } from './home.ts';
-import { callHouse, rpc, UNREACHABLE, Unsettled, type Message, type ToolResult } from './mcp.ts';
-import { refusalOf, retryable } from './refusals.ts';
-import { selectRelay } from './relay.ts';
+import { ownerSocket } from './home.ts';
+import { ownAgentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
+import { refusalOf } from './refusals.ts';
 import { parse } from 'yaml';
 
 interface Tool {
@@ -61,9 +60,6 @@ const ARGUMENTS = `the arguments are one JSON object, in single quotes or on std
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
-const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
-const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
-const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 const socketPath = process.env.HOUSE_BRIDGE;
 const WAY: Way = {
   ...(socketPath === undefined ? {} : { socketPath }),
@@ -78,10 +74,6 @@ function refused(path: string, status: number, text: string, local: boolean): st
   if (status === 401) return REVOKED;
   if (status === 502 && local) return text;
   return path === '/' ? unconfirmed(status) : `${path} answered ${status}`;
-}
-
-function unconfirmed(status: number): string {
-  return `House answered ${status} ${UNCONFIRMED}`;
 }
 
 function bridged(path: string, body: unknown, to = socketPath): Promise<string> {
@@ -102,22 +94,9 @@ function bridged(path: string, body: unknown, to = socketPath): Promise<string> 
   });
 }
 
-async function direct(message: Message): Promise<string> {
-  const ownAgent = await readOwnAgent();
-  if (ownAgent === null) throw new Error(UNCONNECTED);
-  selectRelay(process.env.HOUSE_KIT_RELAY || ownAgent.relay);
-  const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
-    throw new Unsettled(UNREACHABLE);
-  });
-  if (answer.status === 200) return answer.text;
-  if (answer.status === 401) throw new Error(DISCONNECTED);
-  const refusal = refusalOf(answer.text)?.text ?? unconfirmed(answer.status);
-  throw retryable(answer.text) === false ? new Error(refusal) : new Unsettled(refusal);
-}
-
 async function mcp<T>(method: string, params: Record<string, unknown>): Promise<T> {
   const message = rpc(method, params);
-  const answer = JSON.parse(socketPath === undefined ? await direct(message) : await bridged('/', message)) as {
+  const answer = JSON.parse(socketPath === undefined ? await ownAgentCall(message) : await bridged('/', message)) as {
     result?: T;
     error?: { message: string };
   };

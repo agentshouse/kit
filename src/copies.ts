@@ -30,8 +30,8 @@ import {
   tree,
 } from './git.ts';
 import { fileInfo, paused, type FileInfo, type Finished } from './files.ts';
-import { kitHome, readOwnAgent } from './home.ts';
-import { callHouse, rpc, toolAnswer, Unsettled } from './mcp.ts';
+import { kitHome } from './home.ts';
+import { ownAgentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { changed, readDocument, type Edit } from './translate.ts';
@@ -43,7 +43,6 @@ const ROOMS = 'rooms/';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
 const STAGED_CHUNKS = 'house-chunks';
 const SCHEMA = 'settings/schema.yaml';
-const NO_OWN_AGENT = "a binary file's new bytes come through this computer's own agent, which has no House connection; run kit login";
 
 // A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
 const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
@@ -220,6 +219,7 @@ const REBASED = new Set([
   'path_absent',
   'base_required',
   'binary_file',
+  'text_file',
 ]);
 
 function rebaseFixes(refusal: Refusal): boolean {
@@ -535,15 +535,12 @@ export class LocalCopies {
         }
       },
       info: async (path, revision) => {
-        const ownAgent = await readOwnAgent();
-        if (ownAgent === null) throw new Error(NO_OWN_AGENT);
-        const read = toolAnswer(
-          await callHouse(
-            ownAgent.house,
-            ownAgent.credential,
+        const read = toolAnswer({
+          status: 200,
+          text: await ownAgentCall(
             rpc('tools/call', { name: 'info', arguments: { path, ...(revision === undefined ? {} : { ref: revision }) } }),
           ),
-        );
+        });
         if ('refused' in read) throw new Error(read.refused.text);
         return fileInfo(read.text);
       },
@@ -952,9 +949,9 @@ export class LocalCopies {
     const pushed = pushing.get(change.path);
     if (pushed !== undefined && heldKey(pushed) === heldKey(change)) return pushed.blob;
     const moved = leaving.get(heldKey(change));
-    if (!houseTree.has(change.path)) return moved ?? null;
     const kept = heldAt(copy, copy.house, change.path);
-    if (kept !== undefined && heldKey(kept) === heldKey(change)) return houseTree.get(change.path)!;
+    if (kept === undefined) return moved ?? null;
+    if (heldKey(kept) === heldKey(change)) return houseTree.get(change.path)!;
     return moved ?? this.revisionBlob(copy, change.path, change.revision, caller);
   }
 
@@ -988,7 +985,10 @@ export class LocalCopies {
       if (!('removed' in change) && !('content' in change)) {
         const blob = await this.binaryIn(copy, houseTree, change, pushing, leaving, caller);
         if (blob === null) {
-          if (held.has(change.path)) removed.push(change.path, sidecar(change.path));
+          if (houseTree.has(change.path)) {
+            files.set(change.path, null);
+            revisions[change.path] = null;
+          } else if (held.has(change.path)) removed.push(change.path, sidecar(change.path));
           continue;
         }
         const kept = heldAt(copy, copy.house, change.path);
@@ -1040,10 +1040,18 @@ export class LocalCopies {
 
   private async pushed(key: string, worktree: string, selector: string, caller: Caller): Promise<Pushed> {
     let copy = this.copies.get(key)!;
-    if (copy.push?.state === 'submitted') return this.settle(copy, caller);
     const selected = await run(worktree, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${selector}^{commit}`]);
     if (selected.status !== 0) return { refused: true, text: `${selector} names no commit` };
     const commit = selected.stdout.toString('utf8').trim();
+    if (copy.push?.state === 'submitted') {
+      if (copy.push.commit === commit) return this.settle(copy, caller);
+      const replaced = await this.recovered(copy, caller, async (current) => {
+        await this.save(without(current));
+        return { refused: false, text: '' };
+      });
+      if (replaced.refused) return replaced;
+      copy = this.copies.get(key)!;
+    }
     if (copy.push !== undefined) {
       const held = copy.push.acknowledged;
       if (held === undefined || !(await succeeded(worktree, ['merge-base', '--is-ancestor', held, commit]))) {
@@ -1142,7 +1150,11 @@ export class LocalCopies {
 
   private async settle(start: Copy, caller: Caller, restaged = false): Promise<Pushed> {
     let copy = start;
-    if (copy.push!.caller !== caller.key) return this.recovered(copy, caller, true);
+    if (copy.push!.caller !== caller.key) {
+      return this.recovered(copy, caller, async (current) =>
+        this.settle(await this.save({ ...current, push: { ...current.push!, caller: caller.key } }), caller),
+      );
+    }
     const finished = new Set<string>();
     let outcome: Submitted;
     for (;;) {
@@ -1172,17 +1184,22 @@ export class LocalCopies {
         const { upload, ...unstaged } = copy.push!;
         return this.settle(await this.save({ ...copy, push: unstaged }), caller, true);
       }
-      if (outcome.refused.code === 'expired') return this.recovered(copy, caller, false);
+      if (outcome.refused.code === 'expired') {
+        return this.recovered(copy, caller, async (current) => {
+          await this.save(without(current));
+          return { refused: true, text: `House does not hold ${short(current.push!.commit)}; run house push again` };
+        });
+      }
       let settled = await this.save(without(copy));
       if (settled.unfollowed !== undefined) return { refused: true, text: outcome.refused.text };
       const rebased = rebaseFixes(outcome.refused);
       try {
         settled = (await this.caughtUp([settled], true, caller))[0]!;
         await this.save(await this.conflicted(settled, outcome.refused, copy.push!, caller));
-      } catch {
+      } catch (error) {
         return {
           refused: true,
-          text: rebased ? `${outcome.refused.text}\nHouse's current state did not arrive; push again later` : outcome.refused.text,
+          text: rebased ? `${outcome.refused.text}\nHouse's current state did not arrive: ${houseCause(error)}` : outcome.refused.text,
         };
       }
       return {
@@ -1262,19 +1279,14 @@ export class LocalCopies {
     return { ...copy, house, manifests: { ...copy.manifests, [house]: manifest(copy.house, revisions, binary) } };
   }
 
-  private async recovered(copy: Copy, caller: Caller, resumes: boolean): Promise<Pushed> {
+  private async recovered(copy: Copy, caller: Caller, unheld: (current: Copy) => Promise<Pushed>): Promise<Pushed> {
     const push = copy.push!;
     const current = (await this.caughtUp([copy], true, caller))[0]!;
     const house = await tree(copy.repository, current.house);
     const root = rootOf(current.room_handle);
     const model = await modelOf(current, house);
     if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit), model))) {
-      if (resumes) return this.settle(await this.save({ ...current, push: { ...push, caller: caller.key } }), caller);
-      await this.save(without(current));
-      return {
-        refused: true,
-        text: `House does not hold ${short(push.commit)}; run house push again`,
-      };
+      return unheld(current);
     }
     const parts = new Set(binaryParts(push.changes).map(({ path }) => relative(path)));
     const written: Written[] = [];

@@ -17,6 +17,11 @@ const PDF = Buffer.from('%PDF-1.7\n%\xe2\xe3\xcf\xd3\n', 'latin1');
 const RECORDING = Buffer.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0]);
 
 const UNSENT = 'house push again resumes this push and sends only what it has not sent';
+const STORED = 'limit_reached: this file would pass your storage limit';
+const STORAGE = {
+  status: 429,
+  body: { error: { code: 'limit_reached', limit: 'blob', value: '1000', used: '990', message: STORED, retryable: false } },
+};
 
 interface Shelled {
   status: number;
@@ -327,6 +332,50 @@ it("stops a conversation's push the open-uploads cap refuses without sending it 
   expect(digest(room.binaries.get('photo.jpg')!.bytes)).toBe(digest(JPEG));
 });
 
+it('pushes another commit as a new push after a push stopped, and the stopped commit never reaches the Room', async () => {
+  const { hosted, rooms, room } = await copied();
+  rooms.writeUnits = 0;
+  await placed(room, { 'photo.jpg': JPEG, 'plan.md': 'one\ntwo\n' });
+  commitAll(room.repository, 'a photo');
+  const stopped = await house(hosted, room.repository, 'push', '--owner');
+  rooms.writeUnits = Infinity;
+  await rm(join(room.repository, 'photo.jpg'));
+  git(room.repository, 'add', '-A');
+  git(room.repository, 'commit', '-q', '--amend', '-m', 'the plan alone');
+  const commit = git(room.repository, 'rev-parse', 'HEAD').trim();
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(stopped.status).toBe(1);
+  expect(pushed).toEqual({ status: 0, stdout: `House accepted ${short(commit)}.\n`, stderr: '' });
+  const [first, last] = [batches(hosted)[0]!, batches(hosted).at(-1)!];
+  expect(last.operation_id).not.toBe(first.operation_id);
+  expect(last.changes).toEqual([{ op: 'replace_preamble', path: '/rooms/notes/plan.md', base: 'one\n', content: 'one\ntwo\n' }]);
+  expect(room.binaries.has('photo.jpg')).toBe(false);
+  expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
+  expect((await record(hosted, room)).push).toBeUndefined();
+  clean(room);
+});
+
+it("ends a push House refuses past the owner's storage as final, keeping no pending push, so the next push is a new one", async () => {
+  const { hosted, rooms, room } = await copied();
+  rooms.refusesBatches = [STORAGE];
+  await placed(room, { 'photo.jpg': JPEG });
+  const commit = commitAll(room.repository, 'a photo');
+
+  const refused = await house(hosted, room.repository, 'push', '--owner');
+  const pending = (await record(hosted, room)).push;
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(refused).toEqual({ status: 1, stdout: '', stderr: `house: ${STORED}\n` });
+  expect(pending).toBeUndefined();
+  expect(pushed).toEqual({ status: 0, stdout: `House accepted ${short(commit)}.\n`, stderr: '' });
+  const [first, ...rest] = batches(hosted).map((batch) => batch.operation_id);
+  expect(rest).toHaveLength(2);
+  expect(new Set(rest).size).toBe(1);
+  expect(rest).not.toContain(first);
+});
+
 it('lands a push of more binary files than House opens at once in turns under its one operation', async () => {
   const { hosted, rooms, room } = await copied();
   rooms.openUploads = 1;
@@ -427,6 +476,54 @@ it('keeps each binary file the Local copy holds current on house fetch, moving o
   });
 });
 
+it('drops a held text file another writer replaces with a binary file on house fetch, downloading nothing the copy does not hold', async () => {
+  const { hosted, room } = await copied((setup) => setup.put('notes.txt', 'text first\n'));
+  await ownAgent(hosted);
+  room.upload('notes.txt', JPEG);
+  const [asked, got] = [hosted.mcp.length, gets(hosted)];
+
+  const fetched = await house(hosted, '/', 'fetch');
+  git(room.repository, 'merge', '-q', '--ff-only', 'refs/house/received');
+
+  expect(fetched.status).toBe(0);
+  expect(hosted.mcp.slice(asked)).toEqual([]);
+  expect(gets(hosted)).toBe(got);
+  expect(blobAt(room, 'refs/house/received', 'notes.txt')).toBeNull();
+  expect(existsSync(join(room.repository, 'notes.txt'))).toBe(false);
+  clean(room);
+  const manifest = (await record(hosted, room)).manifests[git(room.repository, 'rev-parse', 'refs/house/received').trim()]!;
+  expect(manifest).toEqual({ parent: expect.any(String), files: { 'notes.txt': null } });
+});
+
+it('keeps every binary file the Local copy holds through a whole reread, so the next push sends no removal of one', async () => {
+  const { hosted, rooms, room } = await copied();
+  await placed(room, { 'photo.jpg': JPEG });
+  commitAll(room.repository, 'a photo');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  room.put('plan.md', 'one\nfrom elsewhere\n');
+  room.upload('elsewhere.jpg', REDRAWN);
+  rooms.expired.add(room.ref);
+
+  const fetched = await house(hosted, '/', 'fetch');
+  const reread = (await record(hosted, room)).manifests[git(room.repository, 'rev-parse', 'refs/house/received').trim()]!;
+  git(room.repository, 'merge', '-q', '--ff-only', 'refs/house/received');
+  await placed(room, { 'notes.txt': 'mine\n' });
+  const commit = commitAll(room.repository, 'notes');
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(fetched.status).toBe(0);
+  expect(rooms.expired.has(room.ref)).toBe(false);
+  expect(reread.binary).toEqual({ 'photo.jpg': { bytes: JPEG.length, sha256: digest(JPEG) } });
+  expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(JPEG);
+  expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('one\nfrom elsewhere\n');
+  expect(existsSync(join(room.repository, 'elsewhere.jpg'))).toBe(false);
+  expect(pushed).toEqual({ status: 0, stdout: `House accepted ${short(commit)}.\n`, stderr: '' });
+  expect(batches(hosted).at(-1)!.changes).toEqual([{ op: 'create', path: '/rooms/notes/notes.txt', content: 'mine\n' }]);
+  expect(digest(room.binaries.get('photo.jpg')!.bytes)).toBe(digest(JPEG));
+  expect(hosted.store.requests.filter((request) => request.method === 'GET' && request.key.startsWith('binary/'))).toEqual([]);
+  clean(room);
+});
+
 it('brings the current version of each binary file a push conflicts with onto the House ref, and a native Git resolution then pushes', async () => {
   const { hosted, room } = await copied((setup) => {
     setup.upload('photo.jpg', JPEG);
@@ -458,6 +555,35 @@ it('brings the current version of each binary file a push conflicts with onto th
   expect(batches(hosted).at(-1)!.changes).toEqual([part('photo.jpg', REDRAWN, 'image/jpeg', held)]);
   expect(digest(room.binaries.get('photo.jpg')!.bytes)).toBe(digest(REDRAWN));
   expect(digest(room.binaries.get('scan.pdf')!.bytes)).toBe(digest(PDF));
+  clean(room);
+});
+
+it('ends a push whose new binary file meets text another writer put at its Path with the rebase line, and the resolution replaces that text', async () => {
+  const { hosted, room } = await copied();
+  const caption = room.put('caption.txt', 'a caption another writer wrote\n');
+  await placed(room, { 'caption.txt': RECORDING });
+  commitAll(room.repository, 'a recording');
+
+  const refused = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(refused.status).toBe(1);
+  expect(refused.stderr).toContain('code: text_file');
+  expect(refused.stderr).toMatch(/refs\/house\/received holds House's current state; rebase onto it and push again\n$/);
+  expect(blobAt(room, 'refs/house/received', 'caption.txt')?.toString('utf8')).toBe('a caption another writer wrote\n');
+  expect(tryGit(room.repository, 'merge', '-q', 'refs/house/received').status).not.toBe(0);
+  git(room.repository, 'checkout', '--ours', 'caption.txt');
+  git(room.repository, 'add', 'caption.txt');
+  git(room.repository, 'commit', '-q', '--no-edit');
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(pushed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}/) });
+  expect(batches(hosted).at(-1)!.changes).toEqual([
+    { op: 'remove', path: '/rooms/notes/caption.txt', base: caption },
+    part('caption.txt', RECORDING, 'text/plain'),
+  ]);
+  expect(digest(room.binaries.get('caption.txt')!.bytes)).toBe(digest(RECORDING));
+  expect(room.files.has('caption.txt')).toBe(false);
   clean(room);
 });
 

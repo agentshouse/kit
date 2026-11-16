@@ -1,8 +1,9 @@
 import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { randomUUID } from 'node:crypto';
 import { KIT_RELEASE } from './clis.ts';
-import { refusalOf, type Refusal } from './refusals.ts';
-import { relayed } from './relay.ts';
+import { readOwnAgent } from './home.ts';
+import { refusalOf, retryable, type Refusal } from './refusals.ts';
+import { relayed, selectRelay } from './relay.ts';
 
 export interface Message {
   jsonrpc: '2.0';
@@ -24,6 +25,9 @@ export interface ToolResult {
 const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 export const UNREACHABLE = 'House is unreachable; call again in a minute';
+const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
+const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
+const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 
 export class Unsettled extends Error {}
 
@@ -69,6 +73,23 @@ export async function callHouse(
     signal,
   });
   return { status: answer.status, text: await answer.text() };
+}
+
+export function unconfirmed(status: number): string {
+  return `House answered ${status} ${UNCONFIRMED}`;
+}
+
+export async function ownAgentCall(message: Message): Promise<string> {
+  const ownAgent = await readOwnAgent();
+  if (ownAgent === null) throw new Error(UNCONNECTED);
+  selectRelay(process.env.HOUSE_KIT_RELAY || ownAgent.relay);
+  const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
+    throw new Unsettled(UNREACHABLE);
+  });
+  if (answer.status === 200) return answer.text;
+  if (answer.status === 401) throw new Error(DISCONNECTED);
+  const refusal = refusalOf(answer.text)?.text ?? unconfirmed(answer.status);
+  throw retryable(answer.text) === false ? new Error(refusal) : new Unsettled(refusal);
 }
 
 export function refusalIn(text: string, status: number): Refusal {

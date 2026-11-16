@@ -10,6 +10,14 @@ export interface Refusal {
   text: string;
   conflicts: Conflict[];
   detail: Record<string, unknown>;
+  retryable?: boolean;
+}
+
+interface Answered {
+  code?: unknown;
+  message?: unknown;
+  retryable?: unknown;
+  data?: { code?: unknown; retryable?: unknown } | null;
 }
 
 const HEAD = /^([a-z][a-z0-9_]*): \S/;
@@ -43,37 +51,46 @@ function spoken(text: string): Refusal | null {
 }
 
 export function stopsPush(refusal: Refusal | null): boolean {
-  return refusal !== null && PUSH_STOPS.has(refusal.code);
+  return refusal !== null && PUSH_STOPS.has(refusal.code) && refusal.retryable === true;
 }
 
 export function firstLine(refusal: Refusal): string {
   return refusal.text.split('\n')[0]!;
 }
 
-export function retryable(text: string): boolean | null {
-  let body: unknown;
+function parsed(text: string): { body: unknown } | null {
   try {
-    body = JSON.parse(text);
+    return { body: JSON.parse(text) };
   } catch {
     return null;
   }
-  const error = (body as { error?: { retryable?: unknown; data?: { retryable?: unknown } | null } | null } | null)?.error;
+}
+
+function errorIn(body: unknown): Answered | null {
+  const error = (body as { error?: unknown } | null)?.error;
+  return typeof error === 'object' && error !== null ? (error as Answered) : null;
+}
+
+function verdictOf(error: Answered | null): boolean | null {
   const verdict = error?.retryable ?? error?.data?.retryable;
   return typeof verdict === 'boolean' ? verdict : null;
 }
 
+export function retryable(text: string): boolean | null {
+  const answer = parsed(text);
+  return answer === null ? null : verdictOf(errorIn(answer.body));
+}
+
 export function refusalOf(text: string): Refusal | null {
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    return spoken(text);
-  }
-  const error = (body as { error?: unknown } | null)?.error;
-  if (typeof error !== 'object' || error === null) return null;
-  const { code, message, data } = error as { code?: unknown; message?: unknown; data?: { code?: unknown } };
+  const answer = parsed(text);
+  if (answer === null) return spoken(text);
+  const error = errorIn(answer.body);
+  if (error === null) return null;
+  const { code, message, data } = error;
+  const verdict = verdictOf(error);
+  const judged = verdict === null ? {} : { retryable: verdict };
   const said = typeof message === 'string' ? spoken(message) : null;
-  if (said !== null) return said;
+  if (said !== null) return { ...said, ...judged };
   const named = typeof code === 'string' ? code : typeof data?.code === 'string' ? data.code : null;
-  return named === null ? null : { code: named, text: named, conflicts: [], detail: {} };
+  return named === null ? null : { code: named, text: named, conflicts: [], detail: {}, ...judged };
 }

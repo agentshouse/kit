@@ -189,6 +189,7 @@ export class Room {
   put(path: string, content: string, provenance?: string): string {
     const stored = this.stored(content, provenance);
     this.files.set(path, stored);
+    this.binaries.delete(path);
     this.advance([path]);
     return stored.revision;
   }
@@ -198,6 +199,7 @@ export class Room {
     const binary = { revision: `rev-${revisions}`, bytes };
     this.binaries.set(path, binary);
     this.binaryHistory.set(binary.revision, { ...binary, path });
+    this.files.delete(path);
     this.advance([path]);
     return binary.revision;
   }
