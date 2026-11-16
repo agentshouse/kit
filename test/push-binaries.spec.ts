@@ -524,6 +524,36 @@ it('keeps every binary file the Local copy holds through a whole reread, so the 
   clean(room);
 });
 
+it('moves, updates or removes each held binary file across a whole reread as the Room did, downloading only the one another writer replaced', async () => {
+  const { hosted, rooms, room } = await copied();
+  await ownAgent(hosted);
+  await placed(room, { 'scans/cover.jpg': JPEG, 'scans/report.pdf': PDF, 'photo.jpg': RECORDING });
+  commitAll(room.repository, 'binary files');
+  expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
+  room.upload('scans/cover.jpg', REDRAWN);
+  room.move('scans/report.pdf', 'archive/report.pdf');
+  room.remove('photo.jpg');
+  rooms.expired.add(room.ref);
+  const downloads = () => hosted.store.requests.filter((request) => request.method === 'GET' && request.key.startsWith('binary/'));
+  const got = downloads().length;
+
+  const fetched = await house(hosted, '/', 'fetch');
+  git(room.repository, 'merge', '-q', '--ff-only', 'refs/house/received');
+
+  expect(fetched.status).toBe(0);
+  expect(rooms.expired.has(room.ref)).toBe(false);
+  expect(await readFile(join(room.repository, 'scans/cover.jpg'))).toEqual(REDRAWN);
+  expect(await readFile(join(room.repository, 'archive/report.pdf'))).toEqual(PDF);
+  for (const path of ['scans/report.pdf', 'photo.jpg']) expect(existsSync(join(room.repository, path))).toBe(false);
+  expect(downloads()).toHaveLength(got + 1);
+  clean(room);
+  const manifest = (await record(hosted, room)).manifests[git(room.repository, 'rev-parse', 'refs/house/received').trim()]!;
+  expect(manifest.binary).toEqual({
+    'archive/report.pdf': { bytes: PDF.length, sha256: digest(PDF) },
+    'scans/cover.jpg': { bytes: REDRAWN.length, sha256: digest(REDRAWN) },
+  });
+});
+
 it('brings the current version of each binary file a push conflicts with onto the House ref, and a native Git resolution then pushes', async () => {
   const { hosted, room } = await copied((setup) => {
     setup.upload('photo.jpg', JPEG);

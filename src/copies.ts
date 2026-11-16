@@ -369,18 +369,15 @@ async function importedWhole(
   entries: Whole['entries'],
   commit: Pick<Imported, 'message' | 'from' | 'replaces'>,
   readOnly: ReadOnlyFiles,
-  kept: (entry: KitBinaryChange) => Promise<string | null>,
+  kept: (entries: readonly KitBinaryChange[]) => Promise<ReadonlyMap<string, string>>,
 ): Promise<{ house: string; revisions: Record<string, string>; binary: Record<string, Held> }> {
   const revisions: Record<string, string> = {};
   const binary: Record<string, Held> = {};
   async function* tracked(): AsyncGenerator<readonly [string, Content]> {
+    const binaries: KitBinaryChange[] = [];
     for await (const entry of entries) {
       if (!('content' in entry)) {
-        const blob = declaredWritable(entry.path, scope) ? await kept(entry) : null;
-        if (blob === null) continue;
-        revisions[entry.path] = entry.revision;
-        binary[entry.path] = { bytes: entry.bytes, sha256: entry.sha256 };
-        yield [entry.path, { blob }];
+        if (declaredWritable(entry.path, scope)) binaries.push(entry);
         continue;
       }
       const { path, content, revision: held, provenance } = entry;
@@ -391,6 +388,14 @@ async function importedWhole(
         await readOnly.place(path, content);
       }
       if (provenance !== undefined) await readOnly.place(sidecar(path), provenance);
+    }
+    const blobs = await kept(binaries);
+    for (const entry of binaries) {
+      const blob = blobs.get(entry.path);
+      if (blob === undefined) continue;
+      revisions[entry.path] = entry.revision;
+      binary[entry.path] = { bytes: entry.bytes, sha256: entry.sha256 };
+      yield [entry.path, { blob }];
     }
   }
   return { house: await importCommits(repository, [{ ...commit, files: tracked() }]), revisions, binary };
@@ -769,7 +774,7 @@ export class LocalCopies {
       const read = await whole(join(staging, '.git', STAGED_CHUNKS));
       const readOnly = await readOnlyFiles(staging, []);
       const commit = { message: `House ${rootOf(handle)}`, from: null };
-      const { house, revisions } = await importedWhole(staging, scope, read.entries, commit, readOnly, async () => null);
+      const { house, revisions } = await importedWhole(staging, scope, read.entries, commit, readOnly, async () => new Map());
       await git(staging, ['update-ref', `refs/heads/${BRANCH}`, house]);
       await git(staging, ['reset', '-q', '--hard']);
       copy = {
@@ -835,7 +840,21 @@ export class LocalCopies {
       const commit = { message: `House ${root} at position ${read.position}`, from: copy.house, replaces: true };
       const houseTree = await tree(copy.repository, copy.house);
       const pushing = await this.pushing(copy);
-      const kept = (entry: KitBinaryChange) => this.binaryIn(copy, houseTree, entry, pushing, new Map(), caller);
+      const kept = async (entries: readonly KitBinaryChange[]) => {
+        const present = new Set(entries.map((entry) => entry.path));
+        const leaving = new Map(
+          [...houseTree].flatMap(([path, blob]) => {
+            const held = present.has(path) ? undefined : heldAt(copy, copy.house, path);
+            return held === undefined ? [] : [[heldKey(held), blob] as const];
+          }),
+        );
+        const blobs = new Map<string, string>();
+        for (const entry of entries) {
+          const blob = await this.binaryIn(copy, houseTree, entry, pushing, leaving, caller);
+          if (blob !== null) blobs.set(entry.path, blob);
+        }
+        return blobs;
+      };
       const { house, revisions, binary } = await importedWhole(copy.repository, scope, read.entries, commit, readOnly, kept);
       const next: Copy = {
         ...copy,
