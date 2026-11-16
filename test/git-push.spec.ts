@@ -627,6 +627,14 @@ it('fetches and pushes names with spaces, any script, quotes, %, #, parentheses 
   expect(await Promise.all(names.map((name) => readFile(join(room.repository, 'Old notes', name), 'utf8')))).toEqual(names.map((name) => `${name}\n`));
   expect(git(room.repository, 'status', '--porcelain')).toBe('');
   expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+  for (const name of names) room.put(`Later notes/${name}`, `later ${name}\n`);
+  expect(await house(hosted, '/', 'fetch')).toMatchObject({
+    status: 0,
+    stdout: expect.stringMatching(/^\/rooms\/notes: refs\/house\/received is at [0-9a-f]{12}\n$/),
+  });
+  git(room.repository, 'merge', '--ff-only', '-q', 'refs/house/received');
+  expect(await Promise.all(names.map((name) => readFile(join(room.repository, 'Later notes', name), 'utf8')))).toEqual(names.map((name) => `later ${name}\n`));
+  expect(git(room.repository, 'status', '--porcelain')).toBe('');
 
   await mkdir(join(room.repository, 'New notes'));
   for (const name of names) {

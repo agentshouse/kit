@@ -125,6 +125,44 @@ it('sends a committed git mv of names with spaces, any script and parentheses, a
   expect(git(room.repository, 'status', '--porcelain')).toBe('');
 });
 
+it('sends a git mv made while a conflict is open as a House rename', async () => {
+  const { hosted, rooms, room } = await copied();
+  const alpha = room.revision('a.md');
+
+  const moved = await shell(
+    hosted,
+    [
+      `cd ${room.repository}`,
+      'git checkout -qb side',
+      "printf 'side\\n' > plan.md",
+      'git commit -qam side',
+      'git checkout -q -',
+      "printf 'mine\\n' > plan.md",
+      'git commit -qam mine',
+      '{ git cherry-pick side >/dev/null 2>&1; true; }',
+      "git mv a.md 'a b.md'",
+      "printf 'both\\n' > plan.md",
+      'git add plan.md',
+      'git -c core.editor=true cherry-pick --continue >/dev/null',
+      'house push',
+    ].join(' && '),
+  );
+
+  const changes = rooms.edits().flatMap((received) => changesOf(received) as { op: string }[]);
+  expect(changes.filter(({ op }) => op === 'rename')).toEqual([
+    { op: 'rename', path: '/rooms/notes/a.md', to: '/rooms/notes/a b.md', base: alpha },
+  ]);
+  expect(moved).toMatchObject({
+    status: 0,
+    stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}; main is at [0-9a-f]{12}\.\n$/),
+  });
+  expect(room.files.get('a b.md')?.revision).toBe(alpha);
+  expect(room.files.get('plan.md')?.content).toBe('both\n');
+  expect(room.files.get('index.md')?.content).toBe('See [alpha](a b.md).\n');
+  expect(git(room.repository, 'diff', '--name-only', 'HEAD', 'refs/house/received')).toBe('');
+  expect(git(room.repository, 'status', '--porcelain')).toBe('');
+});
+
 it('sends no rename for a failed, undone or uncommitted move', async () => {
   const { hosted, room, edits } = await copied();
   const plan = room.revision('plan.md');
