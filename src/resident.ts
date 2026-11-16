@@ -10,8 +10,8 @@ import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations } from './conversations.ts';
 import { LocalCopies, type Pushed } from './copies.ts';
-import { restart } from './end.ts';
-import { agentBase, enrolled, kitHome, ownerSocket, readEnrolment } from './home.ts';
+import { restart, restartPlaced } from './end.ts';
+import { agentBase, enrolled, kitHome, ownerSocket, readEnrolment, recordPlannedRestart, takePlannedRestart } from './home.ts';
 import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
@@ -107,6 +107,7 @@ export async function resident(): Promise<void> {
   await moveEarlier();
   await mkdir(kitHome(), { recursive: true, mode: 0o700 });
   const lock = await holdOwner();
+  const planned = takePlannedRestart();
   await resumeWorkspaceMove();
   const copies = new LocalCopies(house);
   await copies.load();
@@ -166,8 +167,8 @@ export async function resident(): Promise<void> {
     if (!idle()) {
       reported = false;
     } else if (update.placedRelease() !== null && conversations.quiet() && process.env.HOUSE_KIT_SANDBOX !== '1') {
-      const placed = update.placedRelease();
-      void stop(() => restart(`Kit ${placed} is placed; its supervisor starts it`));
+      const placed = update.placedRelease()!;
+      void stop(() => restartPlaced(placed));
     } else if (!reported) {
       reported = true;
       logged(house.deliver('kits/report-idle', {}, idle));
@@ -190,6 +191,7 @@ export async function resident(): Promise<void> {
   running = { conversations, agents, calls, stop };
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
+      recordPlannedRestart();
       void stop(() => {
         removeInputs();
         process.kill(process.pid, signal);
@@ -202,7 +204,7 @@ export async function resident(): Promise<void> {
   watch(kitHome(), unenrolled);
   unenrolled();
 
-  await house.deliver('kits/report-restart', {}).catch(report);
+  await house.deliver('kits/report-restart', planned ? { planned } : {}).catch(report);
   logged(agents.refresh());
   agents.keepCurrent(() => process.env.HOUSE_KIT_SANDBOX === '1' && reported);
   connection = holdConnection({

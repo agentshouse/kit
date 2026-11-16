@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -28,6 +28,7 @@ const ENROLMENT = 'credential.json';
 const DISCONNECTED = 'disconnected.json';
 const CONFIGURATION = 'kit.json';
 const OWN_AGENT = 'own-agent.json';
+const PLANNED_RESTART = 'planned-restart';
 
 const EARLIER_PREFIXES = ['/kit-home/kit', '/opt/house-kit'];
 
@@ -178,6 +179,20 @@ export async function forgetRejected(rejected: string): Promise<void> {
     rmSync(join(kitHome(), DISCONNECTED), { force: true });
   }
   rmSync(taken);
+}
+
+export function recordPlannedRestart(): void {
+  writeFileSync(join(kitHome(), PLANNED_RESTART), '', { mode: 0o600 });
+}
+
+export function takePlannedRestart(): boolean {
+  try {
+    unlinkSync(join(kitHome(), PLANNED_RESTART));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 export function enrolled(): boolean {

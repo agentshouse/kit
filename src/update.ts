@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { downloadServed, servedRelease } from './building.ts';
 import type { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
-import { restart, updateLine } from './end.ts';
+import { restartPlaced, updateLine } from './end.ts';
 import { kitHome, readEnrolment } from './home.ts';
 import { placedPrefix } from './placement.ts';
 import { childEnvironment, relayOrigin } from './relay.ts';
@@ -108,7 +108,7 @@ export class KitUpdate {
   async takeRefused(release: string): Promise<never> {
     for (;;) {
       const failure = await this.queued(async () => (this.placed === null ? this.place(release, 'served') : null));
-      if (failure === null) restart(`Kit ${this.placed} is placed; its supervisor starts it`);
+      if (failure === null) restartPlaced(this.placed!);
       process.stderr.write(`kit: ${updateLine(`Kit ${KIT_RELEASE} stays offline and tries again in ${PLACEMENT_RETRY_MS / 60_000} minutes`)}\n`);
       await new Promise((resolve) => setTimeout(resolve, PLACEMENT_RETRY_MS));
     }

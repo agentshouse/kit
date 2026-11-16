@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -49,7 +49,7 @@ async function opened(hosted: Hosted): Promise<void> {
   await hosted.result(lastCall());
 }
 
-it('places the release House names with its adapters beside the one it runs, writing nothing into that one or its settings, and ends with a failure once it is idle so its supervisor starts the new one', async () => {
+it('places the release House names with its adapters beside the one it runs, writing nothing into that one or its settings, and ends with a failure once it is idle so its supervisor starts the new one, recording the restart planned', async () => {
   const hosted = await hostKit();
   await serveRelease(hosted, await released(PLACED));
   const running = await entriesUnder(join(prefix(hosted), 'releases', KIT_RELEASE));
@@ -59,6 +59,7 @@ it('places the release House names with its adapters beside the one it runs, wri
 
   expect(await hosted.result('update-1')).toEqual({});
   expect(await hosted.kit.exited).toBe(1);
+  await access(join(hosted.home, 'planned-restart'));
   expect(await readFile(join(hosted.home, 'kit.json'), 'utf8')).toBe(settings);
   expect(hosted.kit.stderr()).toContain(`kit: Kit ${PLACED} is placed; its supervisor starts it\n`);
   expect(await current(hosted)).toBe(PLACED);
@@ -180,7 +181,7 @@ it('answers an update naming the release it runs at once and keeps running, plac
   expect(await current(hosted)).toBe(KIT_RELEASE);
 });
 
-it('places the release House names when it refuses its Kit connection for its wire at once, though a turn is open, opening no Kit connection again, and ends with a failure so its supervisor starts it', async () => {
+it('places the release House names when it refuses its Kit connection for its wire at once, though a turn is open, opening no Kit connection again, and ends with a failure so its supervisor starts it, recording the restart planned', async () => {
   const hosted = await hostKit();
   await serveRelease(hosted, await released(PLACED));
   await opened(hosted);
@@ -192,6 +193,7 @@ it('places the release House names when it refuses its Kit connection for its wi
 
   expect(await hosted.kit.exited).toBe(1);
   expect(hosted.kit.stderr()).toContain(`kit: Kit ${PLACED} is placed; its supervisor starts it\n`);
+  await access(join(hosted.home, 'planned-restart'));
   expect(await current(hosted)).toBe(PLACED);
   expect(await placedReleases(hosted)).toEqual([KIT_RELEASE, PLACED].sort());
   expect(ended(hosted)).toEqual([]);
