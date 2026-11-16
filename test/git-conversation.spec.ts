@@ -158,7 +158,7 @@ it('sends a git mv made while a conflict is open as a House rename', async () =>
   });
   expect(room.files.get('a b.md')?.revision).toBe(alpha);
   expect(room.files.get('plan.md')?.content).toBe('both\n');
-  expect(room.files.get('index.md')?.content).toBe('See [alpha](a b.md).\n');
+  expect(room.files.get('index.md')?.content).toBe('See [alpha](<a b.md>).\n');
   expect(git(room.repository, 'diff', '--name-only', 'HEAD', 'refs/house/received')).toBe('');
   expect(git(room.repository, 'status', '--porcelain')).toBe('');
 });

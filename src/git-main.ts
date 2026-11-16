@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { accessSync, constants, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { request } from 'node:http';
-import { constants as system, tmpdir } from 'node:os';
+import { constants as system } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { localCopies } from './git.ts';
 import { kitHome } from './home.ts';
@@ -83,10 +83,10 @@ function delegated(git: string, args: string[]): Promise<Outcome> {
   });
 }
 
-function merged(git: string, copy: string[]): string | undefined {
+function merged(git: string, copy: string[], common: string): string | undefined {
   const staged = (captured(git, [...copy, 'ls-files', '--stage', '-z']) ?? '').split('\0');
   const input = staged.filter((entry) => /^\d+ [0-9a-f]+ 0\t/.test(entry)).map((entry) => `${entry}\0`).join('');
-  const scratch = mkdtempSync(join(tmpdir(), 'house-git-'));
+  const scratch = mkdtempSync(join(common, 'house-index-'));
   try {
     const index = join(scratch, 'index');
     captured(git, [...copy, 'update-index', '-z', '--index-info'], { input, index });
@@ -128,7 +128,7 @@ async function observed(git: string, args: string[]): Promise<Outcome> {
     return delegated(git, args);
   }
   const copy = [...globals, '-C', worktree];
-  const before = name === 'mv' ? merged(git, copy) : undefined;
+  const before = name === 'mv' ? merged(git, copy, common) : undefined;
   const outcome = await delegated(git, args);
   const moves = before !== undefined && outcome.status === 0 ? moved(git, copy, before) : [];
   await reported(bridge, { common, worktree, moves });

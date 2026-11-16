@@ -308,10 +308,11 @@ export class Room {
           next.delete(path);
           next.set(to!, current!);
           writes.set(to!, { path: to!, op: 'rename', content: current!.content, revision: current!.revision, from: path });
+          const destination = (name: string) => (name.includes(' ') ? `(<${name}>)` : `(${name})`);
           for (const [other, file] of next) {
-            const link = `(${basename(path)})`;
+            const link = destination(basename(path));
             if (other !== to && dirname(other) === dirname(path) && file.content.includes(link)) {
-              set(other, 'replace', file.content.replaceAll(link, `(${basename(to!)})`), true);
+              set(other, 'replace', file.content.replaceAll(link, destination(basename(to!))), true);
             }
           }
         }
