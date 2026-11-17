@@ -15,12 +15,14 @@ import {
   type Caller,
   type LocalCopies,
   type Observed,
+  type Pushed,
   type Submitted,
   type Upload,
 } from './copies.ts';
 import { fileInfo, type Finished } from './files.ts';
+import { PUSH_NEEDS_OWNER } from './git.ts';
 import { kitHome, readEnrolment, readOwnAgent, socketDirectory } from './home.ts';
-import { callHouse, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
+import { callHouse, DISCONNECTED, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import type { Edit } from './translate.ts';
@@ -34,10 +36,16 @@ export interface Bridge {
 
 interface Holder {
   key: string;
+  origin: string;
   credential: string;
-  operations: boolean;
   named: Record<string, string>;
+  ownAgent: boolean;
+  owner: boolean;
 }
+
+class Said extends Error {}
+
+const OWNER_IN_CONVERSATION = '--owner is not for Agent conversations; run house push without it';
 
 const MCP_REQUEST_BYTES = 4_000_000;
 
@@ -108,7 +116,14 @@ export async function openBridge(
     () => house.act('conversations/credentials/issue', { conversation: conversationId }, signal),
     signal,
   );
-  return bridgeFor(copies, { key: `conversation:${conversationId}`, credential, operations: true, named: {} });
+  return bridgeFor(copies, {
+    key: `conversation:${conversationId}`,
+    origin: (await readEnrolment())!.house,
+    credential,
+    named: {},
+    ownAgent: false,
+    owner: false,
+  });
 }
 
 async function runCredential(house: House, run: string, signal: AbortSignal): Promise<string | null> {
@@ -121,28 +136,34 @@ async function runCredential(house: House, run: string, signal: AbortSignal): Pr
 }
 
 export async function openRunBridge(house: House, copies: LocalCopies, run: string, signal: AbortSignal): Promise<Bridge | null> {
+  const named = { [FUNCTION_RUN_META_KEY]: run };
   const ownAgent = await readOwnAgent();
-  const credential = ownAgent?.credential ?? (await runCredential(house, run, signal));
+  if (ownAgent !== null) {
+    return bridgeFor(copies, {
+      key: `function-run:${run}`,
+      origin: ownAgent.house,
+      credential: ownAgent.credential,
+      named,
+      ownAgent: true,
+      owner: true,
+    });
+  }
+  const credential = await runCredential(house, run, signal);
   if (credential === null) return null;
-  return bridgeFor(copies, {
-    key: `function-run:${run}`,
-    credential,
-    operations: ownAgent === null,
-    named: { [FUNCTION_RUN_META_KEY]: run },
-  });
+  const origin = (await readEnrolment())!.house;
+  return bridgeFor(copies, { key: `function-run:${run}`, origin, credential, named, ownAgent: false, owner: true });
 }
 
 async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
   const path = [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter);
-  const origin = (await readEnrolment())!.house;
-  const { credential, named } = holder;
+  const { origin, credential, named } = holder;
 
   const closed = new AbortController();
   const sent = (message: Message, operation: string | null): Promise<Forwarded> =>
     callHouse(origin, credential, message, { operation, named, signal: closed.signal });
 
   const send = async (message: Message, asked: string | null, pushing = false): Promise<Forwarded> => {
-    const operation = holder.operations ? asked : null;
+    const operation = holder.ownAgent ? null : asked;
     if (operation === null) return sent(message, null);
     for (let attempt = 0; ; attempt++) {
       const forwarded = await sent(message, operation).catch((error: unknown) => {
@@ -224,17 +245,26 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
     },
   };
 
+  const pusher = holder.owner ? copies.owner : caller;
+
   const local = async (path: string, text: string): Promise<Forwarded> => {
     if (path === '/git/push') {
-      const { cwd, commit } = JSON.parse(text) as { cwd: string; commit: string };
-      return { status: 200, text: JSON.stringify(await copies.push(cwd, commit, caller)) };
+      const { cwd, commit, owner } = JSON.parse(text) as { cwd: string; commit: string; owner: boolean };
+      const pushed: Pushed =
+        owner === holder.owner
+          ? await copies.push(cwd, commit, pusher)
+          : { refused: true, text: owner ? OWNER_IN_CONVERSATION : PUSH_NEEDS_OWNER };
+      return { status: 200, text: JSON.stringify(pushed) };
     }
-    if (path === '/git/fetch') return { status: 200, text: JSON.stringify(await copies.fetch(caller)) };
+    if (path === '/git/fetch') return { status: 200, text: JSON.stringify(await copies.fetch(pusher)) };
     if (path === '/git/observed') {
       await copies.observed(JSON.parse(text) as Observed);
       return { status: 200, text: '{}' };
     }
-    return path === '/' ? forward(text) : { status: 404, text: '' };
+    if (path !== '/') return { status: 404, text: '' };
+    const forwarded = await forward(text);
+    if (holder.ownAgent && forwarded.status === 401) throw new Said(DISCONNECTED);
+    return forwarded;
   };
 
   const socketPath = join(socketDirectory(), `${randomUUID()}.sock`);
@@ -248,6 +278,10 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
       const answered = await local(path, await received(request));
       response.writeHead(answered.status, { 'content-type': 'application/json' }).end(answered.text);
     } catch (error) {
+      if (error instanceof Said) {
+        response.writeHead(502).end(error.message);
+        return;
+      }
       if (error instanceof HouseRefusal) {
         response.writeHead(error.status, { 'content-type': 'application/json' }).end(error.text);
         return;

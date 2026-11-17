@@ -7,6 +7,7 @@ import { expect, it, onTestFinished } from 'vitest';
 import { idOf, settle, until, without, type Received } from './double.ts';
 import { hostKit, lastCall, runCredential, type Hosted, type McpCall } from './environment.ts';
 import { accountOf, alive, filesUnder, stop } from './kit.ts';
+import { serveRooms } from './rooms.ts';
 
 interface Ran {
   exit_code?: number;
@@ -84,8 +85,8 @@ function searched(hosted: Hosted): string[][] {
     .map((received) => [String((received.body as McpCall).params.arguments!.query), received.headers.authorization!]);
 }
 
-function ownAgentHome(home: string): Promise<void> {
-  return writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: 'http://127.0.0.1:9', user: 'user-one', credential: OWN_AGENT }));
+function holdOwnAgent(hosted: Hosted): Promise<void> {
+  return writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: OWN_AGENT }));
 }
 
 async function keepsNothing(hosted: Hosted, texts: string[]): Promise<void> {
@@ -303,7 +304,8 @@ it("gives a run on a Sandbox or VPS its own house bridge under the credential Ho
 });
 
 it("sends a run's house calls on a computer under the User's own agent's credential Kit home holds, naming the run and with no operation id, and asks House for no credential", async () => {
-  const hosted = await hostKit([], { prepare: ownAgentHome });
+  const hosted = await hostKit([]);
+  await holdOwnAgent(hosted);
   const id = run(hosted, `house search '{"query":"on-computer"}'`);
 
   expect(await ended(hosted, id)).toEqual({ exit_code: 0, output: 'search answered\n', cut: false });
@@ -330,7 +332,7 @@ it("closes a run's bridge as the run ends, so a house call its process makes aft
     return text.includes('exit ') ? text : undefined;
   });
 
-  expect(late).toBe("house: this conversation's House connection is closed; nothing to do from here\nexit 1\n");
+  expect(late).toBe('house: this House connection is closed; nothing to do from here\nexit 1\n');
   expect(searched(hosted)).toEqual([['in-run', `Bearer ${runCredential(id)}`]]);
 });
 
@@ -346,4 +348,52 @@ it("leaves a run on a computer whose own agent Kit home no longer holds, which H
   });
   expect(hosted.house.requests.filter((received) => received.path === ISSUE).map((received) => received.body)).toEqual([{ run: id }]);
   expect(searched(hosted)).toEqual([]);
+});
+
+it("answers a run's house call on a computer whose own agent House no longer accepts as outside a run, naming kit login", async () => {
+  const hosted = await hostKit([]);
+  await holdOwnAgent(hosted);
+  hosted.house.route('POST', '/', () => ({ status: 401, body: { error: { code: 'token_rejected', retryable: false } } }));
+  const id = run(hosted, `house search '{"query":"rejected"}' 2>&1; echo "exit $?"`);
+
+  expect(await ended(hosted, id)).toEqual({
+    exit_code: 0,
+    output: "house: House no longer accepts this computer's own agent; run kit login\nexit 1\n",
+    cut: false,
+  });
+});
+
+it.each([
+  ['a Sandbox or VPS', false],
+  ['a computer', true],
+])("pushes a run's Local copy on %s as the owner with house push --owner, as outside a run, and refuses house push alone", async (_place, computer) => {
+  const hosted = await hostKit([]);
+  if (computer) await holdOwnAgent(hosted);
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('ROOM.md', 'The notes Room\n');
+  await rooms.fetch([room]);
+  const updates = () => hosted.house.requests.filter((received) => received.path === '/kit/door/update');
+  const id = run(
+    hosted,
+    `cd ${room.repository} && echo added > added.md && git add -A && git commit -q -m added && house push 2>&1; echo "exit $?"; house push --owner > /dev/null 2>&1; echo "exit $?"`,
+  );
+
+  expect(await ended(hosted, id)).toEqual({
+    exit_code: 0,
+    output: 'house: outside an Agent conversation, house push needs --owner\nexit 1\nexit 0\n',
+    cut: false,
+  });
+  expect(updates()).toHaveLength(1);
+});
+
+it("abandons a run's credential request when the Kit connection drops before House answers, and reports the run lost", async () => {
+  const hosted = await hostKit([]);
+  hosted.house.route('POST', ISSUE, () => new Promise(() => undefined));
+  const id = run(hosted, 'echo never');
+  await until(() => hosted.house.requests.find((received) => received.path === ISSUE));
+
+  hosted.connection.transport.terminate();
+
+  expect(await hosted.result(id)).toEqual({ refused: 'the Kit lost its connection to House' });
 });

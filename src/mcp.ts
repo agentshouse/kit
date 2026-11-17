@@ -26,7 +26,7 @@ const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 export const UNREACHABLE = 'House is unreachable; call again in a minute';
 const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
-const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
+export const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
 const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 
 export class Unsettled extends Error {}

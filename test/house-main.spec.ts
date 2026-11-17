@@ -461,7 +461,7 @@ it("never falls back to the User's own agent's connection when a conversation's 
   const ran = await runHouse(home, ['search', '{"query":"invoice"}'], join(home, 'bridges', 'gone.sock'));
 
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toBe("house: this conversation's House connection is closed; nothing to do from here\n");
+  expect(ran.stderr).toBe('house: this House connection is closed; nothing to do from here\n');
   expect(house.requests).toEqual([]);
 });
 
