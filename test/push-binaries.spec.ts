@@ -937,6 +937,39 @@ it('reads House first when a push would turn a text the copy holds into an attac
   clean(room);
 });
 
+it.each([
+  ['read', true],
+  ['did not read', false],
+])("ends a push of a change to a text another writer changed and House then turned into an attachment, which the copy %s, with House's stale-base conflict and the rebase line, and the resolution lands as an upload", async (_, reading) => {
+  const { hosted, room } = await copied((setup) => setup.put('notes.txt', 'first\n'));
+  await ownAgent(hosted);
+  room.put('notes.txt', 'second\n');
+  if (reading) expect((await house(hosted, '/', 'fetch')).status).toBe(0);
+  room.attach('notes.txt');
+  const held = room.binaries.get('notes.txt')!.revision;
+  await placed(room, { 'notes.txt': 'mine\n' });
+  commitAll(room.repository, 'mine');
+
+  const refused = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(refused.status).toBe(1);
+  expect(refused.stderr).toContain('code: base_revision_stale');
+  expect(refused.stderr).toMatch(/refs\/house\/received holds House's current state; rebase onto it and push again\n$/);
+  expect(room.batches).toHaveLength(0);
+  expect(blobAt(room, 'refs/house/received', 'notes.txt')?.toString('utf8')).toBe('second\n');
+  expect(tryGit(room.repository, 'merge', '-q', 'refs/house/received').status).not.toBe(0);
+  git(room.repository, 'checkout', '--ours', 'notes.txt');
+  git(room.repository, 'add', 'notes.txt');
+  git(room.repository, 'commit', '-q', '--no-edit');
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(pushed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}/) });
+  expect(batches(hosted).at(-1)!.changes).toEqual([part('notes.txt', Buffer.from('mine\n'), 'text/plain', held)]);
+  expect(room.binaries.get('notes.txt')!.bytes.toString('utf8')).toBe('mine\n');
+  clean(room);
+});
+
 it('sends a git mv of a text House holds at a Path other than .md to another such Path as a rename, which House takes', async () => {
   const { hosted, room } = await copied((setup) => setup.put('notes.txt', 'some notes\n'));
   const revision = room.revision('notes.txt');

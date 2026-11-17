@@ -495,13 +495,6 @@ function heldAt(copy: Copy, commit: string, path: string): Held | undefined {
   return entryAt(copy, commit, path)?.held;
 }
 
-function heldSince(copy: Copy, base: string, path: string): Held | undefined {
-  const held = heldAt(copy, base, path);
-  if (held !== undefined) return held;
-  const revision = revisionAt(copy, base, path);
-  return revision !== undefined && revisionAt(copy, copy.house, path) === revision ? heldAt(copy, copy.house, path) : undefined;
-}
-
 function manifest(parent: string | null, files: Record<string, string | null>, binary: Record<string, Held>): Manifest {
   return Object.keys(binary).length === 0 ? { parent, files } : { parent, files, binary };
 }
@@ -515,7 +508,7 @@ function pushedBinary(copy: Copy, push: Push): Map<string, Held> {
   for (const change of push.changes) {
     if (change.op === 'upload') sent.set(relative(change.path), { bytes: change.bytes, sha256: change.sha256 });
     else if (change.op === 'rename') {
-      const held = heldSince(copy, push.base, relative(change.path));
+      const held = heldAt(copy, push.base, relative(change.path));
       if (held !== undefined) sent.set(relative(change.to), held);
     }
   }
@@ -1210,8 +1203,9 @@ export class LocalCopies {
       copy,
       [...after].filter(([path, entry]) => before.get(path) !== entry && !renamedAsIs.has(path)),
     );
-    const held = (path: string) => heldSince(copy, base, path);
-    const heldBinary = (path: string) => held(path) !== undefined;
+    const held = (path: string) => heldAt(copy, base, path);
+    const houseTree = base === copy.house ? before : await tree(copy.repository, copy.house);
+    const houseText = (path: string) => houseTree.has(path) && heldAt(copy, copy.house, path) === undefined;
     const moved = new Map([...intended, ...sameBytesMoved(before, after, held, binary, intended)]);
     const arrived = new Set(moved.values());
     const text = (entry: string) => blobText(copy.repository, entry);
@@ -1246,8 +1240,8 @@ export class LocalCopies {
       const part = binary.get(path);
       if (next === undefined) changes.push({ op: 'remove', path: `${root}/${path}`, base: known });
       else if (prior === undefined) changes.push(await created(path, next));
-      else if (heldBinary(path) !== (part !== undefined)) {
-        changes.push({ op: 'remove', path: `${root}/${path}`, base: known }, await created(path, next));
+      else if (part !== undefined && houseText(path)) {
+        changes.push({ op: 'remove', path: `${root}/${path}`, base: known }, { op: 'upload', path: `${root}/${path}`, ...part });
       } else if (part !== undefined) changes.push({ op: 'upload', path: `${root}/${path}`, base: known, ...part });
       else changes.push(...changed(`${root}/${path}`, path, known, await text(prior), await text(next), model));
     }

@@ -378,6 +378,7 @@ export class Room {
       if ((change.op === 'create' || change.op === 'upload') && removedKinds.get(path) === (change.op === 'upload' ? 'attachment' : 'document')) {
         return { refusal: { code: 'duplicate_path', path: change.path } };
       }
+      if (change.op === 'remove' && kind !== undefined) removedKinds.set(path, kind);
       const named = to ?? path;
       const twin = [...next.keys()].find((held) => held !== named && held !== path && held.toLowerCase() === named.toLowerCase());
       if (twin !== undefined && (change.op === 'create' || change.op === 'rename')) {
@@ -420,7 +421,6 @@ export class Room {
         } else {
           binaries.delete(path);
           removed.add(path);
-          removedKinds.set(path, 'attachment');
           writes.set(path, { path, op: 'remove', content: null, revision: null });
         }
         continue;
@@ -436,7 +436,6 @@ export class Room {
         else {
           next.delete(path);
           removed.add(path);
-          removedKinds.set(path, 'document');
           writes.set(path, { path, op: 'remove', content: null, revision: null });
         }
       } else if (change.op === 'rename') {
