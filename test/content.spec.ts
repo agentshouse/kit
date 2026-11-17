@@ -6,9 +6,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { idOf, settle, until, type Received } from './double.ts';
-import { emit, hostKit, lastCall, type Hosted, type RouteOverrides } from './environment.ts';
+import { emit, hostKit, lastCall, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
 
 const KINDS: Record<string, string> = { claude: 'claude-agent-acp', codex: 'codex-acp', grok: 'grok-build' };
+const LATE_STREAM = fileURLToPath(new URL('./late-stream.ts', import.meta.url));
 
 interface Ended {
   content: Turn;
@@ -171,8 +172,8 @@ function emitted(fixture: string, lines: readonly Record<string, any>[]): string
   return lines.map((line) => `@emit ${JSON.stringify({ method: line.method, params: line.params }).split(session).join('$SESSION')}`).join('\n');
 }
 
-async function composed(kind: string, script: (hosted: Hosted) => Promise<string[]>): Promise<{ hosted: Hosted; ended: Ended }> {
-  const hosted = await hostKit([{ kind }]);
+async function composed(kind: string, script: (hosted: Hosted) => Promise<string[]>, hosting: Hosting = {}): Promise<{ hosted: Hosted; ended: Ended }> {
+  const hosted = await hostKit([{ kind }], hosting);
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
   hosted.watch(true);
@@ -252,6 +253,18 @@ it.each([
     const { ended } = await composed(kind, ONCE[kind]!);
 
     expect(ended.content.parts).toEqual([counts({ edited: 1, ...lines }), text('Edited it once.'), counts(lines), text('done')]);
+  },
+);
+
+it.each([
+  ['reports its thread idle and answers', []],
+  ['answers with no report', ['@answer']],
+] as [string, string[]][])(
+  "counts each file codex-acp's recording edits in its turn when Codex's own stream reaches the Kit only after its adapter %s",
+  async (_closing, closing) => {
+    const { ended } = await composed('codex-acp', async (hosted) => [...(await ONCE['codex-acp']!(hosted)), ...closing], { node: ['--import', LATE_STREAM] });
+
+    expect(ended.content.parts).toEqual([counts({ edited: 1, added: 1 }), text('Edited it once.'), counts({ added: 1 }), text('done')]);
   },
 );
 

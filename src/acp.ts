@@ -42,7 +42,7 @@ export async function startAdapter(
   cli: string,
   cwd: string,
   app: ClientApp,
-  events: (message: Message) => void = () => undefined,
+  events: (message: Message) => Promise<void> | null = () => null,
   added: Record<string, string> = {},
   signal?: AbortSignal,
   scope: Scope | null = null,
@@ -101,10 +101,14 @@ export async function startAdapter(
             else asked.add(read.id);
           }
           watch();
-          if (owned) events(read);
-          if (read.id !== undefined || (read.method !== 'session/update' && !read.method!.startsWith('_'))) {
-            controller.enqueue(message);
-          }
+          const held = owned ? events(read) : null;
+          const pass = () => {
+            if (read.id !== undefined || (read.method !== 'session/update' && !read.method!.startsWith('_'))) {
+              controller.enqueue(message);
+            }
+          };
+          if (held === null) return pass();
+          return held.then(pass);
         },
       }),
     ),
