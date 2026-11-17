@@ -63,8 +63,8 @@ it('keeps a link in the text whose info answer is no mapping, a captured item or
   const history = '/rooms/notes/log.md';
   const folder = '/rooms/notes/drafts';
   const answers: Record<string, string> = {
-    [item]: `${item}:4-6 revision=rev-item ref=ep_1\nepisode: ep_1\nthe item's own words: a note\n`,
-    [history]: `${stringify({ ref: 'doc_1', path: history, media_type: 'text/markdown', revisions: [{ revision: 'rev-2' }] })}info: output_cut 1 newest revisions; continue with: info ref=rev-1 path=${history} view=history`,
+    [item]: `${item}:4-6 revision=v_3.1.x ref=ep_1\nepisode: ep_1\nthe item's own words: a note\n`,
+    [history]: `${stringify({ ref: 'd_4.x', path: history, media_type: 'text/markdown', revisions: [{ revision: 'v_4.2.x' }] })}info: output_cut 1 newest revisions; continue with: info ref=v_4.1.x path=${history} view=history`,
     [folder]: `${stringify({ path: folder, documents: [{ path: `${folder}/a.md` }] })}info: output_cut 1 newest documents; continue with: ls -lt ${folder}`,
   };
   hosted.tools.info = (args) => ({ content: [{ type: 'text', text: answers[String(args.path)]! }] });

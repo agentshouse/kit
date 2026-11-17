@@ -1,3 +1,4 @@
+import { REVISION_REFERENCE_PREFIX } from '@agentshouse/mdmodel';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
@@ -213,7 +214,7 @@ export async function startStore(tls?: Certificate): Promise<Store> {
         objects.set(`staged/${id}`, Buffer.concat(all.map((part) => upload.parts.get(part)!.content)));
         return { staged: true };
       }
-      return { path: upload.path!, revision: `fr_${++revisions}` };
+      return { path: upload.path!, revision: `${REVISION_REFERENCE_PREFIX}${++revisions}.1.x` };
     },
   };
 }

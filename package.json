@@ -26,9 +26,9 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "2.4.0",
     "@agentshouse/kit-wire": "0.1.0-caf9c7b612dda",
-    "@agentshouse/mdmodel": "0.1.0-c00ddc0c7ef71",
+    "@agentshouse/mdmodel": "0.1.0-c420026daf4fc",
     "@agentshouse/session-content": "0.1.0-c560e48c9bea3",
-    "@agentshouse/skills": "0.1.0-c3f65f3c62195",
+    "@agentshouse/skills": "0.1.0-cfe9b251aa7df",
     "@lydell/node-pty": "1.2.0-beta.15",
     "micromark": "4.0.2",
     "smol-toml": "1.9.1",

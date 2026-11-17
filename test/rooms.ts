@@ -1,11 +1,16 @@
 import {
   apply,
+  ATTACHMENT_REFERENCE_PATTERN,
+  ATTACHMENT_REFERENCE_PREFIX,
   definitionAt,
+  DOCUMENT_REFERENCE_PATTERN,
   HOUSE_ROOM_TYPES,
   HOUSE_TYPED_PATHS,
   parse,
   readSchemaDocument,
   readTypes,
+  REVISION_REFERENCE_PATTERN,
+  REVISION_REFERENCE_PREFIX,
   serialize,
   type Change,
 } from '@agentshouse/mdmodel';
@@ -29,6 +34,8 @@ const STAGED_PART_BYTES = 8;
 const RETRY_AT = '2026-11-17T00:00:00.000Z';
 const DOCUMENT = /\.md$/i;
 const TEXT_OPS = new Set(['create', 'replace', 'set_field', 'replace_section', 'replace_preamble']);
+const REVISION_BASES = new Set(['replace', 'remove', 'rename', 'upload']);
+const REFERENCES = [REVISION_REFERENCE_PATTERN, DOCUMENT_REFERENCE_PATTERN, ATTACHMENT_REFERENCE_PATTERN];
 
 interface Stored {
   content: string;
@@ -56,7 +63,7 @@ interface Missing {
   sha256: string;
 }
 
-type Refused = { code: string; path?: string; held?: string; kind?: string; conflicts?: Record<string, unknown>[] };
+type Refused = { code: string; path?: string; held?: string; kind?: string; base?: string; conflicts?: Record<string, unknown>[] };
 
 type Edited = { writes: Write[] } | { refusal: Refused } | { missing: Missing[] } | { limited: true };
 
@@ -100,6 +107,7 @@ function said(refusal: Refused): string {
   if (refusal.code === 'duplicate_path') {
     return `duplicate_path: ${refusal.path} is removed or moved away in this batch; leave other changes of a removed path out, and change a moved file at its new path`;
   }
+  if (refusal.code === 'invalid_base_revision') return `invalid_base_revision: base for ${refusal.path} is not a revision; pass the v_… revision your read of it printed`;
   if (refusal.code === 'kind_fixed') return `kind_fixed: ${refusal.path} would hold another kind than the ${refusal.kind} moved there, and an entry keeps its kind`;
   if (refusal.code === 'invalid_authored_path') {
     return `invalid_authored_path: ${refusal.path} differs from ${refusal.held} only in letter case, and a folder holds one name in any case; write to ${refusal.held} or choose another name`;
@@ -127,6 +135,11 @@ function digest(bytes: Buffer): string {
 }
 
 let revisions = 0;
+
+function minted(): string {
+  revisions++;
+  return `${REVISION_REFERENCE_PREFIX}${revisions}.1.x`;
+}
 
 function covers(path: string, prefix: string): boolean {
   return prefix === '' || path === prefix || path.startsWith(`${prefix}/`);
@@ -189,8 +202,7 @@ export class Room {
   }
 
   stored(content: string, provenance?: string): Stored {
-    revisions++;
-    const revision = `rev-${revisions}`;
+    const revision = minted();
     this.history.set(revision, content);
     return { content, revision, ...(provenance === undefined ? {} : { provenance }) };
   }
@@ -204,8 +216,7 @@ export class Room {
   }
 
   upload(path: string, bytes: Buffer): string {
-    revisions++;
-    const binary = { revision: `rev-${revisions}`, bytes };
+    const binary = { revision: minted(), bytes };
     this.binaries.set(path, binary);
     this.binaryHistory.set(binary.revision, { ...binary, path });
     this.files.delete(path);
@@ -370,6 +381,9 @@ export class Room {
         return { refusal: { code: 'protected_path', path: change.path } };
       }
       if (change.op === 'upload' && DOCUMENT.test(path)) return { refusal: { code: 'binary_content', path: change.path } };
+      if (REVISION_BASES.has(change.op) && typeof change.base === 'string' && !REVISION_REFERENCE_PATTERN.test(change.base)) {
+        return { refusal: { code: 'invalid_base_revision', path: change.path, base: change.base } };
+      }
       if (TEXT_OPS.has(change.op) && !DOCUMENT.test(path)) return { refusal: { code: 'attachment_path', path: change.path } };
       const kind = next.has(path) ? 'document' : binaries.has(path) ? 'attachment' : undefined;
       if (change.op === 'rename' && kind !== undefined && (kind === 'document') === DOCUMENT.test(path) && DOCUMENT.test(path) !== DOCUMENT.test(to!)) {
@@ -406,8 +420,7 @@ export class Room {
           missing.push({ bytes: change.bytes!, sha256: change.sha256! });
           continue;
         }
-        revisions++;
-        const stored = { revision: `rev-${revisions}`, bytes };
+        const stored = { revision: minted(), bytes };
         binaries.set(path, stored);
         this.binaryHistory.set(stored.revision, { ...stored, path });
         writes.set(path, { path, op: 'upload', content: null, revision: stored.revision, binary: { bytes: bytes.length, sha256: digest(bytes) } });
@@ -716,6 +729,7 @@ export function serveRooms(hosted: Hosted): Rooms {
   });
   hosted.house.route('POST', '/kit/door/files/revisions/list', (request) => {
     const { path, revision } = request.body as { path: string; revision: string };
+    if (!REVISION_REFERENCE_PATTERN.test(revision)) return INVALID;
     const room = roomOf(path);
     return { body: { path, revisions: [{ revision, content: room.history.get(revision) }], next_before: null } };
   });
@@ -749,6 +763,9 @@ export function serveRooms(hosted: Hosted): Rooms {
     const room = roomOf(path);
     const relative = path.slice(room.root.length + 1);
     const ref = args.ref as string | undefined;
+    if (ref !== undefined && !REFERENCES.some((pattern) => pattern.test(ref))) {
+      return { isError: true, content: [{ type: 'text', text: 'not_found: nothing you can reach is there; check what you passed\n' }] };
+    }
     const binary = ref === undefined ? room.binaries.get(relative) : room.binaryHistory.get(ref);
     if (binary !== undefined) {
       const key = `binary/${room.ref}/${binary.revision}`;
@@ -758,7 +775,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       const text = stringify({
         path,
         revision: binary.revision,
-        file: `bf_${binary.revision}`,
+        file: binary.revision.replace(REVISION_REFERENCE_PATTERN, `${ATTACHMENT_REFERENCE_PREFIX}$1.$3`),
         bytes: binary.bytes.length,
         media_type: 'image/jpeg',
         sha256: createHash('sha256').update(binary.bytes).digest('hex'),

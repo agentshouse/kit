@@ -67,7 +67,7 @@ it("uploads a local file in the parts House answers, finishes it with its room_r
   const uploads = uploadTool(hosted.store, 5);
   const refusal = [
     'edit_conflict: nothing was written; fix each conflict listed, then send the edit again',
-    stringify({ conflicts: [{ path: '/rooms/notes/cover.jpg', code: 'base_required', state: 'current', revision: 'fr_9' }] }).trimEnd(),
+    stringify({ conflicts: [{ path: '/rooms/notes/cover.jpg', code: 'base_required', state: 'current', revision: 'v_9.1.x' }] }).trimEnd(),
   ].join('\n');
   hosted.tools.upload = (args) =>
     args.path === 'cover.jpg' && args.base === undefined
@@ -77,11 +77,11 @@ it("uploads a local file in the parts House answers, finishes it with its room_r
 
   const first = await ran(hosted, '@house upload {"file":"photo.jpg","room_ref":"r_notes","path":"photo.jpg"}');
   const occupied = await ran(hosted, '@house upload {"file":"photo.jpg","room_ref":"r_notes","path":"cover.jpg"}');
-  const based = await ran(hosted, '@house upload {"file":"photo.jpg","room_ref":"r_notes","path":"cover.jpg","base":"fr_9"}');
+  const based = await ran(hosted, '@house upload {"file":"photo.jpg","room_ref":"r_notes","path":"cover.jpg","base":"v_9.1.x"}');
 
-  expect(first).toMatchObject({ status: 0, stdout: 'path: photo.jpg\nrevision: fr_1\n', stderr: '' });
+  expect(first).toMatchObject({ status: 0, stdout: 'path: photo.jpg\nrevision: v_1.1.x\n', stderr: '' });
   expect(occupied).toMatchObject({ status: 1, stdout: '', stderr: `house: ${refusal}\n` });
-  expect(based).toMatchObject({ status: 0, stdout: 'path: cover.jpg\nrevision: fr_2\n' });
+  expect(based).toMatchObject({ status: 0, stdout: 'path: cover.jpg\nrevision: v_2.1.x\n' });
   const declared = { room_ref: 'r_notes', bytes: JPEG.length, sha256: digest(JPEG), media_type: 'image/jpeg' };
   const partSha256 = [JPEG.subarray(0, 5), JPEG.subarray(5, 10), JPEG.subarray(10)].map(digest);
   const finishing = { upload: expect.any(String), room_ref: 'r_notes', part_sha256: partSha256 };
@@ -91,7 +91,7 @@ it("uploads a local file in the parts House answers, finishes it with its room_r
       finishing,
       finishing,
       { ...declared, path: 'cover.jpg' },
-      { ...declared, path: 'cover.jpg', base: 'fr_9' },
+      { ...declared, path: 'cover.jpg', base: 'v_9.1.x' },
       finishing,
       finishing,
     ].map((args) => [`Bearer ${conversationCredential('conversation-1')}`, 'upload', args]),
@@ -110,7 +110,7 @@ it('resumes a transfer cut after some parts by sending only the parts the store 
 
   const sent = await ran(hosted, '@house upload {"file":"notes.bin","room_ref":"r_notes","path":"notes.bin"}');
 
-  expect(sent).toMatchObject({ status: 0, stdout: 'path: notes.bin\nrevision: fr_1\n', stderr: '' });
+  expect(sent).toMatchObject({ status: 0, stdout: 'path: notes.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(storeCalls(hosted)).toEqual([
     ['PUT', 1, 7, 200],
     ['PUT', 2, 0, 0],

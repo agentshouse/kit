@@ -157,7 +157,7 @@ it("uploads a file larger than the house CLI's memory budget from disk in parts 
     MEMORY,
   ], { KIT_TEST_PEAK_MEMORY: peak });
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: recordings/recording.webm\nrevision: fr_1\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: recordings/recording.webm\nrevision: v_1.1.x\n', stderr: '' });
   expect(uploads.calls.declared).toEqual([
     {
       room_ref: 'r_room',
@@ -187,7 +187,7 @@ it("names every part's SHA-256 in each finishing call and sends each part with i
 
   const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'notes/notes.bin' })]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: notes/notes.bin\nrevision: fr_1\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: notes/notes.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(uploads.calls.finished).toEqual(
     Array(3).fill({ upload: expect.any(String), room_ref: 'r_room', part_sha256: digests.map((digest) => digest.toString('hex')) }),
   );
@@ -243,7 +243,7 @@ it("resumes an upload outside a conversation after its connection drops, finishi
     FAST_TIMEOUTS,
   ]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: fr_1\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(store.requests.map((request) => [request.part, request.status])).toEqual([
     [1, 200],
     [2, 0],
@@ -271,7 +271,7 @@ it('finishes an upload outside a conversation again while House answers it with 
     FAST_TIMEOUTS,
   ]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: fr_1\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(store.requests.map((request) => [request.part, request.status])).toEqual([
     [1, 200],
     [2, 200],
@@ -347,12 +347,12 @@ it('prints the revision House answers and posts no bytes when the path already h
   await writeFile(file, 'png');
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
-    return { body: { jsonrpc: '2.0', id: message.id, result: shelled('path: covers/cover.png\nrevision: fr_1') } };
+    return { body: { jsonrpc: '2.0', id: message.id, result: shelled('path: covers/cover.png\nrevision: v_1.1.x') } };
   });
 
   const ran = await runHouse(home, ['upload', JSON.stringify({ file, room_ref: 'r_room', path: 'covers/cover.png' })]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.png\nrevision: fr_1\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: covers/cover.png\nrevision: v_1.1.x\n', stderr: '' });
   expect(house.requests.map((request) => request.path)).toEqual(['/']);
   expect((house.requests[0]!.body as McpCall).params.arguments).toMatchObject({ media_type: 'image/png' });
 });
@@ -539,12 +539,12 @@ it.each([
       '    - op "set_field" (required)',
       '      path (required): The file.',
       "      field (required): The field's key.",
-      '      base: The `fr_` revision you read; for a field, its old value.',
+      '      base: The `v_` revision you read; for a field, its old value.',
       '      value (required): Its new value.',
       '    - op "rename" (required)',
       '      path (required): The file.',
       '      to (required): The new path; links to it follow.',
-      '      base: The `fr_` revision you read.',
+      '      base: The `v_` revision you read.',
       '  mount: An empty folder; every change creates a document in it, all or none.',
     ],
   ],
