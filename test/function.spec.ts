@@ -285,6 +285,8 @@ it("gives a run on a Sandbox or VPS its own house bridge under the credential Ho
 
   expect(ending).toEqual({ exit_code: 0, cut: false });
   expect(output).toMatch(/^bridge \/.+\.sock$/m);
+  expect(output).toMatch(/^PATH=/m);
+  expect(output).not.toMatch(/^PATH=.*\/shim[:\n]/m);
   expect(output).toContain('search answered\nsearch answered\n');
   const asked = hosted.house.requests.filter((received) => received.path === ISSUE);
   expect(asked.map((received) => [received.body, received.headers.authorization])).toEqual([[{ run: id }, 'Bearer ahk_held']]);

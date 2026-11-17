@@ -273,8 +273,8 @@ export class Scripts {
       if (run.ended !== null) return run.ended;
       const environment = {
         ...childEnvironment(),
-        PATH: path,
         ...run.bridge?.env,
+        PATH: path,
         ...(run.input === null ? {} : { HOUSE_INPUT: run.input }),
       };
       if (plan.terminal === null) {
