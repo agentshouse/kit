@@ -34,6 +34,10 @@ export class Work {
 
   async settled(): Promise<void> {}
 
+  caughtUp(): Promise<void> | null {
+    return null;
+  }
+
   read(message: Message): void {
     this.take(message);
     this.changed();
@@ -184,6 +188,7 @@ class CodexWork extends Work {
   private readonly hooks = new Set<string>();
   private readonly starting = new Set<string>();
   private readonly settling: (() => void)[] = [];
+  private readonly waiting: { heard: number; resolve: () => void }[] = [];
   private memories: boolean | null = null;
   private lost = false;
   private server: Server | null = null;
@@ -217,6 +222,14 @@ class CodexWork extends Work {
   protected override take(message: Message): void {
     super.take(message);
     this.heard++;
+  }
+
+  override caughtUp(): Promise<void> | null {
+    if (this.lost || this.socket === null) return null;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.waiting.push({ heard: this.heard, resolve });
+    this.prove();
+    return promise;
   }
 
   override busy(): boolean {
@@ -270,6 +283,7 @@ class CodexWork extends Work {
 
   private lose(): void {
     this.lost = true;
+    this.release();
     this.changed();
   }
 
@@ -277,6 +291,10 @@ class CodexWork extends Work {
     if (this.proving === this.heard) return;
     this.proving = this.heard;
     this.socket!.write(`${JSON.stringify({ jsonrpc: '2.0', id: `${SYNC}${this.heard}`, method: 'house-kit/sync' })}\n`);
+  }
+
+  private release(): void {
+    while (this.waiting[0] !== undefined && (this.lost || this.waiting[0].heard <= this.proven)) this.waiting.shift()!.resolve();
   }
 
   private settle(): void {
@@ -330,6 +348,7 @@ class CodexWork extends Work {
   private answered(message: Message): void {
     if (typeof message.id === 'string' && message.id.startsWith(SYNC)) {
       this.proven = Number(message.id.slice(SYNC.length));
+      this.release();
     } else if (typeof message.id === 'string' && message.id.startsWith(QUEUE_LIST)) {
       const asked = Number(message.id.slice(QUEUE_LIST.length));
       for (const [thread, latest] of this.queues) {

@@ -235,15 +235,27 @@ it('stays busy while a Codex goal is active', async () => {
   await stays(hosted, `@stream ${fixture('codex-goal')} ${complete}`, true);
 });
 
-it.each([
-  ['stalls', '@stall'],
-  ['is lost', '@lose'],
-])('keeps a Codex conversation busy once its stream %s', async (_, directive) => {
+it('keeps a Codex conversation busy once its stream is lost', async () => {
   const hosted = await opened('codex-acp');
 
-  await stays(hosted, directive, false);
+  await stays(hosted, '@lose', false);
 
   hosted.call({ kind: 'kill' });
+  await until(() => hosted.idles[2]);
+});
+
+it('keeps a Codex conversation busy and its turn open once its stream stalls, until the Conversation process exits', async () => {
+  const hosted = await opened('codex-acp');
+  hosted.watch(true);
+
+  hosted.call({ kind: 'message', text: '@stall\n@say ok', first: false });
+  await until(() => hosted.connection.oneWayCalls.some((oneWayCall) => JSON.stringify(oneWayCall.operation ?? {}).includes('"text":"ok"')));
+  await settle();
+  expect(ended(hosted)).toHaveLength(0);
+  expect(hosted.idles).toHaveLength(2);
+
+  hosted.call({ kind: 'kill' });
+  await until(() => ended(hosted)[0]);
   await until(() => hosted.idles[2]);
 });
 

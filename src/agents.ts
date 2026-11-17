@@ -139,7 +139,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
   }
   let adapter: Adapter | undefined;
   try {
-    adapter = await startAdapter(kind, cli, kitHome(), client({ name: '@agentshouse/kit' }), () => undefined, {}, signal);
+    adapter = await startAdapter(kind, cli, kitHome(), client({ name: '@agentshouse/kit' }), () => null, {}, signal);
     signal?.throwIfAborted();
     if ('initializeMeta' in probe) {
       const method = adapter.initialized._meta?.[probe.initializeMeta];

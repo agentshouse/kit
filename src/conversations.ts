@@ -856,7 +856,7 @@ export class Conversations {
           app,
           (message) => {
             work.read(message);
-            this.read(conversation, reader, message);
+            return this.read(conversation, reader, work, message);
           },
           { ...bridge.env, ...streamed },
           undefined,
@@ -1165,9 +1165,18 @@ export class Conversations {
     if (content !== null) this.questions.get(interactionId)?.answer({ action: 'accept', content });
   }
 
-  private read(conversation: Conversation, reader: Reader, message: Message): void {
-    for (const event of reader.read(message)) this.event(conversation, event);
-    this.reportActivity(conversation);
+  private read(conversation: Conversation, reader: Reader, work: Work, message: Message): Promise<void> | null {
+    const events = reader.read(message);
+    const apply = () => {
+      for (const event of events) this.event(conversation, event);
+      this.reportActivity(conversation);
+    };
+    const held = message.method === undefined || events.some((event) => event.kind === 'ended') ? work.caughtUp() : null;
+    if (held === null) {
+      apply();
+      return null;
+    }
+    return held.then(apply);
   }
 
   private tapped(conversation: Conversation, reader: Reader, message: Message): void {
