@@ -40,7 +40,6 @@ function referenced(text: string, prefixes: { [path: string]: string }): string 
       const revision = manifest.files[path];
       if (typeof revision === 'string') manifest.files[path] = revision.replace(REVISION, `${prefix}$1.$2`);
     }
-    if (manifest.parent === null) manifest.files = { ...manifest.files, 'old.md': 'fr_old' };
   }
   return JSON.stringify(record);
 }
@@ -61,10 +60,12 @@ async function copied(): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('plan.md', 'one\n');
+  room.put('notes.md', 'notes\n');
   await rooms.fetch([room]);
   await writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' }));
   await writeFile(join(room.repository, 'cover.jpg'), JPEG);
-  commitAll(room.repository, 'cover');
+  await writeFile(join(room.repository, 'photo.jpg'), REDRAWN);
+  commitAll(room.repository, 'attachments');
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(0);
   return { hosted, rooms, room };
 }
@@ -105,14 +106,25 @@ it("rewrites the fr_ revisions and af_ references an earlier Kit's Local copy re
   expect(await readFile(path, 'utf8')).toBe(rewritten);
 });
 
-it('sends a push an earlier Kit left unanswered again under its operation with its bases in v_, and House lands it', async () => {
+it('sends a push an earlier Kit left unanswered again under its operation with the base of each change in v_, and House lands it', async () => {
   const { hosted, rooms, room } = await copied();
-  await writeFile(join(room.repository, 'plan.md'), 'one\ntwo\n');
-  await writeFile(join(room.repository, 'cover.jpg'), REDRAWN);
+  await writeFile(join(room.repository, 'plan.md'), 'one\n\n## Next\n\ntwo\n');
+  await rm(join(room.repository, 'notes.md'));
+  await mkdir(join(room.repository, 'art'));
+  git(room.repository, 'mv', 'cover.jpg', 'art/cover.jpg');
+  await writeFile(join(room.repository, 'photo.jpg'), JPEG);
   const commit = commitAll(room.repository, 'two');
   rooms.refusesBatches = [{ drop: true }];
   expect((await house(hosted, room.repository, 'push', '--owner')).stderr).toContain(`House's answer to ${short(commit)} did not arrive`);
   const [lost] = batches(hosted).slice(-1);
+  expect(lost!.changes).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ op: 'replace', path: '/rooms/notes/plan.md', base: expect.stringMatching(/^v_/) }),
+      expect.objectContaining({ op: 'remove', path: '/rooms/notes/notes.md', base: expect.stringMatching(/^v_/) }),
+      expect.objectContaining({ op: 'rename', path: '/rooms/notes/cover.jpg', to: '/rooms/notes/art/cover.jpg', base: expect.stringMatching(/^v_/) }),
+      expect.objectContaining({ op: 'upload', path: '/rooms/notes/photo.jpg', base: expect.stringMatching(/^v_/) }),
+    ]),
+  );
   await earlier(hosted, room);
   const asked = hosted.house.requests.length;
 
@@ -124,8 +136,10 @@ it('sends a push an earlier Kit left unanswered again under its operation with i
   expect(resent.length).toBeGreaterThan(0);
   expect(resent.every((batch) => batch.operation_id === lost!.operation_id)).toBe(true);
   expect(resent[0]!.changes).toEqual(lost!.changes);
-  expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
-  expect(room.binaries.get('cover.jpg')!.bytes).toEqual(REDRAWN);
+  expect(room.files.get('plan.md')!.content).toBe('one\n\n## Next\n\ntwo\n');
+  expect(room.files.has('notes.md')).toBe(false);
+  expect(room.binaries.get('art/cover.jpg')!.bytes).toEqual(JPEG);
+  expect(room.binaries.get('photo.jpg')!.bytes).toEqual(JPEG);
   expect(sent(hosted, asked)).not.toMatch(OLD_FORM);
 });
 

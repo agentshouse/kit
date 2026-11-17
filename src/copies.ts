@@ -35,6 +35,7 @@ import {
 import { fileInfo, paused, type FileInfo, type Finished } from './files.ts';
 import { kitHome } from './home.ts';
 import { ownAgentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
+import { renameOldReferences } from './old-references.ts';
 import { operationId } from './operation.ts';
 import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { changed, readDocument, type Edit } from './translate.ts';
@@ -628,7 +629,8 @@ export class LocalCopies {
       const text = await readFile(path, 'utf8').catch(() => null);
       if (text === null) continue;
       const copy = JSON.parse(text) as Copy;
-      this.copies.set(copy.key, copy);
+      if (renameOldReferences(copy)) await this.save(copy);
+      else this.copies.set(copy.key, copy);
     }
   }
 

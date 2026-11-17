@@ -15,7 +15,6 @@ import { agentBase, enrolled, kitHome, ownerSocket, readEnrolment, recordPlanned
 import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
-import { renameOldReferences } from './old-references.ts';
 import { holdOwner } from './owner.ts';
 import { killDescendants } from './scope.ts';
 import { removeInputs, Scripts } from './scripts.ts';
@@ -110,7 +109,6 @@ export async function resident(): Promise<void> {
   const lock = await holdOwner();
   const planned = takePlannedRestart();
   await resumeWorkspaceMove();
-  await renameOldReferences();
   const copies = new LocalCopies(house);
   await copies.load();
   let running: { conversations: Conversations; agents: Agents; calls: Calls; stop(then: () => void): Promise<void> } | null = null;
