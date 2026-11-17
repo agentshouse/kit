@@ -95,7 +95,7 @@ const CAPPED: Stopped = {
 
 function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
-  if (refusal.code === 'binary_content') return `binary_content: ${refusal.path} is Markdown, which holds text only; write it with update`;
+  if (refusal.code === 'binary_content') return `binary_content: ${refusal.path} is a document, which holds Markdown text only; write it with update`;
   if (refusal.code === 'attachment_path') return `attachment_path: ${refusal.path} holds an attachment, since its Path does not end .md; send its bytes with upload`;
   if (refusal.code === 'duplicate_path') {
     return `duplicate_path: ${refusal.path} is removed or moved away in this batch; leave other changes of a removed path out, and change a moved file at its new path`;
@@ -777,7 +777,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     const grant = `edit-${grants.size + 1}`;
     const operation = randomUUID();
     grants.set(grant, { operation });
-    return { content: [{ type: 'text', text: stringify({ transfer: { method: 'POST', url: `${hosted.house.origin}/uploads/${grant}`, operation } }) }] };
+    return { content: [{ type: 'text', text: stringify({ transfer: { url: `${hosted.house.origin}/uploads/${grant}`, operation } }) }] };
   };
   hosted.house.route('POST', '/uploads/:grant', (request) => {
     const refused = state.refusesUploads.shift();
