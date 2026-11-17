@@ -82,7 +82,6 @@ export function changed(
   after: string,
   model: VerifiedModel,
 ): Edit[] {
-  if (!file.endsWith('.md')) return [{ op: 'replace', path, base, content: after }];
   const prior = readDocument(before, file, model);
   const next = readDocument(after, file, model);
   const structured =

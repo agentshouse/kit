@@ -4,6 +4,7 @@ import {
   HOUSE_ROOM_TYPES,
   HOUSE_TYPED_PATHS,
   parse,
+  readSchemaDocument,
   readTypes,
   serialize,
   type Change,
@@ -26,6 +27,8 @@ const CHUNK_BYTES = 1024 * 1024;
 const BODY_BYTES = 4 * 1024 * 1024;
 const STAGED_PART_BYTES = 8;
 const RETRY_AT = '2026-11-17T00:00:00.000Z';
+const DOCUMENT = /\.md$/i;
+const TEXT_OPS = new Set(['create', 'replace', 'set_field', 'replace_section', 'replace_preamble']);
 
 interface Stored {
   content: string;
@@ -53,7 +56,7 @@ interface Missing {
   sha256: string;
 }
 
-type Refused = { code: string; path?: string; held?: string; conflicts?: Record<string, unknown>[] };
+type Refused = { code: string; path?: string; held?: string; kind?: string; conflicts?: Record<string, unknown>[] };
 
 type Edited = { writes: Write[] } | { refusal: Refused } | { missing: Missing[] } | { limited: true };
 
@@ -92,6 +95,9 @@ const CAPPED: Stopped = {
 
 function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
+  if (refusal.code === 'binary_content') return `binary_content: ${refusal.path} is Markdown, which holds text only; write it with files_batch`;
+  if (refusal.code === 'attachment_path') return `attachment_path: ${refusal.path} holds an attachment, since its Path does not end .md; send its bytes with upload`;
+  if (refusal.code === 'kind_fixed') return `kind_fixed: ${refusal.path} would hold another kind than the ${refusal.kind} moved there, and an entry keeps its kind`;
   if (refusal.code === 'invalid_authored_path') {
     return `invalid_authored_path: ${refusal.path} differs from ${refusal.held} only in letter case, and a folder holds one name in any case; write to ${refusal.held} or choose another name`;
   }
@@ -213,6 +219,21 @@ export class Room {
   move(from: string, to: string): void {
     this.binaries.set(to, this.binaries.get(from)!);
     this.binaries.delete(from);
+    this.advance([from, to]);
+  }
+
+  attach(path: string): void {
+    const { revision, content } = this.files.get(path)!;
+    const binary = { revision, bytes: Buffer.from(content) };
+    this.files.delete(path);
+    this.binaries.set(path, binary);
+    this.binaryHistory.set(revision, { ...binary, path });
+    this.advance([path]);
+  }
+
+  rename(from: string, to: string, content: string): void {
+    this.files.delete(from);
+    this.files.set(to, this.stored(content));
     this.advance([from, to]);
   }
 
@@ -344,6 +365,11 @@ export class Room {
       if (!this.writable(path) || (to !== undefined && !this.writable(to))) {
         return { refusal: { code: 'protected_path', path: change.path } };
       }
+      if (change.op === 'upload' && DOCUMENT.test(path)) return { refusal: { code: 'binary_content', path: change.path } };
+      if (TEXT_OPS.has(change.op) && !DOCUMENT.test(path)) return { refusal: { code: 'attachment_path', path: change.path } };
+      if (change.op === 'rename' && next.has(path) !== DOCUMENT.test(to!) && (next.has(path) || binaries.has(path))) {
+        return { refusal: { code: 'kind_fixed', path: change.to!, kind: next.has(path) ? 'document' : 'attachment' } };
+      }
       const named = to ?? path;
       const twin = [...next.keys()].find((held) => held !== named && held !== path && held.toLowerCase() === named.toLowerCase());
       if (twin !== undefined && (change.op === 'create' || change.op === 'rename')) {
@@ -429,8 +455,12 @@ export class Room {
           }
         }
       } else {
-        const schema = next.get('settings/schema.yaml')?.content;
-        const definitions = definitionAt(readTypes(schema ?? '', HOUSE_ROOM_TYPES), path, HOUSE_TYPED_PATHS);
+        const document = next.get('settings/schema.md')?.content;
+        const model =
+          document === undefined
+            ? readTypes(next.get('settings/schema.yaml')?.content ?? '', HOUSE_ROOM_TYPES)
+            : readSchemaDocument(document, HOUSE_ROOM_TYPES);
+        const definitions = definitionAt(model, path, HOUSE_TYPED_PATHS);
         const parsed = current === undefined ? null : parse(current.content, path, definitions);
         if (parsed === null || !parsed.ok) {
           stale('base_revision_stale');

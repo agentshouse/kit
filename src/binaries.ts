@@ -23,11 +23,6 @@ export interface Staged {
   staged: true;
 }
 
-export interface Sorted {
-  binary: Map<string, Described>;
-  markdown: string[];
-}
-
 const SENT_AT_ONCE = 10;
 
 const UPLOADS = 'house-uploads';
@@ -43,23 +38,37 @@ const STORE: Way = {
   refused: (status) => new Error(`the store answered ${status}`),
 };
 
-async function described(repository: string, object: string, bytes: number, path: string): Promise<Described> {
+async function sha256Of(repository: string, object: string): Promise<string> {
   const digest = createHash('sha256');
   for await (const chunk of blobBytes(repository, object)) digest.update(chunk);
-  return { bytes, sha256: digest.digest('hex'), media_type: mediaTypeOf(path) ?? OCTET_STREAM };
+  return digest.digest('hex');
 }
 
-export async function sorted(repository: string, arriving: readonly (readonly [string, string])[], maxBytes: number): Promise<Sorted> {
-  const sizes = await blobSizes(repository, arriving.map(([, object]) => object));
-  const binary = new Map<string, Described>();
-  const markdown: string[] = [];
-  for (const [path, object] of arriving) {
-    const size = sizes.get(object)!;
-    if (await isText(repository, object, size, maxBytes)) continue;
-    if (MARKDOWN.test(path)) markdown.push(path);
-    else binary.set(path, await described(repository, object, size, path));
+export function isDocument(path: string): boolean {
+  return MARKDOWN.test(path);
+}
+
+export async function untext(repository: string, documents: readonly (readonly [string, string])[], maxBytes: number): Promise<string[]> {
+  const sizes = await blobSizes(repository, documents.map(([, object]) => object));
+  const refused: string[] = [];
+  for (const [path, object] of documents) {
+    if (!(await isText(repository, object, sizes.get(object)!, maxBytes))) refused.push(path);
   }
-  return { binary, markdown };
+  return refused;
+}
+
+export async function attachments(repository: string, arriving: readonly (readonly [string, string])[]): Promise<Map<string, Described>> {
+  const sizes = await blobSizes(repository, arriving.map(([, object]) => object));
+  const described = new Map<string, Described>();
+  for (const [path, object] of arriving) {
+    described.set(path, { bytes: sizes.get(object)!, sha256: await sha256Of(repository, object), media_type: mediaTypeOf(path) ?? OCTET_STREAM });
+  }
+  return described;
+}
+
+export async function holds(repository: string, object: string, file: { bytes: number; sha256: string }): Promise<boolean> {
+  const sizes = await blobSizes(repository, [object]);
+  return sizes.get(object) === file.bytes && (await sha256Of(repository, object)) === file.sha256;
 }
 
 export async function eachAtOnce<T>(items: readonly T[], work: (item: T) => Promise<void>): Promise<void> {
