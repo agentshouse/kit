@@ -154,24 +154,25 @@ it('sends the selected commit, HEAD by default, as exact-base edits and leaves s
   expect(batches(hosted)).toHaveLength(2);
 });
 
-it('sends a changed schema as one whole-text replacement against its revision', async () => {
+it('sends a changed Room schema document as one whole-text replacement against its revision', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('private');
   room.protected = ['agents', 'house'];
   const schema = 'note:\n  properties:\n    title: { type: string }\n';
-  room.put('settings/schema.yaml', schema);
+  const notes = '---\n# Notes for people\n';
+  room.put('settings/schema.md', `---\n${schema}${notes}`);
   await rooms.fetch([room]);
-  const revision = room.revision('settings/schema.yaml');
-  const widened = `${schema}    status: { type: string }\n`;
-  await writeFile(join(room.repository, 'settings/schema.yaml'), widened);
+  const revision = room.revision('settings/schema.md');
+  const widened = `---\n${schema}    status: { type: string }\n${notes}`;
+  await writeFile(join(room.repository, 'settings/schema.md'), widened);
   commitAll(room.repository, 'widen');
 
   expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
   expect(batches(hosted).map((batch) => batch.changes)).toEqual([
-    [{ op: 'replace', path: '/rooms/private/settings/schema.yaml', base: revision, content: widened }],
+    [{ op: 'replace', path: '/rooms/private/settings/schema.md', base: revision, content: widened }],
   ]);
-  expect(room.files.get('settings/schema.yaml')!.content).toBe(widened);
+  expect(room.files.get('settings/schema.md')!.content).toBe(widened);
 });
 
 it('sends a changed field, section and preamble against its own prior value, so different remote changes to the same file both stand', async () => {
@@ -301,6 +302,24 @@ it('reads a typed document by the schema the Local copy holds read-only when its
   commitAll(room.repository, 'ready');
 
   expect(git(room.repository, 'ls-files', 'settings')).toBe('');
+  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([[READY]]);
+  expect(room.files.get('docs/launch.md')!.content).toBe(local);
+});
+
+it.each([
+  ['the Local copy writes', ['']],
+  ['the Local copy holds read-only', ['docs']],
+])('reads a typed document by the Room schema document settings/schema.md %s once House moves settings/schema.yaml there, its frontmatter the schema and its body text for people', async (_, write) => {
+  const { hosted, room } = await typed(write);
+  room.rename('settings/schema.yaml', 'settings/schema.md', `---\n${SCHEMA}---\n# The plans schema\n\nmemo: a type House never reads here.\n`);
+  expect((await house(hosted, '/', 'fetch')).status).toBe(0);
+  git(room.repository, 'merge', '-q', '--ff-only', 'refs/house/received');
+  const local = LAUNCH.replace('**Status**: draft', '**Status**: ready');
+  await writeFile(join(room.repository, 'docs/launch.md'), local);
+  commitAll(room.repository, 'ready');
+
+  expect([existsSync(join(room.repository, 'settings/schema.yaml')), existsSync(join(room.repository, 'settings/schema.md'))]).toEqual([false, true]);
   expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
   expect(batches(hosted).map((batch) => batch.changes)).toEqual([[READY]]);
   expect(room.files.get('docs/launch.md')!.content).toBe(local);
@@ -731,7 +750,7 @@ it('pushes as the owner only with --owner outside a conversation and explains it
   expect(bare).toMatchObject({ status: 1, stderr: 'house: outside an Agent conversation, house push needs --owner\n' });
   expect(help.status).toBe(0);
   expect(help.stdout).toBe(
-    "usage: house push [commit] [--owner]\npush [commit]: sends the Local copy's committed changes to House; one commit and one push carry text and binary files alike\n",
+    "usage: house push [commit] [--owner]\npush [commit]: sends the Local copy's committed changes to House in one push, each .md file as document text and every other file as an attachment\n",
   );
   expect(old.status).toBe(1);
   expect(old.stderr).not.toContain('push');

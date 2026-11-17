@@ -20,7 +20,7 @@ const MEMORY = fileURLToPath(new URL('./memory.ts', import.meta.url));
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
-const PUSH = "push [commit]: sends the Local copy's committed changes to House; one commit and one push carry text and binary files alike";
+const PUSH = "push [commit]: sends the Local copy's committed changes to House in one push, each .md file as document text and every other file as an attachment";
 const PUSH_HELP = `usage: house push [commit] [--owner]\n${PUSH}`;
 const UPLOAD_USAGE = `usage: house upload '{"file":"<local file>","room_ref":"r_…","path":"<path in the Room>"}', adding "base", the revision it replaces`;
 
