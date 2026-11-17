@@ -283,6 +283,27 @@ function delivered(house: House, path: string): number {
   return house.requests.filter((request) => request.path === path).length;
 }
 
+function restartReports(house: House): unknown[] {
+  return house.requests.filter((request) => request.path === '/kit/kits/report-restart').map((request) => request.body);
+}
+
+it.each(['SIGTERM', 'SIGINT'] as const)(
+  'records in Kit home that %s stopped it, so its next start reports its restart planned and deletes the record, and reports a restart it did not record as a crash',
+  async (signal) => {
+    const hosted = await hostKit();
+    const record = join(hosted.home, 'planned-restart');
+
+    process.kill(hosted.kit.pid, signal);
+    await hosted.kit.exited;
+    await access(record);
+    await hosted.restart();
+    await expect(access(record)).rejects.toThrow();
+    await hosted.restart();
+
+    expect(restartReports(hosted.house)).toEqual([{}, { planned: true }, {}]);
+  },
+);
+
 it('delivers again a delivery House refuses with a refusal it marks retryable, whatever its status, until House takes it', async () => {
   const house = await startHouse();
   house.route('POST', '/kit/kits/report-restart', () =>

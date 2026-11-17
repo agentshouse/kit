@@ -1,4 +1,4 @@
-import { forgetRejected } from './home.ts';
+import { forgetRejected, recordPlannedRestart } from './home.ts';
 import { installCommand } from './placement.ts';
 import { killDescendants } from './scope.ts';
 
@@ -16,6 +16,11 @@ export function end(reason: string): never {
 
 export function restart(reason: string): never {
   exit(reason, 1);
+}
+
+export function restartPlaced(release: string): never {
+  recordPlannedRestart();
+  restart(`Kit ${release} is placed; its supervisor starts it`);
 }
 
 export function updateLine(lead: string): string {
