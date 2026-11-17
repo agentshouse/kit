@@ -2,7 +2,7 @@ import { ATTACHMENT_REFERENCE_PREFIX, DOCUMENT_REFERENCE_PREFIX, REVISION_REFERE
 import { isDocument } from './binaries.ts';
 
 interface Held {
-  manifests: Record<string, { files: Record<string, string | null> }>;
+  manifests?: Record<string, { files: Record<string, string | null> }>;
   push?: {
     changes: { op: string; path: string; base?: unknown }[];
     written?: { path: string; revision: string | null }[];
@@ -23,7 +23,7 @@ function renamed(value: string | null, path: string): string | null {
 
 export function renameOldReferences(record: Held): boolean {
   const held = JSON.stringify(record);
-  for (const manifest of Object.values(record.manifests)) {
+  for (const manifest of Object.values(record.manifests ?? {})) {
     for (const [path, revision] of Object.entries(manifest.files)) manifest.files[path] = renamed(revision, path);
   }
   for (const change of record.push?.changes ?? []) {
