@@ -1,11 +1,11 @@
-import type { HouseOneWayCall, KitCall, KitCallOf } from '@agentshouse/kit-wire';
+import { FUNCTION_RUN_META_KEY, type HouseOneWayCall, type KitCall, type KitCallOf } from '@agentshouse/kit-wire';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
-import { idOf, settle, until, without } from './double.ts';
-import { hostKit, lastCall, type Hosted } from './environment.ts';
+import { idOf, settle, until, without, type Received } from './double.ts';
+import { hostKit, lastCall, runCredential, type Hosted, type McpCall } from './environment.ts';
 import { accountOf, alive, filesUnder, stop } from './kit.ts';
 
 interface Ran {
@@ -16,6 +16,11 @@ interface Ran {
 }
 
 const TREE = 'sleep 300 & echo "child $!"; echo "script $$"; wait';
+
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const OPERATION = 'agents.house/agent-operation';
+const ISSUE = '/kit/function-runs/credentials/issue';
+const OWN_AGENT = 'ahp_own-agent-5d1c';
 
 function send(hosted: Hosted, frame: HouseOneWayCall | KitCall): void {
   hosted.house.connections.at(-1)!.send(frame);
@@ -69,6 +74,18 @@ async function scratch(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'kit-function-'));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   return directory;
+}
+
+const metaOf = (received: Received) => (received.body as McpCall).params._meta;
+
+function searched(hosted: Hosted): string[][] {
+  return hosted.mcp
+    .filter((received) => (received.body as McpCall).params.name === 'search')
+    .map((received) => [String((received.body as McpCall).params.arguments!.query), received.headers.authorization!]);
+}
+
+function ownAgentHome(home: string): Promise<void> {
+  return writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: 'http://127.0.0.1:9', user: 'user-one', credential: OWN_AGENT }));
 }
 
 async function keepsNothing(hosted: Hosted, texts: string[]): Promise<void> {
@@ -255,4 +272,76 @@ it('starts a run id once however often House delivers it, answering each deliver
 
   expect(answered().map((result) => without(result, 'call'))).toEqual(Array(2).fill({ exit_code: 0, output: 'once\n', cut: false }));
   expect(await readFile(join(directory, 'runs'), 'utf8')).toBe('ran\n');
+});
+
+it("gives a run on a Sandbox or VPS its own house bridge under the credential House issues the run as it starts, for the script and every process it starts, each call naming the run with an operation id", async () => {
+  const hosted = await hostKit([]);
+  const id = run(
+    hosted,
+    `echo "bridge \${HOUSE_BRIDGE:-none}"; house search '{"query":"from-script"}'; sh -c 'house search "{\\"query\\":\\"from-child\\"}"'; env`,
+  );
+
+  const { output, ...ending } = await ended(hosted, id);
+
+  expect(ending).toEqual({ exit_code: 0, cut: false });
+  expect(output).toMatch(/^bridge \/.+\.sock$/m);
+  expect(output).toContain('search answered\nsearch answered\n');
+  const asked = hosted.house.requests.filter((received) => received.path === ISSUE);
+  expect(asked.map((received) => [received.body, received.headers.authorization])).toEqual([[{ run: id }, 'Bearer ahk_held']]);
+  expect(searched(hosted)).toEqual([
+    ['from-script', `Bearer ${runCredential(id)}`],
+    ['from-child', `Bearer ${runCredential(id)}`],
+  ]);
+  for (const received of hosted.mcp) expect(metaOf(received)[FUNCTION_RUN_META_KEY]).toBe(id);
+  for (const received of hosted.mcp.filter((one) => (one.body as McpCall).method === 'tools/call')) {
+    expect(metaOf(received)[OPERATION]).toMatch(UUID_V7);
+  }
+  expect(output).not.toContain(runCredential(id));
+  await keepsNothing(hosted, [runCredential(id)]);
+});
+
+it("sends a run's house calls on a computer under the User's own agent's credential Kit home holds, naming the run and with no operation id, and asks House for no credential", async () => {
+  const hosted = await hostKit([], { prepare: ownAgentHome });
+  const id = run(hosted, `house search '{"query":"on-computer"}'`);
+
+  expect(await ended(hosted, id)).toEqual({ exit_code: 0, output: 'search answered\n', cut: false });
+  expect(hosted.house.requests.filter((received) => received.path === ISSUE)).toEqual([]);
+  expect(searched(hosted)).toEqual([['on-computer', `Bearer ${OWN_AGENT}`]]);
+  for (const received of hosted.mcp) {
+    expect(metaOf(received)[FUNCTION_RUN_META_KEY]).toBe(id);
+    expect(metaOf(received)).not.toHaveProperty(OPERATION);
+  }
+});
+
+it("closes a run's bridge as the run ends, so a house call its process makes after the run reaches nothing", async () => {
+  const hosted = await hostKit([]);
+  const directory = await scratch();
+  const id = run(
+    hosted,
+    `house search '{"query":"in-run"}'; setsid sh -c 'for wait in $(seq 600); do [ -e ${directory}/go ] && break; sleep 0.1; done; house search "{\\"query\\":\\"too-late\\"}" > ${directory}/late 2>&1; echo "exit $?" >> ${directory}/late' < /dev/null > /dev/null 2>&1 &`,
+  );
+
+  expect(await ended(hosted, id)).toEqual({ exit_code: 0, output: 'search answered\n', cut: false });
+  await writeFile(join(directory, 'go'), '');
+  const late = await until(async () => {
+    const text = await readFile(join(directory, 'late'), 'utf8').catch(() => '');
+    return text.includes('exit ') ? text : undefined;
+  });
+
+  expect(late).toBe("house: this conversation's House connection is closed; nothing to do from here\nexit 1\n");
+  expect(searched(hosted)).toEqual([['in-run', `Bearer ${runCredential(id)}`]]);
+});
+
+it("leaves a run on a computer whose own agent Kit home no longer holds, which House gives no credential, without a bridge, so house fails as it does outside a run", async () => {
+  const hosted = await hostKit([]);
+  hosted.house.route('POST', ISSUE, () => ({ status: 404, body: { error: { code: 'not_found', retryable: false } } }));
+  const id = run(hosted, `echo "bridge \${HOUSE_BRIDGE:-none}"; house search '{"query":"revoked"}' 2>&1; echo "exit $?"`);
+
+  expect(await ended(hosted, id)).toEqual({
+    exit_code: 0,
+    output: "bridge none\nhouse: this computer's own agent has no House connection; run kit login\nexit 1\n",
+    cut: false,
+  });
+  expect(hosted.house.requests.filter((received) => received.path === ISSUE).map((received) => received.body)).toEqual([{ run: id }]);
+  expect(searched(hosted)).toEqual([]);
 });

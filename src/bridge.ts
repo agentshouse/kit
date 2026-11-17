@@ -5,6 +5,7 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { delimiter, dirname, join } from 'node:path';
+import { FUNCTION_RUN_META_KEY } from '@agentshouse/kit-wire';
 import { parse } from 'yaml';
 import { finalRefusal, HouseRefusal, retryDelay, retrying, type House } from './api.ts';
 import type { Staged } from './binaries.ts';
@@ -18,7 +19,7 @@ import {
   type Upload,
 } from './copies.ts';
 import { fileInfo, type Finished } from './files.ts';
-import { kitHome, readEnrolment, socketDirectory } from './home.ts';
+import { kitHome, readEnrolment, readOwnAgent, socketDirectory } from './home.ts';
 import { callHouse, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
@@ -29,6 +30,13 @@ export interface Bridge {
   env: Record<string, string>;
   tool(name: string, args: Record<string, unknown>): Promise<ToolResult>;
   close(): void;
+}
+
+interface Holder {
+  key: string;
+  credential: string;
+  operations: boolean;
+  named: Record<string, string>;
 }
 
 const MCP_REQUEST_BYTES = 4_000_000;
@@ -96,18 +104,45 @@ export async function openBridge(
   conversationId: string,
   signal: AbortSignal,
 ): Promise<Bridge> {
-  const path = [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter);
-  const origin = (await readEnrolment())!.house;
   const { credential } = await retrying(
     () => house.act('conversations/credentials/issue', { conversation: conversationId }, signal),
     signal,
   );
+  return bridgeFor(copies, { key: `conversation:${conversationId}`, credential, operations: true, named: {} });
+}
+
+async function runCredential(house: House, run: string, signal: AbortSignal): Promise<string | null> {
+  try {
+    return (await retrying(() => house.act('function-runs/credentials/issue', { run }, signal), signal)).credential;
+  } catch (error) {
+    if (finalRefusal(error)) return null;
+    throw error;
+  }
+}
+
+export async function openRunBridge(house: House, copies: LocalCopies, run: string, signal: AbortSignal): Promise<Bridge | null> {
+  const ownAgent = await readOwnAgent();
+  const credential = ownAgent?.credential ?? (await runCredential(house, run, signal));
+  if (credential === null) return null;
+  return bridgeFor(copies, {
+    key: `function-run:${run}`,
+    credential,
+    operations: ownAgent === null,
+    named: { [FUNCTION_RUN_META_KEY]: run },
+  });
+}
+
+async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
+  const path = [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter);
+  const origin = (await readEnrolment())!.house;
+  const { credential, named } = holder;
 
   const closed = new AbortController();
   const sent = (message: Message, operation: string | null): Promise<Forwarded> =>
-    callHouse(origin, credential, message, operation, closed.signal);
+    callHouse(origin, credential, message, { operation, named, signal: closed.signal });
 
-  const send = async (message: Message, operation: string | null, pushing = false): Promise<Forwarded> => {
+  const send = async (message: Message, asked: string | null, pushing = false): Promise<Forwarded> => {
+    const operation = holder.operations ? asked : null;
     if (operation === null) return sent(message, null);
     for (let attempt = 0; ; attempt++) {
       const forwarded = await sent(message, operation).catch((error: unknown) => {
@@ -161,11 +196,11 @@ export async function openBridge(
   };
 
   const caller: Caller = {
-    key: `conversation:${conversationId}`,
+    key: holder.key,
     submit: async (operation, changes, held, retain) => {
       const inline = call('update', { changes });
       let upload = held;
-      if (upload === undefined && Buffer.byteLength(mcpBody(inline, operation)) > MCP_REQUEST_BYTES) {
+      if (upload === undefined && Buffer.byteLength(mcpBody(inline, { operation, named })) > MCP_REQUEST_BYTES) {
         const prepared = await staged(operation, changes);
         if ('refused' in prepared) return prepared;
         upload = prepared;
