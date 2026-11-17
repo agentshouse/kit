@@ -54,7 +54,7 @@ function copyState(hosted: Hosted, room: Room): Promise<string[]> {
 }
 
 function batches(hosted: Hosted): unknown[] {
-  return hosted.house.requests.filter((request) => request.path === '/kit/door/files/batch').map((request) => request.body);
+  return hosted.house.requests.filter((request) => request.path === '/kit/door/update').map((request) => request.body);
 }
 
 function storeCalls(hosted: Hosted): unknown[][] {

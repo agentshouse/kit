@@ -92,7 +92,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       '  query',
       'shell: Read-only shell over `/rooms/<handle>`.',
       'info: Provenance and revisions; `shell` reads current file text.',
-      'files_batch',
+      'update',
       '  changes (required): The changes, each with an `op`.',
       '  mount: An empty folder; every change creates a document in it, all or none.',
       'records_append: Add a record to a Room, stored as given.',

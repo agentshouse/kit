@@ -71,7 +71,7 @@ it("sends a Tool call outside a conversation to House's root under the User's ow
   expect((call!.body as McpCall).params).toMatchObject({ name: 'search', arguments: { query: 'invoice' } });
 });
 
-it("reads a Tool's arguments from stdin after -, so a files_batch larger than one Linux argument holds reaches House whole", async () => {
+it("reads a Tool's arguments from stdin after -, so an update larger than one Linux argument holds reaches House whole", async () => {
   const house = await startHouse();
   const home = await connected(house, true);
   house.route('POST', '/', ({ body }) => ({ body: { jsonrpc: '2.0', id: (body as { id: string }).id, result: shelled('applied') } }));
@@ -79,10 +79,10 @@ it("reads a Tool's arguments from stdin after -, so a files_batch larger than on
   const piped = JSON.stringify({ changes });
   expect(Buffer.byteLength(piped)).toBeGreaterThan(1024 * 1024);
 
-  const ran = await runHouse(home, ['files_batch', '-'], undefined, [], {}, piped);
+  const ran = await runHouse(home, ['update', '-'], undefined, [], {}, piped);
 
   expect(ran).toEqual({ status: 0, stdout: 'applied\n', stderr: '' });
-  expect((house.requests[0]!.body as McpCall).params).toMatchObject({ name: 'files_batch', arguments: { changes } });
+  expect((house.requests[0]!.body as McpCall).params).toMatchObject({ name: 'update', arguments: { changes } });
 });
 
 it('refuses arguments on stdin that are no JSON object with the form they take', async () => {
@@ -373,7 +373,7 @@ it('says a write may have taken effect when House answers with no result, and to
   const home = await connected(house, true);
   house.route('POST', '/', () => ({ status: 502, bytes: { type: 'text/html', content: '<html>Bad Gateway</html>' } }));
 
-  const ran = await runHouse(home, ['files_batch', '{"changes":[]}']);
+  const ran = await runHouse(home, ['update', '{"changes":[]}']);
 
   expect(ran).toEqual({
     status: 1,
@@ -520,21 +520,21 @@ it('lists a Tool without a description in house --help with its top-level argume
 
   expect(help.stdout).toContain(
     [
-      'files_batch',
+      'update',
       '  changes (required): The changes, each with an `op`.',
       '  mount: An empty folder; every change creates a document in it, all or none.',
       'records_append: Add a record to a Room, stored as given.',
     ].join('\n'),
   );
-  expect(help.stdout).toContain('info: Provenance and revisions; `shell` reads current file text.\nfiles_batch\n');
+  expect(help.stdout).toContain('info: Provenance and revisions; `shell` reads current file text.\nupdate\n');
   expect(help.stdout.endsWith('\nabout_house\n')).toBe(true);
 });
 
 it.each([
   [
-    'files_batch',
+    'update',
     [
-      'files_batch',
+      'update',
       '  changes (required): The changes, each with an `op`.',
       '    - op "set_field" (required)',
       '      path (required): The file.',
@@ -633,10 +633,10 @@ it.each([
 });
 
 it.each([
-  [['files_batch', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
+  [['update', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
   [['rooms_list', '{}', '--bogus'], '--bogus'],
   [['--version'], '--version'],
-  [['help', 'files_batch', '{}'], '{}'],
+  [['help', 'update', '{}'], '{}'],
 ])('refuses house %j with its usage before it calls House', async (argv, unexpected) => {
   const house = await startHouse();
   const home = await connected(house, true);

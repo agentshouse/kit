@@ -590,7 +590,7 @@ export class LocalCopies {
       submit: async (operation, changes) => {
         try {
           const outcome = await retrying(() =>
-            stopping(house.door<{ contents: Written[] }>('files/batch', { operation_id: operation, changes })),
+            stopping(house.door<{ contents: Written[] }>('update', { operation_id: operation, changes })),
           );
           return 'refused' in outcome ? outcome : { accepted: outcome.contents };
         } catch (error) {

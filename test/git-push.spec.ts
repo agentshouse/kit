@@ -100,7 +100,7 @@ async function copied(): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
 
 function batches(hosted: Hosted): { operation_id: string; changes: Record<string, unknown>[] }[] {
   return hosted.house.requests
-    .filter((request) => request.path === '/kit/door/files/batch')
+    .filter((request) => request.path === '/kit/door/update')
     .map((request) => request.body as { operation_id: string; changes: Record<string, unknown>[] });
 }
 
@@ -786,7 +786,7 @@ it('finishes a push whose operation expired when House holds its component chang
   room.put('docs/launch.md', LAUNCH.replace('**Owner**: ada', '**Owner**: grace'));
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/files/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
+  hosted.house.route('POST', '/kit/door/update', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
 
   const recovered = await house(hosted, room.repository, 'push', '--owner');
 
@@ -822,7 +822,7 @@ it('keeps a pushed operation whose outcome it could not yet read and finishes it
   const pushedCommit = commitAll(room.repository, 'three');
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/files/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
+  hosted.house.route('POST', '/kit/door/update', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
   rooms.reads = [false];
 
   const unread = await house(hosted, room.repository, 'push', '--owner');

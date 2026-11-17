@@ -102,7 +102,7 @@ export const LISTING: Listed[] = [
     },
   },
   {
-    name: 'files_batch',
+    name: 'update',
     inputSchema: {
       type: 'object',
       properties: {
