@@ -128,10 +128,7 @@ export async function openBridge(
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const prepared = toolAnswer(
       await send(
-        call('run_command', {
-          command: 'files/batch-upload',
-          arguments: { paths: changedPaths(changes), bytes: bytes.length, sha256 },
-        }),
+        call('update', { op: 'stage', paths: changedPaths(changes), bytes: bytes.length, sha256 }),
         operation,
       ),
     );
@@ -166,7 +163,7 @@ export async function openBridge(
   const caller: Caller = {
     key: `conversation:${conversationId}`,
     submit: async (operation, changes, held, retain) => {
-      const inline = call('files_batch', { changes });
+      const inline = call('update', { changes });
       let upload = held;
       if (upload === undefined && Buffer.byteLength(mcpBody(inline, operation)) > MCP_REQUEST_BYTES) {
         const prepared = await staged(operation, changes);
@@ -175,7 +172,7 @@ export async function openBridge(
         await retain(upload);
       }
       return editAnswer(
-        await send(upload === undefined ? inline : call('files_batch', { paths: changedPaths(changes), upload }), operation, true),
+        await send(upload === undefined ? inline : call('update', { paths: changedPaths(changes), upload }), operation, true),
       );
     },
     finish: async (upload, room, partSha256) => {

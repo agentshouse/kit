@@ -574,7 +574,7 @@ it("sends a push from a Room it no longer follows to House, prints House's refus
   expect(await house(hosted, notes.repository, 'push', '--owner')).toMatchObject({ status: 1, stderr: `house: ${DENIED}\n` });
 
   const sent = hosted.house.requests.slice(asked);
-  expect(sent.filter((request) => request.path === '/kit/door/files/batch').map((request) => request.body)).toEqual([
+  expect(sent.filter((request) => request.path === '/kit/door/update').map((request) => request.body)).toEqual([
     { operation_id: expect.any(String), changes: [expect.objectContaining({ path: `${notes.root}/a.md` })] },
   ]);
   expect(sent.map((request) => request.path)).not.toContain('/kit/door/changes/enumerate');

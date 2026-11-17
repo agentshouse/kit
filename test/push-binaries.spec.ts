@@ -55,7 +55,7 @@ function part(path: string, bytes: Buffer, mediaType: string, base?: string): Re
 
 function batches(hosted: Hosted): { operation_id: string; changes: Record<string, unknown>[] }[] {
   return hosted.house.requests
-    .filter((request) => request.path === '/kit/door/files/batch')
+    .filter((request) => request.path === '/kit/door/update')
     .map((request) => request.body as { operation_id: string; changes: Record<string, unknown>[] });
 }
 
@@ -64,7 +64,7 @@ function called(received: Received): McpCall['params'] {
 }
 
 function toolBatches(hosted: Hosted): Received[] {
-  return hosted.mcp.filter((received) => called(received).name === 'files_batch');
+  return hosted.mcp.filter((received) => called(received).name === 'update');
 }
 
 function operationOf(received: Received): string {
@@ -183,10 +183,10 @@ it("pushes text and a binary file under the conversation's own credential, finis
   const credential = `Bearer ${conversationCredential('conversation-1')}`;
   const finishing = { upload: expect.any(String), room_ref: room.ref, part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };
   expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
-    [credential, 'files_batch', { changes: expect.any(Array) }],
+    [credential, 'update', { changes: expect.any(Array) }],
     [credential, 'upload', finishing],
     [credential, 'upload', finishing],
-    [credential, 'files_batch', { changes: expect.any(Array) }],
+    [credential, 'update', { changes: expect.any(Array) }],
     [credential, 'info', { path: '/rooms/notes/photo.jpg', ref: room.binaries.get('photo.jpg')!.revision }],
   ]);
   expect(called(hosted.mcp[0]!).arguments!.changes).toEqual([
@@ -672,7 +672,7 @@ it('renames a binary file a conversation moved with git mv into a folder, keepin
 
   expect(moved).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}; main is at [0-9a-f]{12}\.\n$/) });
   expect(hosted.mcp.map((received) => [called(received).name, called(received).arguments])).toEqual([
-    ['files_batch', { changes: [{ op: 'rename', path: '/rooms/notes/photo.jpg', to: '/rooms/notes/archive/photo.jpg', base: revision }] }],
+    ['update', { changes: [{ op: 'rename', path: '/rooms/notes/photo.jpg', to: '/rooms/notes/archive/photo.jpg', base: revision }] }],
   ]);
   expect(puts(hosted)).toHaveLength(sent);
   expect(room.binaries.has('photo.jpg')).toBe(false);
@@ -749,7 +749,7 @@ it('finishes a push renaming a binary file whose operation expired once House ho
   const commit = commitAll(room.repository, 'renamed');
   rooms.dropping = 1;
   expect((await house(hosted, room.repository, 'push', '--owner')).status).toBe(1);
-  hosted.house.route('POST', '/kit/door/files/batch', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
+  hosted.house.route('POST', '/kit/door/update', () => ({ status: 409, body: { error: { code: 'expired', retryable: false } } }));
 
   const recovered = await house(hosted, room.repository, 'push', '--owner');
 

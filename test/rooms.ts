@@ -95,7 +95,7 @@ const CAPPED: Stopped = {
 
 function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
-  if (refusal.code === 'binary_content') return `binary_content: ${refusal.path} is Markdown, which holds text only; write it with files_batch`;
+  if (refusal.code === 'binary_content') return `binary_content: ${refusal.path} is Markdown, which holds text only; write it with update`;
   if (refusal.code === 'attachment_path') return `attachment_path: ${refusal.path} holds an attachment, since its Path does not end .md; send its bytes with upload`;
   if (refusal.code === 'duplicate_path') {
     return `duplicate_path: ${refusal.path} is removed or moved away in this batch; leave other changes of a removed path out, and change a moved file at its new path`;
@@ -587,7 +587,11 @@ export function serveRooms(hosted: Hosted): Rooms {
       state.answered = answer;
       return house(hosted, '/', 'fetch');
     },
-    edits: () => hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'files_batch'),
+    edits: () =>
+      hosted.mcp.filter((received) => {
+        const { name, arguments: args } = (received.body as { params: { name?: string; arguments?: { op?: unknown } } }).params;
+        return name === 'update' && args?.op !== 'stage';
+      }),
   };
   const roomOf = (path: string) => rooms.find((room) => path === room.root || path.startsWith(`${room.root}/`))!;
   const opened = new Map<string, { operation: string; sha256: string }>();
@@ -715,7 +719,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     const room = roomOf(path);
     return { body: { path, revisions: [{ revision, content: room.history.get(revision) }], next_before: null } };
   });
-  hosted.house.route('POST', '/kit/door/files/batch', (request) => {
+  hosted.house.route('POST', '/kit/door/update', (request) => {
     const refused = state.refusesBatches.shift();
     if (refused !== undefined) return refused;
     const { operation_id: operation, changes } = request.body as { operation_id: string; changes: EditChange[] };
@@ -768,9 +772,8 @@ export function serveRooms(hosted: Hosted): Rooms {
   };
   const grants = new Map<string, { operation: string; staged?: string }>();
   const staged = new Map<string, Buffer>();
-  hosted.tools.run_command = (args) => {
-    if (args.command !== 'files/batch-upload') return { isError: true, content: [{ type: 'text', text: `command_not_found: ${String(args.command)}\n` }] };
-    state.prepared.push(args.arguments);
+  const stage = ({ op: _stage, ...declared }: Record<string, unknown>): ToolResult => {
+    state.prepared.push(declared);
     const grant = `edit-${grants.size + 1}`;
     const operation = randomUUID();
     grants.set(grant, { operation });
@@ -789,7 +792,8 @@ export function serveRooms(hosted: Hosted): Rooms {
     staged.set(url, bytes);
     return { body: { transfer: { method: 'POST', url, operation: randomUUID() } } };
   });
-  hosted.tools.files_batch = (args, request) => {
+  hosted.tools.update = (args, request) => {
+    if (args.op === 'stage') return stage(args);
     const bearer = request.headers.authorization!;
     if (state.denied.has(bearer)) {
       return { isError: true, content: [{ type: 'text', text: 'operation_denied: you may not write here; the Room owner grants Room access, your User widens an Agent at /agents\n' }] };
