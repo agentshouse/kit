@@ -105,14 +105,14 @@ it("places the Space schema a Room's chunk list names as its model, which no chu
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
-  room.models = [{ path: 'settings/schema.yaml', revision: 'fr_schema', sha256: 'unused', bytes: 7, lines: 1, content: 'note: {}\n', space: 's_one.x' }];
+  room.models = [{ path: 'settings/schema.yaml', revision: 'v_9.1.x', sha256: 'unused', bytes: 7, lines: 1, content: 'note: {}\n', space: 's_one.x' }];
   rooms.expired.add(room.ref);
 
   await rooms.fetch([room]);
 
   expect(git(room.repository, 'show', 'refs/house/received:settings/schema.yaml')).toBe('note: {}\n');
   expect(JSON.parse(await readFile(record(hosted, room), 'utf8')).manifests).toEqual(
-    expect.objectContaining({ [git(room.repository, 'rev-parse', 'refs/house/received').trim()]: { parent: null, files: expect.objectContaining({ 'settings/schema.yaml': 'fr_schema' }) } }),
+    expect.objectContaining({ [git(room.repository, 'rev-parse', 'refs/house/received').trim()]: { parent: null, files: expect.objectContaining({ 'settings/schema.yaml': 'v_9.1.x' }) } }),
   );
 });
 

@@ -188,7 +188,7 @@ it("uploads the local file named by file to its path in the Room, filling its si
 
   expect((await runs(hosted, 1))[0]).toMatchObject({
     status: 0,
-    stdout: 'path: evidence/messenger-next-light.jpg\nrevision: fr_1\n',
+    stdout: 'path: evidence/messenger-next-light.jpg\nrevision: v_1.1.x\n',
     stderr: '',
   });
   const [declared] = hosted.mcp;

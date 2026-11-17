@@ -116,7 +116,7 @@ export const LISTING: Listed[] = [
                   op: { type: 'string', const: 'set_field' },
                   path: { type: 'string', description: 'The file.' },
                   field: { type: 'string', description: "The field's key." },
-                  base: { $ref: '#/$defs/__schema0', description: 'The `fr_` revision you read; for a field, its old value.' },
+                  base: { $ref: '#/$defs/__schema0', description: 'The `v_` revision you read; for a field, its old value.' },
                   value: { $ref: '#/$defs/__schema0', description: 'Its new value.' },
                 },
                 required: ['op', 'path', 'field', 'value'],
@@ -129,7 +129,7 @@ export const LISTING: Listed[] = [
                   to: { type: 'string', description: 'The new path; links to it follow.' },
                   base: {
                     anyOf: [{ type: 'string' }, { type: 'object', propertyNames: { type: 'string' } }],
-                    description: 'The `fr_` revision you read.',
+                    description: 'The `v_` revision you read.',
                   },
                 },
                 required: ['op', 'path', 'to'],
