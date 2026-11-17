@@ -97,6 +97,9 @@ function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
   if (refusal.code === 'binary_content') return `binary_content: ${refusal.path} is Markdown, which holds text only; write it with files_batch`;
   if (refusal.code === 'attachment_path') return `attachment_path: ${refusal.path} holds an attachment, since its Path does not end .md; send its bytes with upload`;
+  if (refusal.code === 'duplicate_path') {
+    return `duplicate_path: ${refusal.path} is removed or moved away in this batch; leave other changes of a removed path out, and change a moved file at its new path`;
+  }
   if (refusal.code === 'kind_fixed') return `kind_fixed: ${refusal.path} would hold another kind than the ${refusal.kind} moved there, and an entry keeps its kind`;
   if (refusal.code === 'invalid_authored_path') {
     return `invalid_authored_path: ${refusal.path} differs from ${refusal.held} only in letter case, and a folder holds one name in any case; write to ${refusal.held} or choose another name`;
@@ -354,6 +357,7 @@ export class Room {
     const conflicts: Record<string, unknown>[] = [];
     const missing: Missing[] = [];
     const removed = new Set<string>();
+    const removedKinds = new Map<string, 'document' | 'attachment'>();
     const set = (path: string, op: string, content: string, rewrite = false) => {
       const stored = this.stored(content);
       next.set(path, stored);
@@ -367,8 +371,12 @@ export class Room {
       }
       if (change.op === 'upload' && DOCUMENT.test(path)) return { refusal: { code: 'binary_content', path: change.path } };
       if (TEXT_OPS.has(change.op) && !DOCUMENT.test(path)) return { refusal: { code: 'attachment_path', path: change.path } };
-      if (change.op === 'rename' && next.has(path) !== DOCUMENT.test(to!) && (next.has(path) || binaries.has(path))) {
-        return { refusal: { code: 'kind_fixed', path: change.to!, kind: next.has(path) ? 'document' : 'attachment' } };
+      const kind = next.has(path) ? 'document' : binaries.has(path) ? 'attachment' : undefined;
+      if (change.op === 'rename' && kind !== undefined && (kind === 'document') === DOCUMENT.test(path) && DOCUMENT.test(path) !== DOCUMENT.test(to!)) {
+        return { refusal: { code: 'kind_fixed', path: change.to!, kind } };
+      }
+      if ((change.op === 'create' || change.op === 'upload') && removedKinds.get(path) === (change.op === 'upload' ? 'attachment' : 'document')) {
+        return { refusal: { code: 'duplicate_path', path: change.path } };
       }
       const named = to ?? path;
       const twin = [...next.keys()].find((held) => held !== named && held !== path && held.toLowerCase() === named.toLowerCase());
@@ -412,6 +420,7 @@ export class Room {
         } else {
           binaries.delete(path);
           removed.add(path);
+          removedKinds.set(path, 'attachment');
           writes.set(path, { path, op: 'remove', content: null, revision: null });
         }
         continue;
@@ -427,6 +436,7 @@ export class Room {
         else {
           next.delete(path);
           removed.add(path);
+          removedKinds.set(path, 'document');
           writes.set(path, { path, op: 'remove', content: null, revision: null });
         }
       } else if (change.op === 'rename') {

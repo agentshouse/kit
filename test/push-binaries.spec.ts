@@ -599,26 +599,25 @@ it('moves, updates or removes each held binary file across a whole reread as the
 it('brings the current version of each attachment a push conflicts with onto the House ref, and a native Git resolution then pushes', async () => {
   const { hosted, room } = await copied((setup) => {
     setup.upload('photo.jpg', JPEG);
-    setup.upload('scan.md', PDF);
+    setup.upload('scan.pdf', PDF);
   });
   await ownAgent(hosted);
   const held = room.binaries.get('photo.jpg')!.revision;
-  await placed(room, { 'photo.jpg': REDRAWN, 'scan.md': 'a caption where House holds a scan\n' });
+  await placed(room, { 'photo.jpg': REDRAWN, 'scan.pdf': 'a caption where House holds a scan\n' });
   commitAll(room.repository, 'mine');
 
   const refused = await house(hosted, room.repository, 'push', '--owner');
 
   expect(refused.status).toBe(1);
-  expect(refused.stderr).toContain('code: base_required');
-  expect(refused.stderr).toContain('code: binary_file');
+  expect(refused.stderr.match(/code: base_required/g)).toHaveLength(2);
   expect(refused.stderr).toMatch(/refs\/house\/received holds House's current state; rebase onto it and push again\n$/);
   expect(blobAt(room, 'refs/house/received', 'photo.jpg')).toEqual(JPEG);
-  expect(blobAt(room, 'refs/house/received', 'scan.md')).toEqual(PDF);
+  expect(blobAt(room, 'refs/house/received', 'scan.pdf')).toEqual(PDF);
   expect(room.batches).toHaveLength(0);
   expect(tryGit(room.repository, 'merge', '-q', 'refs/house/received').status).not.toBe(0);
   git(room.repository, 'checkout', '--ours', 'photo.jpg');
-  git(room.repository, 'checkout', '--theirs', 'scan.md');
-  git(room.repository, 'add', 'photo.jpg', 'scan.md');
+  git(room.repository, 'checkout', '--theirs', 'scan.pdf');
+  git(room.repository, 'add', 'photo.jpg', 'scan.pdf');
   git(room.repository, 'commit', '-q', '--no-edit');
 
   const pushed = await house(hosted, room.repository, 'push', '--owner');
@@ -626,7 +625,7 @@ it('brings the current version of each attachment a push conflicts with onto the
   expect(pushed).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}/) });
   expect(batches(hosted).at(-1)!.changes).toEqual([part('photo.jpg', REDRAWN, 'image/jpeg', held)]);
   expect(digest(room.binaries.get('photo.jpg')!.bytes)).toBe(digest(REDRAWN));
-  expect(digest(room.binaries.get('scan.md')!.bytes)).toBe(digest(PDF));
+  expect(digest(room.binaries.get('scan.pdf')!.bytes)).toBe(digest(PDF));
   clean(room);
 });
 
@@ -916,6 +915,40 @@ it.each<[string, (rooms: Rooms, room: Room) => void, boolean]>([
   expect(pushed).toEqual({ status: 0, stdout: `House accepted ${short(commit)}.\n`, stderr: '' });
   expect(batches(hosted).at(-1)!.changes).toEqual([part('config.json', Buffer.from('{"one": 2}\n'), 'application/json', revisions['config.json'])]);
   expect(room.binaries.get('config.json')!.bytes.toString('utf8')).toBe('{"one": 2}\n');
+  clean(room);
+});
+
+it('reads House first when a push would turn a text the copy holds into an attachment, so a change to a text House turned into one in place since the last read goes as an upload against its revision', async () => {
+  const { hosted, room } = await copied((setup) => setup.put('config.json', '{"one": 1}\n'));
+  const revision = room.revision('config.json');
+  room.attach('config.json');
+  await placed(room, { 'config.json': '{"one": 2}\n' });
+  const commit = commitAll(room.repository, 'two');
+
+  const pushed = await house(hosted, room.repository, 'push', '--owner');
+
+  expect(pushed).toEqual({ status: 0, stdout: `House accepted ${short(commit)}.\n`, stderr: '' });
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [part('config.json', Buffer.from('{"one": 2}\n'), 'application/json', revision)],
+    [part('config.json', Buffer.from('{"one": 2}\n'), 'application/json', revision)],
+  ]);
+  expect(room.binaries.get('config.json')!.bytes.toString('utf8')).toBe('{"one": 2}\n');
+  expect(gets(hosted)).toBe(0);
+  clean(room);
+});
+
+it('sends a git mv of a text House holds at a Path other than .md to another such Path as a rename, which House takes', async () => {
+  const { hosted, room } = await copied((setup) => setup.put('notes.txt', 'some notes\n'));
+  const revision = room.revision('notes.txt');
+  await opened(hosted);
+
+  const moved = await ran(hosted, `@sh cd ${room.repository} && git mv notes.txt notes.json && git commit -qm move && house push`);
+
+  expect(moved).toMatchObject({ status: 0, stdout: expect.stringMatching(/^House accepted [0-9a-f]{12}/) });
+  expect(toolBatches(hosted).map((received) => called(received).arguments!.changes)).toEqual([
+    [{ op: 'rename', path: '/rooms/notes/notes.txt', to: '/rooms/notes/notes.json', base: revision }],
+  ]);
+  expect([room.files.has('notes.txt'), room.files.get('notes.json')?.content]).toEqual([false, 'some notes\n']);
   clean(room);
 });
 

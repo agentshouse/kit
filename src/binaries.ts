@@ -38,10 +38,14 @@ const STORE: Way = {
   refused: (status) => new Error(`the store answered ${status}`),
 };
 
-async function sha256Of(repository: string, object: string): Promise<string> {
+async function digestOf(repository: string, object: string): Promise<{ bytes: number; sha256: string }> {
   const digest = createHash('sha256');
-  for await (const chunk of blobBytes(repository, object)) digest.update(chunk);
-  return digest.digest('hex');
+  let bytes = 0;
+  for await (const chunk of blobBytes(repository, object)) {
+    bytes += chunk.length;
+    digest.update(chunk);
+  }
+  return { bytes, sha256: digest.digest('hex') };
 }
 
 export function isDocument(path: string): boolean {
@@ -58,17 +62,14 @@ export async function untext(repository: string, documents: readonly (readonly [
 }
 
 export async function attachments(repository: string, arriving: readonly (readonly [string, string])[]): Promise<Map<string, Described>> {
-  const sizes = await blobSizes(repository, arriving.map(([, object]) => object));
   const described = new Map<string, Described>();
-  for (const [path, object] of arriving) {
-    described.set(path, { bytes: sizes.get(object)!, sha256: await sha256Of(repository, object), media_type: mediaTypeOf(path) ?? OCTET_STREAM });
-  }
+  for (const [path, object] of arriving) described.set(path, { ...(await digestOf(repository, object)), media_type: mediaTypeOf(path) ?? OCTET_STREAM });
   return described;
 }
 
 export async function holds(repository: string, object: string, file: { bytes: number; sha256: string }): Promise<boolean> {
-  const sizes = await blobSizes(repository, [object]);
-  return sizes.get(object) === file.bytes && (await sha256Of(repository, object)) === file.sha256;
+  const held = await digestOf(repository, object);
+  return held.bytes === file.bytes && held.sha256 === file.sha256;
 }
 
 export async function eachAtOnce<T>(items: readonly T[], work: (item: T) => Promise<void>): Promise<void> {

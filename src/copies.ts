@@ -222,7 +222,6 @@ const REBASED = new Set([
   'path_exists',
   'path_absent',
   'base_required',
-  'binary_file',
   'text_file',
 ]);
 
@@ -243,6 +242,11 @@ async function stopping<T>(sent: Promise<T>): Promise<T | { refused: Refusal }> 
     if (refusal === null || !stopsPush(refusal)) throw error;
     return { refused: refusal };
   }
+}
+
+function changesKind(changes: readonly Edit[]): boolean {
+  const removed = new Set(changes.flatMap((change) => (change.op === 'remove' ? [change.path] : [])));
+  return changes.some((change) => (change.op === 'create' || change.op === 'upload') && removed.has(change.path));
 }
 
 function unstagedUploads(refusal: Refusal): StagedUpload[] {
@@ -1156,6 +1160,11 @@ export class LocalCopies {
     let changes: Edit[];
     try {
       changes = await this.derived(copy, base, commit);
+      if (changesKind(changes)) {
+        const read = (await this.caughtUp([copy], true, caller))[0]!;
+        if (read.house !== copy.house) changes = await this.derived(read, base, commit);
+        copy = read;
+      }
     } catch (error) {
       return { refused: true, text: houseCause(error) };
     }
