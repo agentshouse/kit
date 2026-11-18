@@ -31,7 +31,7 @@ function recorded(fixture: string): { method: string; params: Record<string, any
 
 interface Recording {
   route?: RouteOverrides;
-  options?: [string, string][];
+  collaboration?: string;
   questions?: number;
   responses?: unknown[];
 }
@@ -42,12 +42,9 @@ function endedOf(received: Received): Ended {
 
 async function replayed(fixture: string, count = 1, recording: Recording = {}): Promise<Replayed> {
   const hosted = await hostKit([{ kind: KINDS[fixture.split('-')[0]!]!, ...recording.route }]);
+  if (recording.collaboration !== undefined) await writeFile(join(hosted.home, 'collaboration'), recording.collaboration);
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-  for (const [option, value] of recording.options ?? []) {
-    hosted.call({ kind: 'option', option, value });
-    await hosted.result(lastCall());
-  }
   hosted.watch(true);
   hosted.call({ kind: 'message', text: `@gate admitted\n@replay ${fixture}`, first: false });
   await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
@@ -548,7 +545,7 @@ it.each(['claude-compact', 'codex-compact', 'grok-compact'])('marks the compacti
 
 it.each([
   ['claude-plan', { questions: 1, route: { mode: 'plan', model: 'haiku', effort: null } }, ['default'], 1],
-  ['codex-plan', { questions: 1, options: [['collaboration_mode', 'plan']] }, ['Implement this plan?', 'default'], 2],
+  ['codex-plan', { questions: 1, collaboration: 'plan' }, ['Implement this plan?', 'default'], 2],
   ['grok-plan', { questions: 1, responses: ['approved'] }, ['plan', 'default'], 1],
 ] as const)("marks the plan approval recorded in %s and the mode it left plan mode for, and sends no plan, reasoning or plan update", async (fixture, recording, modes, count) => {
   const { turns } = await replayed(fixture, count, recording as Recording);
@@ -715,7 +712,7 @@ it("marks every model switch Claude Code makes after the Kit asked for a model, 
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-  hosted.call({ kind: 'option', option: 'model', value: 'sonnet' });
+  hosted.call({ kind: 'option', model: 'sonnet' });
   await hosted.result(lastCall());
 
   hosted.call({ kind: 'message', text: `${switched('haiku')}\n${switched('sonnet')}`, first: false });
@@ -733,7 +730,7 @@ it('marks a model switch Claude Code makes to a model the Kit asked for and the 
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
   await writeFile(join(hosted.home, 'refuse-model'), 'opus');
-  hosted.call({ kind: 'option', option: 'model', value: 'opus' });
+  hosted.call({ kind: 'option', model: 'opus' });
   await hosted.result(lastCall());
 
   hosted.call({ kind: 'message', text: switched('opus'), first: false });

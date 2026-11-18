@@ -54,7 +54,8 @@ const models = existsSync(offered) ? (JSON.parse(readFileSync(offered, 'utf8')) 
 let model = models[0]!.id;
 let effort = models[0]!.effort ?? 'medium';
 let mode: string | undefined;
-let collaboration: string | undefined;
+const collaborating = join(home, 'collaboration');
+let collaboration = existsSync(collaborating) ? readFileSync(collaborating, 'utf8') : undefined;
 const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode, collaboration);
 const cancelled = new Map<string, () => void>();
 const prompting = new Set<string>();

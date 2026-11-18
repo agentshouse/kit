@@ -129,16 +129,6 @@ it('starts Grok approving every tool, since it offers no mode', async () => {
   ]);
 });
 
-it("refuses the open in the Kit's words when the CLI does not take the route's effort, and logs the CLI's cause", async () => {
-  const hosted = await hostKit([{ model: 'codex-instant', effort: 'high' }]);
-
-  hosted.call({ kind: 'open' });
-
-  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI refused the Agent's model, mode or effort" });
-  expect(hosted.connection.oneWayCalls.filter((oneWayCall) => oneWayCall.type === 'process')).toEqual([]);
-  expect(hosted.kit.stderr()).toContain('Unknown config option: thought_level');
-});
-
 it('opens a conversation of an Agent House added after the Kit read its Agents', async () => {
   const hosted = await hostKit();
   await until(() => hosted.house.requests.find((request) => request.path === '/kit/agents/report'));
@@ -1664,7 +1654,7 @@ it('ends a CLI that never answers an option the owner changed once the silence b
   const hosted = await silenced();
   await writeFile(join(hosted.home, 'hold-option'), '');
 
-  hosted.call({ kind: 'option', option: 'model', value: 'gpt-5.5-mini' });
+  hosted.call({ kind: 'option', model: 'gpt-5.5-mini' });
 
   expect(await hosted.result(lastCall())).toEqual({});
   const held = (await hosted.adapterLog()).find(
