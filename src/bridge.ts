@@ -41,6 +41,7 @@ interface Holder {
   named: Record<string, string>;
   ownAgent: boolean;
   owner: boolean;
+  path: string | null;
 }
 
 class Said extends Error {}
@@ -123,6 +124,7 @@ export async function openBridge(
     named: {},
     ownAgent: false,
     owner: false,
+    path: [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter),
   });
 }
 
@@ -146,17 +148,17 @@ export async function openRunBridge(house: House, copies: LocalCopies, run: stri
       named,
       ownAgent: true,
       owner: true,
+      path: null,
     });
   }
   const credential = await runCredential(house, run, signal);
   if (credential === null) return null;
   const origin = (await readEnrolment())!.house;
-  return bridgeFor(copies, { key: `function-run:${run}`, origin, credential, named, ownAgent: false, owner: true });
+  return bridgeFor(copies, { key: `function-run:${run}`, origin, credential, named, ownAgent: false, owner: true, path: null });
 }
 
 async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
-  const path = [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter);
-  const { origin, credential, named } = holder;
+  const { origin, credential, named, path } = holder;
 
   const closed = new AbortController();
   const sent = (message: Message, operation: string | null): Promise<Forwarded> =>
@@ -310,7 +312,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
   return {
     env: {
       HOUSE_BRIDGE: socketPath,
-      PATH: path,
+      ...(path === null ? {} : { PATH: path }),
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: `url.${proxy}/app/.insteadOf`,
       GIT_CONFIG_VALUE_0: app,
