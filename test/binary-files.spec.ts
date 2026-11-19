@@ -70,7 +70,7 @@ it("uploads a local file in the parts House answers, finishes it naming its path
     stringify({ conflicts: [{ path: '/rooms/notes/cover.jpg', code: 'base_required', state: 'current', revision: 'v_9.1.x' }] }).trimEnd(),
   ].join('\n');
   hosted.tools.upload = (args) =>
-    args.path === '/rooms/notes/cover.jpg' && args.base === undefined
+    args.upload === undefined && args.path === '/rooms/notes/cover.jpg' && args.base === undefined
       ? { isError: true, content: [{ type: 'text', text: `${refusal}\n` }] }
       : uploads.answer(args);
   await opened(hosted);
