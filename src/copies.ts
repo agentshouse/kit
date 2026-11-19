@@ -188,7 +188,7 @@ export interface Caller {
     upload: Upload | undefined,
     retain: (upload: Upload) => Promise<void>,
   ): Promise<Submitted>;
-  finish(upload: string, room: string, partSha256: string[]): Promise<Finished<Staged>>;
+  finish(upload: string, path: string, partSha256: string[]): Promise<Finished<Staged>>;
   info(path: string, revision?: string): Promise<FileInfo | null>;
 }
 
@@ -601,7 +601,7 @@ export class LocalCopies {
           };
         }
       },
-      finish: async (upload, _room, partSha256) => {
+      finish: async (upload, _path, partSha256) => {
         try {
           return (await house.act('uploads/finish', { upload, part_sha256: partSha256 })) as Finished<Staged>;
         } catch (error) {
@@ -1326,7 +1326,7 @@ export class LocalCopies {
       const path = relative(part.path);
       try {
         await sentBinary(copy.repository, commit.get(path)!, path, part, upload, (id, partSha256) =>
-          caller.finish(id, copy.room_ref, partSha256),
+          caller.finish(id, part.path, partSha256),
         );
       } catch (error) {
         failed.set(upload.sha256, `its transfer failed: ${causeOf(error)}`);

@@ -175,9 +175,9 @@ export async function openBridge(
         await send(upload === undefined ? inline : call('update', { paths: changedPaths(changes), upload }), operation, true),
       );
     },
-    finish: async (upload, room, partSha256) => {
+    finish: async (upload, path, partSha256) => {
       const answer = toolAnswer(
-        await send(call('upload', { upload, room_ref: room, part_sha256: partSha256 }), operationId(), true),
+        await send(call('upload', { upload, path, part_sha256: partSha256 }), operationId(), true),
       );
       if ('refused' in answer) throw new Error(answer.refused.text);
       return parse(answer.text) as Finished<Staged>;

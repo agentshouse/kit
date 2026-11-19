@@ -55,7 +55,7 @@ const FETCH_USAGE = 'usage: house fetch';
 const FETCH = `fetch: records House's changes on each Local copy's ${HOUSE_REF}`;
 const DOWNLOAD_USAGE = `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 const DOWNLOAD = 'download: writes a binary file of a Room to the local file named by file';
-const UPLOAD_USAGE = `usage: house upload '{"file":"<local file>","room_ref":"r_…","path":"<path in the Room>"}', adding "base", the revision it replaces`;
+const UPLOAD_USAGE = `usage: house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
 const CLOSED = "this conversation's House connection is closed; nothing to do from here";
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
@@ -154,8 +154,8 @@ async function described(file: string): Promise<Description> {
   return { bytes, sha256: digest.digest('hex'), ...(mediaType === undefined ? {} : { media_type: mediaType }) };
 }
 
-async function finished(upload: string, room: unknown, partSha256: string[]): Promise<Finishing> {
-  const text = await called('upload', { upload, room_ref: room, part_sha256: partSha256 });
+async function finished(upload: string, path: unknown, partSha256: string[]): Promise<Finishing> {
+  const text = await called('upload', { upload, path, part_sha256: partSha256 });
   const answer = parse(text) as object | null;
   return answer !== null && 'upload' in answer ? (answer as Finishing) : { text };
 }
@@ -172,7 +172,7 @@ async function upload({ file, ...destination }: Record<string, unknown>): Promis
     sha256: description.sha256,
     read: (start, end) => fileRange(file, start, end, (error) => unreadable(file, error)),
     send: (url, start, end, headers) => sentPart(url, file, start, end, headers, WAY),
-    finish: (id, partSha256) => finished(id, destination.room_ref, partSha256),
+    finish: (id, partSha256) => finished(id, destination.path, partSha256),
   });
   return accepted.text;
 }
