@@ -58,8 +58,6 @@ const collaborating = join(home, 'collaboration');
 let collaboration = existsSync(collaborating) ? readFileSync(collaborating, 'utf8') : undefined;
 const options = () => SESSION_OPTIONS[kind]!(models, model, effort, mode, collaboration);
 const cancelled = new Map<string, () => void>();
-const prompting = new Set<string>();
-const turning = new Set<string>();
 let spent: Record<string, unknown> = {};
 const steers = kind !== 'grok-build';
 
@@ -203,7 +201,6 @@ async function subagent(client: AgentContext, sessionId: string, task: string) {
 }
 
 async function turnStarted(client: AgentContext, sessionId: string) {
-  turning.add(sessionId);
   if (kind === 'grok-build') {
     await client.notify('_x.ai/queue/changed', { sessionId, entries: [], runningPromptId: 'task-completed-1' });
   } else if (kind === 'claude-agent-acp') {
@@ -220,7 +217,6 @@ async function turnStarted(client: AgentContext, sessionId: string) {
 }
 
 async function turnEnded(client: AgentContext, sessionId: string) {
-  turning.delete(sessionId);
   if (kind === 'grok-build') {
     await client.notify('_x.ai/session_notification', {
       sessionId,
@@ -584,50 +580,29 @@ const app = agent({ name: 'adapter-double' })
     cancelled.get(params.sessionId)?.();
     cancelled.delete(params.sessionId);
   })
-  .onRequest('_session/steering', STEERING, ({ params, client }) => {
-    const text = promptText(params.prompt);
-    log({ method: '_session/steering', params, text });
+  .onRequest('_session/steering', STEERING, ({ params }) => {
+    log({ method: '_session/steering', params, text: promptText(params.prompt) });
     if (!steers) throw RequestError.methodNotFound('_session/steering');
-    if (existsSync(join(home, 'refuse-steering'))) throw new RequestError(-32603, 'the steer was refused');
-    const steps = directives(text);
-    if ((kind === 'codex-acp' ? turning : prompting).has(params.sessionId)) {
-      void (async () => {
-        for (const line of steps) await directive(client, params.sessionId, line);
-      })();
-      return { outcome: 'injected' };
-    }
-    if (kind === 'claude-agent-acp') return { outcome: 'promptRequired' };
-    void (async () => {
-      await turnStarted(client, params.sessionId);
-      for (const line of steps) await directive(client, params.sessionId, line);
-      await turnEnded(client, params.sessionId);
-    })();
-    return { outcome: 'startedNewTurn' };
+    return { outcome: 'promptRequired' };
   })
   .onRequest('session/prompt', async ({ params, client }) => {
     await replaying;
     const text = promptText(params.prompt);
     written(params.sessionId);
     log({ method: 'session/prompt', params, text });
-    prompting.add(params.sessionId);
-    turning.add(params.sessionId);
     spent = {};
-    try {
-      const steps = directives(text);
-      for (const line of steps.length === 0 ? ['@say ok'] : steps) {
-        const outcome = await directive(client, params.sessionId, line);
-        if (outcome === 'answered') return { stopReason: 'end_turn' };
-        if (outcome === 'cancelled') {
-          await turnEnded(client, params.sessionId);
-          return { stopReason: 'cancelled' };
-        }
-        if (outcome !== undefined) return outcome;
+    const steps = directives(text);
+    for (const line of steps.length === 0 ? ['@say ok'] : steps) {
+      const outcome = await directive(client, params.sessionId, line);
+      if (outcome === 'answered') return { stopReason: 'end_turn' };
+      if (outcome === 'cancelled') {
+        await turnEnded(client, params.sessionId);
+        return { stopReason: 'cancelled' };
       }
-      await turnEnded(client, params.sessionId);
-      return { stopReason: 'end_turn', ...spent };
-    } finally {
-      prompting.delete(params.sessionId);
+      if (outcome !== undefined) return outcome;
     }
+    await turnEnded(client, params.sessionId);
+    return { stopReason: 'end_turn', ...spent };
   });
 
 app.connect(

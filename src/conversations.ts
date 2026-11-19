@@ -102,8 +102,6 @@ const NOT_SIGNED_IN = "the Agent's CLI is not signed in; sign it in on the Agent
 
 const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
 
-const UNSTEERED = "the Agent's CLI did not take the message into its running turn";
-
 const TAKEN_OUT = 'the message was taken out before it started';
 
 const QUIET: SessionState = {
@@ -233,17 +231,12 @@ function marker(bridge: Bridge): string {
   return `HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`;
 }
 
-function steers(adapter: Adapter): boolean {
-  return (adapter.initialized._meta?.steering as { supported?: unknown } | undefined)?.supported === true;
-}
-
 class Turn {
   readonly id = randomUUID();
   readonly content: Content;
   questions = 0;
   secrets = 0;
   prompted = false;
-  steered = false;
   taken: (() => void) | null = null;
   ended = false;
   quietUntil = Infinity;
@@ -561,53 +554,9 @@ export class Conversations {
     conversation.preparing = null;
     const { promise, resolve: settle } = Promise.withResolvers<KitCallResult>();
     const waiting: Waiting = { call, route, content, instructing, settle };
-    if (call.at_once === true && conversation.turns.size > 0) await this.atOnce(conversation, waiting);
-    else conversation.waiting.push(waiting);
+    conversation.waiting.push(waiting);
     this.next(conversation);
     return { result: promise };
-  }
-
-  private async atOnce(conversation: Conversation, waiting: Waiting): Promise<void> {
-    while (conversation.sending !== null) await conversation.sending;
-    const running = conversation.running;
-    if (running !== null && conversation.turns.size > 0 && steers(running.adapter)) {
-      conversation.sending = this.steer(conversation, running, waiting);
-      await conversation.sending;
-      conversation.sending = null;
-      return;
-    }
-    this.ahead(conversation, waiting);
-    if (conversation.turns.size > 0) await this.cancel(conversation);
-  }
-
-  private ahead(conversation: Conversation, waiting: Waiting): void {
-    const behind = conversation.waiting.findIndex((held) => held.call.at_once !== true);
-    conversation.waiting.splice(behind === -1 ? conversation.waiting.length : behind, 0, waiting);
-  }
-
-  private async steer(conversation: Conversation, running: Running, waiting: Waiting): Promise<void> {
-    let outcome: unknown;
-    try {
-      ({ outcome } = await running.adapter.connection.agent.request<{ outcome?: unknown }>('_session/steering', {
-        sessionId: running.sessionId,
-        prompt: waiting.content,
-        _meta: { steering: { idleBehavior: 'promptRequired' } },
-      }));
-    } catch (error) {
-      outcome = error;
-    }
-    if (outcome === 'promptRequired') {
-      this.ahead(conversation, waiting);
-    } else if (outcome === 'injected' || outcome === 'startedNewTurn') {
-      if (outcome === 'injected') {
-        for (const turn of conversation.turns) turn.steered ||= turn.prompted;
-      }
-      this.kit.calls.keepResult(waiting.call.input_id, {});
-      waiting.settle({});
-    } else {
-      const cause = outcome instanceof Error ? outcome : new Error(`the CLI answered ${JSON.stringify(outcome)}`);
-      waiting.settle({ refused: refusal(conversation, new NotStarted(UNSTEERED, { cause })) });
-    }
   }
 
   private next(conversation: Conversation): void {
@@ -1113,7 +1062,7 @@ export class Conversations {
   private ended(conversation: Conversation, stop: Stop | null): void {
     const turn = conversation.turn;
     if (turn === null) return;
-    const held = stop !== null && !turn.steered && [...conversation.subagents].some((key) => turn.content.holds(key));
+    const held = stop !== null && [...conversation.subagents].some((key) => turn.content.holds(key));
     if (!turn.prompted || held) {
       this.took(turn);
       this.end(conversation, turn, stop === 'refusal' ? { failure: 'refused', cause: REFUSED } : null);
