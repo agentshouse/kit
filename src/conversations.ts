@@ -299,7 +299,6 @@ class Conversation {
   tokens: Tokens | null = null;
   readonly leftovers = new Set<Scope>();
   readonly waiting: Waiting[] = [];
-  done = false;
   sending: Promise<void> | null = null;
   readonly subagents = new Set<string>();
   opening: Bridge | null = null;
@@ -450,11 +449,6 @@ export class Conversations {
   private async carry(conversation: Conversation, call: ConversationCall): Promise<{ result: Promise<KitCallResult> }> {
     if (call.kind === 'open') return this.open(conversation, call);
     if (call.kind === 'message') return this.message(conversation, call);
-    if (call.kind === 'done') {
-      conversation.done = true;
-      this.next(conversation);
-      return { result: Promise.resolve({}) };
-    }
     if (call.kind === 'take_out') return { result: Promise.resolve(this.takeOut(conversation, call.message_id)) };
     await this.launched(conversation);
     if (call.kind === 'interrupt') {
@@ -616,7 +610,6 @@ export class Conversations {
     if (waiting === undefined) {
       const step = conversation.preparing ?? (conversation.launch === null ? null : 'session');
       if (conversation.starting !== step) this.starts(conversation, step);
-      if (conversation.done && conversation.launch === null) void this.stop(conversation).catch(logged);
       return;
     }
     conversation.sending = this.send(conversation, waiting).finally(() => {
