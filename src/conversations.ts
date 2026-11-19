@@ -60,6 +60,14 @@ type ConversationCall = Extract<KitCall, { conversation_id: string }>;
 
 type Said = Omit<KitCallOf<'message'>, 'kind' | 'message_id'> & { kind: 'message' | 'answer'; message_id: string | null };
 
+type Chosen = Pick<KitCallOf<'option'>, 'model' | 'effort'>;
+
+const EFFORT = 'thought_level';
+
+function conversationRoute(route: DesiredAgentRoute, chosen: Chosen): DesiredAgentRoute {
+  return { ...route, model: chosen.model ?? route.model, effort: chosen.effort ?? route.effort };
+}
+
 type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error' | 'silent';
 
 interface Failed {
@@ -458,7 +466,7 @@ export class Conversations {
       await conversation.sending;
       if (--conversation.kills === 0) conversation.killed = new AbortController();
     }
-    if (call.kind === 'option') await this.option(conversation, call.option, call.value);
+    if (call.kind === 'option') await this.option(conversation, call);
     if (call.kind === 'answer') {
       const question = this.questions.get(call.interaction_id);
       if (question === undefined) {
@@ -480,7 +488,9 @@ export class Conversations {
 
   private async open(conversation: Conversation, call: KitCallOf<'open'>): Promise<{ result: Promise<KitCallResult> }> {
     await this.stop(conversation);
-    const launch = conversation.launch ?? this.launch(conversation, this.route(conversation, call.agent_id), null, true);
+    const launch =
+      conversation.launch ??
+      this.launch(conversation, this.route(conversation, call.agent_id).then((route) => conversationRoute(route, call)), null, true);
     return {
       result: launch.session.then(
         (session) => ({ provider_session_id: session }),
@@ -539,7 +549,7 @@ export class Conversations {
     let route: DesiredAgentRoute;
     let instructing: Promise<string> | null = null;
     try {
-      route = await this.route(conversation, call.agent_id);
+      route = conversationRoute(await this.route(conversation, call.agent_id), call);
       if (call.first === true) instructing = this.instructed(conversation, route);
       if (call.message_id !== null) content.push(...(await this.transcribed(conversation, call.message_id, call.text)));
       if (conversation.kills > 0) throw new Error(KILLED);
@@ -775,23 +785,32 @@ export class Conversations {
     await running?.adapter.exited;
   }
 
-  private async option(conversation: Conversation, option: string, value: unknown): Promise<void> {
+  private async option(conversation: Conversation, chosen: Chosen): Promise<void> {
+    while (conversation.running === null && conversation.sending !== null) await conversation.sending;
     const running = conversation.running;
     if (running === null) return;
-    try {
-      if (conversation.options?.find(({ id }) => id === option)?.category === 'mode') {
-        throw new Error(`conversation ${conversation.id} keeps the mode its Agent's launch settings name`);
+    for (const [category, value] of [['model', chosen.model], [EFFORT, chosen.effort]] as const) {
+      if (value === undefined) continue;
+      try {
+        const options = await this.setOption(running, conversation.options ?? [], category, value);
+        if (options !== null) this.options(conversation, options);
+      } catch (error) {
+        logged(error);
       }
-      running.reader.requested(option, value);
-      const answered = await running.adapter.connection.agent.request('session/set_config_option', {
-        sessionId: running.sessionId,
-        configId: option,
-        ...(typeof value === 'boolean' ? { type: 'boolean' as const, value } : { value: String(value) }),
-      });
-      this.options(conversation, answered.configOptions);
+    }
+  }
+
+  private async setOption(running: Running, options: SessionConfigOption[], category: string, value: string): Promise<SessionConfigOption[] | null> {
+    const option = options.find((candidate) => candidate.category === category);
+    if (option === undefined && category === EFFORT) return null;
+    const configId = option?.id ?? category;
+    running.reader.requested(configId, value);
+    try {
+      const answered = await running.adapter.connection.agent.request('session/set_config_option', { sessionId: running.sessionId, configId, value });
+      return answered.configOptions;
     } catch (error) {
-      running.reader.refused(option);
-      logged(error);
+      running.reader.refused(configId);
+      throw error;
     }
   }
 
@@ -920,18 +939,10 @@ export class Conversations {
     const settings: [string, string | null][] = [
       ['mode', route.mode ?? CLIS[route.kind]!.fullAccess],
       ['model', route.model],
-      ['thought_level', route.effort],
+      [EFFORT, route.effort],
     ];
     for (const [category, value] of settings) {
-      if (value === null) continue;
-      const option = options.find((candidate) => candidate.category === category);
-      running.reader.requested(option?.id ?? category, value);
-      const answered = await running.adapter.connection.agent.request('session/set_config_option', {
-        sessionId: running.sessionId,
-        configId: option?.id ?? category,
-        value,
-      });
-      options = answered.configOptions;
+      if (value !== null) options = (await this.setOption(running, options, category, value)) ?? options;
     }
     return options;
   }
@@ -995,7 +1006,7 @@ export class Conversations {
       const value = options.find((option) => option.category === category)?.currentValue;
       return value === undefined ? null : String(value);
     };
-    this.stated(conversation, { model: chosen('model'), effort: chosen('thought_level'), mode: chosen('mode') });
+    this.stated(conversation, { model: chosen('model'), effort: chosen(EFFORT), mode: chosen('mode') });
   }
 
   private deliver<Act extends TurnAct>(
