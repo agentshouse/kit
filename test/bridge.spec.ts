@@ -183,12 +183,12 @@ it("uploads the local file named by file to its path in the Room, filling its si
 
   directed(
     hosted,
-    '@house upload {"file":"messenger-evidence/messenger-light.jpg","room_ref":"porting","path":"evidence/messenger-next-light.jpg"}',
+    '@house upload {"file":"messenger-evidence/messenger-light.jpg","path":"/rooms/porting/evidence/messenger-next-light.jpg"}',
   );
 
   expect((await runs(hosted, 1))[0]).toMatchObject({
     status: 0,
-    stdout: 'path: evidence/messenger-next-light.jpg\nrevision: v_1.1.x\n',
+    stdout: 'path: /rooms/porting/evidence/messenger-next-light.jpg\nrevision: v_1.1.x\n',
     stderr: '',
   });
   const [declared] = hosted.mcp;
@@ -196,8 +196,7 @@ it("uploads the local file named by file to its path in the Room, filling its si
   expect(declared!.headers.authorization).toBe(`Bearer ${conversationCredential('conversation-1')}`);
   expect(called(declared!).params.name).toBe('upload');
   expect(called(declared!).params.arguments).toEqual({
-    room_ref: 'porting',
-    path: 'evidence/messenger-next-light.jpg',
+    path: '/rooms/porting/evidence/messenger-next-light.jpg',
     bytes: content.length,
     sha256: createHash('sha256').update(content).digest('hex'),
     media_type: 'image/jpeg',
@@ -250,7 +249,7 @@ it("prints House's refusal of an upload's finishing call as House words it", asy
       : { isError: true, content: [{ type: 'text', text: 'upload_expired: this upload is gone; run the same command again to start a new one\n' }] };
   await opened(hosted);
 
-  directed(hosted, '@house upload {"file":"report.txt","room_ref":"r_room","path":"report.txt"}');
+  directed(hosted, '@house upload {"file":"report.txt","path":"/rooms/room/report.txt"}');
 
   expect((await runs(hosted, 1))[0]).toMatchObject({
     status: 1,
@@ -268,9 +267,9 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
       '@house search invoice',
       '@house search ["invoice"]',
       '@house upload {}',
-      '@house upload {"path":"report.txt","room_ref":"r_room"}',
-      '@house upload {"file":"absent.txt","room_ref":"r_room","path":"absent.txt"}',
-      '@house upload {"file":".","room_ref":"r_room","path":"folder"}',
+      '@house upload {"path":"/rooms/room/report.txt"}',
+      '@house upload {"file":"absent.txt","path":"/rooms/room/absent.txt"}',
+      '@house upload {"file":".","path":"/rooms/room/folder"}',
       '@house agents/list --help',
     ].join('\n'),
   );
