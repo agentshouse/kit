@@ -372,7 +372,7 @@ it('says a write may have taken effect when House answers with no result, and to
   const home = await connected(house, true);
   house.route('POST', '/', () => ({ status: 502, bytes: { type: 'text/html', content: '<html>Bad Gateway</html>' } }));
 
-  const ran = await runHouse(home, ['update', '{"changes":[]}']);
+  const ran = await runHouse(home, ['update', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}']);
 
   expect(ran).toEqual({
     status: 1,
