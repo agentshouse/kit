@@ -226,8 +226,6 @@ export interface UploadTool {
 
 export const MISMATCH = 'upload_mismatch: the stored bytes differ from the file declared; run the same command again';
 
-const ARGUMENTS = ['file', 'path', 'base', 'bytes', 'sha256', 'media_type', 'upload', 'part_sha256'];
-
 function text(value: string): ToolResult {
   return { content: [{ type: 'text', text: value }] };
 }
@@ -240,8 +238,6 @@ export function uploadTool(
   return {
     calls,
     answer: async (args) => {
-      const unknown = Object.keys(args).filter((name) => !ARGUMENTS.includes(name));
-      if (unknown.length > 0) return { isError: true, content: [{ type: 'text', text: `invalid_arguments: ${unknown.join(', ')} is not an argument here; it takes ${ARGUMENTS.join(', ')}\n` }] };
       if (args.upload !== undefined) {
         calls.finished.push(args);
         const finished = await store.finish(String(args.upload), args.part_sha256);
