@@ -166,7 +166,7 @@ it('pushes a commit of text and binary files once as the owner, each binary file
   expect(gets(hosted)).toBe(0);
 });
 
-it("pushes text and a binary file under the conversation's own credential, finishing each staged upload through upload, and a fetch there brings the held file's new bytes", async () => {
+it("pushes text and a binary file under the conversation's own credential, finishing each staged upload through upload by the file's path in the Room, and a fetch there brings the held file's new bytes", async () => {
   const { hosted, room } = await copied();
   await opened(hosted);
   await placed(room, { 'photo.jpg': JPEG, 'plan.md': 'one\ntwo\n' });
@@ -181,7 +181,7 @@ it("pushes text and a binary file under the conversation's own credential, finis
   expect(fetched.status).toBe(0);
   expect(pushedRevision).not.toBe(room.binaries.get('photo.jpg')!.revision);
   const credential = `Bearer ${conversationCredential('conversation-1')}`;
-  const finishing = { upload: expect.any(String), room_ref: room.ref, part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };
+  const finishing = { upload: expect.any(String), path: '/rooms/notes/photo.jpg', part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };
   expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
     [credential, 'update', { changes: expect.any(Array) }],
     [credential, 'upload', finishing],

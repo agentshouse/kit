@@ -167,10 +167,9 @@ export const LISTING: Listed[] = [
       type: 'object',
       properties: {
         file: { type: 'string', description: 'The file in your Environment.' },
-        room_ref: { type: 'string', description: 'The Room.' },
-        path: { type: 'string', description: 'Its path in the Room.' },
+        path: { type: 'string', description: 'Its path, `/rooms/<handle>/…`.' },
       },
-      required: ['file', 'room_ref', 'path'],
+      required: ['file', 'path'],
     },
   },
   {
