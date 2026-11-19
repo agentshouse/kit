@@ -15,7 +15,7 @@ import {
   type UploadParts,
   type Way,
 } from './files.ts';
-import { HOUSE_REF } from './git.ts';
+import { HOUSE_REF, PUSH_NEEDS_OWNER } from './git.ts';
 import { ownerSocket } from './home.ts';
 import { ownAgentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
@@ -57,7 +57,7 @@ const DOWNLOAD_USAGE = `usage: house download '{"path":"/rooms/<handle>/<path>",
 const DOWNLOAD = 'download: writes a binary file of a Room to the local file named by file';
 const UPLOAD_USAGE = `usage: house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
-const CLOSED = "this conversation's House connection is closed; nothing to do from here";
+const CLOSED = 'this House connection is closed; nothing to do from here';
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
 const socketPath = process.env.HOUSE_BRIDGE;
@@ -195,11 +195,11 @@ async function push(args: string[]): Promise<string> {
   const { flags, positionals: [commit = 'HEAD'] } = accepted(args, ['--help', '--owner'], 1, PUSH_USAGE);
   if (flags.has('--help')) return `${PUSH_USAGE}\n${PUSH}`;
   const owner = flags.has('--owner');
-  if (owner && socketPath !== undefined) throw new Error('--owner is not for Agent conversations; run house push without it');
-  if (!owner && socketPath === undefined) throw new Error('outside an Agent conversation, house push needs --owner');
-  const pushed = JSON.parse(
-    await bridged('/git/push', { cwd: process.cwd(), commit }, owner ? ownerSocket() : socketPath),
-  ) as { refused: boolean; text: string };
+  if (!owner && socketPath === undefined) throw new Error(PUSH_NEEDS_OWNER);
+  const pushed = JSON.parse(await bridged('/git/push', { cwd: process.cwd(), commit, owner }, socketPath ?? ownerSocket())) as {
+    refused: boolean;
+    text: string;
+  };
   if (pushed.refused) throw new Error(pushed.text);
   return pushed.text;
 }

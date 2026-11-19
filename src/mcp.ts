@@ -26,7 +26,7 @@ const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 export const UNREACHABLE = 'House is unreachable; call again in a minute';
 const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
-const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
+export const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
 const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 
 export class Unsettled extends Error {}
@@ -35,7 +35,13 @@ export function rpc(method: string, params: Record<string, unknown>): Message {
   return { jsonrpc: '2.0', id: randomUUID(), method, params };
 }
 
-export function mcpBody(message: Message, operation: string | null): string {
+export interface Sending {
+  operation?: string | null;
+  named?: Readonly<Record<string, string>>;
+  signal?: AbortSignal;
+}
+
+export function mcpBody(message: Message, { operation = null, named = {} }: Sending = {}): string {
   return JSON.stringify({
     ...message,
     params: {
@@ -44,19 +50,14 @@ export function mcpBody(message: Message, operation: string | null): string {
         'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
         'io.modelcontextprotocol/clientInfo': { name: '@agentshouse/kit', version: KIT_RELEASE },
         'io.modelcontextprotocol/clientCapabilities': {},
+        ...named,
         ...(operation === null ? {} : { 'agents.house/agent-operation': operation }),
       },
     },
   });
 }
 
-export async function callHouse(
-  origin: string,
-  credential: string,
-  message: Message,
-  operation: string | null = null,
-  signal?: AbortSignal,
-): Promise<Forwarded> {
+export async function callHouse(origin: string, credential: string, message: Message, sending: Sending = {}): Promise<Forwarded> {
   const tool = message.method === 'tools/call' ? String(message.params.name) : null;
   const answer = await fetch(relayed(new URL('/', origin)), {
     method: 'POST',
@@ -69,8 +70,8 @@ export async function callHouse(
       ...(tool === null ? {} : { 'mcp-name': tool }),
       [KIT_WIRE_HEADER]: KIT_WIRE,
     },
-    body: mcpBody(message, operation),
-    signal,
+    body: mcpBody(message, sending),
+    signal: sending.signal,
   });
   return { status: answer.status, text: await answer.text() };
 }

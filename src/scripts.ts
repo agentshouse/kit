@@ -8,8 +8,11 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import type { HouseOneWayCall, KitCallOf, KitCallResult, KitOneWayCall } from '@agentshouse/kit-wire';
 import type { IPty } from '@lydell/node-pty';
+import type { House } from './api.ts';
+import { openRunBridge, type Bridge } from './bridge.ts';
 import type { Calls, Carried } from './calls.ts';
 import { loginPath, onLoginPath } from './clis.ts';
+import type { LocalCopies } from './copies.ts';
 import { kitHome } from './home.ts';
 import { childEnvironment } from './relay.ts';
 import { killTree } from './scope.ts';
@@ -37,6 +40,8 @@ interface Plan {
 interface Run {
   plan: Plan;
   input: string | null;
+  bridge: Bridge | null;
+  closed: AbortController;
   output: KeptOutput | null;
   process: { pid: number } | null;
   pipes: Readable[];
@@ -182,11 +187,15 @@ class KeptOutput {
 export class Scripts {
   private readonly calls: Calls;
   private readonly send: (oneWayCall: KitOneWayCall) => boolean;
+  private readonly house: House;
+  private readonly copies: LocalCopies;
   private readonly runs = new Map<string, Run>();
 
-  constructor(calls: Calls, send: (oneWayCall: KitOneWayCall) => boolean) {
+  constructor(calls: Calls, send: (oneWayCall: KitOneWayCall) => boolean, house: House, copies: LocalCopies) {
     this.calls = calls;
     this.send = send;
+    this.house = house;
+    this.copies = copies;
   }
 
   start(call: ScriptCall): void {
@@ -224,6 +233,8 @@ export class Scripts {
     const run: Run = {
       plan,
       input: null,
+      bridge: null,
+      closed: new AbortController(),
       output,
       process: null,
       pipes: [],
@@ -241,6 +252,7 @@ export class Scripts {
       return { result: await this.ran(id, run), release: plan.function !== null };
     } finally {
       this.runs.delete(id);
+      run.bridge?.close();
       if (run.input !== null) await rm(run.input, { force: true });
     }
   }
@@ -254,9 +266,17 @@ export class Scripts {
       if (shell === null) return failed(plan, NO_BASH);
       const path = await loginPath();
       await run.sized.promise;
-      if (plan.function !== null) run.input = await inputFile(plan.function.input);
+      if (plan.function !== null) {
+        run.input = await inputFile(plan.function.input);
+        run.bridge = await openRunBridge(this.house, this.copies, id, run.closed.signal);
+      }
       if (run.ended !== null) return run.ended;
-      const environment = { ...childEnvironment(), PATH: path, ...(run.input === null ? {} : { HOUSE_INPUT: run.input }) };
+      const environment = {
+        ...childEnvironment(),
+        ...run.bridge?.env,
+        PATH: path,
+        ...(run.input === null ? {} : { HOUSE_INPUT: run.input }),
+      };
       if (plan.terminal === null) {
         ({ exited } = await this.piped(plan.script, shell, environment, run));
       } else {
@@ -271,7 +291,7 @@ export class Scripts {
         exited = new Promise((resolve) => terminal.onExit(({ exitCode, signal }) => resolve(signal ? SIGNALLED + signal : exitCode)));
       }
     } catch (error) {
-      return failed(plan, causeOf(error));
+      return run.ended ?? failed(plan, causeOf(error));
     }
     let timedOut = false;
     // House sends a function run's time cap in seconds, and a run still going at its cap ends with its process group and the output pipes it holds.
@@ -321,6 +341,7 @@ export class Scripts {
     if (run.ended !== null) return;
     this.waited(run, null);
     run.ended = result;
+    run.closed.abort();
     run.sized.resolve();
     this.stop(run);
   }

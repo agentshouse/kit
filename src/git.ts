@@ -12,6 +12,8 @@ export function localCopies(): string {
 
 export const HOUSE_REF = 'refs/house/received';
 
+export const PUSH_NEEDS_OWNER = 'outside an Agent conversation, house push needs --owner';
+
 const COMMITTER = 'Kit <house-kit@localhost>';
 
 export interface Ran {

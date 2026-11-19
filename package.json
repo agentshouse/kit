@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "2.4.0",
-    "@agentshouse/kit-wire": "0.1.0-c896a7802e5cf",
+    "@agentshouse/kit-wire": "0.1.0-c0f6ddeaad2f1",
     "@agentshouse/mdmodel": "0.1.0-c420026daf4fc",
     "@agentshouse/session-content": "0.1.0-c560e48c9bea3",
     "@agentshouse/skills": "0.1.0-ca919afd7cbce",

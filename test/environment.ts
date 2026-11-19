@@ -196,6 +196,10 @@ export function conversationCredential(conversation: string): string {
   return `ahc_${conversation}`;
 }
 
+export function runCredential(run: string): string {
+  return `ahj_${run}`;
+}
+
 export interface McpCall {
   method: string;
   params: { name?: string; arguments?: Record<string, unknown>; _meta: Record<string, unknown> };
@@ -328,6 +332,9 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   serveKitFiles(house, home);
   house.route('POST', '/kit/conversations/credentials/issue', (request) => ({
     body: { credential: conversationCredential(idOf(request, 'conversation')) },
+  }));
+  house.route('POST', '/kit/function-runs/credentials/issue', (request) => ({
+    body: { credential: runCredential(idOf(request, 'run')) },
   }));
   house.route('POST', '/kit/kits/report-restart', () => ({ body: {} }));
   house.route('POST', '/kit/local-copies/selection/read', () => ({ body: { local_copy: { rooms: [] } } }));
