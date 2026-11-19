@@ -1,4 +1,5 @@
-import type { HouseOneWayCall, KitCall } from '@agentshouse/kit-wire';
+import { KIT_DOOR_ACTS, type HouseOneWayCall, type KitCall } from '@agentshouse/kit-wire';
+import { KIT_DOOR_ARGUMENTS, KIT_TOOL_ARGUMENTS, KIT_TOOLS } from '@agentshouse/kit-wire/arguments';
 import { spawnSync } from 'node:child_process';
 import { createReadStream, mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { createServer, STATUS_CODES, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -9,6 +10,7 @@ import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { onTestFinished } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
+import type { ZodType } from 'zod';
 
 export interface Received {
   method: string;
@@ -78,6 +80,43 @@ function matched(pattern: string, path: string): Record<string, string> | null {
     else if (segment !== actual[index]) return null;
   }
   return params;
+}
+
+const DOOR = '/kit/door/';
+
+function published<Name extends string>(names: readonly Name[], shapes: Readonly<Partial<Record<Name, ZodType>>>): ReadonlyMap<string, ZodType> {
+  return new Map(
+    names.map((name) => {
+      const shape = shapes[name];
+      if (shape === undefined) throw new Error(`@agentshouse/kit-wire publishes no arguments for ${name}; pin a kit-wire packed with House's argument shapes`);
+      return [name, shape];
+    }),
+  );
+}
+
+const DOOR_ARGUMENTS = published(KIT_DOOR_ACTS, KIT_DOOR_ARGUMENTS);
+
+const TOOL_ARGUMENTS = published(KIT_TOOLS, KIT_TOOL_ARGUMENTS);
+
+interface ToolCall {
+  id?: unknown;
+  method?: unknown;
+  params?: { name?: unknown; arguments?: unknown };
+}
+
+function refusedArguments({ method, path, body }: Received): Answer | null {
+  if (method !== 'POST') return null;
+  if (path.startsWith(DOOR)) {
+    const parsed = DOOR_ARGUMENTS.get(path.slice(DOOR.length))?.safeParse(body ?? {});
+    if (parsed === undefined || parsed.success) return null;
+    return { status: 400, body: { error: { code: 'invalid_request', message: parsed.error.message, retryable: false } } };
+  }
+  const call = body as ToolCall | null;
+  if (path !== '/' || call?.method !== 'tools/call') return null;
+  const parsed = TOOL_ARGUMENTS.get(String(call.params?.name))?.safeParse(call.params?.arguments ?? {});
+  if (parsed === undefined || parsed.success) return null;
+  const text = `invalid_arguments: ${parsed.error.issues.map((issue) => issue.message).join('\n')}\n`;
+  return { body: { jsonrpc: '2.0', id: call.id, result: { isError: true, content: [{ type: 'text', text }] } } };
 }
 
 function bodyOf(chunks: Buffer[], type: string | undefined): unknown {
@@ -157,7 +196,8 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
       };
       requests.push(received);
       const answer: Answer =
-        route === undefined ? { status: 404, body: { error: { code: 'not_found', retryable: false } } } : await route.handler(received);
+        refusedArguments(received) ??
+        (route === undefined ? { status: 404, body: { error: { code: 'not_found', retryable: false } } } : await route.handler(received));
       if (answer.drop === true) {
         response.destroy();
         return;
