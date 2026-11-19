@@ -1,4 +1,5 @@
-import type { HouseOneWayCall, KitCall } from '@agentshouse/kit-wire';
+import type { HouseOneWayCall, KitCall, KitDoorAct } from '@agentshouse/kit-wire';
+import { KIT_DOOR_ARGUMENTS, KIT_TOOL_ARGUMENTS, type KitTool } from '@agentshouse/kit-wire/arguments';
 import { spawnSync } from 'node:child_process';
 import { createReadStream, mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { createServer, STATUS_CODES, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -80,6 +81,29 @@ function matched(pattern: string, path: string): Record<string, string> | null {
   return params;
 }
 
+const DOOR = '/kit/door/';
+
+interface ToolCall {
+  id?: unknown;
+  method?: unknown;
+  params?: { name?: unknown; arguments?: unknown };
+}
+
+function refusedArguments({ method, path, body }: Received): Answer | null {
+  if (method !== 'POST') return null;
+  if (path.startsWith(DOOR)) {
+    const parsed = KIT_DOOR_ARGUMENTS[path.slice(DOOR.length) as KitDoorAct]?.safeParse(body ?? {});
+    if (parsed === undefined || parsed.success) return null;
+    return { status: 400, body: { error: { code: 'invalid_request', message: parsed.error.message, retryable: false } } };
+  }
+  const call = body as ToolCall | null;
+  if (path !== '/' || call?.method !== 'tools/call') return null;
+  const parsed = KIT_TOOL_ARGUMENTS[call.params?.name as KitTool]?.safeParse(call.params?.arguments ?? {});
+  if (parsed === undefined || parsed.success) return null;
+  const text = `invalid_arguments: ${parsed.error.issues.map((issue) => issue.message).join('\n')}\n`;
+  return { body: { jsonrpc: '2.0', id: call.id, result: { isError: true, content: [{ type: 'text', text }] } } };
+}
+
 function bodyOf(chunks: Buffer[], type: string | undefined): unknown {
   const bytes = Buffer.concat(chunks);
   if (bytes.length === 0) return null;
@@ -157,7 +181,8 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
       };
       requests.push(received);
       const answer: Answer =
-        route === undefined ? { status: 404, body: { error: { code: 'not_found', retryable: false } } } : await route.handler(received);
+        refusedArguments(received) ??
+        (route === undefined ? { status: 404, body: { error: { code: 'not_found', retryable: false } } } : await route.handler(received));
       if (answer.drop === true) {
         response.destroy();
         return;
