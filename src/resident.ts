@@ -9,7 +9,7 @@ import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations } from './conversations.ts';
-import { LocalCopies, type Pushed } from './copies.ts';
+import { DEFAULT_MAX_SIZE, LocalCopies, type Answered } from './copies.ts';
 import { restart, restartPlaced } from './end.ts';
 import { agentBase, enrolled, kitHome, ownerSocket, readEnrolment, recordPlannedRestart, takePlannedRestart } from './home.ts';
 import { Calls } from './calls.ts';
@@ -50,16 +50,17 @@ async function serveOwner(lock: DatabaseSync, copies: LocalCopies, settling: Set
   const server = createServer(async (request, response) => {
     try {
       const text = await received(request);
-      let answered: Pushed | Applied;
+      let answered: Answered | Applied;
       if (request.url === '/resident') {
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ pid: process.pid, release: KIT_RELEASE }));
         return;
       }
-      if (request.url === '/git/fetch') {
-        answered = await copies.fetch(copies.owner);
-      } else if (request.url === '/git/push') {
-        const { cwd, commit } = JSON.parse(text) as { cwd: string; commit: string };
-        answered = await copies.push(cwd, commit, copies.owner);
+      if (request.url === '/copy/download') {
+        const { attachments = false, max_size: maxSize = DEFAULT_MAX_SIZE } = JSON.parse(text) as { attachments?: boolean; max_size?: number };
+        answered = await copies.download(copies.owner, { attachments, maxSize });
+      } else if (request.url === '/copy/upload') {
+        const { cwd } = JSON.parse(text) as { cwd: string };
+        answered = await copies.upload(cwd, copies.owner);
       } else if (request.url === '/settings') {
         const applied = await settling.settle(JSON.parse(text) as SettingsChange);
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(applied), () => settling.answered(applied));
@@ -99,7 +100,7 @@ async function started(): Promise<void> {
   await connected();
   await placeSkillSet((await readEnrolment())!.house);
   await mkdir(agentBase(), { recursive: true });
-  await installShim(join(kitHome(), 'shim', 'git'), 'git-main');
+  await rm(join(kitHome(), 'shim'), { recursive: true, force: true });
   await installShim(codexLauncher(), 'codex-main');
 }
 

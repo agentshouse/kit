@@ -366,22 +366,19 @@ it("answers a run's house call on a computer whose own agent House no longer acc
 it.each([
   ['a Sandbox or VPS', false],
   ['a computer', true],
-])("pushes a run's Local copy on %s as the owner with house push --owner, as outside a run, and refuses house push alone", async (_place, computer) => {
+])("uploads a run's Local copy on %s as the owner with house upload --owner, as outside a run, and refuses house upload alone", async (_place, computer) => {
   const hosted = await hostKit([]);
   if (computer) await holdOwnAgent(hosted);
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('ROOM.md', 'The notes Room\n');
-  await rooms.fetch([room]);
+  await rooms.download([room]);
   const updates = () => hosted.house.requests.filter((received) => received.path === '/kit/door/update');
-  const id = run(
-    hosted,
-    `cd ${room.repository} && echo added > added.md && git add -A && git commit -q -m added && house push 2>&1; echo "exit $?"; house push --owner > /dev/null 2>&1; echo "exit $?"`,
-  );
+  const id = run(hosted, `cd ${room.repository} && echo added > added.md && house upload 2>&1; echo "exit $?"; house upload --owner > /dev/null 2>&1; echo "exit $?"`);
 
   expect(await ended(hosted, id)).toEqual({
     exit_code: 0,
-    output: 'house: outside an Agent conversation, house push needs --owner\nexit 1\nexit 0\n',
+    output: 'house: outside an Agent conversation, house upload needs --owner\nexit 1\nexit 0\n',
     cut: false,
   });
   expect(updates()).toHaveLength(1);

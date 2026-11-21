@@ -1,28 +1,12 @@
-import {
-  apply,
-  ATTACHMENT_REFERENCE_PATTERN,
-  ATTACHMENT_REFERENCE_PREFIX,
-  definitionAt,
-  DOCUMENT_REFERENCE_PATTERN,
-  HOUSE_ROOM_TYPES,
-  HOUSE_TYPED_PATHS,
-  parse,
-  readSchemaDocument,
-  readTypes,
-  REVISION_REFERENCE_PATTERN,
-  REVISION_REFERENCE_PREFIX,
-  serialize,
-  type Change,
-} from '@agentshouse/mdmodel';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
 import type { Answer, Received } from './double.ts';
-import { GIT_IDENTITY, ProtocolRefusal, type Hosted, type ToolResult } from './environment.ts';
+import { ProtocolRefusal, type Hosted, type ToolResult } from './environment.ts';
 import { accountOf, stop } from './kit.ts';
 import { uploadTool, type Store } from './store.ts';
 
@@ -31,11 +15,13 @@ const LOG_EPOCH = '0192f0e4-1c2d-7000-8000-000000000001';
 const CHUNK_BYTES = 1024 * 1024;
 const BODY_BYTES = 4 * 1024 * 1024;
 const STAGED_PART_BYTES = 8;
+const BATCH_FILES = 1000;
 const RETRY_AT = '2026-11-17T00:00:00.000Z';
 const DOCUMENT = /\.md$/i;
-const TEXT_OPS = new Set(['create', 'replace', 'set_field', 'replace_section', 'replace_preamble']);
-const REVISION_BASES = new Set(['replace', 'remove', 'rename', 'upload']);
-const REFERENCES = [REVISION_REFERENCE_PATTERN, DOCUMENT_REFERENCE_PATTERN, ATTACHMENT_REFERENCE_PATTERN];
+const REVISION = /^v_(\d+)\.1\.x$/;
+const REFERENCE = /^(?:v_\d+\.1\.x|at_\d+\.x)$/;
+
+export const MANIFEST = '.house';
 
 interface Stored {
   content: string;
@@ -50,11 +36,11 @@ interface Binary {
 
 interface Write {
   path: string;
-  op: string;
+  op: 'write' | 'delete' | 'move' | 'upload' | 'rewrite';
   content: string | null;
   revision: string | null;
   from?: string;
-  rewrite?: true;
+  merged?: true;
   binary?: { bytes: number; sha256: string };
 }
 
@@ -63,7 +49,16 @@ interface Missing {
   sha256: string;
 }
 
-type Refused = { code: string; path?: string; held?: string; kind?: string; base?: string; conflicts?: Record<string, unknown>[] };
+export interface Conflict {
+  change: number;
+  path: string;
+  code: string;
+  state: 'absent' | 'current';
+  revision?: string;
+  content?: string;
+}
+
+type Refused = { code: string; path?: string; held?: string; current_path?: string; documents?: number; conflicts?: Conflict[] };
 
 type Edited = { writes: Write[] } | { refusal: Refused } | { missing: Missing[] } | { limited: true };
 
@@ -100,45 +95,94 @@ const CAPPED: Stopped = {
   retryable: true,
 };
 
-function said(refusal: Refused): string {
+export function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
   if (refusal.code === 'binary_content') return `binary_content: ${refusal.path} is a document, which holds Markdown text only; write it with update`;
   if (refusal.code === 'attachment_path') return `attachment_path: ${refusal.path} holds an attachment, since its Path does not end .md; send its bytes with upload`;
+  if (refusal.code === 'handle_changed') return `handle_changed: its handle changed; use ${refusal.current_path}`;
+  if (refusal.code === 'batch_too_large') {
+    return `batch_too_large: this batch names ${refusal.documents} documents and attachments, over ${BATCH_FILES} per call; split it into several batches`;
+  }
   if (refusal.code === 'duplicate_path') {
     return `duplicate_path: ${refusal.path} is removed or moved away in this batch; leave other changes of a removed path out, and change a moved file at its new path`;
   }
   if (refusal.code === 'invalid_base_revision') return `invalid_base_revision: base for ${refusal.path} is not a revision; pass the v_… revision your read of it printed`;
-  if (refusal.code === 'kind_fixed') return `kind_fixed: ${refusal.path} would hold another kind than the ${refusal.kind} moved there, and an entry keeps its kind`;
   if (refusal.code === 'invalid_authored_path') {
     return `invalid_authored_path: ${refusal.path} differs from ${refusal.held} only in letter case, and a folder holds one name in any case; write to ${refusal.held} or choose another name`;
   }
   const conflicts = stringify({ conflicts: refusal.conflicts }).trimEnd();
-  return `edit_conflict: nothing was written; fix each conflict listed, then send the edit again\n${conflicts}`;
+  return `edit_conflict: nothing was written; fix each conflict listed, then send it again\n${conflicts}`;
 }
 
-interface EditChange {
+export interface EditChange {
   op: string;
   path: string;
   to?: string;
   base?: unknown;
   content?: string;
-  field?: string;
-  section?: string;
-  value?: unknown;
   bytes?: number;
   sha256?: string;
   media_type?: string;
 }
 
-function digest(bytes: Buffer): string {
+export function digest(bytes: Buffer | string): string {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+function lines(text: string): string[] {
+  return text === '' ? [] : text.split(/(?<=\n)/);
+}
+
+function ended(chunk: string[]): string[] {
+  const last = chunk.at(-1);
+  return last === undefined || last.endsWith('\n') ? chunk : [...chunk.slice(0, -1), `${last}\n`];
+}
+
+function matched(left: string[], right: string[]): Map<number, number> {
+  const table = Array.from({ length: left.length + 1 }, () => new Array<number>(right.length + 1).fill(0));
+  for (let i = left.length - 1; i >= 0; i--) {
+    for (let j = right.length - 1; j >= 0; j--) {
+      table[i]![j] = left[i] === right[j] ? table[i + 1]![j + 1]! + 1 : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
+    }
+  }
+  const pairs = new Map<number, number>();
+  for (let i = 0, j = 0; i < left.length && j < right.length; ) {
+    if (left[i] === right[j]) pairs.set(i++, j++);
+    else if (table[i + 1]![j]! >= table[i]![j + 1]!) i++;
+    else j++;
+  }
+  return pairs;
+}
+
+export function merged3(base: string, current: string, yours: string): { merged: string } | { conflicted: string } {
+  const [o, a, b] = [lines(base), lines(current), lines(yours)];
+  const [toA, toB] = [matched(o, a), matched(o, b)];
+  const out: string[] = [];
+  let conflicted = false;
+  let [io, ia, ib] = [0, 0, 0];
+  const syncs = [...o.keys()].filter((index) => toA.has(index) && toB.has(index));
+  for (const sync of [...syncs, o.length]) {
+    const [ea, eb] = sync === o.length ? [a.length, b.length] : [toA.get(sync)!, toB.get(sync)!];
+    const [co, ca, cb] = [o.slice(io, sync).join(''), a.slice(ia, ea), b.slice(ib, eb)];
+    if (ca.join('') === co) out.push(...cb);
+    else if (cb.join('') === co || ca.join('') === cb.join('')) out.push(...ca);
+    else {
+      conflicted = true;
+      out.push('<<<<<<< current\n', ...ended(ca), '=======\n', ...ended(cb), '>>>>>>> yours\n');
+    }
+    if (sync < o.length) {
+      out.push(o[sync]!);
+      [io, ia, ib] = [sync + 1, ea + 1, eb + 1];
+    }
+  }
+  return conflicted ? { conflicted: out.join('') } : { merged: out.join('') };
 }
 
 let revisions = 0;
 
 function minted(): string {
   revisions++;
-  return `${REVISION_REFERENCE_PREFIX}${revisions}.1.x`;
+  return `v_${revisions}.1.x`;
 }
 
 function covers(path: string, prefix: string): boolean {
@@ -166,6 +210,7 @@ function packed(entries: readonly object[]): Buffer[] {
 export class Room {
   readonly ref = `r_${randomBytes(5).toString('hex')}.x`;
   handle: string;
+  readonly former = new Set<string>();
   position = 1;
   logEpoch = LOG_EPOCH;
   write = [''];
@@ -178,6 +223,7 @@ export class Room {
   readonly log: { position: number; paths: string[] }[] = [];
   readonly batches: EditChange[][] = [];
   models: Record<string, unknown>[] = [];
+  cuts = false;
   private built: { position: number; entries: object[] } | null = null;
 
   readonly copies: string;
@@ -193,6 +239,15 @@ export class Room {
 
   get repository(): string {
     return join(this.copies, 'rooms', this.ref);
+  }
+
+  rehandle(handle: string): void {
+    this.former.add(this.handle);
+    this.handle = handle;
+  }
+
+  names(path: string): boolean {
+    return [this.handle, ...this.former].some((handle) => path === `/rooms/${handle}` || path.startsWith(`/rooms/${handle}/`));
   }
 
   writable(path: string): boolean {
@@ -231,28 +286,18 @@ export class Room {
   }
 
   move(from: string, to: string): void {
-    this.binaries.set(to, this.binaries.get(from)!);
-    this.binaries.delete(from);
-    this.advance([from, to]);
-  }
-
-  attach(path: string): void {
-    const { revision, content } = this.files.get(path)!;
-    const binary = { revision, bytes: Buffer.from(content) };
-    this.files.delete(path);
-    this.binaries.set(path, binary);
-    this.binaryHistory.set(revision, { ...binary, path });
-    this.advance([path]);
-  }
-
-  rename(from: string, to: string, content: string): void {
-    this.files.delete(from);
-    this.files.set(to, this.stored(content));
+    if (this.files.has(from)) {
+      this.files.set(to, this.files.get(from)!);
+      this.files.delete(from);
+    } else {
+      this.binaries.set(to, this.binaries.get(from)!);
+      this.binaries.delete(from);
+    }
     this.advance([from, to]);
   }
 
   revision(path: string): string {
-    return this.files.get(path)!.revision;
+    return (this.files.get(path) ?? this.binaries.get(path))!.revision;
   }
 
   advance(paths: string[]): void {
@@ -286,7 +331,7 @@ export class Room {
     const binary = [...this.binaries].map(([path, file]) => ({
       path,
       revision: file.revision,
-      sha256: createHash('sha256').update(file.bytes).digest('hex'),
+      sha256: digest(file.bytes),
       bytes: file.bytes.length,
       media_type: 'image/jpeg',
     }));
@@ -308,7 +353,7 @@ export class Room {
       log_epoch: this.logEpoch,
       chunks: packed(entries).map((body) => {
         const served = shape.unparsedChunks ? Buffer.concat([body, Buffer.from('{not a line\n')]) : body;
-        const hash = createHash('sha256').update(served).digest('hex');
+        const hash = digest(served);
         const key = `room-chunks/${this.ref}/${hash}`;
         store.objects.set(key, shape.damagesChunks ? Buffer.concat([served, Buffer.from([0])]) : served);
         return { hash, bytes: body.length, download: store.address('GET', key, {}, expires()) };
@@ -357,146 +402,108 @@ export class Room {
     };
   }
 
-  edit(
-    changes: EditChange[],
-    staged: (sha256: string) => Buffer | undefined = () => undefined,
-    admitted: () => boolean = () => true,
-  ): Edited {
+  edit(changes: EditChange[], staged: (sha256: string) => Buffer | undefined = () => undefined, admitted: () => boolean = () => true): Edited {
+    for (const named of changes.flatMap((change) => [change.path, ...(change.to === undefined ? [] : [change.to])])) {
+      const handle = /^\/rooms\/([^/]+)/.exec(named)![1]!;
+      if (handle !== this.handle && this.former.has(handle)) {
+        return { refusal: { code: 'handle_changed', path: named, current_path: `${this.root}${named.slice(`/rooms/${handle}`.length)}` } };
+      }
+    }
+    const distinct = new Set(changes.flatMap((change) => [change.path, ...(change.to === undefined ? [] : [change.to])]));
+    if (distinct.size > BATCH_FILES) return { refusal: { code: 'batch_too_large', documents: distinct.size } };
+    const local = (path: string) => path.slice(this.root.length + 1);
     const next = new Map(this.files);
     const binaries = new Map(this.binaries);
     const writes = new Map<string, Write>();
-    const conflicts: Record<string, unknown>[] = [];
+    const conflicts: Conflict[] = [];
     const missing: Missing[] = [];
     const removed = new Set<string>();
-    const removedKinds = new Map<string, 'document' | 'attachment'>();
-    const set = (path: string, op: string, content: string, rewrite = false) => {
+    const set = (path: string, content: string, extra: Partial<Write> = {}) => {
       const stored = this.stored(content);
       next.set(path, stored);
-      writes.set(path, { path, op, content, revision: stored.revision, ...(rewrite ? { rewrite: true as const } : {}) });
+      writes.set(path, { path, op: 'write', content, revision: stored.revision, ...extra });
     };
-    for (const change of changes) {
-      const path = change.path.slice(this.root.length + 1);
-      const to = change.to?.slice(this.root.length + 1);
-      if (!this.writable(path) || (to !== undefined && !this.writable(to))) {
-        return { refusal: { code: 'protected_path', path: change.path } };
-      }
+    for (const [index, change] of changes.entries()) {
+      const path = local(change.path);
+      const to = change.to === undefined ? undefined : local(change.to);
+      if (!this.writable(path) || (to !== undefined && !this.writable(to))) return { refusal: { code: 'protected_path', path: change.path } };
       if (change.op === 'upload' && DOCUMENT.test(path)) return { refusal: { code: 'binary_content', path: change.path } };
-      if (REVISION_BASES.has(change.op) && typeof change.base === 'string' && !REVISION_REFERENCE_PATTERN.test(change.base)) {
-        return { refusal: { code: 'invalid_base_revision', path: change.path, base: change.base } };
-      }
-      if (TEXT_OPS.has(change.op) && !DOCUMENT.test(path)) return { refusal: { code: 'attachment_path', path: change.path } };
-      const kind = next.has(path) ? 'document' : binaries.has(path) ? 'attachment' : undefined;
-      if (change.op === 'rename' && kind !== undefined && (kind === 'document') === DOCUMENT.test(path) && DOCUMENT.test(path) !== DOCUMENT.test(to!)) {
-        return { refusal: { code: 'kind_fixed', path: change.to!, kind } };
-      }
-      if ((change.op === 'create' || change.op === 'upload') && removedKinds.get(path) === (change.op === 'upload' ? 'attachment' : 'document')) {
-        return { refusal: { code: 'duplicate_path', path: change.path } };
-      }
-      if (change.op === 'remove' && kind !== undefined) removedKinds.set(path, kind);
+      if (change.op === 'write' && !DOCUMENT.test(path)) return { refusal: { code: 'attachment_path', path: change.path } };
+      if (typeof change.base === 'string' && !REVISION.test(change.base)) return { refusal: { code: 'invalid_base_revision', path: change.path } };
+      if (removed.has(path)) return { refusal: { code: 'duplicate_path', path: change.path } };
       const named = to ?? path;
-      const twin = [...next.keys()].find((held) => held !== named && held !== path && held.toLowerCase() === named.toLowerCase());
-      if (twin !== undefined && (change.op === 'create' || change.op === 'rename')) {
+      const twin = [...next.keys(), ...binaries.keys()].find((held) => held !== named && held !== path && held.toLowerCase() === named.toLowerCase());
+      if (twin !== undefined && ((change.op === 'write' && change.base === undefined) || change.op === 'move' || (change.op === 'upload' && change.base === undefined))) {
         return { refusal: { code: 'invalid_authored_path', path: change.to ?? change.path, held: `${this.root}/${twin}` } };
       }
       const current = next.get(path);
-      const stale = (code: string) =>
-        conflicts.push({ path: change.path, code, ...(current === undefined ? {} : { revision: current.revision }) });
-      const binary = binaries.get(to ?? path);
-      if (change.op === 'upload') {
-        if (current !== undefined) {
-          conflicts.push({ path: change.path, code: 'text_file', revision: current.revision });
-          continue;
+      const binary = binaries.get(path);
+      const held = current ?? binary;
+      const conflict = (code: string, extra: Partial<Conflict> = {}) =>
+        conflicts.push({ change: index, path: change.path, code, state: held === undefined ? 'absent' : 'current', ...(held === undefined ? {} : { revision: held.revision }), ...extra });
+      if (change.op === 'write') {
+        if (binary !== undefined) conflict('binary_file');
+        else if (change.base === undefined) {
+          if (current === undefined) set(path, change.content!);
+          else if (current.content === change.content) writes.set(path, { path, op: 'write', content: current.content, revision: current.revision });
+          else conflict('path_exists');
+        } else if (current === undefined) conflict('path_absent');
+        else if (current.revision === change.base) set(path, change.content!);
+        else {
+          const text = this.history.get(change.base as string);
+          const result = text === undefined ? null : merged3(text, current.content, change.content!);
+          if (result === null) conflict('base_revision_stale');
+          else if ('conflicted' in result) conflict('merge_conflict', this.cuts ? {} : { content: result.conflicted });
+          else set(path, result.merged, { merged: true });
         }
-        if (binary !== undefined && change.base !== binary.revision) {
-          conflicts.push({ path: change.path, code: change.base === undefined ? 'base_required' : 'base_revision_stale', revision: binary.revision });
-          continue;
-        }
-        if (binary === undefined && change.base !== undefined) {
-          conflicts.push({ path: change.path, code: 'path_absent' });
-          continue;
-        }
-        const bytes = staged(change.sha256!) ?? (binary !== undefined && digest(binary.bytes) === change.sha256 ? binary.bytes : undefined);
-        if (bytes === undefined) {
-          missing.push({ bytes: change.bytes!, sha256: change.sha256! });
-          continue;
-        }
-        const stored = { revision: minted(), bytes };
-        binaries.set(path, stored);
-        this.binaryHistory.set(stored.revision, { ...stored, path });
-        writes.set(path, { path, op: 'upload', content: null, revision: stored.revision, binary: { bytes: bytes.length, sha256: digest(bytes) } });
-        continue;
-      }
-      if (binary !== undefined) {
-        if (change.op !== 'remove') {
-          conflicts.push({ path: change.to ?? change.path, code: 'binary_file', revision: binary.revision });
-        } else if (change.base !== binary.revision) {
-          conflicts.push({ path: change.path, code: 'base_revision_stale', revision: binary.revision });
-        } else {
-          binaries.delete(path);
-          removed.add(path);
-          writes.set(path, { path, op: 'remove', content: null, revision: null });
-        }
-        continue;
-      }
-      if (change.op === 'create') {
-        if (current !== undefined) stale('path_exists');
-        else set(path, 'create', change.content!);
-      } else if (change.op === 'replace') {
-        if (current?.revision !== change.base) stale('base_revision_stale');
-        else set(path, 'replace', change.content!);
-      } else if (change.op === 'remove') {
-        if (current?.revision !== change.base) stale('base_revision_stale');
+      } else if (change.op === 'delete') {
+        if (held === undefined) conflict('path_absent');
+        else if (held.revision !== change.base) conflict('base_revision_stale');
         else {
           next.delete(path);
-          removed.add(path);
-          writes.set(path, { path, op: 'remove', content: null, revision: null });
-        }
-      } else if (change.op === 'rename') {
-        const moving = current ?? binaries.get(path);
-        if (moving === undefined || moving.revision !== change.base || next.has(to!)) {
-          stale('base_revision_stale');
-          continue;
-        }
-        if (current === undefined) {
-          const file = binaries.get(path)!;
           binaries.delete(path);
-          binaries.set(to!, file);
-          const held = { bytes: file.bytes.length, sha256: digest(file.bytes) };
-          writes.set(to!, { path: to!, op: 'rename', content: null, revision: file.revision, from: path, binary: held });
-        } else {
-          next.delete(path);
-          next.set(to!, current);
-          writes.set(to!, { path: to!, op: 'rename', content: current.content, revision: current.revision, from: path });
+          removed.add(path);
+          writes.set(path, { path, op: 'delete', content: null, revision: null });
         }
-        removed.add(path);
-        const destination = (name: string) => (name.includes(' ') ? `(<${name}>)` : `(${name})`);
-        for (const [other, file] of next) {
-          const link = destination(basename(path));
-          if (other !== to && dirname(other) === dirname(path) && file.content.includes(link)) {
-            set(other, 'replace', file.content.replaceAll(link, destination(relative(dirname(path), to!))), true);
+      } else if (change.op === 'move') {
+        if (held === undefined) conflict('path_absent');
+        else if (change.base !== undefined && held.revision !== change.base) conflict('base_revision_stale');
+        else if (next.has(to!) || binaries.has(to!)) {
+          const there = (next.get(to!) ?? binaries.get(to!))!;
+          conflicts.push({ change: index, path: change.to!, code: 'path_exists', state: 'current', revision: there.revision });
+        } else {
+          removed.add(path);
+          if (current !== undefined) {
+            next.delete(path);
+            next.set(to!, current);
+            writes.set(to!, { path: to!, op: 'move', content: current.content, revision: current.revision, from: path });
+          } else {
+            binaries.delete(path);
+            binaries.set(to!, binary!);
+            writes.set(to!, { path: to!, op: 'move', content: null, revision: binary!.revision, from: path, binary: { bytes: binary!.bytes.length, sha256: digest(binary!.bytes) } });
+          }
+          const destination = (name: string) => (name.includes(' ') ? `(<${name}>)` : `(${name})`);
+          for (const [other, file] of next) {
+            const link = destination(basename(path));
+            if (other !== to && dirname(other) === dirname(path) && file.content.includes(link)) {
+              set(other, file.content.replaceAll(link, destination(relative(dirname(path), to!))), { op: 'rewrite' });
+            }
           }
         }
-      } else {
-        const document = next.get('settings/schema.md')?.content;
-        const model =
-          document === undefined
-            ? readTypes(next.get('settings/schema.yaml')?.content ?? '', HOUSE_ROOM_TYPES)
-            : readSchemaDocument(document, HOUSE_ROOM_TYPES);
-        const definitions = definitionAt(model, path, HOUSE_TYPED_PATHS);
-        const parsed = current === undefined ? null : parse(current.content, path, definitions);
-        if (parsed === null || !parsed.ok) {
-          stale('base_revision_stale');
-          continue;
+      } else if (change.op === 'upload') {
+        if (current !== undefined) conflict('text_file');
+        else if (binary !== undefined && change.base !== binary.revision) conflict(change.base === undefined ? 'base_required' : 'base_revision_stale');
+        else if (binary === undefined && change.base !== undefined) conflict('path_absent');
+        else {
+          const bytes = staged(change.sha256!) ?? (binary !== undefined && digest(binary.bytes) === change.sha256 ? binary.bytes : undefined);
+          if (bytes === undefined) missing.push({ bytes: change.bytes!, sha256: change.sha256! });
+          else {
+            const stored = { revision: minted(), bytes };
+            binaries.set(path, stored);
+            this.binaryHistory.set(stored.revision, { ...stored, path });
+            writes.set(path, { path, op: 'upload', content: null, revision: stored.revision, binary: { bytes: bytes.length, sha256: digest(bytes) } });
+          }
         }
-        const structured: Change =
-          change.op === 'set_field'
-            ? { kind: 'field', name: change.field!, value: change.value, prior: change.base }
-            : change.op === 'replace_preamble'
-              ? { kind: 'preamble', value: change.content!, prior: String(change.base) }
-              : { kind: 'section', name: change.section!, value: change.content!, prior: String(change.base) };
-        const result = apply(parsed.document, [structured], definitions(parsed.document.type));
-        if (result.outcome !== 'applied') stale(`${structured.kind}_base_stale`);
-        else set(path, 'replace', serialize(result.document));
       }
     }
     if (conflicts.length > 0) return { refusal: { code: 'edit_conflict', conflicts } };
@@ -505,21 +512,17 @@ export class Room {
     this.files = next;
     this.binaries = binaries;
     this.batches.push(changes);
-    this.advance([...new Set([...[...writes.values()].map((write) => write.path), ...removed])]);
+    this.advance([...new Set([...[...writes.values()].flatMap((write) => [write.path, ...(write.from === undefined ? [] : [write.from])]), ...removed])]);
     return { writes: [...writes.values()] };
   }
 }
 
-type Receipt = { refusal: Refused } | { authority: string; position: string; log_epoch: string; writes: Write[] };
-
-function answered(writes: Write[]): Write[] {
-  return writes.filter((write) => write.rewrite === undefined);
-}
+type Receipt = { authority: string; position: string; log_epoch: string; writes: Write[] };
 
 export interface Rooms {
   answered: Room[];
   room(handle: string): Room;
-  fetch(rooms: Room[]): Promise<HouseRun>;
+  download(rooms: Room[], ...flags: string[]): Promise<HouseRun>;
   unreadable: Set<string>;
   denied: Set<string>;
   expired: Set<string>;
@@ -528,6 +531,7 @@ export interface Rooms {
   dropsEdits: number;
   refusesBatches: Answer[];
   refusesUploads: Answer[];
+  refusesReads: Answer[];
   reads: boolean[];
   pass: number;
   prepared: unknown[];
@@ -544,6 +548,7 @@ export interface Rooms {
   openUploads: number;
   writeUnits: number;
   partBytes: number;
+  beforeEdit: ((changes: EditChange[]) => void) | null;
   edits(): Received[];
 }
 
@@ -556,6 +561,27 @@ const INVALID = { status: 400, body: { error: { code: 'invalid_request', retryab
 export const OVERLOADED = {
   error: { code: 'house_overloaded', message: 'house_overloaded: House is busy; call again in 5 s', retry_after: 5, retryable: true },
 };
+
+function doorContents(writes: Write[]): Record<string, unknown>[] {
+  return writes.flatMap((write) => [
+    ...(write.from === undefined ? [] : [{ path: write.from, content: null, revision: null }]),
+    {
+      path: write.path,
+      content: write.content,
+      revision: write.revision,
+      ...(write.binary === undefined ? {} : { ...write.binary, media_type: 'image/jpeg' }),
+    },
+  ]);
+}
+
+function toolResults(writes: Write[]): Record<string, unknown>[] {
+  return writes.map((write) => ({
+    path: write.path,
+    ...(write.revision === null ? {} : { revision: write.revision }),
+    ...(write.from === undefined ? {} : { from: write.from }),
+    ...(write.merged === true ? { content: write.content } : {}),
+  }));
+}
 
 export function serveRooms(hosted: Hosted): Rooms {
   const rooms: Room[] = [];
@@ -570,6 +596,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     dropsEdits: 0,
     refusesBatches: [],
     refusesUploads: [],
+    refusesReads: [],
     reads: [],
     pass: Infinity,
     prepared: [],
@@ -586,6 +613,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     openUploads: 10,
     writeUnits: Infinity,
     partBytes: STAGED_PART_BYTES,
+    beforeEdit: null,
     room: (handle) => {
       const room = new Room(handle, join(hosted.workspace, 'local-copies'));
       rooms.push(room);
@@ -596,9 +624,9 @@ export function serveRooms(hosted: Hosted): Rooms {
       });
       return room;
     },
-    fetch: (answer) => {
+    download: (answer, ...flags) => {
       state.answered = answer;
-      return house(hosted, '/', 'fetch');
+      return house(hosted, '/', 'download', ...flags);
     },
     edits: () =>
       hosted.mcp.filter((received) => {
@@ -606,7 +634,7 @@ export function serveRooms(hosted: Hosted): Rooms {
         return name === 'update' && args?.op !== 'stage';
       }),
   };
-  const roomOf = (path: string) => rooms.find((room) => path === room.root || path.startsWith(`${room.root}/`))!;
+  const roomOf = (path: string) => rooms.find((room) => room.names(path))!;
   const opened = new Map<string, { operation: string; sha256: string }>();
   const open = (id: string) => !hosted.store.objects.has(`staged/${id}`);
   const stagedBytes = (operation: string, sha256: string) => {
@@ -645,28 +673,29 @@ export function serveRooms(hosted: Hosted): Rooms {
     state.writeUnits--;
     return true;
   };
-  const edited = (room: Room, changes: EditChange[], operation: string): Receipt | { stopped: Stopped } => {
+  const edited = (changes: EditChange[], operation: string): Receipt | { refusal: Refused } | { stopped: Stopped } => {
     const receipt = receipts.get(operation);
     if (receipt !== undefined) return receipt;
+    state.beforeEdit?.(changes);
+    const room = roomOf(changes[0]!.path);
     const outcome = room.edit(changes, (sha256) => stagedBytes(operation, sha256), admitted);
     if ('missing' in outcome) return { stopped: unstaged(operation, outcome.missing) };
     if ('limited' in outcome) return { stopped: LIMITED };
-    const kept: Receipt =
-      'refusal' in outcome
-        ? outcome
-        : {
-            authority: room.ref,
-            position: String(room.position),
-            log_epoch: room.logEpoch,
-            writes: outcome.writes.map((write) => ({
-              ...write,
-              path: `${room.root}/${write.path}`,
-              ...(write.from === undefined ? {} : { from: `${room.root}/${write.from}` }),
-            })),
-          };
+    if ('refusal' in outcome) return outcome;
+    const kept: Receipt = {
+      authority: room.ref,
+      position: String(room.position),
+      log_epoch: room.logEpoch,
+      writes: outcome.writes.map((write) => ({
+        ...write,
+        path: `${room.root}/${write.path}`,
+        ...(write.from === undefined ? {} : { from: `${room.root}/${write.from}` }),
+      })),
+    };
     receipts.set(operation, kept);
     return kept;
   };
+  const refusalStatus = (refusal: Refused) => (refusal.code === 'batch_too_large' ? 413 : refusal.code === 'protected_path' ? 403 : 409);
   hosted.house.route('POST', '/kit/local-copies/selection/read', () => ({
     body: { local_copy: { rooms: state.answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) } },
   }));
@@ -729,44 +758,38 @@ export function serveRooms(hosted: Hosted): Rooms {
   });
   hosted.house.route('POST', '/kit/door/files/revisions/list', (request) => {
     const { path, revision } = request.body as { path: string; revision: string };
-    if (!REVISION_REFERENCE_PATTERN.test(revision)) return INVALID;
-    const room = roomOf(path);
-    return { body: { path, revisions: [{ revision, content: room.history.get(revision) }], next_before: null } };
+    if (!REVISION.test(revision)) return INVALID;
+    const refused = state.refusesReads.shift();
+    if (refused !== undefined) return refused;
+    const content = roomOf(path).history.get(revision);
+    return { body: { path, revisions: content === undefined ? [] : [{ revision, content }], next_before: null } };
   });
   hosted.house.route('POST', '/kit/door/update', (request) => {
     const refused = state.refusesBatches.shift();
     if (refused !== undefined) return refused;
     const { operation_id: operation, changes } = request.body as { operation_id: string; changes: EditChange[] };
-    const outcome = edited(roomOf(changes[0]!.path), changes, operation);
+    const outcome = edited(changes, operation);
     if ('stopped' in outcome) return doorStopped(outcome.stopped);
+    if ('refusal' in outcome) {
+      return { status: refusalStatus(outcome.refusal), body: { error: { ...outcome.refusal, message: said(outcome.refusal), retryable: false } } };
+    }
     if (state.dropping > 0) {
       state.dropping--;
       return { drop: true };
     }
-    if ('refusal' in outcome) return { status: 409, body: { error: { ...outcome.refusal, message: said(outcome.refusal), retryable: false } } };
     const { writes, ...rest } = outcome;
-    return {
-      body: {
-        ...rest,
-        contents: answered(writes).map((write) => ({
-          path: write.path,
-          content: write.content,
-          revision: write.revision,
-          ...(write.binary === undefined ? {} : { ...write.binary, media_type: 'image/jpeg' }),
-        })),
-      },
-    };
+    return { body: { ...rest, contents: doorContents(writes) } };
   });
   hosted.tools.upload = uploadTool(hosted.store, STAGED_PART_BYTES).answer;
   hosted.tools.info = (args) => {
     const path = String(args.path);
     const room = roomOf(path);
-    const relative = path.slice(room.root.length + 1);
+    const local = path.slice(room.root.length + 1);
     const ref = args.ref as string | undefined;
-    if (ref !== undefined && !REFERENCES.some((pattern) => pattern.test(ref))) {
+    if (ref !== undefined && !REFERENCE.test(ref)) {
       return { isError: true, content: [{ type: 'text', text: 'not_found: nothing you can reach is there; check what you passed\n' }] };
     }
-    const binary = ref === undefined ? room.binaries.get(relative) : room.binaryHistory.get(ref);
+    const binary = ref === undefined ? room.binaries.get(local) : room.binaryHistory.get(ref);
     if (binary !== undefined) {
       const key = `binary/${room.ref}/${binary.revision}`;
       hosted.store.objects.set(key, state.damages ? Buffer.concat([binary.bytes, Buffer.from([0])]) : binary.bytes);
@@ -775,19 +798,19 @@ export function serveRooms(hosted: Hosted): Rooms {
       const text = stringify({
         path,
         revision: binary.revision,
-        file: binary.revision.replace(REVISION_REFERENCE_PATTERN, `${ATTACHMENT_REFERENCE_PREFIX}$1.$3`),
+        file: binary.revision.replace(REVISION, 'at_$1.x'),
         bytes: binary.bytes.length,
         media_type: 'image/jpeg',
-        sha256: createHash('sha256').update(binary.bytes).digest('hex'),
+        sha256: digest(binary.bytes),
         download: hosted.store.address('GET', key, {}, expired),
       });
       return { content: [{ type: 'text', text }] };
     }
-    const file = room.files.get(relative);
+    const file = room.files.get(local);
     if (file === undefined) return { isError: true, content: [{ type: 'text', text: `path_not_found: ${path} does not exist\n` }] };
     return { content: [{ type: 'text', text: stringify({ path, revision: file.revision }) }] };
   };
-  const grants = new Map<string, { operation: string; staged?: string }>();
+  const grants = new Map<string, { operation: string }>();
   const staged = new Map<string, Buffer>();
   const stage = ({ op: _stage, ...declared }: Record<string, unknown>): ToolResult => {
     state.prepared.push(declared);
@@ -821,47 +844,16 @@ export function serveRooms(hosted: Hosted): Rooms {
     ) as EditChange[];
     const meta = (request.body as { params: { _meta: Record<string, string> } }).params._meta;
     const operation = meta['agents.house/agent-operation']!;
-    const outcome = edited(roomOf(changes[0]!.path), changes, operation);
+    const outcome = edited(changes, operation);
     if ('stopped' in outcome) throw toolStopped(outcome.stopped);
+    if ('refusal' in outcome) return { isError: true, content: [{ type: 'text', text: `${said(outcome.refusal)}\n` }] } satisfies ToolResult;
     if (state.dropsEdits > 0) {
       state.dropsEdits--;
       return null;
     }
-    if ('refusal' in outcome) {
-      return { isError: true, content: [{ type: 'text', text: `${said(outcome.refusal)}\n` }] } satisfies ToolResult;
-    }
-    return {
-      content: [
-        {
-          type: 'text',
-          text: stringify({
-            results: answered(outcome.writes).map((write) => ({
-              path: write.path,
-              ...(write.op === 'remove' || write.revision === null ? {} : { revision: write.revision }),
-              ...(write.from === undefined ? {} : { from: write.from }),
-            })),
-          }),
-        },
-      ],
-    };
+    return { content: [{ type: 'text', text: stringify({ results: toolResults(outcome.writes) }) }] };
   };
   return state;
-}
-
-export function tryGit(cwd: string, ...args: string[]): { status: number | null; stdout: string; stderr: string } {
-  return spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...GIT_IDENTITY, GIT_EDITOR: 'true' } });
-}
-
-export function git(cwd: string, ...args: string[]): string {
-  const ran = tryGit(cwd, ...args);
-  if (ran.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${ran.stderr}`);
-  return ran.stdout;
-}
-
-export function commitAll(cwd: string, message: string): string {
-  git(cwd, 'add', '-A');
-  git(cwd, 'commit', '-q', '-m', message);
-  return git(cwd, 'rev-parse', 'HEAD').trim();
 }
 
 export interface HouseRun {
@@ -885,4 +877,25 @@ export function house(hosted: Hosted, cwd: string, ...args: string[]): Promise<H
     });
     child.on('close', (status) => resolve({ status, stdout, stderr }));
   });
+}
+
+export async function ownAgent(hosted: Hosted): Promise<void> {
+  await writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' }));
+}
+
+export function upload(hosted: Hosted, room: Room, ...flags: string[]): Promise<HouseRun> {
+  return house(hosted, room.repository, 'upload', '--owner', ...flags);
+}
+
+export interface ManifestEntry {
+  revision: string;
+  sha256: string;
+  bytes: number;
+  read_only?: true;
+  skipped?: true;
+  conflicted?: true;
+}
+
+export async function manifestOf(room: Room): Promise<{ room_ref: string; files: Record<string, ManifestEntry> }> {
+  return JSON.parse(await readFile(join(room.repository, MANIFEST), 'utf8')) as { room_ref: string; files: Record<string, ManifestEntry> };
 }

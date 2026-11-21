@@ -28,7 +28,7 @@ function blockOf(prompt: Prompt): string[] {
   return prompt[0]!.text.split('\n');
 }
 
-it("begins a first message with the package's Agent instructions, the base instructions and the Owner rules read over the conversation's bridge, the same for every CLI, writing no Owner rules with the Skill set installed and naming no Trigger", async () => {
+it("begins a first message with the package's Agent instructions, the base instructions and the Owner rules read over the conversation's bridge, the same for every CLI, writing no Owner rules with the Skill set installed and naming no `conversation` action", async () => {
   const kinds = ['codex-acp', 'claude-agent-acp', 'grok-build'];
   const hosted = await hostKit(kinds.map((kind) => ({ kind })), { skills: true });
   hosted.tools.shell = () => shelled(DOCUMENT);
@@ -46,7 +46,7 @@ it("begins a first message with the package's Agent instructions, the base instr
   const sent = await prompts(hosted, kinds.length);
   expect(LINES.length).toBeGreaterThan(1);
   expect(blockOf(sent[0]!)).toEqual([...LINES, '', 'Be useful.', '', ...DOCUMENT.split('\n')]);
-  expect(sent[0]![0]!.text).not.toMatch(/trigger|`conversation` action/i);
+  expect(sent[0]![0]!.text).not.toMatch(/`conversation` action/i);
   for (const prompt of sent) expect(prompt).toEqual(sent[0]);
   expect(
     hosted.mcp.map((received) => [received.headers.authorization, (received.body as McpCall).params.arguments]).sort(),

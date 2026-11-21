@@ -61,7 +61,7 @@ it.each([
   [['--no-skills']],
   [['--enroll', 'environment-one']],
   [['kit', 'login']],
-  [['house', 'push', '--owner']],
+  [['house', 'upload', '--owner']],
 ])('refuses %j as an unknown argument before it reads the host', async (argv) => {
   expect(bootstrap(await published(), ['--house', 'https://agents.house', ...argv])).toMatchObject({
     status: 1,

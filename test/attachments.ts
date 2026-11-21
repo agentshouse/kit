@@ -1,4 +1,3 @@
-import { ATTACHMENT_REFERENCE_PREFIX, REVISION_REFERENCE_PREFIX } from '@agentshouse/mdmodel';
 import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { vi } from 'vitest';
@@ -40,14 +39,14 @@ export function attached(hosted: Hosted, attachments: Attachment[], documents: s
     const refusal = refusals[path];
     if (refusal !== undefined) return { isError: true, content: [{ type: 'text', text: refusal }] };
     if (documents.includes(path)) {
-      return { content: [{ type: 'text', text: stringify({ path, revision: `${REVISION_REFERENCE_PREFIX}1.1.x`, media_type: 'text/markdown' }) }] };
+      return { content: [{ type: 'text', text: stringify({ path, revision: `v_1.1.x`, media_type: 'text/markdown' }) }] };
     }
     const file = held.get(path);
     if (file === undefined) return { isError: true, content: [{ type: 'text', text: `path_not_found: ${path} does not exist\n` }] };
     const text = stringify({
       path,
-      revision: `${REVISION_REFERENCE_PREFIX}${file.ordinal}.1.x`,
-      file: `${ATTACHMENT_REFERENCE_PREFIX}${file.ordinal}.x`,
+      revision: `v_${file.ordinal}.1.x`,
+      file: `at_${file.ordinal}.x`,
       bytes: file.content.length,
       ...(file.media_type === null ? {} : { media_type: file.media_type }),
       sha256: createHash('sha256').update(file.content).digest('hex'),

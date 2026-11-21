@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { request } from 'node:http';
 import { resolve } from 'node:path';
 import { text as textOf } from 'node:stream/consumers';
@@ -15,8 +13,9 @@ import {
   type UploadParts,
   type Way,
 } from './files.ts';
-import { HOUSE_REF, PUSH_NEEDS_OWNER } from './git.ts';
+import { DEFAULT_MAX_SIZE, UPLOAD_NEEDS_OWNER } from './copies.ts';
 import { ownerSocket } from './home.ts';
+import { fileDigest } from './manifest.ts';
 import { ownAgentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { parse } from 'yaml';
@@ -49,13 +48,13 @@ type Finishing = { upload: UploadParts } | { text: string };
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const HELP = 'help [tool]';
-const PUSH_USAGE = 'usage: house push [commit] [--owner]';
-const PUSH = "push [commit]: sends the Local copy's committed changes to House in one push, each .md file as document text and every other file as an attachment";
-const FETCH_USAGE = 'usage: house fetch';
-const FETCH = `fetch: records House's changes on each Local copy's ${HOUSE_REF}`;
-const DOWNLOAD_USAGE = `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
-const DOWNLOAD = 'download: writes a binary file of a Room to the local file named by file';
-const UPLOAD_USAGE = `usage: house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
+const UPLOAD_USAGE = `usage: house upload [--owner], or house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
+const UPLOAD =
+  "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names";
+const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
+const DOWNLOAD = `download: brings House's changes into every Local copy, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
+const MAX_SIZE = `--max-size takes a number of megabytes; ${DOWNLOAD_USAGE}`;
+const MEGABYTES = /^\d+(?:\.\d+)?$/;
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
 const CLOSED = 'this House connection is closed; nothing to do from here';
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
@@ -118,8 +117,17 @@ function unreadable(path: string, error: unknown): Error {
 
 
 async function download(args: string[]): Promise<string> {
-  const { flags, positionals: [argument] } = accepted(args, ['--help'], 1, DOWNLOAD_USAGE);
-  if (flags.has('--help')) return DOWNLOAD_USAGE;
+  const valued = args.indexOf('--max-size');
+  const size = valued === -1 ? undefined : args[valued + 1];
+  const rest = valued === -1 ? args : args.filter((_arg, index) => index !== valued && index !== valued + 1);
+  const { flags, positionals: [argument] } = accepted(rest, ['--help', '--with-attachments'], 1, DOWNLOAD_USAGE);
+  if (flags.has('--help')) return `${DOWNLOAD_USAGE}\n${DOWNLOAD}`;
+  if (argument === undefined) {
+    if (valued !== -1 && !MEGABYTES.test(size ?? '')) throw new Error(MAX_SIZE);
+    const maxSize = size === undefined ? DEFAULT_MAX_SIZE : Number(size);
+    return copyVerb('/copy/download', { attachments: flags.has('--with-attachments'), max_size: maxSize });
+  }
+  if (valued !== -1 || flags.has('--with-attachments')) throw unexpected(valued !== -1 ? '--max-size' : '--with-attachments', DOWNLOAD_USAGE);
   const { file, ...selected } = await argumentsOf(argument);
   if (typeof file !== 'string' || file === '') throw new Error('download needs "file", the local file to write');
   const written = resolve(file);
@@ -140,18 +148,14 @@ async function download(args: string[]): Promise<string> {
 }
 
 async function described(file: string): Promise<Description> {
-  const digest = createHash('sha256');
-  let bytes = 0;
+  let held: { sha256: string; bytes: number };
   try {
-    for await (const chunk of createReadStream(file) as AsyncIterable<Buffer>) {
-      digest.update(chunk);
-      bytes += chunk.length;
-    }
+    held = await fileDigest(file);
   } catch (error) {
     throw unreadable(file, error);
   }
   const mediaType = mediaTypeOf(file);
-  return { bytes, sha256: digest.digest('hex'), ...(mediaType === undefined ? {} : { media_type: mediaType }) };
+  return { bytes: held.bytes, sha256: held.sha256, ...(mediaType === undefined ? {} : { media_type: mediaType }) };
 }
 
 async function finished(upload: string, path: unknown, partSha256: string[]): Promise<Finishing> {
@@ -191,27 +195,22 @@ function accepted(args: string[], flags: string[], positionals: number, usage: s
   return given;
 }
 
-async function push(args: string[]): Promise<string> {
-  const { flags, positionals: [commit = 'HEAD'] } = accepted(args, ['--help', '--owner'], 1, PUSH_USAGE);
-  if (flags.has('--help')) return `${PUSH_USAGE}\n${PUSH}`;
-  const owner = flags.has('--owner');
-  if (!owner && socketPath === undefined) throw new Error(PUSH_NEEDS_OWNER);
-  const pushed = JSON.parse(await bridged('/git/push', { cwd: process.cwd(), commit, owner }, socketPath ?? ownerSocket())) as {
-    refused: boolean;
-    text: string;
-  };
-  if (pushed.refused) throw new Error(pushed.text);
-  return pushed.text;
-}
-
-async function fetched(args: string[]): Promise<string> {
-  if (accepted(args, ['--help'], 0, FETCH_USAGE).flags.has('--help')) return FETCH_USAGE;
-  const answer = JSON.parse(await bridged('/git/fetch', {}, socketPath ?? ownerSocket())) as {
-    refused: boolean;
-    text: string;
-  };
+async function copyVerb(path: string, body: Record<string, unknown>): Promise<string> {
+  const answer = JSON.parse(await bridged(path, body, socketPath ?? ownerSocket())) as { refused: boolean; text: string };
   if (answer.refused) throw new Error(answer.text);
   return answer.text;
+}
+
+async function uploadVerb(args: string[]): Promise<string> {
+  const { flags, positionals: [argument] } = accepted(args, ['--help', '--owner'], 1, UPLOAD_USAGE);
+  if (flags.has('--help')) return `${UPLOAD_USAGE}\n${UPLOAD}`;
+  if (argument !== undefined) {
+    if (flags.has('--owner')) throw unexpected('--owner', UPLOAD_USAGE);
+    return upload(await argumentsOf(argument));
+  }
+  const owner = flags.has('--owner');
+  if (!owner && socketPath === undefined) throw new Error(UPLOAD_NEEDS_OWNER);
+  return copyVerb('/copy/upload', { cwd: process.cwd(), owner });
 }
 
 async function argumentsOf(argument: string | undefined): Promise<Record<string, unknown>> {
@@ -295,11 +294,10 @@ async function house(args: string[]): Promise<string> {
     const listing = (await tools()).flatMap((tool) =>
       tool.description === undefined ? [tool.name, ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', false)] : [listed(tool)],
     );
-    return [USAGE, HELP, PUSH, FETCH, DOWNLOAD, ...listing].join('\n');
+    return [USAGE, HELP, UPLOAD, DOWNLOAD, ...listing].join('\n');
   }
-  if (flags.has('--help')) return verb === 'upload' ? UPLOAD_USAGE : toolHelp(verb);
-  const parsed = await argumentsOf(argument);
-  return verb === 'upload' ? upload(parsed) : called(verb, parsed);
+  if (flags.has('--help')) return toolHelp(verb);
+  return called(verb, await argumentsOf(argument));
 }
 
 async function called(name: string, args: Record<string, unknown>): Promise<string> {
@@ -312,8 +310,7 @@ async function called(name: string, args: Record<string, unknown>): Promise<stri
 function run(argv: string[]): Promise<string> {
   const named = argv.findIndex((arg) => !arg.startsWith('-'));
   const rest = argv.filter((_arg, index) => index !== named);
-  if (argv[named] === 'push') return push(rest);
-  if (argv[named] === 'fetch') return fetched(rest);
+  if (argv[named] === 'upload') return uploadVerb(rest);
   if (argv[named] === 'download') return download(rest);
   return house(argv);
 }
