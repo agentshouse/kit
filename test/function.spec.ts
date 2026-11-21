@@ -20,7 +20,7 @@ const TREE = 'sleep 300 & echo "child $!"; echo "script $$"; wait';
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const OPERATION = 'agents.house/agent-operation';
-const ISSUE = '/kit/function-runs/credentials/issue';
+const ISSUE = '/kit/agent_update.credentials_issue';
 const OWN_AGENT = 'ahp_own-agent-5d1c';
 
 function send(hosted: Hosted, frame: HouseOneWayCall | KitCall): void {
@@ -346,7 +346,7 @@ it("leaves a run on a computer whose own agent Kit home no longer holds, which H
     output: "bridge none\nhouse: this computer's own agent has no House connection; run kit login\nexit 1\n",
     cut: false,
   });
-  expect(hosted.house.requests.filter((received) => received.path === ISSUE).map((received) => received.body)).toEqual([{ run: id }]);
+  expect(hosted.house.requests.filter((received) => received.path === ISSUE).map((received) => received.body)).toEqual([{ op: 'credentials_issue', run: id }]);
   expect(searched(hosted)).toEqual([]);
 });
 

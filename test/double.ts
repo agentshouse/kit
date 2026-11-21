@@ -84,6 +84,13 @@ function matched(pattern: string, path: string): Record<string, string> | null {
 
 const DOOR = '/kit/door/';
 
+const KIT_TOOL = /^\/kit\/[a-z_]+$/u;
+
+function actPath(path: string, body: unknown): string {
+  const op = (body as { op?: unknown } | null)?.op;
+  return KIT_TOOL.test(path) && typeof op === 'string' ? `${path}.${op}` : path;
+}
+
 function published<Name extends string>(names: readonly Name[], shapes: Readonly<Partial<Record<Name, ZodType>>>): ReadonlyMap<string, ZodType> {
   return new Map(
     names.map((name) => {
@@ -183,15 +190,16 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', async () => {
-      const path = new URL(request.url ?? '/', 'http://house').pathname;
       const method = request.method ?? 'GET';
+      const body = bodyOf(chunks, request.headers['content-type']);
+      const path = actPath(new URL(request.url ?? '/', 'http://house').pathname, body);
       const route = routes.find((candidate) => candidate.method === method && matched(candidate.pattern, path) !== null);
       const received: Received = {
         method,
         path,
         params: route === undefined ? {} : matched(route.pattern, path)!,
         headers: request.headers,
-        body: bodyOf(chunks, request.headers['content-type']),
+        body,
         port: request.socket.remotePort!,
       };
       requests.push(received);
