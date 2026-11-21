@@ -139,13 +139,40 @@ async function earlierCopy(hosted: Hosted, room: Room, files: Record<string, str
       protected: ['capture', 'collaboration'],
       read_only: [],
       manifests: Object.fromEntries(
-        manifests.map((pairs, index) => [commits[index], { parent: index === 0 ? null : commits[index - 1], files: Object.fromEntries(pairs.map((pair) => pair.split('='))) }]),
+        manifests.map((pairs, index) => [commits[index], { parent: index === 0 ? null : commits[index - 1], files: Object.fromEntries(pairs.map((pair) => pair.split('=')).map(([path, revision]) => [path, revision === '' ? null : revision])) }]),
       ),
       moves: [],
     }),
   );
   return record;
 }
+
+it("brings a copy an earlier Kit kept to what House changed that it received but never applied, so its next upload neither deletes House's file nor restores one House deleted", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  const plan = room.put('plan.md', 'one\n');
+  const gone = room.put('gone.md', 'gone\n');
+  const kept = room.put('kept.md', 'kept\n');
+  const added = room.put('added.md', 'added\n');
+  room.remove('gone.md');
+  room.remove('kept.md');
+  rooms.answered = [room];
+  await earlierCopy(hosted, room, { 'plan.md': 'one\n', 'gone.md': 'gone\n', 'kept.md': 'kept, mine\n' }, [
+    [`plan.md=${plan}`, `gone.md=${gone}`, `kept.md=${kept}`],
+    [`added.md=${added}`, 'gone.md=', 'kept.md='],
+  ]);
+  await hosted.restart();
+
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+
+  const sent = hosted.house.requests.filter((request) => request.path === '/kit/door/update').map((request) => (request.body as { changes: unknown }).changes);
+  expect(sent).toEqual([[{ op: 'write', path: '/rooms/notes/kept.md', content: 'kept, mine\n' }]]);
+  expect(await readFile(join(room.repository, 'added.md'), 'utf8')).toBe('added\n');
+  expect(room.files.get('added.md')!.content).toBe('added\n');
+  expect(existsSync(join(room.repository, 'gone.md'))).toBe(false);
+  expect(room.files.has('gone.md')).toBe(false);
+});
 
 it('keeps a copy an earlier Kit kept unconverted when House does not answer a revision it reads, says why, and converts it on the next download', async () => {
   const hosted = await hostKit();

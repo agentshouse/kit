@@ -33,19 +33,23 @@ export function digest(bytes: Buffer | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-export async function hashed(file: string): Promise<{ sha256: string; bytes: number } | null> {
+export async function fileDigest(file: string): Promise<{ sha256: string; bytes: number }> {
   const hash = createHash('sha256');
   let bytes = 0;
+  for await (const chunk of createReadStream(file) as AsyncIterable<Buffer>) {
+    hash.update(chunk);
+    bytes += chunk.length;
+  }
+  return { sha256: hash.digest('hex'), bytes };
+}
+
+export async function hashed(file: string): Promise<{ sha256: string; bytes: number } | null> {
   try {
-    for await (const chunk of createReadStream(file) as AsyncIterable<Buffer>) {
-      hash.update(chunk);
-      bytes += chunk.length;
-    }
+    return await fileDigest(file);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'EISDIR') return null;
     throw error;
   }
-  return { sha256: hash.digest('hex'), bytes };
 }
 
 export async function holding(repository: string, name: string, sha256: string): Promise<boolean> {

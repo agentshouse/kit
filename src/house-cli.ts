@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { request } from 'node:http';
 import { resolve } from 'node:path';
 import { text as textOf } from 'node:stream/consumers';
@@ -17,6 +15,7 @@ import {
 } from './files.ts';
 import { DEFAULT_MAX_SIZE, UPLOAD_NEEDS_OWNER } from './copies.ts';
 import { ownerSocket } from './home.ts';
+import { fileDigest } from './manifest.ts';
 import { ownAgentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { parse } from 'yaml';
@@ -149,18 +148,14 @@ async function download(args: string[]): Promise<string> {
 }
 
 async function described(file: string): Promise<Description> {
-  const digest = createHash('sha256');
-  let bytes = 0;
+  let held: { sha256: string; bytes: number };
   try {
-    for await (const chunk of createReadStream(file) as AsyncIterable<Buffer>) {
-      digest.update(chunk);
-      bytes += chunk.length;
-    }
+    held = await fileDigest(file);
   } catch (error) {
     throw unreadable(file, error);
   }
   const mediaType = mediaTypeOf(file);
-  return { bytes, sha256: digest.digest('hex'), ...(mediaType === undefined ? {} : { media_type: mediaType }) };
+  return { bytes: held.bytes, sha256: held.sha256, ...(mediaType === undefined ? {} : { media_type: mediaType }) };
 }
 
 async function finished(upload: string, path: unknown, partSha256: string[]): Promise<Finishing> {

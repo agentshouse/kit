@@ -1110,6 +1110,7 @@ export class LocalCopies {
       const read = await this.chunked(root, copy.room_ref, directory);
       const present = await scanned(copy.repository);
       const current = new Map<string, { revision: string; sha256: string; bytes: number }>();
+      const unbrought = new Map<string, string>();
       const binaries: KitBinaryChange[] = [];
       const readOnly = async (path: string, content: string, revision: string) => {
         if (present.get(path)?.sha256 !== digest(content)) await placed(work, join(copy.repository, path), content);
@@ -1123,13 +1124,15 @@ export class LocalCopies {
         if (entry.provenance !== undefined) await readOnly(sidecar(entry.path), entry.provenance, entry.revision);
         if (declaredWritable(entry.path, copy)) {
           current.set(entry.path, { revision: entry.revision, sha256: digest(entry.content), bytes: Buffer.byteLength(entry.content) });
+          if (!present.has(entry.path)) unbrought.set(entry.path, entry.content);
         } else {
           await readOnly(entry.path, entry.content, entry.revision);
         }
       }
       for (const [path, { revision, held: attached }] of recorded) {
+        if (manifest.files[path]?.read_only) continue;
         if (attached !== undefined) {
-          manifest.files[path] = { revision, ...attached };
+          manifest.files[path] = present.has(path) ? { revision, ...attached } : { revision, ...attached, skipped: true };
           continue;
         }
         const named = `${root}/${path}`;
@@ -1138,7 +1141,12 @@ export class LocalCopies {
         if (now?.revision !== revision && read === null) continue;
         const latest = now?.revision === revision ? now : { revision, sha256: digest(read!), bytes: Buffer.byteLength(read!) };
         const local = present.get(path);
-        if (local === undefined || local.sha256 === latest.sha256) {
+        if (local === undefined) {
+          await placed(work, join(copy.repository, path), read ?? unbrought.get(path)!);
+          manifest.files[path] = latest;
+          continue;
+        }
+        if (local.sha256 === latest.sha256) {
           manifest.files[path] = latest;
           continue;
         }
@@ -1165,6 +1173,10 @@ export class LocalCopies {
         if (manifest.files[path] !== undefined) continue;
         const writable = declaredWritable(path, copy) ? {} : { read_only: true as const };
         manifest.files[path] = present.get(path)?.sha256 === sha256 ? { revision, sha256, bytes, ...writable } : { revision, sha256, bytes, skipped: true, ...writable };
+      }
+      for (const [path, local] of present) {
+        if (manifest.files[path] !== undefined || current.has(path)) continue;
+        if (await this.deletedByHouse(held, `${root}/${path}`, path, local.sha256)) await removed(copy.repository, local.name);
       }
       for (const path of held.read_only) if (manifest.files[path] === undefined) await removed(copy.repository, path);
       for (const name of [...KIT_IGNORES, ...KIT_GIT]) await rm(join(copy.repository, name), { recursive: true, force: true });
@@ -1556,6 +1568,16 @@ export class LocalCopies {
     await writeManifest(copy.repository, work, manifest);
     await this.save(without(copy));
     return { refused: false, files: pending.changes.length, lines };
+  }
+
+  private async deletedByHouse(held: EarlierCopy, named: string, path: string, sha256: string): Promise<boolean> {
+    const attachments = Object.values(held.manifests).flatMap((manifest) => (manifest.binary?.[path] === undefined ? [] : [manifest.binary[path].sha256]));
+    if (attachments.length > 0) return attachments.includes(sha256);
+    for (const revision of recordedRevisions(held, path)) {
+      const text = await this.revisionRead(named, revision);
+      if (text !== null && digest(text) === sha256) return true;
+    }
+    return false;
   }
 
   private async revisionRead(path: string, wanted: string): Promise<string | null> {
