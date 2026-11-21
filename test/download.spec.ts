@@ -395,3 +395,30 @@ it('catches a Room House answers again up from the position it kept, reading no 
   expect(await upload(hosted, notes)).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n' });
   expect(notes.files.get('a.md')!.content).toBe('a, local\n');
 });
+
+it('keeps a file holding the conflict markers an upload wrote through a download that brings a newer change of it, and the resolution merges with that change', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('plan.md', 'one\ntwo\nthree\nfour\nfive\n');
+  await rooms.download([room]);
+  room.put('plan.md', 'one\nTWO, theirs\nthree\nfour\nfive\n');
+  const conflicted = room.revision('plan.md');
+  await writeFile(join(room.repository, 'plan.md'), 'one\ntwo, mine\nthree\nfour\nfive\n');
+  expect((await upload(hosted, room)).status).toBe(1);
+  const marked = await text(room, 'plan.md');
+  room.put('plan.md', 'one\nTWO, theirs\nthree\nfour\nFIVE\n');
+
+  expect(await house(hosted, '/', 'download')).toEqual({
+    status: 0,
+    stdout: "/rooms/notes/plan.md: changed here, so House's change was not brought; the next house upload merges it\n",
+    stderr: '',
+  });
+  expect(await text(room, 'plan.md')).toBe(marked);
+  expect((await manifestOf(room)).files['plan.md']).toMatchObject({ revision: conflicted, conflicted: true });
+
+  await writeFile(join(room.repository, 'plan.md'), 'one\nTWO, both\nthree\nfour\nfive\n');
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(room.files.get('plan.md')!.content).toBe('one\nTWO, both\nthree\nfour\nFIVE\n');
+  expect(await text(room, 'plan.md')).toBe('one\nTWO, both\nthree\nfour\nFIVE\n');
+});

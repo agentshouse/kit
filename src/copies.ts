@@ -457,7 +457,7 @@ class Applying {
       this.manifest.files[path] = kept;
       return;
     }
-    const unchanged = entry === undefined ? local === undefined : entry.read_only === true || local?.sha256 === entry.sha256;
+    const unchanged = entry === undefined ? local === undefined : entry.read_only === true || (entry.conflicted === undefined && local?.sha256 === entry.sha256);
     if (!unchanged || (local !== undefined && !(await holding(this.repository, local.name, local.sha256)))) {
       this.report.kept.add(path);
       return;
