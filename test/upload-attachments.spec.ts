@@ -348,19 +348,24 @@ it('uploads one removed and one added attachment of equal bytes as a move, and r
   expect(await upload(hosted, room)).toMatchObject({ stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
 });
 
-it("takes House's current revision as the base of an attachment another writer replaced, and the next upload sends this copy's bytes over it", async () => {
+it("sends no attachment over a newer version another writer stored that this copy never held, and says how to replace it", async () => {
   const { hosted, room } = await copied();
   await placed(room, { 'photo.jpg': JPEG });
   expect((await upload(hosted, room)).status).toBe(0);
+  const held = (await manifestOf(room)).files['photo.jpg'];
   const theirs = room.upload('photo.jpg', RECORDING);
   await placed(room, { 'photo.jpg': REDRAWN });
+  const advice = `/rooms/notes/photo.jpg: House holds ${theirs}, a version this copy never held, so this file was not sent; to replace House's with it, run house upload '{"file":"${join(room.repository, 'photo.jpg')}","path":"/rooms/notes/photo.jpg","base":"${theirs}"}'\n`;
 
   const refused = await upload(hosted, room);
 
   expect(refused.status).toBe(1);
   expect(refused.stderr).toContain('code: base_revision_stale');
-  expect(refused.stderr.endsWith(`/rooms/notes/photo.jpg: House's revision ${theirs} is now its base; the next house upload sends this copy's version over it\n`)).toBe(true);
-  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
-  expect(batches(hosted).at(-1)!.changes).toEqual([part('photo.jpg', REDRAWN, 'image/jpeg', theirs)]);
-  expect(digest(room.binaries.get('photo.jpg')!.bytes)).toBe(digest(REDRAWN));
+  expect(refused.stderr.endsWith(advice)).toBe(true);
+  expect((await manifestOf(room)).files['photo.jpg']).toEqual(held);
+  const again = await upload(hosted, room);
+  expect(again.stderr.endsWith(advice)).toBe(true);
+  expect(batches(hosted).at(-1)!.changes).toEqual([part('photo.jpg', REDRAWN, 'image/jpeg', held!.revision)]);
+  expect(digest(room.binaries.get('photo.jpg')!.bytes)).toBe(digest(RECORDING));
+  expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(REDRAWN);
 });

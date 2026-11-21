@@ -223,6 +223,7 @@ export class Room {
   readonly log: { position: number; paths: string[] }[] = [];
   readonly batches: EditChange[][] = [];
   models: Record<string, unknown>[] = [];
+  cuts = false;
   private built: { position: number; entries: object[] } | null = null;
 
   readonly copies: string;
@@ -452,7 +453,7 @@ export class Room {
           const text = this.history.get(change.base as string);
           const result = text === undefined ? null : merged3(text, current.content, change.content!);
           if (result === null) conflict('base_revision_stale');
-          else if ('conflicted' in result) conflict('merge_conflict', { content: result.conflicted });
+          else if ('conflicted' in result) conflict('merge_conflict', this.cuts ? {} : { content: result.conflicted });
           else set(path, result.merged, { merged: true });
         }
       } else if (change.op === 'delete') {
@@ -530,6 +531,7 @@ export interface Rooms {
   dropsEdits: number;
   refusesBatches: Answer[];
   refusesUploads: Answer[];
+  refusesReads: Answer[];
   reads: boolean[];
   pass: number;
   prepared: unknown[];
@@ -594,6 +596,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     dropsEdits: 0,
     refusesBatches: [],
     refusesUploads: [],
+    refusesReads: [],
     reads: [],
     pass: Infinity,
     prepared: [],
@@ -756,8 +759,10 @@ export function serveRooms(hosted: Hosted): Rooms {
   hosted.house.route('POST', '/kit/door/files/revisions/list', (request) => {
     const { path, revision } = request.body as { path: string; revision: string };
     if (!REVISION.test(revision)) return INVALID;
-    const room = roomOf(path);
-    return { body: { path, revisions: [{ revision, content: room.history.get(revision) }], next_before: null } };
+    const refused = state.refusesReads.shift();
+    if (refused !== undefined) return refused;
+    const content = roomOf(path).history.get(revision);
+    return { body: { path, revisions: content === undefined ? [] : [{ revision, content }], next_before: null } };
   });
   hosted.house.route('POST', '/kit/door/update', (request) => {
     const refused = state.refusesBatches.shift();
