@@ -112,10 +112,12 @@ function operationsOf(hosted: Hosted, turn: string): Operation[] {
     .map((oneWayCall) => oneWayCall.operation as Operation);
 }
 
-function streamed(hosted: Hosted, type: string): boolean {
-  return hosted.connection.oneWayCalls.some(
-    (oneWayCall) => oneWayCall.type === 'turn' && (oneWayCall.operation as Operation).op === 'start' && ((oneWayCall.operation as { part: Part }).part.type === type),
-  );
+function streamed(hosted: Hosted, type: string, file?: string): boolean {
+  return hosted.connection.oneWayCalls.some((oneWayCall) => {
+    if (oneWayCall.type !== 'turn' || (oneWayCall.operation as Operation).op !== 'start') return false;
+    const { part } = oneWayCall.operation as { part: Part };
+    return part.type === type && (file === undefined || (part as PartOf<'image'>).file === file);
+  });
 }
 
 function emittedImage(): string {
@@ -640,7 +642,6 @@ it("marks an image House did not save with House's refusal as an error notice", 
 it('streams the text after an image and declares the next image while the first one uploads, and saves each image as its upload ends', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   const declared = new Map<string, string>();
-  let first = false;
   hosted.house.route('POST', '/kit/turns/images/declare', (request) => {
     hosted.images.push(request);
     const { bytes, sha256 } = request.body as { bytes: number; sha256: string };
@@ -651,10 +652,8 @@ it('streams the text after an image and declares the next image while the first 
   hosted.house.route('POST', '/kit/uploads/finish', async (request) => {
     const { upload, part_sha256 } = request.body as { upload: string; part_sha256: unknown };
     if (declared.get(upload) === 'version-1') await until(() => hosted.images[1] && streamed(hosted, 'text'));
-    else await until(() => first);
-    const finished = await hosted.store.finish(upload, part_sha256);
-    first = true;
-    return { body: finished };
+    else await until(() => streamed(hosted, 'image', 'version-1'));
+    return { body: await hosted.store.finish(upload, part_sha256) };
   });
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
