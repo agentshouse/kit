@@ -3,6 +3,8 @@ import { parse } from 'yaml';
 export interface Conflict {
   code: string;
   path: string;
+  revision?: string;
+  content?: string;
 }
 
 export interface Refusal {
@@ -36,8 +38,17 @@ function detailOf(text: string): Record<string, unknown> {
 
 function conflictsOf(detail: Record<string, unknown>): Conflict[] {
   if (!Array.isArray(detail.conflicts)) return [];
-  return detail.conflicts.flatMap((conflict: { code?: unknown; path?: unknown } | null) =>
-    typeof conflict?.code === 'string' ? [{ code: conflict.code, path: typeof conflict.path === 'string' ? conflict.path : '' }] : [],
+  return detail.conflicts.flatMap((conflict: { code?: unknown; path?: unknown; revision?: unknown; content?: unknown } | null) =>
+    typeof conflict?.code === 'string'
+      ? [
+          {
+            code: conflict.code,
+            path: typeof conflict.path === 'string' ? conflict.path : '',
+            ...(typeof conflict.revision === 'string' ? { revision: conflict.revision } : {}),
+            ...(typeof conflict.content === 'string' ? { content: conflict.content } : {}),
+          },
+        ]
+      : [],
   );
 }
 
@@ -86,11 +97,14 @@ export function refusalOf(text: string): Refusal | null {
   if (answer === null) return spoken(text);
   const error = errorIn(answer.body);
   if (error === null) return null;
-  const { code, message, data } = error;
+  const { code, message, data, retryable: _retryable, ...fields } = error as Answered & Record<string, unknown>;
   const verdict = verdictOf(error);
   const judged = verdict === null ? {} : { retryable: verdict };
   const said = typeof message === 'string' ? spoken(message) : null;
-  if (said !== null) return { ...said, ...judged };
+  if (said !== null) {
+    const detail = { ...said.detail, ...fields };
+    return { ...said, detail, conflicts: conflictsOf(detail), ...judged };
+  }
   const named = typeof code === 'string' ? code : typeof data?.code === 'string' ? data.code : null;
   return named === null ? null : { code: named, text: named, conflicts: [], detail: {}, ...judged };
 }

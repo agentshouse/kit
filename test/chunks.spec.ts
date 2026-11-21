@@ -1,13 +1,12 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { importCommits } from '../src/git.ts';
 import { until } from './double.ts';
 import { hostKit, type Hosted } from './environment.ts';
 import { temporaryHome } from './kit.ts';
-import { commitAll, git, house, serveRooms, type Room } from './rooms.ts';
+import { house, MANIFEST, manifestOf, serveRooms, upload, type ManifestEntry, type Room } from './rooms.ts';
 
 const ASKED_AGAIN = fileURLToPath(new URL('./asked-again.ts', import.meta.url));
 const COLLECTING = fileURLToPath(new URL('./collecting.ts', import.meta.url));
@@ -21,7 +20,11 @@ function record(hosted: Hosted, room: Room): string {
 }
 
 function tracked(room: Room, repository = room.repository): string[] {
-  return git(repository, 'ls-files').trim().split('\n');
+  const { files } = JSON.parse(readFileSync(join(repository, MANIFEST), 'utf8')) as { files: Record<string, ManifestEntry> };
+  return Object.entries(files)
+    .filter(([, entry]) => entry.read_only === undefined && entry.skipped === undefined)
+    .map(([path]) => path)
+    .sort();
 }
 
 function listed(hosted: Hosted): unknown[] {
@@ -49,7 +52,7 @@ it('carries a Room it holds nothing of through the enumeration from position zer
   room.remove('capture/mail/one.md');
   room.put('capture/mail/two.md', 'two\n', 'source: s_mail\n');
 
-  expect(await rooms.fetch([room])).toMatchObject({ status: 0, stdout: `${room.root}: copied to ${room.repository}\n` });
+  expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: `${room.root}: copied to ${room.repository}\n` });
 
   expect(enumerated(hosted)).toEqual([
     {
@@ -66,7 +69,7 @@ it('carries a Room it holds nothing of through the enumeration from position zer
   expect(JSON.parse(await readFile(record(hosted, room), 'utf8'))).toMatchObject({ position: String(room.position), log_epoch: room.logEpoch });
 });
 
-it('copies a Room House answers too old at position zero from its chunks straight from storage into its Git repository, with no binary entry and no folder', async () => {
+it('copies a Room House answers too old at position zero from its chunks straight from storage into its folder, recording its attachment as skipped and making no folder', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -79,24 +82,25 @@ it('copies a Room House answers too old at position zero from its chunks straigh
   room.folders.add('plans/empty');
   rooms.expired.add(room.ref);
 
-  expect(await rooms.fetch([room])).toMatchObject({ status: 0, stdout: `${room.root}: copied to ${room.repository}\n` });
+  expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: `${room.root}: copied to ${room.repository}\n` });
 
   expect(listed(hosted)).toEqual([{ prefixes: [room.root] }]);
   expect(chunkReads(hosted)).toHaveLength(1);
   expect(tracked(room)).toEqual(['ROOM.md', 'plans/q4.md']);
-  expect(git(room.repository, 'show', 'refs/house/received:plans/q4.md')).toBe('Ship it\n');
-  expect(git(room.repository, 'status', '--porcelain')).toBe('');
+  expect(await readFile(join(room.repository, 'plans/q4.md'), 'utf8')).toBe('Ship it\n');
   expect(await readFile(join(room.repository, 'archive/old.md'), 'utf8')).toBe('Read only for this grant\n');
   expect(await readFile(join(room.repository, 'capture/mail/inbox/one.md'), 'utf8')).toBe('Hello from mail\n');
   expect(await readFile(join(room.repository, 'capture/mail/inbox/_provenance/one.md'), 'utf8')).toBe('source: s_mail\n');
   expect(existsSync(join(room.repository, 'plans/photo.jpg'))).toBe(false);
   expect(existsSync(join(room.repository, 'plans/empty'))).toBe(false);
-  expect(git(room.repository, 'check-ignore', 'archive/old.md').trim()).toBe('archive/old.md');
-  expect((await readdir(join(room.repository, '.git'))).filter((name) => name.includes('chunk'))).toEqual([]);
+  expect(existsSync(join(room.repository, '.git'))).toBe(false);
+  const { files } = await manifestOf(room);
+  expect(files['archive/old.md']!.read_only).toBe(true);
+  expect(files['plans/photo.jpg']).toMatchObject({ bytes: 10, skipped: true });
+  expect((await readdir(dirname(room.repository))).filter((name) => name.startsWith('.') && !name.endsWith('work'))).toEqual([]);
 
   await writeFile(join(room.repository, 'plans/q4.md'), 'Ship it, edited\n');
-  commitAll(room.repository, 'local');
-  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(await upload(hosted, room)).toMatchObject({ status: 0 });
   expect(room.files.get('plans/q4.md')!.content).toBe('Ship it, edited\n');
 });
 
@@ -108,12 +112,10 @@ it("places the Space schema a Room's chunk list names as its model, which no chu
   room.models = [{ path: 'settings/schema.yaml', revision: 'v_9.1.x', sha256: 'unused', bytes: 7, lines: 1, content: 'note: {}\n', space: 's_one.x' }];
   rooms.expired.add(room.ref);
 
-  await rooms.fetch([room]);
+  await rooms.download([room]);
 
-  expect(git(room.repository, 'show', 'refs/house/received:settings/schema.yaml')).toBe('note: {}\n');
-  expect(JSON.parse(await readFile(record(hosted, room), 'utf8')).manifests).toEqual(
-    expect.objectContaining({ [git(room.repository, 'rev-parse', 'refs/house/received').trim()]: { parent: null, files: expect.objectContaining({ 'settings/schema.yaml': 'v_9.1.x' }) } }),
-  );
+  expect(await readFile(join(room.repository, 'settings/schema.yaml'), 'utf8')).toBe('note: {}\n');
+  expect((await manifestOf(room)).files['settings/schema.yaml']).toMatchObject({ revision: 'v_9.1.x' });
 });
 
 it('downloads many chunks at once and shows nothing of the Room until every one arrived', async () => {
@@ -125,7 +127,7 @@ it('downloads many chunks at once and shows nothing of the Room until every one 
   rooms.expired.add(room.ref);
   const release = hosted.store.holdReads();
 
-  const fetching = rooms.fetch([room]);
+  const fetching = rooms.download([room]);
 
   await until(() => hosted.store.reading >= 3);
   expect(existsSync(room.repository)).toBe(false);
@@ -142,34 +144,34 @@ it('keeps every chunk body through a garbage collection that runs between its an
   for (let document = 0; document < 40; document += 1) room.put(`d${document}.md`, `${text}${document}\n`);
   rooms.expired.add(room.ref);
 
-  expect(await rooms.fetch([room])).toMatchObject({ stderr: '', status: 0 });
+  expect(await rooms.download([room])).toMatchObject({ stderr: '', status: 0 });
 
   expect(tracked(room)).toHaveLength(40);
 });
 
-it("reads what changed since the chunk list's position through the enumeration, so a fetch after a push shows the push", async () => {
+it("reads what changed since the chunk list's position through the enumeration, so a download after an upload keeps what the upload sent", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
   room.put('b.md', 'b\n');
-  await rooms.fetch([room]);
-  await writeFile(join(room.repository, 'a.md'), 'a, pushed\n');
-  commitAll(room.repository, 'local');
+  await rooms.download([room]);
+  await writeFile(join(room.repository, 'a.md'), 'a, uploaded\n');
   room.build();
   const built = room.position;
-  expect(await house(hosted, room.repository, 'push', '--owner')).toMatchObject({ status: 0 });
+  expect(await upload(hosted, room)).toMatchObject({ status: 0 });
   rooms.expired.add(room.ref);
   const asked = enumerated(hosted).length;
 
-  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: expect.stringMatching(/^\/rooms\/notes: refs\/house\/received is at [0-9a-f]{12}\n$/) });
+  expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
 
   expect(enumerated(hosted).slice(asked).at(1)).toEqual({ prefixes: [room.root], positions: [at(room, built)] });
-  expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, pushed\n');
+  expect(await readFile(join(room.repository, 'a.md'), 'utf8')).toBe('a, uploaded\n');
+  expect((await manifestOf(room)).files['a.md']!.revision).toBe(room.revision('a.md'));
   expect(chunkReads(hosted)).toHaveLength(1);
 });
 
-it("brings a new copy's branch to what changed since the chunk list's position", async () => {
+it("brings a new copy to what changed since the chunk list's position", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -178,12 +180,10 @@ it("brings a new copy's branch to what changed since the chunk list's position",
   room.put('late.md', 'late\n');
   rooms.expired.add(room.ref);
 
-  expect(await rooms.fetch([room])).toMatchObject({ status: 0, stdout: `${room.root}: copied to ${room.repository}\n` });
+  expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: `${room.root}: copied to ${room.repository}\n` });
 
   expect(tracked(room)).toEqual(['a.md', 'late.md']);
   expect(await readFile(join(room.repository, 'late.md'), 'utf8')).toBe('late\n');
-  expect(git(room.repository, 'rev-parse', 'HEAD')).toBe(git(room.repository, 'rev-parse', 'refs/house/received'));
-  expect(git(room.repository, 'status', '--porcelain')).toBe('');
 });
 
 it('reads a Room whose carry from zero fits no one answer from its chunks, and leaves a Room that fits carried', async () => {
@@ -195,7 +195,7 @@ it('reads a Room whose carry from zero fits no one answer from its chunks, and l
   const small = rooms.room('small');
   small.put('a.md', 'a\n');
 
-  expect(await rooms.fetch([large, small])).toMatchObject({ status: 0 });
+  expect(await rooms.download([large, small])).toMatchObject({ status: 0 });
 
   expect(listed(hosted)).toEqual([{ prefixes: [large.root] }]);
   expect(tracked(large)).toHaveLength(6);
@@ -212,7 +212,7 @@ it('asks a Room answered not ready again after 1, 2, 3, 5, 8, 11 and 15 seconds,
   rooms.carriedDocuments = 0;
   rooms.notReady.set(room.ref, 9);
 
-  expect(await rooms.fetch([room])).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
+  expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
 
   expect(existsSync(room.repository)).toBe(false);
   await until(() => existsSync(record(hosted, room)));
@@ -222,26 +222,24 @@ it('asks a Room answered not ready again after 1, 2, 3, 5, 8, 11 and 15 seconds,
   expect(tracked(room)).toEqual(['a.md']);
 });
 
-it('keeps what a held Room shows while House answers it not ready, and takes it from chunks with its unpushed commits kept once it is built', async () => {
+it('keeps what a held Room shows while House answers it not ready, and takes it from chunks keeping what changed here once it is built', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
-  await rooms.fetch([room]);
+  await rooms.download([room]);
   await writeFile(join(room.repository, 'a.md'), 'a, local\n');
-  const unpushed = commitAll(room.repository, 'local');
-  const before = git(room.repository, 'rev-parse', 'refs/house/received').trim();
   room.put('b.md', 'b, from House\n');
   rooms.carriedDocuments = 0;
   rooms.notReady.set(room.ref, 2);
 
-  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
-  expect(git(room.repository, 'rev-parse', 'refs/house/received').trim()).toBe(before);
+  expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
+  expect(existsSync(join(room.repository, 'b.md'))).toBe(false);
 
-  await until(() => git(room.repository, 'rev-parse', 'refs/house/received').trim() !== before);
+  await until(() => existsSync(join(room.repository, 'b.md')));
   await until(async () => JSON.parse(await readFile(record(hosted, room), 'utf8')).position === String(room.position));
-  expect(git(room.repository, 'show', 'refs/house/received:b.md')).toBe('b, from House\n');
-  expect(git(room.repository, 'rev-parse', 'HEAD').trim()).toBe(unpushed);
+  expect(await readFile(join(room.repository, 'b.md'), 'utf8')).toBe('b, from House\n');
+  expect(await readFile(join(room.repository, 'a.md'), 'utf8')).toBe('a, local\n');
   expect(listed(hosted)).toHaveLength(3);
 });
 
@@ -253,7 +251,7 @@ it('keeps asking a Room answered not ready when one of its asks fails, and copie
   rooms.carriedDocuments = 0;
   rooms.notReady.set(room.ref, 1);
 
-  expect(await rooms.fetch([room])).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
+  expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
   rooms.unreadable.add(room.ref);
   const asked = listed(hosted).length;
   await until(() => listed(hosted).length > asked);
@@ -270,12 +268,12 @@ it("asks a Room answered not ready again when another Room's read fails in the s
   regranted.put('a.md', 'a\n');
   const other = rooms.room('other');
   other.put('b.md', 'b\n');
-  await rooms.fetch([regranted, other]);
+  await rooms.download([regranted, other]);
   regranted.protected = [...regranted.protected, 'archive'];
   rooms.notReady.set(regranted.ref, 1);
   rooms.reads = [false];
 
-  const fetched = await house(hosted, '/', 'fetch');
+  const fetched = await house(hosted, '/', 'download');
 
   expect(fetched.status).toBe(1);
   expect(fetched.stderr).toContain(`${regranted.root}: ${NOT_READY}\n`);
@@ -294,13 +292,13 @@ it('stops asking a Room answered not ready once it leaves the selection', async 
   rooms.notReady.set(room.ref, Infinity);
   const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read').length;
 
-  await rooms.fetch([room]);
+  await rooms.download([room]);
   await until(() => listed(hosted).length >= 3);
   rooms.answered = [];
   const left = selections();
   await until(() => selections() > left);
   const asked = (await readFile(pauses, 'utf8')).trim().split('\n').length;
-  await house(hosted, '/', 'fetch');
+  await house(hosted, '/', 'download');
 
   expect((await readFile(pauses, 'utf8')).trim().split('\n').length).toBeLessThanOrEqual(asked + 1);
   expect(existsSync(room.repository)).toBe(false);
@@ -315,7 +313,7 @@ it('downloads what a failed chunk left once more and finishes the copy from what
   rooms.expired.add(room.ref);
   hosted.store.refuseReads(1);
 
-  expect(await rooms.fetch([room])).toMatchObject({ stderr: '', status: 0 });
+  expect(await rooms.download([room])).toMatchObject({ stderr: '', status: 0 });
 
   const whole = hosted.store.requests.filter((request) => request.key.startsWith('room-chunks/') && request.status === 200).map((request) => request.key);
   expect(new Set(whole).size).toBe(whole.length);
@@ -334,16 +332,17 @@ it("sweeps the staging its Kit left when stopped during a copy as it starts agai
   const staged = async () => (await readdir(copies).catch(() => [])).filter((name) => name.startsWith('.'));
   const release = hosted.store.holdReads();
 
-  const stopped = rooms.fetch([room]).catch(() => undefined);
+  const stopped = rooms.download([room]).catch(() => undefined);
   await until(() => hosted.store.reading >= 1);
-  expect(await staged()).toHaveLength(1);
+  const kits = await staged();
+  expect(kits.length).toBeGreaterThan(0);
   await mkdir(join(copies, '.another-kit'));
   release();
   await hosted.restart();
   await stopped;
 
-  await until(async () => (await staged()).length === 1);
-  expect(await staged()).toEqual(['.another-kit']);
+  await until(async () => (await staged()).every((name) => !kits.includes(name)));
+  expect((await staged()).filter((name) => !name.endsWith('work'))).toEqual(['.another-kit']);
 });
 
 it('removes what a copy staged when its chunks cannot be read', async () => {
@@ -355,20 +354,9 @@ it('removes what a copy staged when its chunks cannot be read', async () => {
   rooms.expired.add(room.ref);
   rooms.damagesChunks = true;
 
-  expect((await rooms.fetch([room])).status).toBe(1);
+  expect((await rooms.download([room])).status).toBe(1);
 
   expect(await readdir(join(workspace, 'local-copies', 'rooms'))).toEqual([]);
-});
-
-it("names git's cause when git fast-import dies while a large commit is sent", async () => {
-  const repository = await temporaryHome();
-  git(repository, 'init', '-q');
-  const text = 'x'.repeat(1_000_000);
-  async function* files(): AsyncGenerator<readonly [string, string]> {
-    for (let document = 0; document < 200; document += 1) yield [`d${document}.md`, text];
-  }
-
-  await expect(importCommits(repository, [{ message: 'a', from: 'f'.repeat(40), files: files() }])).rejects.toThrow(/git fast-import failed: .*f{40}/su);
 });
 
 it('asks the list again when a chunk address expired, and downloads only the chunks it lacks', async () => {
@@ -380,7 +368,7 @@ it('asks the list again when a chunk address expired, and downloads only the chu
   rooms.expired.add(room.ref);
   rooms.expiringChunks = 1;
 
-  expect(await rooms.fetch([room])).toMatchObject({ status: 0 });
+  expect(await rooms.download([room])).toMatchObject({ status: 0 });
 
   expect(listed(hosted)).toHaveLength(2);
   expect(tracked(room)).toHaveLength(8);
@@ -390,35 +378,33 @@ it('asks the list again when a chunk address expired, and downloads only the chu
   expect(reads.filter((request) => request.status === 403)).toHaveLength(1);
 });
 
-it("refuses a chunk that did not arrive whole, keeps the copy where it was, and leaves the House ref alone when a chunk's text cannot be read", async () => {
+it("refuses a chunk that did not arrive whole or whose text cannot be read, and keeps the copy and its manifest where they were", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
-  await rooms.fetch([room]);
-  const before = git(room.repository, 'rev-parse', 'refs/house/received').trim();
+  await rooms.download([room]);
+  const before = await manifestOf(room);
   room.put('a.md', 'a, later\n');
   room.put('b.md', 'b\n');
   rooms.expired.add(room.ref);
   rooms.damagesChunks = true;
 
-  const damaged = await house(hosted, '/', 'fetch');
-
-  expect(damaged.status).toBe(1);
-  expect(git(room.repository, 'rev-parse', 'refs/house/received').trim()).toBe(before);
+  expect((await house(hosted, '/', 'download')).status).toBe(1);
+  expect(await manifestOf(room)).toEqual(before);
 
   rooms.damagesChunks = false;
   rooms.unparsedChunks = true;
   rooms.expired.add(room.ref);
 
-  expect((await house(hosted, '/', 'fetch')).status).toBe(1);
-  expect(git(room.repository, 'rev-parse', 'refs/house/received').trim()).toBe(before);
-  expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a\n');
-  expect((await readdir(join(room.repository, '.git'))).filter((name) => name.includes('chunk'))).toEqual([]);
+  expect((await house(hosted, '/', 'download')).status).toBe(1);
+  expect(await manifestOf(room)).toEqual(before);
+  expect(await readFile(join(room.repository, 'a.md'), 'utf8')).toBe('a\n');
+  expect((await readdir(dirname(room.repository))).filter((name) => name.startsWith('.') && !name.endsWith('work'))).toEqual([]);
 
   rooms.unparsedChunks = false;
-  expect(await house(hosted, '/', 'fetch')).toMatchObject({ status: 0 });
-  expect(git(room.repository, 'show', 'refs/house/received:a.md')).toBe('a, later\n');
+  expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0 });
+  expect(await readFile(join(room.repository, 'a.md'), 'utf8')).toBe('a, later\n');
 });
 
 it("copies a Room larger than the former bundle limit with the Kit's heap capped far below the Room and its peak memory under half of it", { timeout: 300_000 }, async () => {
@@ -431,7 +417,7 @@ it("copies a Room larger than the former bundle limit with the Kit's heap capped
   for (let document = 0; document < documents; document += 1) room.put(`d/${document}.md`, `${document}\n${text}`);
   rooms.expired.add(room.ref);
 
-  const copying = await rooms.fetch([room]);
+  const copying = await rooms.download([room]);
   expect({ ...copying, kit: hosted.kit.stderr() }).toMatchObject({ stderr: '', kit: '', status: 0 });
 
   const repository = join(workspace, 'local-copies', 'rooms', room.ref);

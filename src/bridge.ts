@@ -12,20 +12,20 @@ import type { Staged } from './binaries.ts';
 import { loginPath } from './clis.ts';
 import {
   changedPaths,
+  DEFAULT_MAX_SIZE,
+  UPLOAD_NEEDS_OWNER,
+  type Answered,
   type Caller,
+  type Change,
   type LocalCopies,
-  type Observed,
-  type Pushed,
   type Submitted,
   type Upload,
 } from './copies.ts';
 import { fileInfo, type Finished } from './files.ts';
-import { PUSH_NEEDS_OWNER } from './git.ts';
-import { kitHome, readEnrolment, readOwnAgent, socketDirectory } from './home.ts';
+import { readEnrolment, readOwnAgent, socketDirectory } from './home.ts';
 import { callHouse, DISCONNECTED, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
-import type { Edit } from './translate.ts';
 import { relayed } from './relay.ts';
 
 export interface Bridge {
@@ -46,7 +46,7 @@ interface Holder {
 
 class Said extends Error {}
 
-const OWNER_IN_CONVERSATION = '--owner is not for Agent conversations; run house push without it';
+const OWNER_IN_CONVERSATION = '--owner is not for Agent conversations; run house upload without it';
 
 const MCP_REQUEST_BYTES = 4_000_000;
 
@@ -98,11 +98,11 @@ function resendAfter(forwarded: Forwarded | null, attempt: number, pushing: bool
 function editAnswer(forwarded: Forwarded): Submitted {
   const answer = toolAnswer(forwarded);
   if ('refused' in answer) return answer;
-  const { results } = parse(answer.text) as { results: { path: string; revision?: string; from?: string }[] };
+  const { results } = parse(answer.text) as { results: { path: string; revision?: string; from?: string; content?: string }[] };
   return {
     accepted: results.flatMap((result) => [
       ...(result.from === undefined ? [] : [{ path: result.from, revision: null, content: null }]),
-      { path: result.path, revision: result.revision ?? null },
+      { path: result.path, revision: result.revision ?? null, ...(result.content === undefined ? {} : { content: result.content }) },
     ]),
   };
 }
@@ -124,7 +124,7 @@ export async function openBridge(
     named: {},
     ownAgent: false,
     owner: false,
-    path: [join(kitHome(), 'shim'), dirname(process.execPath), await loginPath()].join(delimiter),
+    path: [dirname(process.execPath), await loginPath()].join(delimiter),
   });
 }
 
@@ -181,7 +181,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
 
   const call = (name: string, args: Record<string, unknown>): Message => rpc('tools/call', { name, arguments: args });
 
-  const staged = async (operation: string, changes: Edit[]): Promise<Upload | { refused: Refusal }> => {
+  const staged = async (operation: string, changes: Change[]): Promise<Upload | { refused: Refusal }> => {
     const bytes = Buffer.from(JSON.stringify({ changes }));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const prepared = toolAnswer(
@@ -247,21 +247,18 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
     },
   };
 
-  const pusher = holder.owner ? copies.owner : caller;
+  const uploader = holder.owner ? copies.owner : caller;
 
   const local = async (path: string, text: string): Promise<Forwarded> => {
-    if (path === '/git/push') {
-      const { cwd, commit, owner } = JSON.parse(text) as { cwd: string; commit: string; owner: boolean };
-      const pushed: Pushed =
-        owner === holder.owner
-          ? await copies.push(cwd, commit, pusher)
-          : { refused: true, text: owner ? OWNER_IN_CONVERSATION : PUSH_NEEDS_OWNER };
-      return { status: 200, text: JSON.stringify(pushed) };
+    if (path === '/copy/upload') {
+      const { cwd, owner } = JSON.parse(text) as { cwd: string; owner: boolean };
+      const uploaded: Answered =
+        owner === holder.owner ? await copies.upload(cwd, uploader) : { refused: true, text: owner ? OWNER_IN_CONVERSATION : UPLOAD_NEEDS_OWNER };
+      return { status: 200, text: JSON.stringify(uploaded) };
     }
-    if (path === '/git/fetch') return { status: 200, text: JSON.stringify(await copies.fetch(pusher)) };
-    if (path === '/git/observed') {
-      await copies.observed(JSON.parse(text) as Observed);
-      return { status: 200, text: '{}' };
+    if (path === '/copy/download') {
+      const { attachments = false, max_size: maxSize = DEFAULT_MAX_SIZE } = JSON.parse(text) as { attachments?: boolean; max_size?: number };
+      return { status: 200, text: JSON.stringify(await copies.download(uploader, { attachments, maxSize })) };
     }
     if (path !== '/') return { status: 404, text: '' };
     const forwarded = await forward(text);
@@ -288,7 +285,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
         response.writeHead(error.status, { 'content-type': 'application/json' }).end(error.text);
         return;
       }
-      const verb = request.url === '/git/push' || request.url === '/git/fetch';
+      const verb = request.url === '/copy/upload' || request.url === '/copy/download';
       response.writeHead(502).end(verb && error instanceof Error ? error.message : UNREACHABLE);
     }
   });

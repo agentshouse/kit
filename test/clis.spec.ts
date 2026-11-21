@@ -125,7 +125,6 @@ it.each(KINDS)('gives a %s conversation its login shell PATH with Kit shims and 
 
   const entry = (await initialized(hosted)).find((entry) => (entry.env as Record<string, string>).HOUSE_BRIDGE !== undefined)!;
   expect((entry.env as Record<string, string>).PATH.split(':')).toEqual([
-    join(hosted.home, 'shim'),
     dirname(process.execPath),
     userBin(hosted.home),
     '/usr/bin',
