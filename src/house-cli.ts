@@ -55,6 +55,7 @@ const UPLOAD =
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 const DOWNLOAD = `download: brings House's changes into every Local copy, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
 const MAX_SIZE = `--max-size takes a number of megabytes; ${DOWNLOAD_USAGE}`;
+const MEGABYTES = /^\d+(?:\.\d+)?$/;
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
 const CLOSED = 'this House connection is closed; nothing to do from here';
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
@@ -123,8 +124,8 @@ async function download(args: string[]): Promise<string> {
   const { flags, positionals: [argument] } = accepted(rest, ['--help', '--with-attachments'], 1, DOWNLOAD_USAGE);
   if (flags.has('--help')) return `${DOWNLOAD_USAGE}\n${DOWNLOAD}`;
   if (argument === undefined) {
+    if (valued !== -1 && !MEGABYTES.test(size ?? '')) throw new Error(MAX_SIZE);
     const maxSize = size === undefined ? DEFAULT_MAX_SIZE : Number(size);
-    if (!Number.isFinite(maxSize) || maxSize < 0) throw new Error(MAX_SIZE);
     return copyVerb('/copy/download', { attachments: flags.has('--with-attachments'), max_size: maxSize });
   }
   if (valued !== -1 || flags.has('--with-attachments')) throw unexpected(valued !== -1 ? '--max-size' : '--with-attachments', DOWNLOAD_USAGE);

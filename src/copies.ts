@@ -298,6 +298,22 @@ function declaredWritable(path: string, copy: Scope): boolean {
   return deepest(copy.write) > deepest(copy.protected);
 }
 
+function differing(left: string, right: string): number {
+  const counts = new Map<string, number>();
+  for (const line of left.split('\n')) counts.set(line, (counts.get(line) ?? 0) + 1);
+  let unmatched = 0;
+  for (const line of right.split('\n')) {
+    const held = counts.get(line) ?? 0;
+    if (held > 0) counts.set(line, held - 1);
+    else unmatched++;
+  }
+  return unmatched + [...counts.values()].reduce((sum, count) => sum + count, 0);
+}
+
+function whole(theirs: string, mine: string): string {
+  return `<<<<<<< current\n${ended(theirs)}=======\n${ended(mine)}>>>>>>> yours\n`;
+}
+
 function ended(text: string): string {
   return text === '' || text.endsWith('\n') ? text : `${text}\n`;
 }
@@ -1103,18 +1119,30 @@ export class LocalCopies {
           manifest.files[path] = { revision, ...attached };
           continue;
         }
+        const named = `${root}/${path}`;
         const now = current.get(path);
-        const text = now?.revision === revision ? null : await this.revisionText(`${root}/${path}`, revision).catch(() => null);
-        const file = now?.revision === revision ? now : text === null ? null : { revision, sha256: digest(text), bytes: Buffer.byteLength(text) };
-        if (file === null) continue;
-        manifest.files[path] = { revision, sha256: file.sha256, bytes: file.bytes };
+        const read = now?.revision === revision ? null : await this.revisionRead(named, revision);
+        if (now?.revision !== revision && read === null) continue;
+        const latest = now?.revision === revision ? now : { revision, sha256: digest(read!), bytes: Buffer.byteLength(read!) };
         const local = present.get(path);
-        if (local === undefined || local.sha256 === file.sha256) continue;
+        if (local === undefined || local.sha256 === latest.sha256) {
+          manifest.files[path] = latest;
+          continue;
+        }
+        const edited = await readFile(join(copy.repository, local.name), 'utf8');
+        const latestText = read ?? (await this.revisionText(named, revision));
+        let closest = { revision, text: latestText, apart: differing(latestText, edited) };
         for (const before of recordedRevisions(held, path).filter((other) => other !== revision)) {
-          const behind = await this.revisionText(`${root}/${path}`, before).catch(() => null);
-          if (behind === null || digest(behind) !== local.sha256) continue;
-          await placed(work, join(copy.repository, local.name), text ?? (await this.revisionText(`${root}/${path}`, revision)));
-          break;
+          const text = await this.revisionRead(named, before);
+          if (text === null) continue;
+          const apart = differing(text, edited);
+          if (apart < closest.apart) closest = { revision: before, text, apart };
+        }
+        if (closest.revision !== revision && closest.text === edited) {
+          await placed(work, join(copy.repository, local.name), latestText);
+          manifest.files[path] = latest;
+        } else {
+          manifest.files[path] = { revision: closest.revision, sha256: digest(closest.text), bytes: Buffer.byteLength(closest.text) };
         }
       }
       for (const [path, now] of current) {
@@ -1129,6 +1157,9 @@ export class LocalCopies {
       for (const name of [...KIT_IGNORES, ...KIT_GIT]) await rm(join(copy.repository, name), { recursive: true, force: true });
       await rmdir(join(copy.repository, '.git', 'refs', 'house')).catch(() => undefined);
       await writeManifest(copy.repository, work, manifest);
+    } catch (error) {
+      if (error instanceof NotReady) throw error;
+      throw new Error(`${root}: Kit could not convert the copy an earlier Kit kept yet (${houseCause(error)}); the next house download or house upload converts it`);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -1140,7 +1171,7 @@ export class LocalCopies {
     try {
       copy = await this.converted(this.copies.get(key)!);
     } catch (error) {
-      return { refused: true, text: `${rootOf(this.copies.get(key)!.room_handle)}: ${houseCause(error)}` };
+      return { refused: true, text: error instanceof NotReady ? `${rootOf(this.copies.get(key)!.room_handle)}: ${NOT_READY}` : causeOf(error) };
     }
     const lines: string[] = [];
     let files = 0;
@@ -1155,9 +1186,10 @@ export class LocalCopies {
     }
     const root = rootOf(copy.room_handle);
     const manifest = await readManifest(copy.repository);
+    const present = await scanned(copy.repository);
     const unresolved: string[] = [];
     for (const [path, entry] of Object.entries(manifest.files)) {
-      if (entry.conflicted && (await marked(copy.repository, path))) unresolved.push(`${root}/${path}`);
+      if (entry.conflicted && (await marked(copy.repository, present.get(path)?.name ?? path))) unresolved.push(`${root}/${path}`);
     }
     if (unresolved.length > 0) {
       const [named, they] = unresolved.length === 1 ? [`${unresolved[0]} still holds`, 'it'] : [`${unresolved.join(', ')} still hold`, 'each'];
@@ -1165,7 +1197,7 @@ export class LocalCopies {
     }
     let built: Built;
     try {
-      built = await this.built(copy, manifest);
+      built = await this.built(copy, manifest, present);
     } catch (error) {
       return { refused: true, text: houseCause(error) };
     }
@@ -1191,9 +1223,8 @@ export class LocalCopies {
     };
   }
 
-  private async built(copy: Copy, manifest: Manifest): Promise<Built> {
+  private async built(copy: Copy, manifest: Manifest, present: Map<string, Present>): Promise<Built> {
     const root = rootOf(copy.room_handle);
-    const present = await scanned(copy.repository);
     const added: string[] = [];
     const changed: string[] = [];
     const gone: string[] = [];
@@ -1309,7 +1340,7 @@ export class LocalCopies {
       }
       const settled = await this.save(without(copy));
       if (outcome.refused.code !== 'edit_conflict') return { refused: true, text: outcome.refused.text };
-      const lines = await this.conflicted(settled, copy.pending!, outcome.refused);
+      const lines = await this.conflicted(settled, copy.pending!, outcome.refused, caller);
       return { refused: true, text: [outcome.refused.text, ...lines].join('\n') };
     }
     return this.integrated(copy, outcome.accepted);
@@ -1363,43 +1394,88 @@ export class LocalCopies {
     };
   }
 
-  private async conflicted(copy: Copy, pending: Pending, refusal: Refusal): Promise<string[]> {
+  private async conflicted(copy: Copy, pending: Pending, refusal: Refusal, caller: Caller): Promise<string[]> {
     const root = rootOf(copy.room_handle);
-    const touched = new Set(changedPaths(pending.changes).map(relative));
     const manifest = await readManifest(copy.repository);
+    const present = await scanned(copy.repository);
     const work = await staging();
     const lines: string[] = [];
+    const nameOf = (path: string) => present.get(path)?.name ?? path;
+    const holds = async (path: string, sha256: string) => present.has(path) && (await holding(copy.repository, nameOf(path), sha256));
+    const brought = async (path: string, revision: string): Promise<boolean> => {
+      const named = `${root}/${path}`;
+      const target = join(copy.repository, nameOf(path));
+      if (isDocument(path)) {
+        const text = await this.revisionRead(named, revision);
+        if (text === null) return false;
+        await placed(work, target, text);
+        manifest.files[path] = { revision, sha256: digest(text), bytes: Buffer.byteLength(text) };
+      } else {
+        const held: { file?: FileInfo } = {};
+        const file = await receivedBinary(work, named, async () => {
+          const info = await caller.info(named, revision);
+          if (info === null) throw new Error(`House holds no attachment at ${named}`);
+          held.file = info;
+          return info;
+        });
+        await mkdir(dirname(target), { recursive: true });
+        await rename(file, target);
+        manifest.files[path] = { revision, sha256: held.file!.sha256, bytes: held.file!.bytes };
+      }
+      present.set(path, { name: nameOf(path), sha256: manifest.files[path]!.sha256, bytes: manifest.files[path]!.bytes });
+      return true;
+    };
     for (const conflict of refusal.conflicts) {
       const path = relative(conflict.path);
-      if (!touched.has(path)) continue;
+      const change = pending.changes.find((sent) => relative(sent.path) === path || (sent.op === 'move' && relative(sent.to) === path));
+      if (change === undefined) continue;
+      const named = `${root}/${path}`;
       const read = pending.read[path];
-      const entry = manifest.files[path];
+      const busy = `${named}: changed while it uploaded; the next house upload merges it`;
       if (conflict.revision === undefined) {
         delete manifest.files[path];
-        lines.push(`${root}/${path}: House no longer holds it; the next house upload sends it as a new file`);
+        lines.push(`${named}: House no longer holds it; the next house upload sends it as a new file`);
         continue;
       }
-      const mine = pending.changes.find((change) => change.op === 'write' && relative(change.path) === path);
-      if (conflict.content === undefined && conflict.code === 'path_exists' && mine?.op === 'write' && read !== undefined && (await holding(copy.repository, read.name, read.sha256))) {
-        const theirs = await this.revisionText(conflict.path, conflict.revision);
-        const content = `<<<<<<< current\n${ended(theirs)}=======\n${ended(mine.content)}>>>>>>> yours\n`;
-        await placed(work, join(copy.repository, read.name), content);
+      if (change.op === 'write') {
+        if (read === undefined || !(await holds(path, read.sha256))) {
+          lines.push(busy);
+          continue;
+        }
+        const content = conflict.content ?? whole(await this.revisionText(named, conflict.revision), change.content);
+        await placed(work, join(copy.repository, nameOf(path)), content);
         manifest.files[path] = { revision: conflict.revision, sha256: digest(content), bytes: Buffer.byteLength(content), conflicted: true };
-        lines.push(`${root}/${path}: conflict markers written; resolve them, then run house upload again`);
+        lines.push(`${named}: conflict markers written; resolve them, then run house upload again`);
         continue;
       }
-      if (conflict.content === undefined) {
-        manifest.files[path] = { ...(entry ?? { sha256: '', bytes: 0 }), revision: conflict.revision };
-        lines.push(`${root}/${path}: House's revision ${conflict.revision} is now its base; the next house upload sends this copy's version over it`);
+      if (change.op === 'upload') {
+        const file = JSON.stringify({ file: join(copy.repository, nameOf(path)), path: named, base: conflict.revision });
+        lines.push(`${named}: House holds ${conflict.revision}, a version this copy never held, so this file was not sent; to replace House's with it, run house upload '${file}'`);
         continue;
       }
-      if (read === undefined || !(await holding(copy.repository, read.name, read.sha256))) {
-        lines.push(`${root}/${path}: changed while it uploaded; the next house upload merges it`);
+      if (change.op === 'delete') {
+        if (present.has(path)) lines.push(busy);
+        else if (await brought(path, conflict.revision)) {
+          lines.push(`${named}: House changed it since this copy read it and now holds ${conflict.revision}; that version is back here, so delete it again if you still mean to`);
+        }
         continue;
       }
-      await placed(work, join(copy.repository, read.name), conflict.content);
-      manifest.files[path] = { revision: conflict.revision, sha256: digest(conflict.content), bytes: Buffer.byteLength(conflict.content), conflicted: true };
-      lines.push(`${root}/${path}: conflict markers written; resolve them, then run house upload again`);
+      const from = relative(change.path);
+      const to = relative(change.to);
+      const moved = pending.read[to];
+      if (!present.has(from) && moved !== undefined && (await holds(to, moved.sha256))) {
+        await mkdir(dirname(join(copy.repository, from)), { recursive: true });
+        await rename(join(copy.repository, nameOf(to)), join(copy.repository, from));
+        await removed(copy.repository, nameOf(to));
+        present.set(from, { ...present.get(to)!, name: from });
+        present.delete(to);
+      }
+      const entry = manifest.files[from];
+      if (path === from && entry !== undefined && (await holds(from, entry.sha256)) && (await brought(from, conflict.revision))) {
+        lines.push(`${named}: House changed it since this copy read it and now holds ${conflict.revision}; it is back at ${named} with that version, so move it again if you still mean to`);
+      } else if (path === to && !present.has(to) && (await brought(to, conflict.revision))) {
+        lines.push(`${named}: House already holds a file there (${conflict.revision}); ${root}/${from} is back where it was and ${named} holds House's file`);
+      } else lines.push(busy);
     }
     await writeManifest(copy.repository, work, manifest);
     return lines;
@@ -1466,13 +1542,20 @@ export class LocalCopies {
     return { refused: false, files: pending.changes.length, lines };
   }
 
-  private async revisionText(path: string, wanted: string): Promise<string> {
-    const page = await this.house.door<{ revisions: { revision: string; content?: string }[] }>('files/revisions/list', {
+  private async revisionRead(path: string, wanted: string): Promise<string | null> {
+    const page = await this.house.door<{ revisions: { revision: string; content?: string | null }[] }>('files/revisions/list', {
       path,
       revision: wanted,
     });
-    const content = page.revisions.find((entry) => entry.revision === wanted)?.content;
-    if (content === undefined) throw new Error(`House's text of ${path} at ${wanted} is not readable yet`);
-    return content;
+    const found = page.revisions.find((entry) => entry.revision === wanted);
+    if (found === undefined) return null;
+    if (typeof found.content !== 'string') throw new Error(`House's text of ${path} at ${wanted} is not readable yet`);
+    return found.content;
+  }
+
+  private async revisionText(path: string, wanted: string): Promise<string> {
+    const text = await this.revisionRead(path, wanted);
+    if (text === null) throw new Error(`House holds no revision ${wanted} of ${path}`);
+    return text;
   }
 }

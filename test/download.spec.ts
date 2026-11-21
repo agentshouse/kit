@@ -243,11 +243,17 @@ it('keeps each attachment the copy holds current, moving or removing it as the R
   expect(await upload(hosted, room)).toMatchObject({ stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
 });
 
-it('refuses a --max-size that is no number of megabytes', async () => {
+it.each([
+  [['--max-size', 'big']],
+  [['--with-attachments', '--max-size']],
+  [['--max-size', '', '--with-attachments']],
+])('refuses house download %j, whose --max-size names no number of megabytes, before it asks for anything', async (flags) => {
   const hosted = await hostKit();
-  const refused = await house(hosted, '/', 'download', '--max-size', 'big');
+  const asked = hosted.house.requests.length;
+  const refused = await house(hosted, '/', 'download', ...flags);
   expect(refused.status).toBe(1);
   expect(refused.stderr).toMatch(/^house: --max-size takes a number of megabytes; usage: house download/);
+  expect(hosted.house.requests.slice(asked).filter((request) => request.path === '/kit/local-copies/selection/read')).toEqual([]);
 });
 
 it("keeps the copied Rooms beneath the workspace kit.json names and none beneath Kit home", async () => {

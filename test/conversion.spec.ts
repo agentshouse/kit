@@ -3,8 +3,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { GIT_IDENTITY, hostKit } from './environment.ts';
-import { digest, house, manifestOf, serveRooms, upload } from './rooms.ts';
+import { GIT_IDENTITY, hostKit, type Hosted } from './environment.ts';
+import { digest, house, manifestOf, serveRooms, upload, type Room } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
 const COVER = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0, 8, 0x45, 0x78, 0x69, 0x66]);
@@ -116,4 +116,78 @@ it("converts a copy an earlier Kit kept as a Git repository once, keeping its wo
   expect(sent).toEqual([[{ op: 'write', path: '/rooms/notes/plan.md', content: 'one\ntwo\nmine, not pushed\n', base: plan }]]);
   expect(room.files.get('plan.md')!.content).toBe('one\ntwo\nmine, not pushed\n');
   expect(git(repository, 'log', '--format=%s')).toBe('House /rooms/notes\n');
+});
+
+async function earlierCopy(hosted: Hosted, room: Room, files: Record<string, string>, manifests: string[][]): Promise<string> {
+  for (const [path, content] of Object.entries(files)) await put(join(room.repository, path), content);
+  git(room.repository, 'init', '-q', '-b', 'main');
+  git(room.repository, 'add', '-A');
+  git(room.repository, 'commit', '-q', '-m', 'House /rooms/notes');
+  const commits = manifests.map((_, index) => String(index + 1).repeat(40));
+  const record = join(hosted.home, 'local-copies', 'rooms', `${room.ref}.json`);
+  await put(
+    record,
+    JSON.stringify({
+      key: `rooms/${room.ref}`,
+      room_ref: room.ref,
+      room_handle: room.handle,
+      repository: room.repository,
+      house: commits.at(-1),
+      position: String(room.position),
+      log_epoch: room.logEpoch,
+      write: [''],
+      protected: ['capture', 'collaboration'],
+      read_only: [],
+      manifests: Object.fromEntries(
+        manifests.map((pairs, index) => [commits[index], { parent: index === 0 ? null : commits[index - 1], files: Object.fromEntries(pairs.map((pair) => pair.split('='))) }]),
+      ),
+      moves: [],
+    }),
+  );
+  return record;
+}
+
+it('keeps a copy an earlier Kit kept unconverted when House does not answer a revision it reads, says why, and converts it on the next download', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  const plan = room.put('plan.md', 'one\n');
+  rooms.answered = [room];
+  const record = await earlierCopy(hosted, room, { 'plan.md': 'one\n' }, [[`plan.md=${plan}`]]);
+  room.put('plan.md', 'one, later\n');
+  await hosted.restart();
+  rooms.refusesReads = [
+    { status: 503, body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; call again shortly', retryable: true } } },
+  ];
+
+  expect(await house(hosted, '/', 'download')).toEqual({
+    status: 1,
+    stdout: '',
+    stderr:
+      'house: /rooms/notes: Kit could not convert the copy an earlier Kit kept yet (house_unavailable: House is unavailable; call again shortly); the next house download or house upload converts it\n',
+  });
+  expect(JSON.parse(await readFile(record, 'utf8'))).toHaveProperty('manifests');
+  expect(existsSync(join(room.repository, '.house'))).toBe(false);
+
+  expect(await house(hosted, '/', 'download')).toEqual({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n', stderr: '' });
+  expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('one, later\n');
+  expect(JSON.parse(await readFile(record, 'utf8'))).not.toHaveProperty('manifests');
+});
+
+it('takes as the base of a file edited on an older received revision the revision the earlier record holds closest to it, so House merges the change the copy never brought', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  const first = room.put('plan.md', 'one\ntwo\nthree\nfour\nfive\n');
+  const second = room.put('plan.md', 'ONE\ntwo\nthree\nfour\nfive\n');
+  rooms.answered = [room];
+  await earlierCopy(hosted, room, { 'plan.md': 'one\ntwo\nthree\nfour\nFIVE, mine\n' }, [[`plan.md=${first}`], [`plan.md=${second}`]]);
+  await hosted.restart();
+
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+
+  const sent = hosted.house.requests.filter((request) => request.path === '/kit/door/update').map((request) => (request.body as { changes: unknown }).changes);
+  expect(sent).toEqual([[{ op: 'write', path: '/rooms/notes/plan.md', content: 'one\ntwo\nthree\nfour\nFIVE, mine\n', base: first }]]);
+  expect(room.files.get('plan.md')!.content).toBe('ONE\ntwo\nthree\nfour\nFIVE, mine\n');
+  expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('ONE\ntwo\nthree\nfour\nFIVE, mine\n');
 });
