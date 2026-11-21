@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { HouseRefusal, kitAct } from './api.ts';
 import { KIT_RELEASE } from './clis.ts';
-import { takeOverEarlier } from './earlier.ts';
-import { kitHome, readEnrolment, storedConfiguration, writeConfiguration } from './home.ts';
+import { otherAccountKit, takeOverEarlier } from './earlier.ts';
+import { kitHome, readDisconnected, readEnrolment, storedConfiguration, writeConfiguration } from './home.ts';
 import { DEFAULT_HOUSE, enrol, placeConnection } from './login.ts';
 import { runningRelease } from './owner.ts';
 import { quoted } from './shell.ts';
@@ -29,7 +29,8 @@ async function standing(house: string, credential: string): Promise<boolean> {
     await kitAct(house, 'agents/desired/list', {}, credential);
     return true;
   } catch (error) {
-    if (!unanswered(error)) return false;
+    if (error instanceof HouseRefusal && error.status === 401) return false;
+    if (!unanswered(error)) throw error;
     process.stderr.write(`kit: House did not answer, so the stored credential stands: ${(error as Error).message}\n`);
     return true;
   }
@@ -73,17 +74,21 @@ export async function connect(argv: string[]): Promise<void> {
   await takeOverEarlier();
   settleHeld();
   const stored = await readEnrolment();
+  const other = stored === null && (await readDisconnected()) === null ? otherAccountKit() : null;
+  if (other !== null) throw new Error(`this computer's Kit runs as ${other}; run this command as ${other} to update it`);
   const house = values.house ?? stored?.house ?? DEFAULT_HOUSE;
   if (stored !== null && stored.house !== house) {
     throw new Error(`this account's Kit serves ${stored.house}; kit logout disconnects it from there, then this command connects it to ${house}`);
   }
-  const install = process.env.HOUSE_KIT_INSTALL_COMMAND;
-  if (install !== undefined && install !== '') await writeFile(join(kitHome(), 'install-command'), `${install}\n`, { mode: 0o600 });
   if (stored === null || !(await standing(stored.house, stored.credential))) {
     if (values.code === undefined) await enrol({ house, 'no-private': false });
     else await heldWhile(() => enrol({ house, code: values.code, 'no-private': false }));
     if ((await readEnrolment()) === null) throw new Error('kit login connected no Environment');
+  } else if (values.code !== undefined) {
+    process.stdout.write(`This computer is already connected as Environment ${stored.environment}; the login code was not used.\n`);
   }
+  const install = process.env.HOUSE_KIT_INSTALL_COMMAND;
+  if (install !== undefined && install !== '') await writeFile(join(kitHome(), 'install-command'), `${install}\n`, { mode: 0o600 });
   const settings = await storedConfiguration();
   if (settings.skills === undefined || settings.workspace === undefined) {
     await writeConfiguration({ skills: true, workspace: kitHome(), ...settings });
