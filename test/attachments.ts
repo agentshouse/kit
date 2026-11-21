@@ -72,5 +72,5 @@ export async function bridgeSockets(hosted: Hosted): Promise<string[]> {
 }
 
 export function posted(hosted: Hosted): unknown[] {
-  return hosted.transcripts.map((received) => [idOf(received, 'conversation'), idOf(received, 'message'), without(received, 'conversation', 'message')]);
+  return hosted.transcripts.map((received) => [idOf(received, 'conversation'), idOf(received, 'message'), without(received, 'op', 'conversation', 'message')]);
 }

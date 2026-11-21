@@ -330,11 +330,13 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });
   serveKitFiles(house, home);
-  house.route('POST', '/kit/conversations/credentials/issue', (request) => ({
-    body: { credential: conversationCredential(idOf(request, 'conversation')) },
-  }));
-  house.route('POST', '/kit/function-runs/credentials/issue', (request) => ({
-    body: { credential: runCredential(idOf(request, 'run')) },
+  house.route('POST', '/kit/agent_update.credentials_issue', (request) => ({
+    body: {
+      credential:
+        (request.body as { run?: unknown }).run === undefined
+          ? conversationCredential(idOf(request, 'conversation'))
+          : runCredential(idOf(request, 'run')),
+    },
   }));
   house.route('POST', '/kit/kits/report-restart', () => ({ body: {} }));
   house.route('POST', '/kit/local-copies/selection/read', () => ({ body: { local_copy: { rooms: [] } } }));
@@ -361,7 +363,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     turns.push(request);
     return hosted.activity();
   });
-  house.route('POST', '/kit/conversations/interaction/ask', (request) => {
+  house.route('POST', '/kit/agent_update.conversation_ask', (request) => {
     interactions.push(request);
     return { body: {} };
   });
@@ -377,7 +379,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     if ('mismatch' in finished) return { status: 409, body: { error: { code: 'upload_mismatch', message: MISMATCH, retryable: false } } };
     return { body: finished };
   });
-  house.route('POST', '/kit/transcripts/keep', (request) => {
+  house.route('POST', '/kit/agent_update.transcript_keep', (request) => {
     transcripts.push(request);
     return { body: {} };
   });

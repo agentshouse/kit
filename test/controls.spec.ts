@@ -127,10 +127,10 @@ it('refuses an open and returns the result of the kill at once while House holds
     release = resolve;
   });
   onTestFinished(() => release({ status: 503, body: {} }));
-  hosted.house.route('POST', '/kit/conversations/credentials/issue', () => held);
+  hosted.house.route('POST', '/kit/agent_update.credentials_issue', () => held);
   hosted.call({ kind: 'open' });
   const open = lastCall();
-  await until(() => hosted.house.requests.find((request) => request.path === '/kit/conversations/credentials/issue'));
+  await until(() => hosted.house.requests.find((request) => request.path === '/kit/agent_update.credentials_issue'));
 
   hosted.call({ kind: 'kill' });
 
@@ -299,7 +299,7 @@ it.each([0, 2500])(
   'drops a question the CLI stops waiting on, its report %i ms on its way, so the turn no longer counts as waiting and its answer goes to the CLI as a new message',
   async (delay) => {
     const hosted = await hostKit();
-    hosted.house.route('POST', '/kit/conversations/interaction/ask', async (request) => {
+    hosted.house.route('POST', '/kit/agent_update.conversation_ask', async (request) => {
       // House takes the report as late as the case names.
       await new Promise((resolve) => setTimeout(resolve, delay));
       hosted.interactions.push(request);

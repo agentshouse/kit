@@ -443,7 +443,7 @@ it("prepares a new conversation's first message, reading what it links and House
     [...agentInstructions(), '', 'Be useful.'].join('\n'),
     text,
   ]);
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue')).toHaveLength(1);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/agent_update.credentials_issue')).toHaveLength(1);
 });
 
 it("prompts a first message with House's instructions through the CLI it starts itself when its open's start failed while it read them", async () => {
@@ -461,7 +461,7 @@ it("prompts a first message with House's instructions through the CLI it starts 
     return { body: { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: '' }] } } };
   });
   let credentials = 0;
-  hosted.house.route('POST', '/kit/conversations/credentials/issue', async (request) => {
+  hosted.house.route('POST', '/kit/agent_update.credentials_issue', async (request) => {
     if (credentials++ === 1) await released;
     return { body: { credential: conversationCredential(idOf(request, 'conversation')) } };
   });
@@ -809,7 +809,7 @@ it("refuses a conversation whose connection cannot open in the Kit's words, and 
 it('opens a conversation whose credential House refused as retryable while it restarted, once House answers it', async () => {
   const hosted = await hostKit();
   let refusals = 2;
-  hosted.house.route('POST', '/kit/conversations/credentials/issue', (request) =>
+  hosted.house.route('POST', '/kit/agent_update.credentials_issue', (request) =>
     refusals-- > 0
       ? { status: 503, body: { error: { code: 'house_overloaded', retryable: true } } }
       : { body: { credential: conversationCredential(idOf(request, 'conversation')) } },
@@ -821,7 +821,7 @@ it('opens a conversation whose credential House refused as retryable while it re
   expect(result).toEqual({ provider_session_id: expect.any(String) });
   const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
   expect(result).toEqual({ provider_session_id: opened.sessionId });
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue')).toHaveLength(3);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/agent_update.credentials_issue')).toHaveLength(3);
 });
 
 it.each([
@@ -829,7 +829,7 @@ it.each([
   [409, 'conversation_historical', "this conversation's Agent is retired, so it cannot start"],
 ])('refuses a conversation House answers %s %s for in its own words, without asking again', async (status, code, refused) => {
   const hosted = await hostKit();
-  hosted.house.route('POST', '/kit/conversations/credentials/issue', () => ({
+  hosted.house.route('POST', '/kit/agent_update.credentials_issue', () => ({
     status,
     body: { error: { code, retryable: false } },
   }));
@@ -837,7 +837,7 @@ it.each([
   hosted.call({ kind: 'open' });
 
   expect(await hosted.result(lastCall())).toEqual({ refused });
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue')).toHaveLength(1);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/agent_update.credentials_issue')).toHaveLength(1);
 });
 
 const KINDS = ['codex-acp', 'claude-agent-acp', 'grok-build'];
@@ -1420,7 +1420,7 @@ it('ends the running process, every process it started and its bridge for an ope
   await until(() => !alive(job.spawned as number) && !alive(job.clean as number));
   expect(alive(sessions[1]!.pid as number)).toBe(true);
   expect(processes(hosted)).toEqual([true, false, true]);
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/conversations/credentials/issue')).toHaveLength(2);
+  expect(hosted.house.requests.filter((request) => request.path === '/kit/agent_update.credentials_issue')).toHaveLength(2);
   hosted.call({ kind: 'message', provider_session_id: old, text: '@say after\n@exit 3', first: false });
   await ends(hosted, 2);
   hosted.call({ kind: 'message', provider_session_id: old, text: '@say again', first: false });
