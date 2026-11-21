@@ -11,14 +11,14 @@ import { received } from './bridge.ts';
 import { Conversations } from './conversations.ts';
 import { DEFAULT_MAX_SIZE, LocalCopies, type Answered } from './copies.ts';
 import { restart, restartPlaced } from './end.ts';
-import { agentBase, enrolled, kitHome, ownerSocket, readEnrolment, recordPlannedRestart, takePlannedRestart } from './home.ts';
+import { agentBase, enrolled, kitHome, ownerSocket, readEnrolment, recordPlannedRestart, roomsFolder, takePlannedRestart } from './home.ts';
 import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
 import { holdOwner } from './owner.ts';
 import { killDescendants } from './scope.ts';
 import { removeInputs, Scripts } from './scripts.ts';
-import { applySettings, enrolledRoutes, resumeWorkspaceMove, type Applied, type SettingsChange } from './settings.ts';
+import { applySettings, enrolledRoutes, launchDirectories, moveIntoHouse, resumeWorkspaceMove, type Applied, type SettingsChange } from './settings.ts';
 import { quoted } from './shell.ts';
 import { SignIns } from './sign-in.ts';
 import { placeSkillSet } from './skills.ts';
@@ -99,7 +99,8 @@ function connected(): Promise<void> {
 async function started(): Promise<void> {
   await connected();
   await placeSkillSet((await readEnrolment())!.house);
-  await mkdir(agentBase(), { recursive: true });
+  await mkdir(agentBase(), { recursive: true, mode: 0o700 });
+  await mkdir(roomsFolder(), { recursive: true, mode: 0o700 });
   await rm(join(kitHome(), 'shim'), { recursive: true, force: true });
   await installShim(codexLauncher(), 'codex-main');
 }
@@ -108,10 +109,12 @@ export async function resident(): Promise<void> {
   await moveEarlier();
   await mkdir(kitHome(), { recursive: true, mode: 0o700 });
   const lock = await holdOwner();
-  const planned = takePlannedRestart();
   await resumeWorkspaceMove();
-  const copies = new LocalCopies(house);
+  const copies = new LocalCopies(house, launchDirectories);
   await copies.load();
+  const moved = await moveIntoHouse(copies);
+  if (moved !== null) restart(moved);
+  const planned = takePlannedRestart();
   let running: { conversations: Conversations; agents: Agents; calls: Calls; stop(then: () => void): Promise<void> } | null = null;
   let settings: Promise<unknown> = Promise.resolve();
   const settle = (change: SettingsChange): Promise<Applied> => {

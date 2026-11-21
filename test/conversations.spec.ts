@@ -165,7 +165,7 @@ it('opens a conversation with the CLI its route named after House moved that Age
   const hosted = await hostKit();
   const hold = await installHeld(hosted);
   const agentId = `agent-${randomUUID()}`;
-  const directory = join(hosted.home, 'agents', agentId);
+  const directory = join(hosted.workspace, 'agents', agentId);
   const route = {
     agent_id: agentId,
     kind: 'grok-build',
@@ -277,10 +277,10 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   ]);
 });
 
-it("creates an absent default launch directory beneath Kit home's agents before it opens the session there", async () => {
+it("creates an absent default launch directory beneath the workspace's agents before it opens the session there", async () => {
   const agentId = `agent-${randomUUID()}`;
   const home = await temporaryHome();
-  const directory = join(home, 'agents', agentId);
+  const directory = join(accountOf(home), 'house', 'agents', agentId);
   const hosted = await hostKit([{ agent_id: agentId, working_directory: directory }], { home, skills: false });
 
   hosted.call({ kind: 'open', agent_id: agentId });

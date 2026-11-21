@@ -230,6 +230,7 @@ export interface Hosted {
   house: House;
   home: string;
   workspace: string;
+  environment: Record<string, string>;
   kit: KitRun;
   connection: KitConnection;
   workingDirectory: string;
@@ -284,9 +285,10 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }),
   );
   if (hosting.home === undefined || hosting.skills !== undefined || hosting.workspace !== undefined) {
+    const held = JSON.parse(await readFile(join(home, 'kit.json'), 'utf8').catch(() => '{}')) as Record<string, unknown>;
     await writeFile(
       join(home, 'kit.json'),
-      JSON.stringify({ skills: hosting.skills ?? false, ...(hosting.workspace === undefined ? {} : { workspace: hosting.workspace }) }),
+      JSON.stringify({ ...held, skills: hosting.skills ?? false, ...(hosting.workspace === undefined ? {} : { workspace: hosting.workspace }) }),
     );
   }
   const resolved = routes.map((route, index) => ({
@@ -400,7 +402,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const hosted: Hosted = {
     house,
     home,
-    workspace: hosting.workspace ?? home,
+    workspace: hosting.workspace ?? join(accountOf(home), 'house'),
+    environment,
     kit,
     connection,
     workingDirectory,

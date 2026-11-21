@@ -328,7 +328,7 @@ it("sweeps the staging its Kit left when stopped during a copy as it starts agai
   const room = rooms.room('large');
   room.put('a.md', 'a\n');
   rooms.expired.add(room.ref);
-  const copies = join(workspace, 'local-copies', 'rooms');
+  const copies = join(workspace, 'rooms');
   const staged = async () => (await readdir(copies).catch(() => [])).filter((name) => name.startsWith('.'));
   const release = hosted.store.holdReads();
 
@@ -356,7 +356,7 @@ it('removes what a copy staged when its chunks cannot be read', async () => {
 
   expect((await rooms.download([room])).status).toBe(1);
 
-  expect(await readdir(join(workspace, 'local-copies', 'rooms'))).toEqual([]);
+  expect(await readdir(join(workspace, 'rooms'))).toEqual([]);
 });
 
 it('asks the list again when a chunk address expired, and downloads only the chunks it lacks', async () => {
@@ -420,7 +420,7 @@ it("copies a Room larger than the former bundle limit with the Kit's heap capped
   const copying = await rooms.download([room]);
   expect({ ...copying, kit: hosted.kit.stderr() }).toMatchObject({ stderr: '', kit: '', status: 0 });
 
-  const repository = join(workspace, 'local-copies', 'rooms', room.ref);
+  const repository = join(workspace, 'rooms', room.handle);
   const written = await stat(join(repository, 'd/0.md'));
   expect(written.size * documents).toBeGreaterThan(FORMER_BUNDLE_BYTES);
   expect(tracked(room, repository)).toHaveLength(documents);

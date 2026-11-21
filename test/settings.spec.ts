@@ -25,9 +25,14 @@ function git(cwd: string, ...args: string[]): string {
   return ran.stdout;
 }
 
-async function filled(home: string, workspace: string): Promise<void> {
+function houseOf(home: string): string {
+  return join(accountOf(home), 'house');
+}
+
+async function filled(home: string, workspace = houseOf(home)): Promise<void> {
+  await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false, workspace }));
   await put(join(workspace, 'agents', 'agent-1', 'notes.md'), 'kept\n');
-  const repository = join(workspace, 'local-copies', 'rooms', 'r_notes');
+  const repository = join(workspace, 'rooms', 'notes');
   await put(join(repository, 'plan.md'), 'plan\n');
   git(repository, 'init', '--quiet');
   git(repository, 'add', 'plan.md');
@@ -41,7 +46,7 @@ async function filled(home: string, workspace: string): Promise<void> {
 
 async function followed(home: string, workspace: string): Promise<void> {
   expect(await readFile(join(workspace, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
-  const repository = join(workspace, 'local-copies', 'rooms', 'r_notes');
+  const repository = join(workspace, 'rooms', 'notes');
   expect(git(repository, 'log', '--format=%s')).toBe('the plan\n');
   expect(git(repository, 'status', '--porcelain')).toBe('?? draft.md\n');
   expect(await readFile(join(repository, 'draft.md'), 'utf8')).toBe('not committed\n');
@@ -49,7 +54,8 @@ async function followed(home: string, workspace: string): Promise<void> {
   expect(record.repository).toBe(repository);
   expect(record.moves[0]!.worktree).toBe(repository);
   expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toMatchObject({ workspace });
-  await absent(join(home, 'agents'));
+  await absent(join(houseOf(home), 'agents'));
+  await absent(join(houseOf(home), 'rooms'));
   expect(await readdir(join(home, 'local-copies', 'rooms'))).toEqual(['r_notes.json']);
 }
 
@@ -146,9 +152,9 @@ it('changes a setting through a Kit process that waits for a login', async () =>
 
 it('refuses to move the workspace of a Kit logged out of its Environment, which cannot tell the folders its Agents’ owners chose, changing nothing', async () => {
   const home = await temporaryHome();
-  await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false, workspace: home }));
+  await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false, workspace: houseOf(home) }));
   await writeFile(join(home, 'disconnected.json'), JSON.stringify({ house: HOUSE, environment: 'environment-one' }));
-  await put(join(home, 'agents', 'reader', 'chosen.md'), 'chosen\n');
+  await put(join(houseOf(home), 'agents', 'reader', 'chosen.md'), 'chosen\n');
   const workspace = join(await temporaryDirectory(), 'workspace');
 
   expect(await kitSettings(home, 'workspace', workspace)).toEqual({
@@ -156,22 +162,22 @@ it('refuses to move the workspace of a Kit logged out of its Environment, which 
     stdout: '',
     stderr: "kit: Kit is logged out, so it cannot tell which Agents' folders their owners chose; run kit login, then change its workspace\n",
   });
-  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: false, workspace: home });
-  expect(await readFile(join(home, 'agents', 'reader', 'chosen.md'), 'utf8')).toBe('chosen\n');
+  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: false, workspace: houseOf(home) });
+  expect(await readFile(join(houseOf(home), 'agents', 'reader', 'chosen.md'), 'utf8')).toBe('chosen\n');
   await absent(workspace);
 });
 
 it('declares its settings and changes placing the Skill set for a settings Kit call and for kit settings, declaring them again', async () => {
   const hosted = await hostKit();
-  expect(hosted.reports[0]).toMatchObject({ settings: { skills: false, workspace: hosted.home } });
+  expect(hosted.reports[0]).toMatchObject({ settings: { skills: false, workspace: hosted.workspace } });
 
   const call = callSettings(hosted, { skills: true });
 
-  expect(await hosted.result(call)).toEqual({ settings: { skills: true, workspace: hosted.home } });
+  expect(await hosted.result(call)).toEqual({ settings: { skills: true, workspace: hosted.workspace } });
   await lastReport(hosted, (report) => (report.settings as { skills: boolean }).skills);
   expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ origin: hosted.house.origin });
 
-  expect(await kitSettings(hosted.home, 'skills', 'off')).toEqual({ status: 0, stdout: `skills off\nworkspace ${hosted.home}\n`, stderr: '' });
+  expect(await kitSettings(hosted.home, 'skills', 'off')).toEqual({ status: 0, stdout: `skills off\nworkspace ${hosted.workspace}\n`, stderr: '' });
   await lastReport(hosted, (report) => !(report.settings as { skills: boolean }).skills);
   await absent(join(hosted.home, 'skill-set.json'));
   expect(alive(hosted.kit.pid)).toBe(true);
@@ -179,7 +185,7 @@ it('declares its settings and changes placing the Skill set for a settings Kit c
 
 it('moves the workspace for kit settings within one filesystem, keeping a Local copy’s history and uncommitted files, and ends so its supervisor starts it on the new root', async () => {
   const workspace = join(await temporaryDirectory(), 'workspace');
-  const hosted = await hostKit([{}], { prepare: (home) => filled(home, home) });
+  const hosted = await hostKit([{}], { prepare: (home) => filled(home) });
   expect((await stat(hosted.home)).dev).toBe((await stat(dirname(workspace))).dev);
 
   expect(await kitSettings(hosted.home, 'workspace', workspace)).toEqual({ status: 0, stdout: `skills off\nworkspace ${workspace}\n`, stderr: '' });
@@ -193,7 +199,7 @@ it('moves the workspace for kit settings within one filesystem, keeping a Local 
 
 it('moves the workspace for a settings Kit call across filesystems, copying and checking before the old folders go, and answers the call House sends again once it starts on the new root', async () => {
   const workspace = await otherFilesystem();
-  const hosted = await hostKit([{}], { prepare: (home) => filled(home, home) });
+  const hosted = await hostKit([{}], { prepare: (home) => filled(home) });
   expect((await stat(hosted.home)).dev).not.toBe((await stat('/dev/shm')).dev);
 
   const call = callSettings(hosted, { workspace });
@@ -210,29 +216,30 @@ it('moves the workspace for a settings Kit call across filesystems, copying and 
 it('keeps where they are the folders inside the workspace its owner chose for an Agent, and the Local copy an Agent works in with its record, moving every other', async () => {
   const workspace = join(await temporaryDirectory(), 'workspace');
   const home = await temporaryHome();
+  const house = houseOf(home);
   const routes = [
-    { working_directory: join(home, 'agents', 'reader') },
-    { agent_id: 'agent-2', working_directory: join(home, 'agents', 'agent-2') },
-    { agent_id: 'agent-3', working_directory: join(home, 'local-copies', 'rooms', 'r_notes') },
+    { working_directory: join(house, 'agents', 'reader') },
+    { agent_id: 'agent-2', working_directory: join(house, 'agents', 'agent-2') },
+    { agent_id: 'agent-3', working_directory: join(house, 'rooms', 'notes') },
   ];
   const hosted = await hostKit(routes, {
     home,
     skills: false,
     prepare: async () => {
-      await filled(home, home);
-      await put(join(home, 'agents', 'reader', 'chosen.md'), 'chosen\n');
-      await put(join(home, 'agents', 'agent-2', 'default.md'), 'default\n');
+      await filled(home);
+      await put(join(house, 'agents', 'reader', 'chosen.md'), 'chosen\n');
+      await put(join(house, 'agents', 'agent-2', 'default.md'), 'default\n');
     },
   });
 
   const call = callSettings(hosted, { workspace });
 
   expect(await hosted.kit.exited).toBe(1);
-  expect(await readFile(join(hosted.home, 'agents', 'reader', 'chosen.md'), 'utf8')).toBe('chosen\n');
+  expect(await readFile(join(house, 'agents', 'reader', 'chosen.md'), 'utf8')).toBe('chosen\n');
   expect(await readFile(join(workspace, 'agents', 'agent-2', 'default.md'), 'utf8')).toBe('default\n');
   expect(await readFile(join(workspace, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
   await absent(join(workspace, 'agents', 'reader'));
-  const repository = join(hosted.home, 'local-copies', 'rooms', 'r_notes');
+  const repository = join(house, 'rooms', 'notes');
   expect(git(repository, 'status', '--porcelain')).toBe('?? draft.md\n');
   const record = JSON.parse(await readFile(join(hosted.home, 'local-copies', 'rooms', 'r_notes.json'), 'utf8')) as { repository: string };
   expect(record.repository).toBe(repository);
@@ -245,9 +252,9 @@ it('moves every folder back and answers why when a move across filesystems fails
   const workspace = await otherFilesystem();
   const hosted = await hostKit([{}], {
     prepare: async (home) => {
-      await filled(home, home);
-      await put(join(home, 'local-copies', 'rooms', 'r_notes', 'unreadable.md'), 'secret\n');
-      await chmod(join(home, 'local-copies', 'rooms', 'r_notes', 'unreadable.md'), 0o000);
+      await filled(home);
+      await put(join(houseOf(home), 'rooms', 'notes', 'unreadable.md'), 'secret\n');
+      await chmod(join(houseOf(home), 'rooms', 'notes', 'unreadable.md'), 0o000);
     },
   });
   const settings = await readFile(join(hosted.home, 'kit.json'), 'utf8');
@@ -255,9 +262,9 @@ it('moves every folder back and answers why when a move across filesystems fails
   const call = callSettings(hosted, { workspace });
 
   expect(await hosted.kit.exited).toBe(1);
-  await chmod(join(hosted.home, 'local-copies', 'rooms', 'r_notes', 'unreadable.md'), 0o600);
-  expect(await readFile(join(hosted.home, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
-  expect(git(join(hosted.home, 'local-copies', 'rooms', 'r_notes'), 'log', '--format=%s')).toBe('the plan\n');
+  await chmod(join(hosted.workspace, 'rooms', 'notes', 'unreadable.md'), 0o600);
+  expect(await readFile(join(hosted.workspace, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
+  expect(git(join(hosted.workspace, 'rooms', 'notes'), 'log', '--format=%s')).toBe('the plan\n');
   expect(await readFile(join(hosted.home, 'kit.json'), 'utf8')).toBe(settings);
   await absent(join(hosted.home, 'workspace-move.json'));
   expect(await readdir(workspace).catch(() => [])).toEqual([]);
@@ -265,16 +272,16 @@ it('moves every folder back and answers why when a move across filesystems fails
   callSettings(hosted, { workspace }, call);
   const answered = (await hosted.result(call)) as { refused: string };
   expect(answered.refused).toMatch(new RegExp(`^the workspace could not be moved to ${workspace}: .*EACCES`, 'u'));
-  expect(await readFile(join(hosted.home, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
+  expect(await readFile(join(hosted.workspace, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
 });
 
 it('finishes a move an ended Kit process left unfinished when it starts, from what it finds', async () => {
   const workspace = await otherFilesystem();
   const hosted = await hostKit([{}], {
     prepare: async (home) => {
-      await filled(home, home);
+      await filled(home);
       await put(join(workspace, 'agents', 'agent-1.moving', 'notes.md'), 'ke');
-      await writeFile(join(home, 'workspace-move.json'), JSON.stringify({ from: home, to: workspace }));
+      await writeFile(join(home, 'workspace-move.json'), JSON.stringify({ from: houseOf(home), to: workspace }));
     },
   });
 
@@ -284,18 +291,22 @@ it('finishes a move an ended Kit process left unfinished when it starts, from wh
   expect(hosted.reports[0]).toMatchObject({ agent_base: join(workspace, 'agents'), settings: { skills: false, workspace } });
 });
 
-it('refuses a workspace that already holds an agents or local-copies folder, changing nothing', async () => {
+it('refuses a workspace that already holds an agents or rooms folder, changing nothing', async () => {
   const taken = join(await temporaryDirectory(), 'taken');
-  await put(join(taken, 'local-copies', 'mine.md'), 'mine\n');
-  const hosted = await hostKit([{}], { prepare: (home) => filled(home, home) });
+  await put(join(taken, 'rooms', 'mine.md'), 'mine\n');
+  const hosted = await hostKit([{}], { prepare: (home) => filled(home) });
   const settings = await readFile(join(hosted.home, 'kit.json'), 'utf8');
 
   const call = callSettings(hosted, { workspace: taken });
 
-  expect(await hosted.result(call)).toEqual({ refused: `${taken} already holds ${join(taken, 'local-copies')}` });
+  expect(await hosted.result(call)).toEqual({ refused: `${taken} already holds ${join(taken, 'rooms')}` });
   expect(await readFile(join(hosted.home, 'kit.json'), 'utf8')).toBe(settings);
-  expect(await readdir(taken)).toEqual(['local-copies']);
-  expect(await readFile(join(hosted.home, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
+  expect(await readdir(taken)).toEqual(['rooms']);
+  expect(await readFile(join(hosted.workspace, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
+  const agents = join(await temporaryDirectory(), 'agents-taken');
+  await put(join(agents, 'agents', 'mine.md'), 'mine\n');
+  expect(await hosted.result(callSettings(hosted, { workspace: agents }))).toEqual({ refused: `${agents} already holds ${join(agents, 'agents')}` });
+  expect(await readFile(join(hosted.workspace, 'rooms', 'notes', 'plan.md'), 'utf8')).toBe('plan\n');
   await settle();
   expect(alive(hosted.kit.pid)).toBe(true);
 });
@@ -366,7 +377,7 @@ it('refuses to move the workspace while a turn is open, saying an Agent is worki
 
   expect(await hosted.result(call)).toEqual({ refused: 'an Agent is working; change the workspace once its turn ends' });
   await absent(workspace);
-  expect(JSON.parse(await readFile(join(hosted.home, 'kit.json'), 'utf8'))).not.toHaveProperty('workspace');
+  expect(JSON.parse(await readFile(join(hosted.home, 'kit.json'), 'utf8'))).toEqual({ skills: false, workspace: hosted.workspace });
   await writeFile(join(hosted.home, 'go'), '');
   await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect(alive(hosted.kit.pid)).toBe(true);
