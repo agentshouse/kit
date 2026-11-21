@@ -196,7 +196,7 @@ it('ends with a failure when a start step after its claim fails, and leaves the 
   const failed = runKit(['resident'], { HOME: accountOf(home) });
 
   expect(await ended(failed)).toBe(1);
-  expect(failed.stderr()).toBe(`kit: ENOTDIR: not a directory, lstat '${join(workspace, 'agents')}'\n`);
+  expect(failed.stderr()).toBe(`kit: ENOTDIR: not a directory, mkdir '${join(workspace, 'agents')}'\n`);
   await writeFile(join(home, 'kit.json'), JSON.stringify({}));
   runKit(['resident'], { HOME: accountOf(home) });
   await until(() => house.connections[0]);

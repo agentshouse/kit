@@ -5,10 +5,10 @@ import { parseArgs } from 'node:util';
 import { HouseRefusal, kitAct } from './api.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { otherAccountKit, takeOverEarlier } from './earlier.ts';
-import { houseFolder, kitHome, readDisconnected, readEnrolment, storedConfiguration, writeConfiguration } from './home.ts';
+import { kitHome, readDisconnected, readEnrolment, storedConfiguration, writeConfiguration } from './home.ts';
 import { DEFAULT_HOUSE, enrol, placeConnection } from './login.ts';
 import { runningRelease } from './owner.ts';
-import { houseRoot } from './settings.ts';
+import { HOUSE_NOT_KITS, houseRoot } from './settings.ts';
 import { quoted } from './shell.ts';
 import { defineSupervisor, launcher, supervise, systemd } from './supervisor.ts';
 
@@ -76,7 +76,7 @@ export async function connect(argv: string[]): Promise<void> {
   settleHeld();
   const held = await storedConfiguration();
   const workspace = held.workspace ?? (await houseRoot());
-  if (workspace === null) throw new Error(`${houseFolder()} holds what is not Kit's; move it elsewhere, then run this command again`);
+  if (workspace === null) throw new Error(HOUSE_NOT_KITS);
   const stored = await readEnrolment();
   const other = stored === null && (await readDisconnected()) === null ? otherAccountKit() : null;
   if (other !== null) throw new Error(`this computer's Kit runs as ${other}; run this command as ${other} to update it`);
