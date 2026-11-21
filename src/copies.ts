@@ -579,13 +579,15 @@ class Applying {
 export class LocalCopies {
   readonly owner: Caller;
   private readonly house: House;
+  private readonly launched: () => Promise<readonly string[]>;
   private readonly copies = new Map<string, Held>();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly waiting = new Set<string>();
   private answering: Promise<unknown> = Promise.resolve();
 
-  constructor(house: House) {
+  constructor(house: House, launched: () => Promise<readonly string[]> = async () => []) {
     this.house = house;
+    this.launched = launched;
     this.owner = {
       key: 'owner',
       submit: async (operation, changes) => {
@@ -663,6 +665,7 @@ export class LocalCopies {
     const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
     const synced = new Map(answer.rooms.map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
     return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
+      const chosen = await this.launched();
       const said: string[] = [];
       let refused = false;
       const mark = refreshing ? 'said' : 'unsaid';
@@ -682,7 +685,7 @@ export class LocalCopies {
           }
           const { unfollowed, ...followed } = held;
           const named = unfollowed === undefined && held.room_handle === handle ? held : await this.save({ ...followed, room_handle: handle });
-          current.push(await this.renamed(named));
+          current.push(await this.renamed(named, chosen));
         } catch (error) {
           refused = true;
           said.push(`${rootOf(handle)}: ${causeOf(error)}`);
@@ -696,7 +699,7 @@ export class LocalCopies {
           const authority = authorities.find((entry) => `${ROOMS}${entry.room_ref}` === key);
           try {
             if (authority === undefined) throw new Error('House serves nothing of it to copy');
-            said.push(await this.copied({ key, handle, authority }, fetching));
+            said.push(await this.copied({ key, handle, authority }, fetching, chosen));
           } catch (error) {
             if (error instanceof NotReady) {
               unready.push(...error.rooms);
@@ -825,8 +828,9 @@ export class LocalCopies {
     return join(roomsFolder(), `${stagingPrefix()}${randomUUID()}`);
   }
 
-  private async setAside(path: string): Promise<void> {
+  private async setAside(path: string, chosen: readonly string[]): Promise<void> {
     if ((await found(path)) === null) return;
+    if (chosen.some((folder) => within(folder, path))) throw new Error(`${path} holds a folder an Agent works in, so Kit leaves it as it is`);
     const kept = await keptName(path);
     await rename(path, kept);
     for (const copy of [...this.copies.values()]) if (within(copy.repository, path)) await this.save(rerooted(copy, path, kept));
@@ -846,7 +850,7 @@ export class LocalCopies {
       let target: string;
       if (copy !== undefined && copy.unfollowed === undefined) {
         target = join(rooms, copy.room_handle);
-        await this.setAside(target);
+        await this.setAside(target, kept);
       } else {
         target = await keptName(join(rooms, basename(source)));
       }
@@ -861,17 +865,18 @@ export class LocalCopies {
     return { moved: moving.length > 0, kept: staying };
   }
 
-  private async renamed<T extends Held>(copy: T): Promise<T> {
+  private async renamed<T extends Held>(copy: T, chosen: readonly string[]): Promise<T> {
     const folder = join(roomsFolder(), copy.room_handle);
     if (dirname(copy.repository) !== roomsFolder() || basename(copy.repository) === copy.room_handle) return copy;
-    await this.setAside(folder);
+    if (chosen.some((launch) => within(launch, copy.repository))) return copy;
+    await this.setAside(folder, chosen);
     await rename(copy.repository, folder);
     return this.save(rerooted(copy, copy.repository, folder));
   }
 
-  private async materialized({ key, handle, authority }: Wanted, whole: (directory: string) => Promise<Whole>): Promise<Copy> {
+  private async materialized({ key, handle, authority }: Wanted, whole: (directory: string) => Promise<Whole>, chosen: readonly string[]): Promise<Copy> {
     const repository = join(roomsFolder(), handle);
-    await this.setAside(repository);
+    await this.setAside(repository, chosen);
     const folder = join(dirname(repository), `${stagingPrefix()}${randomUUID()}`);
     const chunks = this.chunksFolder();
     const scope = { write: authority.operations.write, protected: authority.protected_paths };
@@ -917,7 +922,7 @@ export class LocalCopies {
     return this.save(copy);
   }
 
-  private async copied(wanted: Wanted, fetching: Fetching): Promise<string> {
+  private async copied(wanted: Wanted, fetching: Fetching, chosen: readonly string[]): Promise<string> {
     const { handle, authority } = wanted;
     const root = rootOf(handle);
     let answer: { authorities: Enumerated[] } | null = null;
@@ -937,11 +942,11 @@ export class LocalCopies {
     if (answer !== null && view === undefined) throw new Error('House serves nothing of it to copy');
     if (view !== undefined && view.next === undefined) {
       const entries = view.changes.filter((change): change is Entered => !('removed' in change));
-      const copy = await this.materialized(wanted, async () => ({ position: view.position, log_epoch: view.log_epoch, entries }));
+      const copy = await this.materialized(wanted, async () => ({ position: view.position, log_epoch: view.log_epoch, entries }), chosen);
       await this.attached(copy, this.owner, fetching, { touched: new Map<string, string | null>(), kept: new Set<string>() });
       return `${root}: copied to ${copy.repository}`;
     }
-    const copy = await this.materialized(wanted, (directory) => this.chunked(root, authority.room_ref, directory));
+    const copy = await this.materialized(wanted, (directory) => this.chunked(root, authority.room_ref, directory), chosen);
     const report = { touched: new Map<string, string | null>(), kept: new Set<string>() };
     const [caught] = await this.caughtUp([copy], true, this.owner, fetching, new Map([[copy.key, report]]));
     await this.attached(caught!, this.owner, fetching, report);
