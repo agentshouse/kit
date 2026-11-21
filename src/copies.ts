@@ -25,7 +25,7 @@ import {
 import { ownAgentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
-import { keptName, present as found, rerooted, within } from './workspace.ts';
+import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
 
 const ROOMS = 'rooms/';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
@@ -830,6 +830,35 @@ export class LocalCopies {
     const kept = await keptName(path);
     await rename(path, kept);
     for (const copy of [...this.copies.values()]) if (within(copy.repository, path)) await this.save(rerooted(copy, path, kept));
+  }
+
+  async laidOut(earlier: string, rooms: string, kept: readonly string[]): Promise<{ moved: boolean; kept: string[] }> {
+    const folders = (await readdir(earlier, { withFileTypes: true }).catch(() => []))
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => join(earlier, entry.name));
+    const held = (folder: string) => [...this.copies.values()].find((copy) => copy.repository === folder);
+    const followed = (folder: string) => held(folder)?.unfollowed === undefined && held(folder) !== undefined;
+    const staying = folders.filter((folder) => kept.some((chosen) => within(chosen, folder)));
+    const moving = folders.filter((folder) => !staying.includes(folder));
+    await mkdir(rooms, { recursive: true, mode: 0o700 });
+    for (const source of [...moving.filter(followed), ...moving.filter((folder) => !followed(folder))]) {
+      const copy = held(source);
+      let target: string;
+      if (copy !== undefined && copy.unfollowed === undefined) {
+        target = join(rooms, copy.room_handle);
+        await this.setAside(target);
+      } else {
+        target = await keptName(join(rooms, basename(source)));
+      }
+      await carried(source, target);
+      if (copy !== undefined) await this.save(rerooted(copy, source, target));
+    }
+    for (const name of await readdir(earlier).catch(() => [])) {
+      if (name.startsWith(stagingPrefix())) await rm(join(earlier, name), { recursive: true, force: true });
+    }
+    await removeFolder(earlier);
+    await removeFolder(dirname(earlier));
+    return { moved: moving.length > 0, kept: staying };
   }
 
   private async renamed<T extends Held>(copy: T): Promise<T> {

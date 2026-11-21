@@ -1,10 +1,10 @@
 import type { DesiredAgentRoute, KitSettings } from '@agentshouse/kit-wire';
 import { constants } from 'node:fs';
-import { access, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { access, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { house } from './api.ts';
 import { KIT_RELEASE } from './clis.ts';
-import { stagingPrefix } from './copies.ts';
+import { LocalCopies } from './copies.ts';
 import {
   earlierPrefix,
   enrolled,
@@ -22,7 +22,7 @@ import {
 } from './home.ts';
 import { askOwner, holdOwner } from './owner.ts';
 import { placeSkillSet } from './skills.ts';
-import { followRoot, keptName, merged, moved, present, removeFolder, within, type Placement } from './workspace.ts';
+import { followRoot, merged, present, within, type Placement } from './workspace.ts';
 
 export interface SettingsChange {
   skills?: boolean;
@@ -45,10 +45,10 @@ interface Move {
 
 const FOLDERS = ['agents', 'rooms'] as const;
 const RECORDS = join('local-copies', 'rooms');
-const EARLIER_COPIES = join('local-copies', 'rooms');
 const MOVE = 'workspace-move.json';
 const WORKING = 'an Agent is working; change the workspace once its turn ends';
-const LOGGED_OUT = "Kit is logged out, so it cannot tell which Agents' folders their owners chose; run kit login, then change its workspace";
+const UNCHOSEN = "Kit is logged out, so it cannot tell which Agents' folders their owners chose";
+const LOGGED_OUT = `${UNCHOSEN}; run kit login, then change its workspace`;
 export const SETTINGS_USAGE = 'usage: kit settings [skills on|off | workspace <absolute path>]';
 export async function enrolledRoutes(): Promise<readonly DesiredAgentRoute[] | null> {
   if (enrolled()) return (await house.act('agents/desired/list', {})).routes;
@@ -140,11 +140,7 @@ export async function resumeWorkspaceMove(): Promise<void> {
   if (failure !== null) process.stderr.write(`kit: the workspace could not be moved to ${move.to}: ${failure}\n`);
 }
 
-interface Recorded {
-  repository: string;
-  room_handle: string;
-  unfollowed?: string;
-}
+export const HOUSE_NOT_KITS = `${houseFolder()} holds what is not Kit's; move it elsewhere, then run this command again`;
 
 async function free(folder: string, from: string): Promise<boolean> {
   if ((await present(folder)) !== null) {
@@ -154,14 +150,10 @@ async function free(folder: string, from: string): Promise<boolean> {
   return (await refusedRoot(from, folder)) === null;
 }
 
-async function earlierCopies(root: string): Promise<string[]> {
-  const entries = await readdir(join(root, EARLIER_COPIES), { withFileTypes: true }).catch(() => []);
-  return entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name);
-}
-
 async function earlierLayout(root: string): Promise<boolean> {
-  if ((await earlierCopies(root)).length > 0) return true;
-  return (await present(join(root, 'agents'))) !== null && (await present(join(root, 'rooms'))) === null;
+  const copies = await readdir(join(root, RECORDS), { withFileTypes: true }).catch(() => []);
+  if (copies.some((entry) => entry.isDirectory() && !entry.name.startsWith('.'))) return true;
+  return root === kitHome() && (await present(join(root, 'agents'))) !== null && (await present(join(root, 'rooms'))) === null;
 }
 
 export async function houseRoot(): Promise<string | null> {
@@ -169,54 +161,44 @@ export async function houseRoot(): Promise<string | null> {
   return (await free(houseFolder(), kitHome())) ? houseFolder() : null;
 }
 
-async function recordedCopies(): Promise<Recorded[]> {
-  const names = (await readdir(records()).catch(() => [])).filter((name) => name.endsWith('.json'));
-  return Promise.all(names.map(async (name) => JSON.parse(await readFile(join(records(), name), 'utf8')) as Recorded));
+function chosenFolders(routes: readonly DesiredAgentRoute[], from: string): string[] {
+  const agents = join(from, 'agents');
+  const roots = [agents, join(from, 'rooms'), join(from, RECORDS)];
+  return routes
+    .filter(({ agent_id, working_directory }) => resolve(working_directory) !== join(agents, agent_id))
+    .map(({ working_directory }) => resolve(working_directory))
+    .filter((folder) => roots.some((root) => folder.startsWith(`${root}/`)));
 }
 
-async function laidOut(root: string): Promise<boolean> {
-  const folders = await earlierCopies(root);
-  const rooms = join(root, 'rooms');
-  await mkdir(rooms, { recursive: true, mode: 0o700 });
-  if (folders.length === 0) return false;
-  const held = await recordedCopies();
-  const copies = folders.map((name) => ({ name, record: held.find((copy) => copy.repository === join(root, EARLIER_COPIES, name)) }));
-  const followed = (record: Recorded | undefined): record is Recorded => record !== undefined && record.unfollowed === undefined;
-  for (const { name, record } of [...copies.filter((copy) => followed(copy.record)), ...copies.filter((copy) => !followed(copy.record))]) {
-    const source = join(root, EARLIER_COPIES, name);
-    const named = join(rooms, followed(record) ? record.room_handle : name);
-    const target = followed(record) && (await present(named)) === null ? named : await keptName(named);
-    await moved(source, target);
-    await followRoot(records(), source, target);
-  }
-  const left = join(root, EARLIER_COPIES);
-  for (const name of await readdir(left).catch(() => [])) {
-    if (name.startsWith(stagingPrefix())) await rm(join(left, name), { recursive: true, force: true });
-  }
-  await removeFolder(left);
-  await removeFolder(dirname(left));
-  return true;
-}
-
-export async function moveIntoHouse(): Promise<string | null> {
+export async function moveIntoHouse(copies: LocalCopies): Promise<string | null> {
   if (earlierPrefix() !== null) return null;
   const stored = await storedConfiguration();
   const from = stored.workspace ?? kitHome();
   if (!(await earlierLayout(from))) {
-    if (stored.workspace === undefined) await writeConfiguration({ ...stored, workspace: (await houseRoot()) ?? kitHome() });
+    if (stored.workspace !== undefined) return null;
+    const root = await houseRoot();
+    if (root === null) throw new Error(HOUSE_NOT_KITS);
+    await writeConfiguration({ ...stored, workspace: root });
     return null;
   }
-  const to = from === kitHome() && (await free(houseFolder(), from)) ? houseFolder() : from;
-  const converted = await laidOut(from);
-  if (to === from) {
-    if (stored.workspace !== from) await writeConfiguration({ ...stored, workspace: from });
-    return converted ? `Kit ${KIT_RELEASE} laid out its workspace ${from}; its supervisor starts it again` : null;
+  if (stored.workspace === undefined) await writeConfiguration({ ...stored, workspace: from });
+  const routes = await enrolledRoutes().catch((error: unknown) => {
+    process.stderr.write(`kit: the workspace stays at ${from} and moves at the next start: ${causeOf(error)}\n`);
+    return undefined;
+  });
+  if (routes === undefined) return null;
+  if (routes === null) {
+    process.stderr.write(`kit: the workspace stays at ${from} and moves at the next start: ${UNCHOSEN}; run kit login\n`);
+    return null;
   }
-  const move = { from, to };
+  const chosen = chosenFolders(routes, from);
+  const to = from === kitHome() && (await free(houseFolder(), from)) ? houseFolder() : from;
+  const laid = await copies.laidOut(join(from, RECORDS), join(from, 'rooms'), chosen);
+  if (to === from) return laid.moved ? `Kit ${KIT_RELEASE} laid out its workspace ${from}; its supervisor starts it again` : null;
+  const move = { from, to, kept: [...chosen, ...laid.kept] };
   await writeHome(MOVE, move);
   const failure = await finished(move);
   if (failure === null) return `Kit ${KIT_RELEASE} moved its workspace to ${to}; its supervisor starts it there`;
-  await writeConfiguration({ ...(await storedConfiguration()), workspace: from });
   return `the workspace could not be moved to ${to}: ${failure}; it stays at ${from} and its supervisor starts Kit again`;
 }
 
@@ -241,13 +223,7 @@ export async function applySettings(change: SettingsChange, kit: Working): Promi
       if (refused !== null) return { refused, ended: false };
       const routes = await kit.routes();
       if (routes === null) return { refused: LOGGED_OUT, ended: false };
-      const agents = join(from, 'agents');
-      const copies = join(from, 'rooms');
-      const kept = routes
-        .filter(({ agent_id, working_directory }) => resolve(working_directory) !== join(agents, agent_id))
-        .map(({ working_directory }) => resolve(working_directory))
-        .filter((folder) => folder.startsWith(`${agents}/`) || folder.startsWith(`${copies}/`));
-      move = { from, to, kept };
+      move = { from, to, kept: chosenFolders(routes, from) };
     }
   }
   if (move !== null) {
@@ -273,7 +249,9 @@ async function appliedHere(change: SettingsChange): Promise<Applied> {
   const lock = await holdOwner();
   try {
     await resumeWorkspaceMove();
-    await moveIntoHouse();
+    const copies = new LocalCopies(house);
+    await copies.load();
+    await moveIntoHouse(copies);
     return await applySettings(change, IDLE);
   } finally {
     lock.close();

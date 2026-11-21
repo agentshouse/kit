@@ -99,8 +99,8 @@ function connected(): Promise<void> {
 async function started(): Promise<void> {
   await connected();
   await placeSkillSet((await readEnrolment())!.house);
-  await mkdir(agentBase(), { recursive: true });
-  await mkdir(roomsFolder(), { recursive: true });
+  await mkdir(agentBase(), { recursive: true, mode: 0o700 });
+  await mkdir(roomsFolder(), { recursive: true, mode: 0o700 });
   await rm(join(kitHome(), 'shim'), { recursive: true, force: true });
   await installShim(codexLauncher(), 'codex-main');
 }
@@ -110,11 +110,11 @@ export async function resident(): Promise<void> {
   await mkdir(kitHome(), { recursive: true, mode: 0o700 });
   const lock = await holdOwner();
   await resumeWorkspaceMove();
-  const moved = await moveIntoHouse();
-  if (moved !== null) restart(moved);
-  const planned = takePlannedRestart();
   const copies = new LocalCopies(house);
   await copies.load();
+  const moved = await moveIntoHouse(copies);
+  if (moved !== null) restart(moved);
+  const planned = takePlannedRestart();
   let running: { conversations: Conversations; agents: Agents; calls: Calls; stop(then: () => void): Promise<void> } | null = null;
   let settings: Promise<unknown> = Promise.resolve();
   const settle = (change: SettingsChange): Promise<Applied> => {
