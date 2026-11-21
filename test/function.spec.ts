@@ -346,7 +346,7 @@ it("leaves a run on a computer whose own agent Kit home no longer holds, which H
     output: "bridge none\nhouse: this computer's own agent has no House connection; run kit login\nexit 1\n",
     cut: false,
   });
-  expect(hosted.house.requests.filter((received) => received.path === ISSUE).map((received) => received.body)).toEqual([{ op: 'credentials_issue', run: id }]);
+  expect(hosted.house.requests.filter((received) => received.path === ISSUE).map((received) => received.body)).toEqual([{ run: id }]);
   expect(searched(hosted)).toEqual([]);
 });
 

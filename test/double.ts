@@ -86,9 +86,10 @@ const DOOR = '/kit/door/';
 
 const KIT_TOOL = /^\/kit\/[a-z_]+$/u;
 
-function actPath(path: string, body: unknown): string {
-  const op = (body as { op?: unknown } | null)?.op;
-  return KIT_TOOL.test(path) && typeof op === 'string' ? `${path}.${op}` : path;
+function routedAct(path: string, body: unknown): { readonly path: string; readonly body: unknown } {
+  if (!KIT_TOOL.test(path) || body === null || typeof body !== 'object' || Buffer.isBuffer(body)) return { path, body };
+  const { op, ...request } = body as { readonly op?: unknown };
+  return typeof op === 'string' ? { path: `${path}.${op}`, body: request } : { path, body };
 }
 
 function published<Name extends string>(names: readonly Name[], shapes: Readonly<Partial<Record<Name, ZodType>>>): ReadonlyMap<string, ZodType> {
@@ -191,8 +192,7 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', async () => {
       const method = request.method ?? 'GET';
-      const body = bodyOf(chunks, request.headers['content-type']);
-      const path = actPath(new URL(request.url ?? '/', 'http://house').pathname, body);
+      const { path, body } = routedAct(new URL(request.url ?? '/', 'http://house').pathname, bodyOf(chunks, request.headers['content-type']));
       const route = routes.find((candidate) => candidate.method === method && matched(candidate.pattern, path) !== null);
       const received: Received = {
         method,
