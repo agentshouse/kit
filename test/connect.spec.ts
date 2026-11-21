@@ -3,10 +3,8 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
 import { accountOf, runKit, temporaryHome } from './kit.ts';
-import { serveLogin } from './login.ts';
+import { REDEEMED, redeems, serveLogin } from './login.ts';
 import { DARWIN, ROOTED, supervision, type Supervision } from './supervision.ts';
-
-const CODE = { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' };
 
 function accepts(house: House, credential: string): void {
   house.route('POST', '/kit/agents/desired/list', ({ headers }) =>
@@ -14,10 +12,6 @@ function accepts(house: House, credential: string): void {
       ? { body: { agents: [], routes: [], transcribe: true } }
       : { status: 401, body: { error: { code: 'authentication_required', retryable: false } } },
   );
-}
-
-function redeems(house: House, answer: Record<string, string> = CODE): void {
-  house.route('POST', '/kit/token', () => ({ body: answer }));
 }
 
 async function connect(home: string, tools: Supervision, argv: string[], node: string[] = ROOTED, environment: Record<string, string> = {}) {
@@ -132,7 +126,7 @@ it("refuses an install naming another Building on an account whose Kit serves on
   redeems(first);
   expect((await connect(home, tools, ['--house', first.origin, '--code', 'ahk_code_one'])).status).toBe(0);
   const credential = await readFile(join(home, 'credential.json'), 'utf8');
-  redeems(second, { ...CODE, environment: 'environment-two', credential: 'ahk_second' });
+  redeems(second, { ...REDEEMED, environment: 'environment-two', credential: 'ahk_second' });
 
   const refused = await connect(home, tools, ['--house', second.origin, '--code', 'ahk_code_two']);
 
@@ -187,7 +181,7 @@ it('keeps the stored credential and leaves the login code unused when House does
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_held' });
 });
 
-it('stops with the refusal, keeping the stored credential and leaving the login code unused, when its check is refused but not as unauthenticated', async () => {
+it('stops with the refusal, changing nothing and leaving the login code unused, when its check is refused but not as unauthenticated', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   const tools = await supervision();
@@ -197,12 +191,13 @@ it('stops with the refusal, keeping the stored credential and leaving the login 
   house.route('POST', '/kit/agents/desired/list', () => ({ status: 403, body: { error: { code: 'forbidden', retryable: false } } }));
   redeems(house);
 
-  const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one']);
+  const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one'], ROOTED, { HOUSE_KIT_INSTALL_COMMAND: 'curl -fsSL agents.house/kit | sh' });
 
   expect(ran.status).toBe(1);
   expect(ran.stderr).toMatch(/^kit: House refused \/kit\/agents\/desired\/list with 403: /);
   expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
   expect(await readFile(join(home, 'credential.json'), 'utf8')).toBe(stored);
+  await expect(readFile(join(home, 'install-command'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 it('starts nothing on a Linux without systemd and names the kit resident command to supervise', async () => {

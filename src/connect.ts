@@ -80,8 +80,6 @@ export async function connect(argv: string[]): Promise<void> {
   if (stored !== null && stored.house !== house) {
     throw new Error(`this account's Kit serves ${stored.house}; kit logout disconnects it from there, then this command connects it to ${house}`);
   }
-  const install = process.env.HOUSE_KIT_INSTALL_COMMAND;
-  if (install !== undefined && install !== '') await writeFile(join(kitHome(), 'install-command'), `${install}\n`, { mode: 0o600 });
   if (stored === null || !(await standing(stored.house, stored.credential))) {
     if (values.code === undefined) await enrol({ house, 'no-private': false });
     else await heldWhile(() => enrol({ house, code: values.code, 'no-private': false }));
@@ -89,6 +87,8 @@ export async function connect(argv: string[]): Promise<void> {
   } else if (values.code !== undefined) {
     process.stdout.write(`This computer is already connected as Environment ${stored.environment}; the login code was not used.\n`);
   }
+  const install = process.env.HOUSE_KIT_INSTALL_COMMAND;
+  if (install !== undefined && install !== '') await writeFile(join(kitHome(), 'install-command'), `${install}\n`, { mode: 0o600 });
   const settings = await storedConfiguration();
   if (settings.skills === undefined || settings.workspace === undefined) {
     await writeConfiguration({ skills: true, workspace: kitHome(), ...settings });

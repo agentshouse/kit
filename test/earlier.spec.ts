@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
 import { hostKit } from './environment.ts';
 import { runKit, temporaryDirectory } from './kit.ts';
-import { serveLogin } from './login.ts';
+import { redeems, serveLogin } from './login.ts';
 import { placing, released, served, sha256 } from './release.ts';
 import { ROOTED, supervision, type Supervision } from './supervision.ts';
 
@@ -210,8 +210,8 @@ function connecting(house: House, earlier: Earlier, tools: Supervision, code: st
   return runKit(['connect', '--house', house.origin, ...code], { HOME: earlier.account, ...tools.environment }, ROOTED);
 }
 
-function redeems(house: House): void {
-  house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_new', environment: 'environment-new', user: 'user-one' } }));
+function redeemsNew(house: House): void {
+  redeems(house, { credential: 'ahk_new', environment: 'environment-new', user: 'user-one' });
 }
 
 it("takes over a container's Kit home as the same Environment when the install runs again, moving its workspace and removing the container", async () => {
@@ -261,7 +261,7 @@ it("keeps the Environment of a system unit's Kit it takes over when the install 
   const house = await startHouse();
   const tools = await supervision();
   const earlier = await rootKit(house, tools, true);
-  redeems(house);
+  redeemsNew(house);
 
   const kit = connecting(house, earlier, tools, ['--code', 'ahk_code_one']);
 
@@ -281,16 +281,16 @@ it.each([
 ])("stops, connecting nothing, when this computer's Kit runs under the earlier system unit as another account and this account's Kit home records no Environment, given %s", async (_name, code) => {
   const house = await startHouse();
   const tools = await supervision();
-  const earlier = await rootKit(house, tools, true, 'lena');
+  const earlier = await rootKit(house, tools, true, 'service');
   const account = await temporaryDirectory();
   if (code.length === 0) serveLogin(house, 'environment-new', 'ahk_new');
-  else redeems(house);
+  else redeemsNew(house);
 
   const kit = runKit(['connect', '--house', house.origin, ...code], { HOME: account, ...tools.environment }, ROOTED);
 
   expect(await kit.exited).toBe(1);
   expect(kit.stdout()).toBe('');
-  expect(kit.stderr()).toBe("kit: this computer's Kit runs as lena; run this command as lena to update it\n");
+  expect(kit.stderr()).toBe("kit: this computer's Kit runs as service; run this command as service to update it\n");
   expect(house.requests).toEqual([]);
   await absent(join(account, '.agents', 'house', 'credential.json'));
   expect(JSON.parse(await readFile(join(earlier.home, 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one' });
@@ -301,7 +301,7 @@ it.each([
 it("updates this account's own connected Kit beside another account's earlier system unit, keeping its Environment", async () => {
   const house = await startHouse();
   const tools = await supervision();
-  await rootKit(house, tools, true, 'lena');
+  await rootKit(house, tools, true, 'service');
   const account = await temporaryDirectory();
   await put(join(account, '.agents', 'house', 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-own', credential: 'ahk_own' }));
   house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: [], routes: [], transcribe: true } }));
@@ -311,6 +311,23 @@ it("updates this account's own connected Kit beside another account's earlier sy
   expect(await kit.exited).toBe(0);
   expect(kit.stdout().split('\n').at(-2)).toBe('Kit connected for Environment environment-own.');
   expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
+});
+
+it("reconnects this account's own disconnected Kit beside another account's earlier system unit as its own Environment", async () => {
+  const house = await startHouse();
+  const tools = await supervision();
+  await rootKit(house, tools, true, 'service');
+  const account = await temporaryDirectory();
+  await put(join(account, '.agents', 'house', 'disconnected.json'), JSON.stringify({ house: house.origin, environment: 'environment-own' }));
+  const login = serveLogin(house, 'environment-own', 'ahk_own');
+  house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: [], routes: [], transcribe: true } }));
+
+  const kit = runKit(['connect', '--house', house.origin], { HOME: account, ...tools.environment }, ROOTED);
+
+  expect(await kit.exited).toBe(0);
+  expect(kit.stdout().split('\n').at(-2)).toBe('Kit connected for Environment environment-own.');
+  expect(login.settled).toEqual([{ act: 'existing_environment', environment: 'environment-own' }]);
+  await lstat(join(tools.root, 'etc', 'systemd', 'system', 'house-kit.service'));
 });
 
 it("takes over the Kit home the Windows command copied out of its container as the same Environment, keeping its Windows workspace and following its Local copies there", async () => {

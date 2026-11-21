@@ -20,6 +20,12 @@ function undeclared(body: unknown, fields: string[]): boolean {
   return Object.keys(body as object).some((field) => !fields.includes(field));
 }
 
+export const REDEEMED = { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' };
+
+export function redeems(house: House, answer: Record<string, string> = REDEEMED): void {
+  house.route('POST', '/kit/token', () => ({ body: answer }));
+}
+
 export function loginLink(house: House): string {
   return `${house.origin}/kit/ahk_login_one`;
 }
