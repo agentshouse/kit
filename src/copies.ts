@@ -1,75 +1,54 @@
 import type { KitBinaryChange } from '@agentshouse/kit-wire';
-import { HOUSE_ROOM_TYPES, readSchemaDocument, readTypes, type VerifiedModel } from '@agentshouse/mdmodel';
+import { isUtf8 } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
-import {
-  attachments,
-  eachAtOnce,
-  holds,
-  isDocument,
-  receivedBinary,
-  sentBinary,
-  sweptTransfers,
-  untext,
-  type Described,
-  type Staged,
-  type StagedUpload,
-} from './binaries.ts';
+import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
-import {
-  blobId,
-  blobText,
-  git,
-  HOUSE_REF,
-  importCommits,
-  type Content,
-  type Imported,
-  localCopies,
-  revision,
-  run,
-  succeeded,
-  tree,
-} from './git.ts';
 import { fileInfo, paused, type FileInfo, type Finished } from './files.ts';
-import { kitHome } from './home.ts';
+import { kitHome, workspaceRoot } from './home.ts';
+import {
+  digest,
+  hashed,
+  holding,
+  marked,
+  placed,
+  readManifest,
+  removed,
+  scanned,
+  writeManifest,
+  type Entry,
+  type Manifest,
+  type Present,
+} from './manifest.ts';
 import { ownAgentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
-import { renameOldReferences } from './old-references.ts';
 import { operationId } from './operation.ts';
 import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
-import { changed, readDocument, type Edit } from './translate.ts';
 
-const BRANCH = 'main';
-const PROVENANCE = '_provenance';
-const IDENTITY = { GIT_COMMITTER_NAME: 'Kit', GIT_COMMITTER_EMAIL: 'house-kit@localhost' };
 const ROOMS = 'rooms/';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
-const STAGED_CHUNKS = 'house-chunks';
-const SCHEMA = 'settings/schema.md';
-const SCHEMA_YAML = 'settings/schema.yaml';
+const PROVENANCE = '_provenance';
+const BATCH_FILES = 1000;
+const BATCH_BYTES = 15_000_000;
+const MEGABYTE = 1_000_000;
+const CUT = /\noutput_cut \d+ of \d+ bytes$/;
+const KIT_IGNORES = ['.gitignore', '.ignore'];
+const KIT_GIT = ['.git/refs/house/received', '.git/house-chunks', '.git/house-uploads', '.git/house-downloads'];
+
+export const DEFAULT_MAX_SIZE = 10;
+export const UPLOAD_NEEDS_OWNER = 'outside an Agent conversation, house upload needs --owner';
 
 // A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
 const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
 
-interface Held {
-  bytes: number;
-  sha256: string;
-}
+export type Change =
+  | { op: 'write'; path: string; content: string; base?: string }
+  | { op: 'move'; path: string; to: string; base: string }
+  | { op: 'delete'; path: string; base: string }
+  | { op: 'upload'; path: string; base?: string; bytes: number; sha256: string; media_type: string };
 
-interface Manifest {
-  parent: string | null;
-  files: Record<string, string | null>;
-  binary?: Record<string, Held>;
-}
-
-type BinaryPart = Extract<Edit, { op: 'upload' }>;
-
-interface Move {
-  worktree: string;
-  from: string;
-  to: string;
-}
+type Part = Extract<Change, { op: 'upload' }>;
 
 export interface Written {
   path: string;
@@ -84,38 +63,49 @@ export interface Upload {
   sha256: string;
 }
 
-interface Push {
-  state: 'submitted' | 'accepted';
-  caller: string;
+interface Read {
+  name: string;
+  sha256: string;
+}
+
+interface Pending {
   operation_id: string;
-  commit: string;
-  base: string;
-  changes: Edit[];
-  worktree: string;
-  branch: string | null;
-  house: string;
+  caller: string;
+  changes: Change[];
+  read: Record<string, Read>;
   upload?: Upload;
-  written?: Written[];
-  acknowledged?: string;
   staged?: string[];
 }
 
-interface Copy {
+interface Copied {
   key: string;
   room_ref: string;
   room_handle: string;
   repository: string;
-  house: string;
   position: string;
   log_epoch: string;
   write: string[];
   protected: string[];
-  read_only: string[];
-  manifests: Record<string, Manifest>;
-  moves: Move[];
-  push?: Push;
   unfollowed?: 'unsaid' | 'said';
 }
+
+interface Copy extends Copied {
+  pending?: Pending;
+}
+
+interface Recorded {
+  parent: string | null;
+  files: Record<string, string | null>;
+  binary?: Record<string, { bytes: number; sha256: string }>;
+}
+
+interface EarlierCopy extends Copied {
+  house: string;
+  read_only: string[];
+  manifests: Record<string, Recorded>;
+}
+
+type Held = Copy | EarlierCopy;
 
 interface Authority {
   room_ref: string;
@@ -130,13 +120,15 @@ interface Discovery {
   authorities: Authority[];
 }
 
-type Change = Text | KitBinaryChange | { path: string; removed: true };
+type Entered = Text | KitBinaryChange;
+
+type Delta = Entered | { path: string; removed: true };
 
 interface Enumerated {
   authority: string;
   position: string;
   log_epoch: string;
-  changes: Change[];
+  changes: Delta[];
   next?: unknown;
 }
 
@@ -144,12 +136,10 @@ type Listed =
   | { room_ref: string; ready: false }
   | { room_ref: string; ready: true; position: string; log_epoch: string; chunks: Chunk[]; models: Text[] };
 
-type Entry = Text | KitBinaryChange;
-
 interface Whole {
   position: string;
   log_epoch: string;
-  entries: Iterable<Entry> | AsyncIterable<Entry>;
+  entries: Iterable<Entered> | AsyncIterable<Entered>;
 }
 
 interface Wanted {
@@ -163,10 +153,14 @@ interface Scope {
   protected: string[];
 }
 
-interface ReadOnlyFiles {
-  remove(path: string): Promise<void>;
-  place(path: string, content: string): Promise<void>;
-  held(): string[];
+interface Report {
+  touched: Map<string, string | null>;
+  kept: Set<string>;
+}
+
+export interface Fetching {
+  attachments: boolean;
+  maxSize: number;
 }
 
 class NotReady extends Error {
@@ -184,7 +178,7 @@ export interface Caller {
   key: string;
   submit(
     operation: string,
-    changes: Edit[],
+    changes: Change[],
     upload: Upload | undefined,
     retain: (upload: Upload) => Promise<void>,
   ): Promise<Submitted>;
@@ -192,16 +186,16 @@ export interface Caller {
   info(path: string, revision?: string): Promise<FileInfo | null>;
 }
 
-export interface Pushed {
+export interface Answered {
   refused: boolean;
   text: string;
 }
 
-export interface Observed {
-  common: string;
-  worktree: string;
-  moves: { from: string; to: string }[];
-}
+type Settled = { refused: true; text: string } | { refused: false; files: number; lines: string[] };
+
+type Built = { changes: Change[]; read: Record<string, Read> } | Answered;
+
+const HELD: Fetching = { attachments: false, maxSize: DEFAULT_MAX_SIZE };
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -215,24 +209,9 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
-const REBASED = new Set([
-  'field_base_stale',
-  'section_base_stale',
-  'preamble_base_stale',
-  'base_revision_stale',
-  'path_exists',
-  'path_absent',
-  'base_required',
-  'text_file',
-]);
-
-function rebaseFixes(refusal: Refusal): boolean {
-  return refusal.code === 'edit_conflict' && refusal.conflicts.some(({ code }) => REBASED.has(code));
-}
-
 function markdownOnly(paths: string[], maxBytes: number): string {
   const [named, them] = paths.length === 1 ? [`${paths[0]} is`, 'it'] : [`${paths.join(', ')} are`, 'them'];
-  return `${named} Markdown, which holds text only: UTF-8 without NUL, at most ${maxBytes} bytes; commit ${them} as text and push again`;
+  return `${named} Markdown, which holds text only: UTF-8 without NUL, at most ${maxBytes} bytes; save ${them} as text and run house upload again`;
 }
 
 async function stopping<T>(sent: Promise<T>): Promise<T | { refused: Refusal }> {
@@ -245,31 +224,22 @@ async function stopping<T>(sent: Promise<T>): Promise<T | { refused: Refusal }> 
   }
 }
 
-function changesKind(changes: readonly Edit[]): boolean {
-  const removed = new Set(changes.flatMap((change) => (change.op === 'remove' ? [change.path] : [])));
-  return changes.some((change) => (change.op === 'create' || change.op === 'upload') && removed.has(change.path));
-}
-
 function unstagedUploads(refusal: Refusal): StagedUpload[] {
   const named = refusal.detail.upload;
   return Array.isArray(named) ? (named as StagedUpload[]) : [];
 }
 
-function heldKey(file: Held): string {
-  return `${file.sha256}:${file.bytes}`;
+function currentHandle(refusal: Refusal): string | null {
+  const path = typeof refusal.detail.current_path === 'string' ? refusal.detail.current_path : /use (\/rooms\/\S+)/.exec(refusal.text)?.[1];
+  return path === undefined ? null : (/^\/rooms\/([^/]+)/.exec(path)?.[1] ?? null);
 }
 
-function outside(path: string): Pushed {
-  return { refused: true, text: `${path} is not a House Local copy; run house push inside one` };
+function outside(path: string): Answered {
+  return { refused: true, text: `${path} is not in a House Local copy; run house upload inside one` };
 }
 
-function short(commit: string): string {
-  return commit.slice(0, 12);
-}
-
-function moved(before: Copy, after: Copy): string[] {
-  if (before.house !== after.house) return [`${rootOf(after.room_handle)}: ${HOUSE_REF} is at ${short(after.house)}`];
-  return before.position === after.position ? [] : [`${rootOf(after.room_handle)}: read-only files refreshed`];
+function counted(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
 function expiredAuthority(error: unknown): string | undefined {
@@ -304,6 +274,16 @@ function stagingPrefix(): string {
   return `.${createHash('sha256').update(kitHome()).digest('hex').slice(0, 16)}-`;
 }
 
+export function localCopies(): string {
+  return join(workspaceRoot(), 'local-copies');
+}
+
+async function staging(): Promise<string> {
+  const folder = join(localCopies(), 'rooms', `${stagingPrefix()}work`);
+  await mkdir(folder, { recursive: true });
+  return `${folder}/`;
+}
+
 function rootOf(handle: string): string {
   return `/rooms/${handle}`;
 }
@@ -318,8 +298,12 @@ function declaredWritable(path: string, copy: Scope): boolean {
   return deepest(copy.write) > deepest(copy.protected);
 }
 
-function pattern(path: string): string {
-  return `/${path.replace(/[\\*?[]/g, '\\$&').replace(/ +$/, (spaces) => spaces.replace(/ /g, '\\ '))}`;
+function ended(text: string): string {
+  return text === '' || text.endsWith('\n') ? text : `${text}\n`;
+}
+
+function sameBytes(file: { sha256: string; bytes: number }): string {
+  return `${file.sha256}:${file.bytes}`;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -329,257 +313,255 @@ async function exists(path: string): Promise<boolean> {
   );
 }
 
-async function writeText(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, content);
-}
-
-async function removeFile(repository: string, path: string): Promise<void> {
-  await rm(join(repository, path), { force: true });
-  for (let folder = dirname(path); folder !== '.'; folder = dirname(folder)) {
-    if (!(await rmdir(join(repository, folder)).then(() => true, () => false))) return;
-  }
-}
-
-async function readOnlyFiles(repository: string, held: readonly string[]): Promise<ReadOnlyFiles> {
-  const tracked = new Set((await git(repository, ['ls-files', '-z'])).split('\0'));
-  const holding = new Set(held);
-  return {
-    remove: async (path) => {
-      if (!holding.has(path)) return;
-      if (!tracked.has(path)) await removeFile(repository, path);
-      holding.delete(path);
-    },
-    place: async (path, content) => {
-      if (tracked.has(path)) return;
-      if (!holding.has(path) && (await exists(join(repository, path)))) return;
-      await writeText(join(repository, path), content);
-      holding.add(path);
-    },
-    held: () => [...holding].sort(),
-  };
-}
-
-async function readOnlyPlaced(
-  repository: string,
-  held: readonly string[],
-  written: ReadonlyMap<string, string>,
-  removed: readonly string[],
-): Promise<string[]> {
-  const files = await readOnlyFiles(repository, held);
-  for (const path of removed) await files.remove(path);
-  for (const [path, content] of written) await files.place(path, content);
-  return files.held();
-}
-
-async function importedWhole(
-  repository: string,
-  scope: Scope,
-  entries: Whole['entries'],
-  commit: Pick<Imported, 'message' | 'from' | 'replaces'>,
-  readOnly: ReadOnlyFiles,
-  kept: (entries: readonly KitBinaryChange[]) => Promise<ReadonlyMap<string, string>>,
-): Promise<{ house: string; revisions: Record<string, string>; binary: Record<string, Held> }> {
-  const revisions: Record<string, string> = {};
-  const binary: Record<string, Held> = {};
-  async function* tracked(): AsyncGenerator<readonly [string, Content]> {
-    const binaries: KitBinaryChange[] = [];
-    for await (const entry of entries) {
-      if (!('content' in entry)) {
-        if (declaredWritable(entry.path, scope)) binaries.push(entry);
-        continue;
-      }
-      const { path, content, revision: held, provenance } = entry;
-      if (declaredWritable(path, scope)) {
-        revisions[path] = held;
-        yield [path, content];
-      } else {
-        await readOnly.place(path, content);
-      }
-      if (provenance !== undefined) await readOnly.place(sidecar(path), provenance);
-    }
-    const blobs = await kept(binaries);
-    for (const entry of binaries) {
-      const blob = blobs.get(entry.path);
-      if (blob === undefined) continue;
-      revisions[entry.path] = entry.revision;
-      binary[entry.path] = { bytes: entry.bytes, sha256: entry.sha256 };
-      yield [entry.path, { blob }];
-    }
-  }
-  return { house: await importCommits(repository, [{ ...commit, files: tracked() }]), revisions, binary };
-}
-
-async function ruled(path: string, rules: string): Promise<void> {
-  if ((await readFile(path, 'utf8').catch(() => null)) !== rules) await writeFile(path, rules);
-}
-
-async function ignoreRules(
-  repository: string,
-  writable: readonly string[],
-  copy: Pick<Copy, 'read_only' | 'protected'>,
-): Promise<void> {
-  const readOnly = copy.read_only.filter((path) => !path.split('/').includes(PROVENANCE));
-  const protectedPath = (path: string) => copy.protected.some((prefix) => prefix !== '' && covers(path, prefix));
-  const whole = copy.protected.filter((prefix) => prefix !== '' && !writable.some((path) => covers(path, prefix)));
-  const house = [
-    ...whole,
-    ...readOnly.filter((path) => protectedPath(path) && !whole.some((prefix) => covers(path, prefix))),
-  ].map(pattern);
-  const granted = readOnly.filter((path) => !protectedPath(path)).map(pattern);
-  await ruled(
-    join(repository, '.gitignore'),
-    [
-      '# Kit writes this file and .ignore. The paths below are read-only House',
-      '# content: Git does not track them, and House refuses a change to them even',
-      '# when this file is edited or a path is force-added.',
-      '/.gitignore',
-      '/.ignore',
-      PROVENANCE,
-      '',
-      '# House maintains or protects these paths.',
-      ...house,
-      '',
-      '# Your current House grant does not allow writing these paths.',
-      ...granted,
-      '',
-    ].join('\n'),
-  );
-  await ruled(
-    join(repository, '.ignore'),
-    [
-      '# Kit writes this file so native search still reads the read-only House',
-      '# content that .gitignore keeps out of Git.',
-      `!${PROVENANCE}`,
-      ...[...house, ...granted].map((rule) => `!${rule}`),
-      '',
-    ].join('\n'),
-  );
-}
-
-async function schemaText(copy: Copy, files: ReadonlyMap<string, string>, path: string): Promise<string | undefined> {
-  const entry = files.get(path);
-  if (entry !== undefined) return blobText(copy.repository, entry);
-  return copy.read_only.includes(path) ? readFile(join(copy.repository, path), 'utf8') : undefined;
-}
-
-async function modelOf(copy: Copy, files: ReadonlyMap<string, string>): Promise<VerifiedModel> {
-  const document = await schemaText(copy, files, SCHEMA);
-  if (document !== undefined) return readSchemaDocument(document, HOUSE_ROOM_TYPES);
-  return readTypes((await schemaText(copy, files, SCHEMA_YAML)) ?? '', HOUSE_ROOM_TYPES);
-}
-
-async function attachedText(repository: string, houseTree: ReadonlyMap<string, string>, change: KitBinaryChange): Promise<string | null> {
-  const blob = houseTree.get(change.path);
-  return blob !== undefined && (await holds(repository, blob, change)) ? blob : null;
-}
-
-function entryAt(copy: Copy, commit: string, path: string): { revision: string; held?: Held } | undefined {
-  let manifest: Manifest | undefined = copy.manifests[commit];
-  while (manifest !== undefined) {
-    if (path in manifest.files) {
-      const revision = manifest.files[path];
-      if (revision === null || revision === undefined) return undefined;
-      const held = manifest.binary?.[path];
-      return held === undefined ? { revision } : { revision, held };
-    }
-    manifest = manifest.parent === null ? undefined : copy.manifests[manifest.parent];
-  }
-  return undefined;
-}
-
-function revisionAt(copy: Copy, commit: string, path: string): string | undefined {
-  return entryAt(copy, commit, path)?.revision;
-}
-
-function heldAt(copy: Copy, commit: string, path: string): Held | undefined {
-  return entryAt(copy, commit, path)?.held;
-}
-
-function manifest(parent: string | null, files: Record<string, string | null>, binary: Record<string, Held>): Manifest {
-  return Object.keys(binary).length === 0 ? { parent, files } : { parent, files, binary };
-}
-
-function binaryParts(changes: readonly Edit[]): BinaryPart[] {
-  return changes.filter((change): change is BinaryPart => change.op === 'upload');
-}
-
-function pushedBinary(copy: Copy, push: Push): Map<string, Held> {
-  const sent = new Map<string, Held>();
-  for (const change of push.changes) {
-    if (change.op === 'upload') sent.set(relative(change.path), { bytes: change.bytes, sha256: change.sha256 });
-    else if (change.op === 'rename') {
-      const held = heldAt(copy, push.base, relative(change.path));
-      if (held !== undefined) sent.set(relative(change.to), held);
-    }
-  }
-  return sent;
-}
-
-async function writtenAt(copy: Copy, house: ReadonlyMap<string, string>, path: string): Promise<Written> {
-  const named = `${rootOf(copy.room_handle)}/${path}`;
-  const entry = house.get(path);
-  if (entry === undefined) return { path: named, revision: null, content: null };
-  const revision = revisionAt(copy, copy.house, path) ?? null;
-  return heldAt(copy, copy.house, path) === undefined
-    ? { path: named, revision, content: await blobText(copy.repository, entry) }
-    : { path: named, revision };
-}
-
 function without(copy: Copy): Copy {
-  const { push, ...settled } = copy;
+  const { pending, ...settled } = copy;
   return settled;
 }
 
-export function changedPaths(changes: readonly Edit[]): string[] {
-  return [
-    ...new Set(changes.flatMap((change) => (change.op === 'rename' ? [change.path, change.to] : [change.path]))),
-  ].sort();
+function earlier(copy: Held): copy is EarlierCopy {
+  return 'manifests' in copy;
 }
 
-function movedPaths(moves: readonly Move[], before: Map<string, string>, after: Map<string, string>): Map<string, string> {
-  const pairs = moves.filter(
-    ({ from, to }) => before.has(from) && !after.has(from) && after.has(to) && !before.has(to),
-  );
-  return new Map(
-    pairs
-      .filter((pair) => pairs.filter((other) => other.from === pair.from || other.to === pair.to).length === 1)
-      .map(({ from, to }) => [from, to]),
-  );
-}
-
-function sameBytesMoved(
-  before: ReadonlyMap<string, string>,
-  after: ReadonlyMap<string, string>,
-  held: (path: string) => Held | undefined,
-  binary: ReadonlyMap<string, Described>,
-  intended: ReadonlyMap<string, string>,
-): Map<string, string> {
-  const arriving = new Set(intended.values());
-  const leaving = new Map<string, string[]>();
-  const added = new Map<string, string[]>();
-  const listed = (paths: Map<string, string[]>, file: Held, path: string) => {
-    paths.set(heldKey(file), [...(paths.get(heldKey(file)) ?? []), path]);
+function rehandled(copy: Copy, handle: string): Copy {
+  const from = `${rootOf(copy.room_handle)}/`;
+  const to = `${rootOf(handle)}/`;
+  const moved = (path: string) => (path.startsWith(from) ? `${to}${path.slice(from.length)}` : path);
+  const { upload, ...pending } = copy.pending!;
+  return {
+    ...copy,
+    room_handle: handle,
+    pending: {
+      ...pending,
+      changes: pending.changes.map((change) => (change.op === 'move' ? { ...change, path: moved(change.path), to: moved(change.to) } : { ...change, path: moved(change.path) })),
+    },
   };
-  for (const [path, entry] of before) {
-    const file = held(path);
-    if (file !== undefined && !intended.has(path) && !binary.has(path) && after.get(path) !== entry) listed(leaving, file, path);
+}
+
+export function changedPaths(changes: readonly Change[]): string[] {
+  return [...new Set(changes.flatMap((change) => (change.op === 'move' ? [change.path, change.to] : [change.path])))].sort();
+}
+
+function batched(changes: readonly Change[]): Change[][] {
+  const batches: Change[][] = [];
+  let batch: Change[] = [];
+  let files = 0;
+  let bytes = 0;
+  for (const change of changes) {
+    const named = change.op === 'move' ? 2 : 1;
+    const size = Buffer.byteLength(JSON.stringify(change));
+    if (batch.length > 0 && (files + named > BATCH_FILES || bytes + size > BATCH_BYTES)) {
+      batches.push(batch);
+      batch = [];
+      files = 0;
+      bytes = 0;
+    }
+    batch.push(change);
+    files += named;
+    bytes += size;
   }
-  for (const [path, file] of binary) {
-    if (!arriving.has(path) && held(path) === undefined) listed(added, file, path);
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
+
+function recordedFiles(copy: EarlierCopy): Map<string, { revision: string; held?: { bytes: number; sha256: string } }> {
+  const found = new Map<string, { revision: string; held?: { bytes: number; sha256: string } }>();
+  const seen = new Set<string>();
+  for (let manifest: Recorded | undefined = copy.manifests[copy.house]; manifest !== undefined; manifest = manifest.parent === null ? undefined : copy.manifests[manifest.parent]) {
+    for (const [path, revision] of Object.entries(manifest.files)) {
+      if (seen.has(path)) continue;
+      seen.add(path);
+      const held = manifest.binary?.[path];
+      if (revision !== null) found.set(path, held === undefined ? { revision } : { revision, held });
+    }
   }
-  const moved = new Map<string, string>();
-  for (const [key, [from, ...others]] of leaving) {
-    const [to, ...more] = added.get(key) ?? [];
-    if (others.length === 0 && more.length === 0 && to !== undefined && !after.has(from!) && !before.has(to)) moved.set(from!, to);
+  return found;
+}
+
+function recordedRevisions(copy: EarlierCopy, path: string): string[] {
+  return [...new Set(Object.values(copy.manifests).flatMap((manifest) => (typeof manifest.files[path] === 'string' ? [manifest.files[path]] : [])))];
+}
+
+class Applying {
+  private present = new Map<string, Present>();
+  private readonly binaries: KitBinaryChange[] = [];
+  private readonly gone: string[] = [];
+
+  private readonly repository: string;
+  private readonly manifest: Manifest;
+  private readonly scope: Scope;
+  private readonly staging: string;
+  private readonly report: Report;
+  private readonly fetching: Fetching;
+  private readonly bytesOf: (change: KitBinaryChange) => Promise<string>;
+
+  constructor(
+    repository: string,
+    manifest: Manifest,
+    scope: Scope,
+    staging: string,
+    report: Report,
+    fetching: Fetching,
+    bytesOf: (change: KitBinaryChange) => Promise<string>,
+  ) {
+    this.repository = repository;
+    this.manifest = manifest;
+    this.scope = scope;
+    this.staging = staging;
+    this.report = report;
+    this.fetching = fetching;
+    this.bytesOf = bytesOf;
   }
-  return moved;
+
+  async start(): Promise<void> {
+    this.present = await scanned(this.repository);
+  }
+
+  private nameOf(path: string): string {
+    return this.present.get(path)?.name ?? path;
+  }
+
+  private touch(path: string): void {
+    if (!this.report.touched.has(path)) this.report.touched.set(path, this.present.get(path)?.sha256 ?? null);
+  }
+
+  private async put(path: string, content: Buffer | string): Promise<void> {
+    this.touch(path);
+    await placed(this.staging, join(this.repository, this.nameOf(path)), content);
+    this.present.set(path, { name: this.nameOf(path), sha256: digest(content), bytes: Buffer.byteLength(content) });
+  }
+
+  private async drop(path: string): Promise<void> {
+    this.touch(path);
+    await removed(this.repository, this.nameOf(path));
+    this.present.delete(path);
+  }
+
+  private async readOnly(path: string, content: string, revision: string): Promise<void> {
+    const sha256 = digest(content);
+    if (this.present.get(path)?.sha256 !== sha256) await this.put(path, content);
+    this.manifest.files[path] = { revision, sha256, bytes: Buffer.byteLength(content), read_only: true };
+  }
+
+  async text({ path, content, revision, provenance }: Text): Promise<void> {
+    if (provenance !== undefined) await this.readOnly(sidecar(path), provenance, revision);
+    if (!declaredWritable(path, this.scope)) {
+      await this.readOnly(path, content, revision);
+      return;
+    }
+    const entry = this.manifest.files[path];
+    if (entry !== undefined && !entry.read_only && entry.revision === revision) return;
+    const sha256 = digest(content);
+    const kept = { revision, sha256, bytes: Buffer.byteLength(content) };
+    const local = this.present.get(path);
+    if (local?.sha256 === sha256) {
+      this.manifest.files[path] = kept;
+      return;
+    }
+    const unchanged = entry === undefined ? local === undefined : entry.read_only === true || local?.sha256 === entry.sha256;
+    if (!unchanged || (local !== undefined && !(await holding(this.repository, local.name, local.sha256)))) {
+      this.report.kept.add(path);
+      return;
+    }
+    await this.put(path, content);
+    this.manifest.files[path] = kept;
+  }
+
+  binary(change: KitBinaryChange): void {
+    this.binaries.push(change);
+  }
+
+  removal(path: string): void {
+    this.gone.push(path);
+  }
+
+  async finish(): Promise<void> {
+    const leaving = new Map<string, string | null>();
+    for (const path of this.gone) {
+      const entry = this.manifest.files[path];
+      if (entry === undefined || entry.skipped || isDocument(path) || this.present.get(path)?.sha256 !== entry.sha256) continue;
+      leaving.set(sameBytes(entry), leaving.has(sameBytes(entry)) ? null : path);
+    }
+    const taken = new Set<string>();
+    const movedFrom = (change: KitBinaryChange): string | undefined => {
+      const from = leaving.get(sameBytes(change));
+      if (from === undefined || from === null || taken.has(from)) return undefined;
+      taken.add(from);
+      return from;
+    };
+    for (const change of this.binaries) await this.attachment(change, movedFrom);
+    for (const path of this.gone) {
+      if (taken.has(path)) continue;
+      await this.removedHere(path);
+      if (this.manifest.files[sidecar(path)]?.read_only) await this.removedHere(sidecar(path));
+    }
+  }
+
+  private async attachment(change: KitBinaryChange, movedFrom: (change: KitBinaryChange) => string | undefined): Promise<void> {
+    const { path, revision, bytes, sha256 } = change;
+    const entry = this.manifest.files[path];
+    if (entry !== undefined && entry.revision === revision) return;
+    const held: Entry = { revision, sha256, bytes, ...(declaredWritable(path, this.scope) ? {} : { read_only: true as const }) };
+    const local = this.present.get(path);
+    if (local?.sha256 === sha256) {
+      this.manifest.files[path] = held;
+      return;
+    }
+    const holds = entry !== undefined && !entry.skipped;
+    if (holds && !entry.read_only && local?.sha256 !== entry.sha256) {
+      this.report.kept.add(path);
+      return;
+    }
+    if (!holds && local !== undefined) {
+      this.report.kept.add(path);
+      return;
+    }
+    const from = movedFrom(change);
+    if (from !== undefined) {
+      const target = join(this.repository, this.nameOf(path));
+      this.touch(path);
+      await mkdir(dirname(target), { recursive: true });
+      await rename(join(this.repository, this.nameOf(from)), target);
+      await removed(this.repository, this.nameOf(from));
+      this.present.set(path, { name: this.nameOf(path), sha256, bytes });
+      this.present.delete(from);
+      delete this.manifest.files[from];
+      this.manifest.files[path] = held;
+      return;
+    }
+    if (!holds && !(this.fetching.attachments && bytes <= this.fetching.maxSize * MEGABYTE)) {
+      this.manifest.files[path] = { ...held, skipped: true };
+      return;
+    }
+    const file = await this.bytesOf(change);
+    const target = join(this.repository, this.nameOf(path));
+    this.touch(path);
+    await mkdir(dirname(target), { recursive: true });
+    await rename(file, target);
+    this.present.set(path, { name: this.nameOf(path), sha256, bytes });
+    this.manifest.files[path] = held;
+  }
+
+  private async removedHere(path: string): Promise<void> {
+    const entry = this.manifest.files[path];
+    if (entry === undefined) return;
+    const local = this.present.get(path);
+    if (entry.skipped || local === undefined) {
+      delete this.manifest.files[path];
+      return;
+    }
+    if (!entry.read_only && (local.sha256 !== entry.sha256 || !(await holding(this.repository, local.name, entry.sha256)))) {
+      this.report.kept.add(path);
+      return;
+    }
+    await this.drop(path);
+    delete this.manifest.files[path];
+  }
 }
 
 export class LocalCopies {
   readonly owner: Caller;
   private readonly house: House;
-  private readonly copies = new Map<string, Copy>();
+  private readonly copies = new Map<string, Held>();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly waiting = new Set<string>();
   private answering: Promise<unknown> = Promise.resolve();
@@ -628,9 +610,8 @@ export class LocalCopies {
     for (const path of names.map((name) => join(home, 'rooms', name))) {
       const text = await readFile(path, 'utf8').catch(() => null);
       if (text === null) continue;
-      const copy = JSON.parse(text) as Copy;
-      if (renameOldReferences(copy)) await this.save(copy);
-      else this.copies.set(copy.key, copy);
+      const copy = JSON.parse(text) as Held;
+      this.copies.set(copy.key, copy);
     }
   }
 
@@ -639,19 +620,18 @@ export class LocalCopies {
     for (const name of await readdir(rooms).catch(() => [])) {
       if (name.startsWith(stagingPrefix())) await rm(join(rooms, name), { recursive: true, force: true });
     }
-    for (const copy of this.copies.values()) await sweptTransfers(copy.repository);
   }
 
   connected(): Promise<void> {
     return this.selected();
   }
 
-  fetch(caller: Caller): Promise<Pushed> {
-    return this.answered(() => this.fetched(true, caller));
+  download(caller: Caller, fetching: Fetching): Promise<Answered> {
+    return this.answered(() => this.fetched(true, caller, fetching));
   }
 
   private async selected(): Promise<void> {
-    const copied = await this.answered(() => this.fetched(false, this.owner));
+    const copied = await this.answered(() => this.fetched(false, this.owner, HELD));
     if (copied.refused) logged(copied.text);
   }
 
@@ -661,7 +641,7 @@ export class LocalCopies {
     return answered;
   }
 
-  private async fetched(refreshing: boolean, caller: Caller): Promise<Pushed> {
+  private async fetched(refreshing: boolean, caller: Caller, fetching: Fetching): Promise<Answered> {
     const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
     const synced = new Map(answer.rooms.map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
     return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
@@ -673,7 +653,7 @@ export class LocalCopies {
         await this.save({ ...copy, unfollowed: mark });
         if (refreshing) said.push(`${rootOf(copy.room_handle)}: no longer followed; kept as it is`);
       }
-      const current: Copy[] = [];
+      const current: Held[] = [];
       const wanted = new Map<string, string>();
       for (const [key, handle] of synced) {
         try {
@@ -683,9 +663,7 @@ export class LocalCopies {
             continue;
           }
           const { unfollowed, ...followed } = held;
-          current.push(
-            unfollowed === undefined && held.room_handle === handle ? held : await this.save({ ...followed, room_handle: handle }),
-          );
+          current.push(unfollowed === undefined && held.room_handle === handle ? held : await this.save({ ...followed, room_handle: handle }));
         } catch (error) {
           refused = true;
           said.push(`${rootOf(handle)}: ${causeOf(error)}`);
@@ -699,7 +677,7 @@ export class LocalCopies {
           const authority = authorities.find((entry) => `${ROOMS}${entry.room_ref}` === key);
           try {
             if (authority === undefined) throw new Error('House serves nothing of it to copy');
-            said.push(await this.copied({ key, handle, authority }));
+            said.push(await this.copied({ key, handle, authority }, fetching));
           } catch (error) {
             if (error instanceof NotReady) {
               unready.push(...error.rooms);
@@ -714,9 +692,11 @@ export class LocalCopies {
       }
       const reading = refreshing ? current : current.filter((copy) => this.waiting.has(copy.room_ref));
       if (reading.length > 0) {
-        const failed = await this.refreshed(reading, unready, caller).then(() => null, houseCause);
+        const reports = new Map<string, Report>(reading.map((copy) => [copy.key, { touched: new Map<string, string | null>(), kept: new Set<string>() }]));
+        const failed = await this.refreshed(reading, unready, caller, fetching, reports).then(() => null, houseCause);
         for (const copy of reading) {
-          said.push(...(unready.includes(copy.room_ref) ? [`${rootOf(copy.room_handle)}: ${NOT_READY}`] : moved(copy, this.copies.get(copy.key)!)));
+          if (unready.includes(copy.room_ref)) said.push(`${rootOf(copy.room_handle)}: ${NOT_READY}`);
+          else said.push(...(await this.reported(this.copies.get(copy.key)!, reports.get(copy.key)!)));
         }
         if (failed !== null) {
           refused = true;
@@ -734,6 +714,16 @@ export class LocalCopies {
     });
   }
 
+  private async reported(copy: Held, report: Report): Promise<string[]> {
+    const root = rootOf(copy.room_handle);
+    let updated = 0;
+    for (const [path, before] of report.touched) if (((await hashed(join(copy.repository, path)))?.sha256 ?? null) !== before) updated++;
+    return [
+      ...(updated === 0 ? [] : [`${root}: ${counted(updated, 'file')} updated from House`]),
+      ...[...report.kept].sort().map((path) => `${root}/${path}: changed here, so House's change was not brought; the next house upload merges it`),
+    ];
+  }
+
   private async askedAgain(rooms: readonly string[]): Promise<void> {
     let asking = rooms;
     for (let step = 0; asking.length > 0; step++) {
@@ -743,44 +733,18 @@ export class LocalCopies {
     }
   }
 
-  async observed(report: Observed): Promise<void> {
-    const key = await this.keyAt(dirname(report.common));
-    if (key === undefined) return;
-    await this.exclusive(key, async () => {
-      const copy = this.copies.get(key)!;
-      let moves = copy.moves;
-      for (const { from, to } of report.moves) {
-        const held = moves.find((move) => move.worktree === report.worktree && move.to === from);
-        moves = moves.filter((move) => move !== held);
-        if (held === undefined) moves.push({ worktree: report.worktree, from, to });
-        else if (held.from !== to) moves.push({ ...held, to });
-      }
-      if (moves.some((move) => move.worktree === report.worktree)) {
-        const index = new Set((await git(report.worktree, ['ls-files', '-z'])).split('\0'));
-        const head = await tree(report.worktree, 'HEAD').catch(() => new Map<string, string>());
-        const live = ({ from, to }: Move) =>
-          (index.has(to) && !index.has(from)) || (head.has(to) && !head.has(from));
-        moves = moves.filter((move) => move.worktree !== report.worktree || live(move));
-      }
-      if (JSON.stringify(moves) !== JSON.stringify(copy.moves)) await this.save({ ...copy, moves });
-    });
+  upload(cwd: string, caller: Caller): Promise<Answered> {
+    return this.keyAt(cwd).then((key) => (key === undefined ? outside(cwd) : this.exclusive(key, () => this.uploaded(key, caller))));
   }
 
-  async push(cwd: string, selector: string, caller: Caller): Promise<Pushed> {
-    const located = await run(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']);
-    if (located.status !== 0) return outside(cwd);
-    const [common, worktree] = located.stdout.toString('utf8').split('\n') as [string, string];
-    const key = await this.keyAt(dirname(common));
-    if (key === undefined) return outside(worktree);
-    return this.exclusive(key, () => this.pushed(key, worktree, selector, caller));
-  }
-
-  private async keyAt(repository: string): Promise<string | undefined> {
-    const real = await realpath(repository).catch(() => repository);
-    for (const copy of this.copies.values()) {
-      if ((await realpath(copy.repository).catch(() => copy.repository)) === real) return copy.key;
+  private async keyAt(cwd: string): Promise<string | undefined> {
+    const held = new Map<string, string>();
+    for (const copy of this.copies.values()) held.set(await realpath(copy.repository).catch(() => copy.repository), copy.key);
+    for (let folder = await realpath(cwd).catch(() => cwd); ; folder = dirname(folder)) {
+      const key = held.get(folder);
+      if (key !== undefined) return key;
+      if (dirname(folder) === folder) return undefined;
     }
-    return undefined;
   }
 
   private exclusive<T>(key: string, work: () => Promise<T>): Promise<T> {
@@ -797,7 +761,7 @@ export class LocalCopies {
     return key === undefined ? work() : this.exclusive(key, () => this.holding(rest, work));
   }
 
-  private async save(copy: Copy): Promise<Copy> {
+  private async save<T extends Held>(copy: T): Promise<T> {
     const path = recordOf(copy.key);
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}`;
@@ -832,46 +796,59 @@ export class LocalCopies {
     }
   }
 
-  private async materialized({ key, handle, authority }: Wanted, whole: (staging: string) => Promise<Whole>): Promise<Copy> {
+  private chunksFolder(): string {
+    return join(localCopies(), 'rooms', `${stagingPrefix()}${randomUUID()}`);
+  }
+
+  private async materialized({ key, handle, authority }: Wanted, whole: (directory: string) => Promise<Whole>): Promise<Copy> {
     const repository = join(localCopies(), 'rooms', authority.room_ref);
     if (await exists(repository)) throw new Error(`${repository} already exists and Kit leaves it as it is`);
-    const staging = join(dirname(repository), `${stagingPrefix()}${randomUUID()}`);
+    const folder = join(dirname(repository), `${stagingPrefix()}${randomUUID()}`);
+    const chunks = this.chunksFolder();
     const scope = { write: authority.operations.write, protected: authority.protected_paths };
-    await mkdir(staging, { recursive: true });
+    const manifest: Manifest = { room_ref: authority.room_ref, files: {} };
+    await mkdir(folder, { recursive: true });
     let copy: Copy;
     try {
-      await git(staging, ['init', '-q', '-b', BRANCH]);
-      await git(staging, ['config', 'core.precomposeUnicode', 'true']);
-      const read = await whole(join(staging, '.git', STAGED_CHUNKS));
-      const readOnly = await readOnlyFiles(staging, []);
-      const commit = { message: `House ${rootOf(handle)}`, from: null };
-      const { house, revisions } = await importedWhole(staging, scope, read.entries, commit, readOnly, async () => new Map());
-      await git(staging, ['update-ref', `refs/heads/${BRANCH}`, house]);
-      await git(staging, ['reset', '-q', '--hard']);
-      copy = {
-        key,
-        room_ref: authority.room_ref,
-        room_handle: handle,
-        repository,
-        house,
-        position: read.position,
-        log_epoch: read.log_epoch,
-        ...scope,
-        read_only: readOnly.held(),
-        manifests: { [house]: { parent: null, files: revisions } },
-        moves: [],
-      };
-      await ignoreRules(staging, Object.keys(revisions), copy);
-      await rm(join(staging, '.git', STAGED_CHUNKS), { recursive: true, force: true });
-      await rename(staging, repository);
+      const read = await whole(chunks);
+      const work = await staging();
+      for await (const entry of read.entries) {
+        if (!('content' in entry)) {
+          manifest.files[entry.path] = {
+            revision: entry.revision,
+            sha256: entry.sha256,
+            bytes: entry.bytes,
+            skipped: true,
+            ...(declaredWritable(entry.path, scope) ? {} : { read_only: true as const }),
+          };
+          continue;
+        }
+        const { path, content, revision, provenance } = entry;
+        await placed(work, join(folder, path), content);
+        manifest.files[path] = {
+          revision,
+          sha256: digest(content),
+          bytes: Buffer.byteLength(content),
+          ...(declaredWritable(path, scope) ? {} : { read_only: true as const }),
+        };
+        if (provenance !== undefined) {
+          await placed(work, join(folder, sidecar(path)), provenance);
+          manifest.files[sidecar(path)] = { revision, sha256: digest(provenance), bytes: Buffer.byteLength(provenance), read_only: true };
+        }
+      }
+      await writeManifest(folder, work, manifest);
+      await rename(folder, repository);
+      copy = { key, room_ref: authority.room_ref, room_handle: handle, repository, position: read.position, log_epoch: read.log_epoch, ...scope };
     } catch (error) {
-      await rm(staging, { recursive: true, force: true });
+      await rm(folder, { recursive: true, force: true });
       throw error;
+    } finally {
+      await rm(chunks, { recursive: true, force: true });
     }
     return this.save(copy);
   }
 
-  private async copied(wanted: Wanted): Promise<string> {
+  private async copied(wanted: Wanted, fetching: Fetching): Promise<string> {
     const { handle, authority } = wanted;
     const root = rootOf(handle);
     let answer: { authorities: Enumerated[] } | null = null;
@@ -890,67 +867,79 @@ export class LocalCopies {
     const view = answer?.authorities.find((entry) => entry.authority === authority.room_ref);
     if (answer !== null && view === undefined) throw new Error('House serves nothing of it to copy');
     if (view !== undefined && view.next === undefined) {
-      const entries = view.changes.filter((change): change is Text => 'content' in change);
+      const entries = view.changes.filter((change): change is Entered => !('removed' in change));
       const copy = await this.materialized(wanted, async () => ({ position: view.position, log_epoch: view.log_epoch, entries }));
+      await this.attached(copy, this.owner, fetching, { touched: new Map<string, string | null>(), kept: new Set<string>() });
       return `${root}: copied to ${copy.repository}`;
     }
     const copy = await this.materialized(wanted, (directory) => this.chunked(root, authority.room_ref, directory));
-    const [caught] = await this.caughtUp([copy], true, this.owner);
-    await succeeded(copy.repository, ['merge', '--ff-only', '-q', caught!.house]);
+    const report = { touched: new Map<string, string | null>(), kept: new Set<string>() };
+    const [caught] = await this.caughtUp([copy], true, this.owner, fetching, new Map([[copy.key, report]]));
+    await this.attached(caught!, this.owner, fetching, report);
     return `${root}: copied to ${copy.repository}`;
   }
 
-  private async received(copy: Copy, authority: Authority, caller: Caller): Promise<Copy> {
+  private applying(copy: Copy, manifest: Manifest, scope: Scope, work: string, report: Report, fetching: Fetching, caller: Caller): Applying {
     const root = rootOf(copy.room_handle);
-    const directory = join(copy.repository, '.git', STAGED_CHUNKS);
+    return new Applying(copy.repository, manifest, scope, work, report, fetching, (change) =>
+      receivedBinary(work, `${root}/${change.path}`, async () => {
+        const file = await caller.info(`${root}/${change.path}`, change.revision);
+        if (file === null) throw new Error(`House holds no attachment at ${root}/${change.path}`);
+        return file;
+      }),
+    );
+  }
+
+  private async received(copy: Copy, authority: Authority, caller: Caller, fetching: Fetching, report: Report): Promise<Copy> {
+    const root = rootOf(copy.room_handle);
+    const directory = this.chunksFolder();
     const scope = { write: authority.operations.write, protected: authority.protected_paths };
     try {
       const read = await this.chunked(root, copy.room_ref, directory);
-      const readOnly = await readOnlyFiles(copy.repository, copy.read_only);
-      for (const path of copy.read_only) await readOnly.remove(path);
-      const commit = { message: `House ${root} at position ${read.position}`, from: copy.house, replaces: true };
-      const houseTree = await tree(copy.repository, copy.house);
-      const pushing = await this.pushing(copy);
-      const kept = async (entries: readonly KitBinaryChange[]) => {
-        const present = new Set(entries.map((entry) => entry.path));
-        const leaving = new Map(
-          [...houseTree].flatMap(([path, blob]) => {
-            const held = present.has(path) ? undefined : heldAt(copy, copy.house, path);
-            return held === undefined ? [] : [[heldKey(held), blob] as const];
-          }),
-        );
-        const blobs = new Map<string, string>();
-        for (const entry of entries) {
-          const blob = await this.binaryIn(copy, houseTree, entry, pushing, leaving, caller);
-          if (blob !== null) blobs.set(entry.path, blob);
+      const manifest = await readManifest(copy.repository);
+      const work = await staging();
+      const applying = this.applying(copy, manifest, scope, work, report, fetching, caller);
+      await applying.start();
+      try {
+        const whole = new Set<string>();
+        for await (const entry of read.entries) {
+          whole.add(entry.path);
+          if (!('content' in entry)) {
+            applying.binary(entry);
+            continue;
+          }
+          if (entry.provenance !== undefined) whole.add(sidecar(entry.path));
+          await applying.text(entry);
         }
-        return blobs;
-      };
-      const { house, revisions, binary } = await importedWhole(copy.repository, scope, read.entries, commit, readOnly, kept);
-      const next: Copy = {
-        ...copy,
-        ...scope,
-        house,
-        position: read.position,
-        log_epoch: read.log_epoch,
-        read_only: readOnly.held(),
-        manifests: { ...copy.manifests, [house]: manifest(null, revisions, binary) },
-      };
-      await ignoreRules(copy.repository, Object.keys(revisions), next);
-      return next;
+        for (const path of Object.keys(manifest.files)) if (!whole.has(path)) applying.removal(path);
+        await applying.finish();
+      } finally {
+        await writeManifest(copy.repository, work, manifest);
+      }
+      return { ...copy, ...scope, position: read.position, log_epoch: read.log_epoch };
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   }
 
-  private async reread(copy: Copy, caller: Caller): Promise<Copy> {
+  private async reread(copy: Copy, caller: Caller, fetching: Fetching, report: Report): Promise<Copy> {
     const { authorities } = await this.discovered([copy.room_handle]);
     const authority = authorities.find((entry) => entry.room_ref === copy.room_ref);
     if (authority === undefined) throw new NotReady([copy.room_ref]);
-    return this.received(copy, authority, caller);
+    return this.received(copy, authority, caller, fetching, report);
   }
 
-  private async refreshed(copies: readonly Copy[], unready: string[], caller: Caller): Promise<void> {
+  private async refreshed(held: readonly Held[], unready: string[], caller: Caller, fetching: Fetching, reports: Map<string, Report>): Promise<void> {
+    const copies: Copy[] = [];
+    for (const copy of held) {
+      try {
+        copies.push(await this.converted(copy));
+      } catch (error) {
+        if (!(error instanceof NotReady)) throw error;
+        unready.push(...error.rooms);
+      }
+    }
+    if (copies.length === 0) return;
     const { bounds, authorities } = await this.discovered(copies.map((copy) => copy.room_handle));
     const read: Copy[] = [];
     const unchanged: Copy[] = [];
@@ -961,7 +950,7 @@ export class LocalCopies {
         JSON.stringify([authority.operations.write, authority.protected_paths]) !== JSON.stringify([copy.write, copy.protected])
       ) {
         try {
-          read.push(await this.save(await this.received(copy, authority, caller)));
+          read.push(await this.save(await this.received(copy, authority, caller, fetching, reports.get(copy.key)!)));
         } catch (error) {
           if (!(error instanceof NotReady)) throw error;
           unready.push(...error.rooms);
@@ -970,11 +959,44 @@ export class LocalCopies {
         unchanged.push(copy);
       }
     }
-    for (const group of grouped(unchanged, bounds.max_prefixes)) await this.caughtUp(group, false, caller, unready);
-    for (const group of grouped(read, bounds.max_prefixes)) await this.caughtUp(group, true, caller, unready);
+    for (const group of grouped(unchanged, bounds.max_prefixes)) await this.caughtUp(group, false, caller, fetching, reports, unready);
+    for (const group of grouped(read, bounds.max_prefixes)) await this.caughtUp(group, true, caller, fetching, reports, unready);
+    for (const copy of copies) {
+      if (!unready.includes(copy.room_ref)) await this.attached(this.copies.get(copy.key) as Copy, caller, fetching, reports.get(copy.key)!);
+    }
   }
 
-  private async caughtUp(copies: readonly Copy[], whole: boolean, caller: Caller, unready?: string[]): Promise<Copy[]> {
+  private async attached(copy: Copy, caller: Caller, fetching: Fetching, report: Report): Promise<void> {
+    if (!fetching.attachments) return;
+    const manifest = await readManifest(copy.repository);
+    const wanted = Object.entries(manifest.files).filter(([, entry]) => entry.skipped && entry.bytes <= fetching.maxSize * MEGABYTE);
+    if (wanted.length === 0) return;
+    const root = rootOf(copy.room_handle);
+    const work = await staging();
+    const present = await scanned(copy.repository);
+    for (const [path, { skipped: _skipped, ...entry }] of wanted) {
+      if (present.has(path)) continue;
+      const file = await receivedBinary(work, `${root}/${path}`, async () => {
+        const held = await caller.info(`${root}/${path}`, entry.revision);
+        if (held === null) throw new Error(`House holds no attachment at ${root}/${path}`);
+        return held;
+      });
+      if (!report.touched.has(path)) report.touched.set(path, null);
+      await mkdir(dirname(join(copy.repository, path)), { recursive: true });
+      await rename(file, join(copy.repository, path));
+      manifest.files[path] = entry;
+    }
+    await writeManifest(copy.repository, work, manifest);
+  }
+
+  private async caughtUp(
+    copies: readonly Copy[],
+    whole: boolean,
+    caller: Caller,
+    fetching: Fetching,
+    reports: Map<string, Report>,
+    unready?: string[],
+  ): Promise<Copy[]> {
     const caught = new Map(copies.map((copy) => [copy.key, copy]));
     const read = new Set<string>();
     const waiting: string[] = unready ?? [];
@@ -996,7 +1018,7 @@ export class LocalCopies {
         }
         read.add(expired.key);
         try {
-          const next = await this.save(await this.reread(expired, caller));
+          const next = await this.save(await this.reread(expired, caller, fetching, reports.get(expired.key)!));
           caught.set(expired.key, next);
           asking.push(next);
         } catch (refused) {
@@ -1009,7 +1031,7 @@ export class LocalCopies {
       for (const copy of asking) {
         const view = answer.authorities.find((entry) => entry.authority === copy.room_ref);
         if (view === undefined || (view.position === copy.position && view.log_epoch === copy.log_epoch)) continue;
-        const next = await this.save(await this.incorporated(copy, view.changes, view.position, view.log_epoch, caller));
+        const next = await this.save(await this.incorporated(copy, view, caller, fetching, reports.get(copy.key)!));
         caught.set(copy.key, next);
         advanced.push(next);
       }
@@ -1019,511 +1041,429 @@ export class LocalCopies {
     return copies.map((copy) => caught.get(copy.key)!);
   }
 
-  private async pushing(copy: Copy): Promise<Map<string, Held & { blob: string }>> {
-    const sent = copy.push === undefined ? new Map<string, Held>() : pushedBinary(copy, copy.push);
-    if (sent.size === 0) return new Map();
-    const commit = await tree(copy.repository, copy.push!.commit);
-    return new Map([...sent].map(([path, held]) => [path, { ...held, blob: commit.get(path)! }]));
+  private async incorporated(copy: Copy, view: Enumerated, caller: Caller, fetching: Fetching, report: Report): Promise<Copy> {
+    const manifest = await readManifest(copy.repository);
+    const work = await staging();
+    const applying = this.applying(copy, manifest, copy, work, report, fetching, caller);
+    await applying.start();
+    try {
+      for (const change of view.changes) {
+        if ('removed' in change) applying.removal(change.path);
+        else if ('content' in change) await applying.text(change);
+        else applying.binary(change);
+      }
+      await applying.finish();
+    } finally {
+      await writeManifest(copy.repository, work, manifest);
+    }
+    return { ...copy, position: view.position, log_epoch: view.log_epoch };
   }
 
-  private async binaryIn(
-    copy: Copy,
-    houseTree: ReadonlyMap<string, string>,
-    change: KitBinaryChange,
-    pushing: ReadonlyMap<string, Held & { blob: string }>,
-    leaving: ReadonlyMap<string, string>,
-    caller: Caller,
-  ): Promise<string | null> {
-    const pushed = pushing.get(change.path);
-    if (pushed !== undefined && heldKey(pushed) === heldKey(change)) return pushed.blob;
-    const moved = leaving.get(heldKey(change));
-    const kept = heldAt(copy, copy.house, change.path) ?? pushed;
-    if (kept === undefined) return moved ?? (await attachedText(copy.repository, houseTree, change));
-    if (heldKey(kept) === heldKey(change)) return houseTree.get(change.path)!;
-    return moved ?? this.revisionBlob(copy, change.path, change.revision, caller);
-  }
-
-  private revisionBlob(copy: Copy, path: string, revision: string, caller: Caller, first: FileInfo | null = null): Promise<string> {
-    const named = `${rootOf(copy.room_handle)}/${path}`;
-    let answered = first;
-    return receivedBinary(copy.repository, named, async () => {
-      const file = answered ?? (await caller.info(named, revision));
-      answered = null;
-      if (file === null) throw new Error(`House holds no attachment at ${named}`);
-      return file;
-    });
-  }
-
-  private async incorporated(copy: Copy, changes: readonly Change[], position: string, logEpoch: string, caller: Caller): Promise<Copy> {
-    const houseTree = await tree(copy.repository, copy.house);
-    const held = new Set(copy.read_only);
-    const files = new Map<string, Content | null>();
-    const revisions: Record<string, string | null> = {};
-    const binary: Record<string, Held> = {};
-    const written = new Map<string, string>();
-    const removed: string[] = [];
-    const pushing = await this.pushing(copy);
-    const leaving = new Map(
-      changes.flatMap((change) => {
-        const kept = 'removed' in change ? heldAt(copy, copy.house, change.path) : undefined;
-        return kept === undefined ? [] : [[heldKey(kept), houseTree.get(change.path)!] as const];
-      }),
-    );
-    for (const change of changes) {
-      if (!('removed' in change) && !('content' in change)) {
-        const blob = await this.binaryIn(copy, houseTree, change, pushing, leaving, caller);
-        if (blob === null) {
-          if (houseTree.has(change.path)) {
-            files.set(change.path, null);
-            revisions[change.path] = null;
-          } else if (held.has(change.path)) removed.push(change.path, sidecar(change.path));
+  private async converted(held: Held): Promise<Copy> {
+    if (!earlier(held)) return held;
+    const copy: Copy = {
+      key: held.key,
+      room_ref: held.room_ref,
+      room_handle: held.room_handle,
+      repository: held.repository,
+      position: held.position,
+      log_epoch: held.log_epoch,
+      write: held.write,
+      protected: held.protected,
+      ...(held.unfollowed === undefined ? {} : { unfollowed: held.unfollowed }),
+    };
+    const root = rootOf(copy.room_handle);
+    const directory = this.chunksFolder();
+    const recorded = recordedFiles(held);
+    const manifest: Manifest = { room_ref: copy.room_ref, files: {} };
+    const work = await staging();
+    try {
+      const read = await this.chunked(root, copy.room_ref, directory);
+      const present = await scanned(copy.repository);
+      const current = new Map<string, { revision: string; sha256: string; bytes: number }>();
+      const binaries: KitBinaryChange[] = [];
+      const readOnly = async (path: string, content: string, revision: string) => {
+        if (present.get(path)?.sha256 !== digest(content)) await placed(work, join(copy.repository, path), content);
+        manifest.files[path] = { revision, sha256: digest(content), bytes: Buffer.byteLength(content), read_only: true };
+      };
+      for await (const entry of read.entries) {
+        if (!('content' in entry)) {
+          binaries.push(entry);
           continue;
         }
-        const kept = heldAt(copy, copy.house, change.path);
-        const unchanged =
-          houseTree.get(change.path) === blob &&
-          kept !== undefined &&
-          heldKey(kept) === heldKey(change) &&
-          revisionAt(copy, copy.house, change.path) === change.revision;
-        if (unchanged) continue;
-        files.set(change.path, { blob });
-        revisions[change.path] = change.revision;
-        binary[change.path] = { bytes: change.bytes, sha256: change.sha256 };
-        continue;
+        if (entry.provenance !== undefined) await readOnly(sidecar(entry.path), entry.provenance, entry.revision);
+        if (declaredWritable(entry.path, copy)) {
+          current.set(entry.path, { revision: entry.revision, sha256: digest(entry.content), bytes: Buffer.byteLength(entry.content) });
+        } else {
+          await readOnly(entry.path, entry.content, entry.revision);
+        }
       }
-      const gone = 'removed' in change;
-      if (houseTree.has(change.path) || (!gone && !held.has(change.path) && declaredWritable(change.path, copy))) {
-        const unchanged = gone
-          ? !houseTree.has(change.path)
-          : houseTree.get(change.path) === blobId(change.content) &&
-            revisionAt(copy, copy.house, change.path) === change.revision;
-        if (unchanged) continue;
-        files.set(change.path, gone ? null : change.content);
-        revisions[change.path] = gone ? null : change.revision;
-      } else if (gone) {
-        removed.push(change.path, sidecar(change.path));
-      } else {
-        written.set(change.path, change.content);
-        if (change.provenance !== undefined) written.set(sidecar(change.path), change.provenance);
+      for (const [path, { revision, held: attached }] of recorded) {
+        if (attached !== undefined) {
+          manifest.files[path] = { revision, ...attached };
+          continue;
+        }
+        const now = current.get(path);
+        const text = now?.revision === revision ? null : await this.revisionText(`${root}/${path}`, revision).catch(() => null);
+        const file = now?.revision === revision ? now : text === null ? null : { revision, sha256: digest(text), bytes: Buffer.byteLength(text) };
+        if (file === null) continue;
+        manifest.files[path] = { revision, sha256: file.sha256, bytes: file.bytes };
+        const local = present.get(path);
+        if (local === undefined || local.sha256 === file.sha256) continue;
+        for (const before of recordedRevisions(held, path).filter((other) => other !== revision)) {
+          const behind = await this.revisionText(`${root}/${path}`, before).catch(() => null);
+          if (behind === null || digest(behind) !== local.sha256) continue;
+          await placed(work, join(copy.repository, local.name), text ?? (await this.revisionText(`${root}/${path}`, revision)));
+          break;
+        }
       }
+      for (const [path, now] of current) {
+        if (manifest.files[path] === undefined && present.get(path)?.sha256 === now.sha256) manifest.files[path] = now;
+      }
+      for (const { path, revision, bytes, sha256 } of binaries) {
+        if (manifest.files[path] !== undefined) continue;
+        const writable = declaredWritable(path, copy) ? {} : { read_only: true as const };
+        manifest.files[path] = present.get(path)?.sha256 === sha256 ? { revision, sha256, bytes, ...writable } : { revision, sha256, bytes, skipped: true, ...writable };
+      }
+      for (const path of held.read_only) if (manifest.files[path] === undefined) await removed(copy.repository, path);
+      for (const name of [...KIT_IGNORES, ...KIT_GIT]) await rm(join(copy.repository, name), { recursive: true, force: true });
+      await rmdir(join(copy.repository, '.git', 'refs', 'house')).catch(() => undefined);
+      await writeManifest(copy.repository, work, manifest);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
-    let { house, manifests } = copy;
-    if (files.size > 0) {
-      house = await importCommits(copy.repository, [
-        { message: `House ${rootOf(copy.room_handle)} at position ${position}`, from: copy.house, files },
-      ]);
-      manifests = { ...manifests, [house]: manifest(copy.house, revisions, binary) };
-    }
-    const next: Copy = {
-      ...copy,
-      house,
-      manifests,
-      position,
-      log_epoch: logEpoch,
-      read_only: await readOnlyPlaced(copy.repository, copy.read_only, written, removed),
-    };
-    await ignoreRules(copy.repository, [...(await tree(copy.repository, house)).keys()], next);
-    return next;
+    return this.save(copy);
   }
 
-  private async pushed(key: string, worktree: string, selector: string, caller: Caller): Promise<Pushed> {
-    let copy = this.copies.get(key)!;
-    const selected = await run(worktree, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${selector}^{commit}`]);
-    if (selected.status !== 0) return { refused: true, text: `${selector} names no commit` };
-    const commit = selected.stdout.toString('utf8').trim();
-    if (copy.push?.state === 'submitted') {
-      if (copy.push.commit === commit) return this.settle(copy, caller);
-      const replaced = await this.recovered(copy, caller, async (current) => {
-        await this.save(without(current));
-        return { refused: false, text: '' };
-      });
-      if (replaced.refused) return replaced;
-      copy = this.copies.get(key)!;
-    }
-    if (copy.push !== undefined) {
-      const held = copy.push.acknowledged;
-      if (held === undefined || !(await succeeded(worktree, ['merge-base', '--is-ancestor', held, commit]))) {
-        return this.finished(copy, caller);
-      }
-      copy = await this.save(without(copy));
-    }
-    const listed = (await git(copy.repository, ['rev-list', '--topo-order', commit])).split('\n');
-    const base = listed.find((ancestor) => ancestor in copy.manifests);
-    if (base === undefined) {
-      return { refused: true, text: `${short(commit)} holds no House state; merge or rebase onto ${HOUSE_REF}` };
-    }
-    let changes: Edit[];
+  private async uploaded(key: string, caller: Caller): Promise<Answered> {
+    let copy: Copy;
     try {
-      changes = await this.derived(copy, base, commit);
-      if (changesKind(changes)) {
-        const read = (await this.caughtUp([copy], true, caller))[0]!;
-        if (read.house !== copy.house) changes = await this.derived(read, base, commit);
-        copy = read;
-      }
+      copy = await this.converted(this.copies.get(key)!);
+    } catch (error) {
+      return { refused: true, text: `${rootOf(this.copies.get(key)!.room_handle)}: ${houseCause(error)}` };
+    }
+    const lines: string[] = [];
+    let files = 0;
+    let landed = 0;
+    if (copy.pending !== undefined) {
+      const settled = await this.settle(copy, caller);
+      if (settled.refused) return settled;
+      files += settled.files;
+      landed++;
+      lines.push(...settled.lines);
+      copy = this.copies.get(key) as Copy;
+    }
+    const root = rootOf(copy.room_handle);
+    const manifest = await readManifest(copy.repository);
+    const unresolved: string[] = [];
+    for (const [path, entry] of Object.entries(manifest.files)) {
+      if (entry.conflicted && (await marked(copy.repository, path))) unresolved.push(`${root}/${path}`);
+    }
+    if (unresolved.length > 0) {
+      const [named, they] = unresolved.length === 1 ? [`${unresolved[0]} still holds`, 'it'] : [`${unresolved.join(', ')} still hold`, 'each'];
+      return { refused: true, text: `${named} conflict markers; resolve ${they}, then run house upload again` };
+    }
+    let built: Built;
+    try {
+      built = await this.built(copy, manifest);
     } catch (error) {
       return { refused: true, text: houseCause(error) };
     }
-    if (changes.length === 0) return { refused: false, text: `Nothing to submit: ${short(commit)} matches House.` };
-    const branch = await git(worktree, ['symbolic-ref', '-q', 'HEAD']).then(
-      (name) => name.trim(),
-      () => null,
-    );
-    const submitted = await this.save({
-      ...copy,
-      push: {
-        state: 'submitted',
-        caller: caller.key,
-        operation_id: operationId(),
-        commit,
-        base,
-        changes,
-        worktree,
-        branch,
-        house: copy.house,
-      },
-    });
-    return this.settle(submitted, caller);
-  }
-
-  private async attachmentsOf(copy: Copy, arriving: readonly (readonly [string, string])[]): Promise<Map<string, Described>> {
-    const documents = arriving.filter(([path]) => isDocument(path));
-    if (documents.length > 0) {
-      const { bounds } = await this.house.door<Discovery>('rooms/discover', { prefixes: [rootOf(copy.room_handle)] });
-      const refused = await untext(copy.repository, documents, bounds.max_authored_file_bytes);
-      if (refused.length > 0) throw new Error(markdownOnly(refused, bounds.max_authored_file_bytes));
+    if ('refused' in built) return built;
+    const batches = batched(built.changes);
+    for (const [index, changes] of batches.entries()) {
+      const read = Object.fromEntries(changedPaths(changes).flatMap((path) => (built.read[relative(path)] === undefined ? [] : [[relative(path), built.read[relative(path)]!]])));
+      copy = await this.save({ ...(this.copies.get(key) as Copy), pending: { operation_id: operationId(), caller: caller.key, changes, read } });
+      const settled = await this.settle(copy, caller);
+      if (settled.refused) {
+        const done = landed === 0 ? [] : [`House accepted ${counted(landed, 'batch', 'batches')} of ${rootOf(copy.room_handle)} before this one.`];
+        return { refused: true, text: [...done, ...lines, settled.text, ...(index + 1 < batches.length ? [`${counted(batches.length - index - 1, 'batch', 'batches')} after it ${batches.length - index - 1 === 1 ? 'was' : 'were'} not sent`] : [])].join('\n') };
+      }
+      files += settled.files;
+      landed++;
+      lines.push(...settled.lines);
     }
-    return attachments(copy.repository, arriving.filter(([path]) => !isDocument(path)));
+    const now = rootOf((this.copies.get(key) as Copy).room_handle);
+    if (landed === 0) return { refused: false, text: `Nothing to upload: ${root} matches House.` };
+    return {
+      refused: false,
+      text: [`House accepted ${counted(files, 'file')} of ${now}${landed > 1 ? ` in ${landed} batches` : ''}.`, ...lines].join('\n'),
+    };
   }
 
-  private async derived(copy: Copy, base: string, commit: string): Promise<Edit[]> {
+  private async built(copy: Copy, manifest: Manifest): Promise<Built> {
     const root = rootOf(copy.room_handle);
-    const before = await tree(copy.repository, base);
-    const after = await tree(copy.repository, commit);
-    const intended = movedPaths(copy.moves, before, after);
-    const renamedAsIs = new Set([...intended].filter(([from, to]) => before.get(from) === after.get(to)).map(([, to]) => to));
-    const binary = await this.attachmentsOf(
-      copy,
-      [...after].filter(([path, entry]) => before.get(path) !== entry && !renamedAsIs.has(path)),
-    );
-    const held = (path: string) => heldAt(copy, base, path);
-    const houseTree = base === copy.house ? before : await tree(copy.repository, copy.house);
-    const houseText = (path: string) => houseTree.has(path) && heldAt(copy, copy.house, path) === undefined;
-    const moved = new Map([...intended, ...sameBytesMoved(before, after, held, binary, intended)]);
-    const arrived = new Set(moved.values());
-    const text = (entry: string) => blobText(copy.repository, entry);
-    const created = async (path: string, entry: string): Promise<Edit> => {
-      const part = binary.get(path);
-      return part === undefined
-        ? { op: 'create', path: `${root}/${path}`, content: await text(entry) }
-        : { op: 'upload', path: `${root}/${path}`, ...part };
+    const present = await scanned(copy.repository);
+    const added: string[] = [];
+    const changed: string[] = [];
+    const gone: string[] = [];
+    let adopted = false;
+    for (const [path, file] of present) {
+      const entry = manifest.files[path];
+      if (entry === undefined) added.push(path);
+      else if (entry.read_only) continue;
+      else if (entry.sha256 !== file.sha256) changed.push(path);
+      else if (entry.skipped) {
+        manifest.files[path] = { revision: entry.revision, sha256: entry.sha256, bytes: entry.bytes };
+        adopted = true;
+      }
+    }
+    for (const [path, entry] of Object.entries(manifest.files)) {
+      if (!entry.read_only && !entry.skipped && !present.has(path)) gone.push(path);
+    }
+    if (adopted) await writeManifest(copy.repository, await staging(), manifest);
+    const listed = (paths: string[], file: (path: string) => { sha256: string; bytes: number }) => {
+      const found = new Map<string, string[]>();
+      for (const path of paths) found.set(sameBytes(file(path)), [...(found.get(sameBytes(file(path))) ?? []), path]);
+      return found;
     };
-    const model = await modelOf(copy, after);
-    const changes: Edit[] = [];
-    for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+    const leaving = listed(gone, (path) => manifest.files[path]!);
+    const arriving = listed(added, (path) => present.get(path)!);
+    const moves = new Map<string, string>();
+    for (const [held, [from, ...others]] of leaving) {
+      const [to, ...more] = arriving.get(held) ?? [];
+      if (others.length === 0 && more.length === 0 && to !== undefined && isDocument(from!) === isDocument(to)) moves.set(from!, to);
+    }
+    const arrived = new Set(moves.values());
+    const documents = [...added.filter((path) => !arrived.has(path)), ...changed].filter(isDocument).sort();
+    const texts = new Map<string, string>();
+    if (documents.length > 0) {
+      const { bounds } = await this.house.door<Discovery>('rooms/discover', { prefixes: [root] });
+      const refused: string[] = [];
+      for (const path of documents) {
+        const bytes = await readFile(join(copy.repository, present.get(path)!.name));
+        if (bytes.length > bounds.max_authored_file_bytes || !isUtf8(bytes) || bytes.includes(0)) refused.push(path);
+        else texts.set(path, bytes.toString('utf8'));
+      }
+      if (refused.length > 0) return { refused: true, text: markdownOnly(refused, bounds.max_authored_file_bytes) };
+    }
+    const changes: Change[] = [];
+    const read: Record<string, Read> = {};
+    for (const path of [...new Set([...added, ...changed, ...gone])].sort()) {
       if (arrived.has(path)) continue;
-      const prior = before.get(path);
-      const next = after.get(path);
-      const known = revisionAt(copy, base, path);
-      const to = moved.get(path);
+      const named = `${root}/${path}`;
+      const entry = manifest.files[path];
+      const to = moves.get(path);
       if (to !== undefined) {
-        changes.push({ op: 'rename', path: `${root}/${path}`, to: `${root}/${to}`, base: known });
-        const moving = after.get(to)!;
-        const part = binary.get(to);
-        if (moving !== prior) {
-          changes.push(
-            part === undefined
-              ? { op: 'replace', path: `${root}/${to}`, base: known, content: await text(moving) }
-              : { op: 'upload', path: `${root}/${to}`, base: known, ...part },
-          );
-        }
+        changes.push({ op: 'move', path: named, to: `${root}/${to}`, base: entry!.revision });
+        read[to] = { name: present.get(to)!.name, sha256: present.get(to)!.sha256 };
         continue;
       }
-      if (prior === next) continue;
-      const part = binary.get(path);
-      if (next === undefined) changes.push({ op: 'remove', path: `${root}/${path}`, base: known });
-      else if (prior === undefined) changes.push(await created(path, next));
-      else if (part !== undefined && houseText(path)) {
-        changes.push({ op: 'remove', path: `${root}/${path}`, base: known }, { op: 'upload', path: `${root}/${path}`, ...part });
-      } else if (part !== undefined) changes.push({ op: 'upload', path: `${root}/${path}`, base: known, ...part });
-      else changes.push(...changed(`${root}/${path}`, path, known, await text(prior), await text(next), model));
+      const file = present.get(path);
+      if (file === undefined) {
+        changes.push({ op: 'delete', path: named, base: entry!.revision });
+        continue;
+      }
+      const base = entry === undefined ? {} : { base: entry.revision };
+      const text = texts.get(path);
+      if (text !== undefined) {
+        changes.push({ op: 'write', path: named, content: text, ...base });
+        read[path] = { name: file.name, sha256: digest(text) };
+      } else {
+        changes.push({ op: 'upload', path: named, ...base, bytes: file.bytes, sha256: file.sha256, media_type: mediaType(path) });
+        read[path] = { name: file.name, sha256: file.sha256 };
+      }
     }
-    return changes;
+    return { changes, read };
   }
 
-  private async settle(start: Copy, caller: Caller, restaged = false): Promise<Pushed> {
+  private async settle(start: Copy, caller: Caller, restaged = false): Promise<Settled> {
     let copy = start;
-    if (copy.push!.caller !== caller.key) {
-      return this.recovered(copy, caller, async (current) =>
-        this.settle(await this.save({ ...current, push: { ...current.push!, caller: caller.key } }), caller),
-      );
+    if (copy.pending!.caller !== caller.key) {
+      const { upload: _upload, ...pending } = copy.pending!;
+      copy = await this.save({ ...copy, pending: { ...pending, caller: caller.key } });
     }
     const finished = new Set<string>();
-    let outcome: Submitted;
+    let rehandledOnce = false;
+    let outcome!: Submitted;
     for (;;) {
-      const push = copy.push!;
+      const pending = copy.pending!;
       try {
-        outcome = await caller.submit(push.operation_id, push.changes, push.upload, async (upload) => {
-          copy = await this.save({ ...copy, push: { ...copy.push!, upload } });
+        outcome = await caller.submit(pending.operation_id, pending.changes, pending.upload, async (upload) => {
+          copy = await this.save({ ...copy, pending: { ...copy.pending!, upload } });
         });
       } catch (error) {
         const refusal = error instanceof HouseRefusal ? refusalOf(error.text) : null;
-        return {
-          refused: true,
-          text: refusal?.text ?? `House's answer to ${short(push.commit)} did not arrive; run house push again`,
-        };
+        return { refused: true, text: refusal?.text ?? "House's answer to this upload did not arrive; run house upload again" };
       }
-      if (!('refused' in outcome) || outcome.refused.code !== 'files_unstaged') break;
-      const named = unstagedUploads(outcome.refused).filter(({ id }) => !finished.has(id));
-      if (named.length === 0) break;
-      for (const { id } of named) finished.add(id);
-      const failed = await this.sentUploads(copy, named, caller);
-      copy = this.copies.get(copy.key)!;
-      if (failed.size > 0) return this.stopped(copy, failed);
+      if (!('refused' in outcome)) break;
+      if (outcome.refused.code === 'files_unstaged') {
+        const named = unstagedUploads(outcome.refused).filter(({ id }) => !finished.has(id));
+        if (named.length === 0) break;
+        for (const { id } of named) finished.add(id);
+        const failed = await this.sentParts(copy, named, caller);
+        copy = this.copies.get(copy.key) as Copy;
+        if (failed.size > 0) return this.stopped(copy, failed);
+        continue;
+      }
+      const handle = outcome.refused.code === 'handle_changed' && !rehandledOnce ? currentHandle(outcome.refused) : null;
+      if (handle === null) break;
+      rehandledOnce = true;
+      copy = await this.save(rehandled(copy, handle));
     }
     if ('refused' in outcome) {
       if (stopsPush(outcome.refused)) return this.stopped(copy, firstLine(outcome.refused));
-      if (outcome.refused.code === 'upload_unavailable' && copy.push!.upload !== undefined && !restaged) {
-        const { upload, ...unstaged } = copy.push!;
-        return this.settle(await this.save({ ...copy, push: unstaged }), caller, true);
+      if (outcome.refused.code === 'upload_unavailable' && copy.pending!.upload !== undefined && !restaged) {
+        const { upload: _upload, ...unstaged } = copy.pending!;
+        return this.settle(await this.save({ ...copy, pending: unstaged }), caller, true);
       }
-      if (outcome.refused.code === 'expired') {
-        return this.recovered(copy, caller, async (current) => {
-          await this.save(without(current));
-          return { refused: true, text: `House does not hold ${short(current.push!.commit)}; run house push again` };
-        });
-      }
-      let settled = await this.save(without(copy));
-      if (settled.unfollowed !== undefined) return { refused: true, text: outcome.refused.text };
-      const rebased = rebaseFixes(outcome.refused);
-      try {
-        settled = (await this.caughtUp([settled], true, caller))[0]!;
-        await this.save(await this.conflicted(settled, outcome.refused, copy.push!, caller));
-      } catch (error) {
-        return {
-          refused: true,
-          text: rebased ? `${outcome.refused.text}\nHouse's current state did not arrive: ${houseCause(error)}` : outcome.refused.text,
-        };
-      }
-      return {
-        refused: true,
-        text: rebased
-          ? `${outcome.refused.text}\n${HOUSE_REF} holds House's current state; rebase onto it and push again`
-          : outcome.refused.text,
-      };
+      const settled = await this.save(without(copy));
+      if (outcome.refused.code !== 'edit_conflict') return { refused: true, text: outcome.refused.text };
+      const lines = await this.conflicted(settled, copy.pending!, outcome.refused);
+      return { refused: true, text: [outcome.refused.text, ...lines].join('\n') };
     }
-    return this.finished(await this.save({ ...copy, push: { ...copy.push!, state: 'accepted', written: outcome.accepted } }), caller);
+    return this.integrated(copy, outcome.accepted);
   }
 
-  private async sentUploads(start: Copy, named: readonly StagedUpload[], caller: Caller): Promise<Map<string, string>> {
+  private async sentParts(start: Copy, named: readonly StagedUpload[], caller: Caller): Promise<Map<string, string | Changed>> {
     let copy = start;
-    const parts = new Map(binaryParts(copy.push!.changes).map((part) => [part.sha256, part]));
-    const commit = await tree(copy.repository, copy.push!.commit);
-    const staged = new Set(copy.push!.staged ?? []);
-    const failed = new Map<string, string>();
+    const pending = copy.pending!;
+    const parts = new Map(pending.changes.filter((change): change is Part => change.op === 'upload').map((part) => [part.sha256, part]));
+    const staged = new Set(pending.staged ?? []);
+    const failed = new Map<string, string | Changed>();
+    const work = await staging();
     let saving = Promise.resolve();
     await eachAtOnce(named, async (upload) => {
       const part = parts.get(upload.sha256)!;
       const path = relative(part.path);
       try {
-        await sentBinary(copy.repository, commit.get(path)!, path, part, upload, (id, partSha256) =>
+        await sentBinary(work, join(copy.repository, pending.read[path]?.name ?? path), path, part, upload, (id, partSha256) =>
           caller.finish(id, part.path, partSha256),
         );
       } catch (error) {
-        failed.set(upload.sha256, `its transfer failed: ${causeOf(error)}`);
+        failed.set(upload.sha256, error instanceof Changed ? error : `its transfer failed: ${causeOf(error)}`);
         return;
       }
       staged.add(upload.sha256);
       saving = saving.then(async () => {
-        copy = await this.save({ ...copy, push: { ...copy.push!, staged: [...staged] } });
+        copy = await this.save({ ...copy, pending: { ...copy.pending!, staged: [...staged] } });
       });
       await saving;
     });
     return failed;
   }
 
-  private stopped(copy: Copy, reasons: ReadonlyMap<string, string> | string): Pushed {
-    const push = copy.push!;
-    const staged = new Set(push.staged ?? []);
-    const unsent = binaryParts(push.changes).filter(({ sha256 }) => !staged.has(sha256));
-    const unchanged = `House holds nothing of ${short(push.commit)} yet, so ${rootOf(copy.room_handle)} is unchanged`;
-    const again = 'house push again resumes this push and sends only what it has not sent';
+  private async stopped(copy: Copy, reasons: ReadonlyMap<string, string | Changed> | string): Promise<Settled> {
+    const pending = copy.pending!;
+    const root = rootOf(copy.room_handle);
+    const unchanged = `House holds nothing of this upload yet, so ${root} is unchanged`;
+    const changed = typeof reasons === 'string' ? [] : [...reasons.values()].filter((reason): reason is Changed => reason instanceof Changed);
+    if (changed.length > 0) {
+      await this.save(without(copy));
+      return { refused: true, text: `${unchanged}: ${changed.map((reason) => reason.message).join('; ')}; run house upload again to send the copy as it is now` };
+    }
+    const again = 'house upload again resumes this upload and sends only what it has not sent';
+    const staged = new Set(pending.staged ?? []);
+    const unsent = pending.changes.filter((change): change is Part => change.op === 'upload' && !staged.has(change.sha256));
     if (typeof reasons === 'string' && unsent.length === 0) return { refused: true, text: `${unchanged}: ${reasons}\n${again}` };
-    const why = (sha256: string) => (typeof reasons === 'string' ? reasons : (reasons.get(sha256) ?? 'not sent yet'));
+    const why = (sha256: string) => (typeof reasons === 'string' ? reasons : String(reasons.get(sha256) ?? 'not sent yet'));
     return {
       refused: true,
-      text: [`${unchanged}; these attachments are not sent:`, ...unsent.map(({ path, sha256 }) => `${relative(path)}: ${why(sha256)}`), again].join(
-        '\n',
-      ),
+      text: [`${unchanged}; these attachments are not sent:`, ...unsent.map(({ path, sha256 }) => `${relative(path)}: ${why(sha256)}`), again].join('\n'),
     };
   }
 
-  private async conflicted(copy: Copy, refusal: Refusal, push: Push, caller: Caller): Promise<Copy> {
+  private async conflicted(copy: Copy, pending: Pending, refusal: Refusal): Promise<string[]> {
     const root = rootOf(copy.room_handle);
-    const touched = new Set(changedPaths(push.changes));
-    const houseTree = await tree(copy.repository, copy.house);
-    const paths = [
-      ...new Set(refusal.conflicts.filter(({ code, path }) => code !== 'path_absent' && touched.has(path)).map(({ path }) => relative(path))),
-    ].filter((path) => !houseTree.has(path));
-    const files = new Map<string, Content>();
-    const revisions: Record<string, string> = {};
-    const binary: Record<string, Held> = {};
-    for (const path of paths) {
-      const file = await caller.info(`${root}/${path}`);
-      if (file === null) continue;
-      files.set(path, { blob: await this.revisionBlob(copy, path, file.revision, caller, file) });
-      revisions[path] = file.revision;
-      binary[path] = { bytes: file.bytes, sha256: file.sha256 };
-    }
-    if (files.size === 0) return copy;
-    const house = await importCommits(copy.repository, [
-      { message: `House ${root}: the attachments ${short(push.commit)} conflicts with`, from: copy.house, files },
-    ]);
-    return { ...copy, house, manifests: { ...copy.manifests, [house]: manifest(copy.house, revisions, binary) } };
-  }
-
-  private async recovered(copy: Copy, caller: Caller, unheld: (current: Copy) => Promise<Pushed>): Promise<Pushed> {
-    const push = copy.push!;
-    const current = (await this.caughtUp([copy], true, caller))[0]!;
-    const house = await tree(copy.repository, current.house);
-    const model = await modelOf(current, house);
-    if (!(await this.landed(copy.repository, push.changes, house, await tree(copy.repository, push.commit), model))) {
-      return unheld(current);
-    }
-    const written: Written[] = [];
-    for (const path of changedPaths(push.changes).map(relative)) written.push(await writtenAt(current, house, path));
-    return this.finished(await this.save({ ...current, push: { ...push, state: 'accepted', written } }), caller);
-  }
-
-  private async finished(start: Copy, caller: Caller): Promise<Pushed> {
-    let copy = start;
-    const { commit } = copy.push!;
-    try {
-      if (copy.push!.acknowledged === undefined) copy = await this.save(await this.acknowledged(copy, caller));
-      const integrated = await this.integrated(copy.push!);
-      if (integrated.done) await this.save(without(copy));
-      return { refused: false, text: integrated.text };
-    } catch {
-      return {
-        refused: false,
-        text: `House accepted ${short(commit)}; run house push again to finish integrating it here`,
-      };
-    }
-  }
-
-  private async acknowledged(start: Copy, caller: Caller): Promise<Copy> {
-    let copy = start;
-    const push = copy.push!;
-    let written = push.written!;
-    const read = push.changes.some((change) => change.op === 'rename');
-    if (read) {
-      copy = (await this.caughtUp([copy], true, caller))[0]!;
-      const house = await tree(copy.repository, copy.house);
-      const sent = await tree(copy.repository, push.house);
-      const unread = push.changes.some(
-        (change) =>
-          change.op === 'rename' &&
-          house.get(relative(change.path)) === sent.get(relative(change.path)) &&
-          !house.has(relative(change.to)),
-      );
-      if (unread) throw new Error(`House's result for ${short(push.commit)} is not readable yet`);
-      const known = new Set(written.map((entry) => relative(entry.path)));
-      for (const path of new Set([...sent.keys(), ...house.keys()])) {
-        if (!known.has(path) && sent.get(path) !== house.get(path)) written = [...written, await writtenAt(copy, house, path)];
+    const touched = new Set(changedPaths(pending.changes).map(relative));
+    const manifest = await readManifest(copy.repository);
+    const work = await staging();
+    const lines: string[] = [];
+    for (const conflict of refusal.conflicts) {
+      const path = relative(conflict.path);
+      if (!touched.has(path)) continue;
+      const read = pending.read[path];
+      const entry = manifest.files[path];
+      if (conflict.revision === undefined) {
+        delete manifest.files[path];
+        lines.push(`${root}/${path}: House no longer holds it; the next house upload sends it as a new file`);
+        continue;
       }
+      const mine = pending.changes.find((change) => change.op === 'write' && relative(change.path) === path);
+      if (conflict.content === undefined && conflict.code === 'path_exists' && mine?.op === 'write' && read !== undefined && (await holding(copy.repository, read.name, read.sha256))) {
+        const theirs = await this.revisionText(conflict.path, conflict.revision);
+        const content = `<<<<<<< current\n${ended(theirs)}=======\n${ended(mine.content)}>>>>>>> yours\n`;
+        await placed(work, join(copy.repository, read.name), content);
+        manifest.files[path] = { revision: conflict.revision, sha256: digest(content), bytes: Buffer.byteLength(content), conflicted: true };
+        lines.push(`${root}/${path}: conflict markers written; resolve them, then run house upload again`);
+        continue;
+      }
+      if (conflict.content === undefined) {
+        manifest.files[path] = { ...(entry ?? { sha256: '', bytes: 0 }), revision: conflict.revision };
+        lines.push(`${root}/${path}: House's revision ${conflict.revision} is now its base; the next house upload sends this copy's version over it`);
+        continue;
+      }
+      if (read === undefined || !(await holding(copy.repository, read.name, read.sha256))) {
+        lines.push(`${root}/${path}: changed while it uploaded; the next house upload merges it`);
+        continue;
+      }
+      await placed(work, join(copy.repository, read.name), conflict.content);
+      manifest.files[path] = { revision: conflict.revision, sha256: digest(conflict.content), bytes: Buffer.byteLength(conflict.content), conflicted: true };
+      lines.push(`${root}/${path}: conflict markers written; resolve them, then run house upload again`);
     }
-    const selected = await tree(copy.repository, push.commit);
-    const houseTree = await tree(copy.repository, copy.house);
-    const parts = pushedBinary(copy, push);
-    const files = new Map<string, Content | null>();
-    const revisions: Record<string, string | null> = {};
-    const binary: Record<string, Held> = {};
-    const settled = new Map<string, Written>();
-    for (const entry of written) {
-      const path = relative(entry.path);
-      if (entry.revision !== null || !settled.has(path)) settled.set(path, entry);
-    }
-    for (const [path, entry] of settled) {
-      if (!selected.has(path) && !houseTree.has(path) && !declaredWritable(path, copy)) continue;
-      revisions[path] = entry.revision;
-      const part = parts.get(path);
-      const kept = heldAt(copy, copy.house, path);
-      if (entry.revision === null) files.set(path, null);
-      else if (part !== undefined) {
-        files.set(path, { blob: selected.get(path)! });
-        binary[path] = part;
-      } else if (kept !== undefined && revisionAt(copy, copy.house, path) === entry.revision) {
-        files.set(path, { blob: houseTree.get(path)! });
-        binary[path] = kept;
-      } else files.set(path, entry.content ?? (await this.revisionText(entry.path, entry.revision)));
-    }
-    const edits = new Map(
-      [...files].filter(([path, content]) => (content === null ? selected.has(path) : selected.get(path) !== blobId(content))),
-    );
-    const received = read
-      ? []
-      : [...files.keys()].filter((path) => revisionAt(copy, copy.house, path) === revisionAt(copy, push.house, path));
-    const accepted = `House ${rootOf(copy.room_handle)} with ${push.commit} accepted`;
-    const house = await importCommits(copy.repository, [
-      ...(edits.size === 0 ? [] : [{ message: accepted, from: push.commit, files: edits }]),
-      {
-        message: accepted,
-        from: copy.house,
-        merge: edits.size === 0 ? push.commit : ':1',
-        files: new Map(received.map((path) => [path, files.get(path)!])),
-      },
-    ]);
-    const acknowledged = edits.size === 0 ? push.commit : await revision(copy.repository, `${house}^2`);
-    const after = await tree(copy.repository, house);
-    return {
-      ...copy,
-      house,
-      manifests: {
-        ...copy.manifests,
-        [acknowledged]: manifest(push.base, revisions, binary),
-        [house]: manifest(
-          copy.house,
-          Object.fromEntries(received.map((path) => [path, revisions[path] ?? null])),
-          Object.fromEntries(received.flatMap((path) => (binary[path] === undefined ? [] : [[path, binary[path]]]))),
-        ),
-      },
-      moves: copy.moves.filter(({ from, to }) => !(after.has(to) && !after.has(from))),
-      push: { ...push, acknowledged },
-    };
+    await writeManifest(copy.repository, work, manifest);
+    return lines;
   }
 
-  private async landed(
-    repository: string,
-    changes: readonly Edit[],
-    house: Map<string, string>,
-    selected: Map<string, string>,
-    model: VerifiedModel,
-  ): Promise<boolean> {
-    const created = new Set(changes.flatMap((change) => (change.op === 'create' || change.op === 'upload' ? [change.path] : [])));
-    for (const change of changes) {
+  private async textOf(written: Written, sent: string | undefined): Promise<string> {
+    if (typeof written.content === 'string' && !CUT.test(written.content)) return written.content;
+    if (written.content === undefined && sent !== undefined) return sent;
+    return this.revisionText(written.path, written.revision!);
+  }
+
+  private async integrated(copy: Copy, accepted: Written[]): Promise<Settled> {
+    const pending = copy.pending!;
+    const root = rootOf(copy.room_handle);
+    const manifest = await readManifest(copy.repository);
+    const work = await staging();
+    const answered = new Map(accepted.filter((written) => written.revision !== null).map((written) => [relative(written.path), written]));
+    const lines: string[] = [];
+    const sent = new Set<string>();
+    for (const change of pending.changes) {
       const path = relative(change.path);
+      sent.add(path);
+      if (change.op === 'delete') {
+        delete manifest.files[path];
+        continue;
+      }
+      if (change.op === 'move') {
+        const to = relative(change.to);
+        sent.add(to);
+        const entry = manifest.files[path]!;
+        delete manifest.files[path];
+        manifest.files[to] = { revision: answered.get(to)?.revision ?? entry.revision, sha256: entry.sha256, bytes: entry.bytes };
+        continue;
+      }
+      const written = answered.get(path)!;
       if (change.op === 'upload') {
-        if (house.get(path) === selected.get(path)) continue;
-        return false;
+        manifest.files[path] = { revision: written.revision!, sha256: change.sha256, bytes: change.bytes };
+        continue;
       }
-      if (change.op === 'remove') {
-        if (created.has(change.path) || !house.has(path)) continue;
-        return false;
+      const text = await this.textOf(written, change.content);
+      const read = pending.read[path]!;
+      if (text === change.content) {
+        manifest.files[path] = { revision: written.revision!, sha256: read.sha256, bytes: Buffer.byteLength(text) };
+      } else if (await holding(copy.repository, read.name, read.sha256)) {
+        await placed(work, join(copy.repository, read.name), text);
+        manifest.files[path] = { revision: written.revision!, sha256: digest(text), bytes: Buffer.byteLength(text) };
+      } else {
+        lines.push(`${root}/${path}: changed while it uploaded; House accepted it and local integration is pending, so the next house upload merges it`);
       }
-      if (change.op === 'rename') {
-        if (!house.has(path) && house.get(relative(change.to)) === selected.get(relative(change.to))) continue;
-        return false;
-      }
-      const entry = house.get(path);
-      const current = entry === undefined ? undefined : await blobText(repository, entry);
-      if ((change.op === 'create' || change.op === 'replace') && current === change.content) continue;
-      const document = current === undefined ? undefined : readDocument(current, path, model)?.document;
-      if (document === undefined) return false;
-      if (change.op === 'set_field' && JSON.stringify(document.fields[change.field]) === JSON.stringify(change.value)) continue;
-      if (change.op === 'replace_section' && document.sections[change.section] === change.content) continue;
-      if (change.op === 'replace_preamble' && document.preamble === change.content) continue;
-      return false;
     }
-    return true;
+    for (const [path, written] of answered) {
+      const entry = manifest.files[path];
+      if (sent.has(path) || entry === undefined || entry.revision === written.revision) continue;
+      const text = await this.textOf(written, undefined);
+      if (!(await holding(copy.repository, path, entry.sha256))) {
+        lines.push(`${root}/${path}: changed here, so House's change was not brought; the next house upload merges it`);
+        continue;
+      }
+      await placed(work, join(copy.repository, path), text);
+      manifest.files[path] = { revision: written.revision!, sha256: digest(text), bytes: Buffer.byteLength(text) };
+    }
+    await writeManifest(copy.repository, work, manifest);
+    await this.save(without(copy));
+    return { refused: false, files: pending.changes.length, lines };
   }
 
   private async revisionText(path: string, wanted: string): Promise<string> {
@@ -1532,39 +1472,7 @@ export class LocalCopies {
       revision: wanted,
     });
     const content = page.revisions.find((entry) => entry.revision === wanted)?.content;
-    if (content === undefined) throw new Error(`House's result for ${path} is not readable yet`);
+    if (content === undefined) throw new Error(`House's text of ${path} at ${wanted} is not readable yet`);
     return content;
-  }
-
-  private async integrated(push: Push): Promise<{ done: boolean; text: string }> {
-    const { commit, worktree, branch } = push;
-    const acknowledged = push.acknowledged!;
-    const accepted = `House accepted ${short(commit)}`;
-    if (acknowledged === commit) return { done: true, text: `${accepted}.` };
-    const pending = (reason: string) => ({
-      done: false,
-      text: `${accepted}; local integration is pending (${reason}): ${acknowledged} holds House's result.`,
-    });
-    const head = await git(worktree, ['symbolic-ref', '-q', 'HEAD']).then(
-      (name) => name.trim(),
-      () => null,
-    );
-    if (branch === null || head !== branch) return pending('the branch changed');
-    const tip = await revision(worktree, 'HEAD');
-    const name = branch.replace(/^refs\/heads\//, '');
-    if (await succeeded(worktree, ['merge-base', '--is-ancestor', acknowledged, tip])) {
-      return { done: true, text: `${accepted}; ${name} holds it.` };
-    }
-    if (!(await succeeded(worktree, ['merge-base', '--is-ancestor', commit, tip]))) return pending('the branch changed');
-    if ((await git(worktree, ['status', '--porcelain', '--untracked-files=no'])).trim() !== '') {
-      return pending('uncommitted changes');
-    }
-    if (tip === commit) {
-      if (!(await succeeded(worktree, ['merge', '--ff-only', '-q', acknowledged]))) return pending('a conflict');
-    } else if (!(await succeeded(worktree, ['rebase', '-q', '--onto', acknowledged, commit], IDENTITY))) {
-      await succeeded(worktree, ['rebase', '--abort']);
-      return pending('a conflict');
-    }
-    return { done: true, text: `${accepted}; ${name} is at ${short(await revision(worktree, 'HEAD'))}.` };
   }
 }

@@ -42,10 +42,14 @@ this computer as a new one when House no longer holds it.
 `kit settings` prints Kit's two settings, which every update and every rerun of the install keep: `skills`, whether Kit places House's Skills, and `workspace`, the folder that holds `agents` and `local-copies`. `kit settings skills on|off` and `kit settings workspace <absolute path>` change one, as the Environment's page in House does.
 A new workspace must hold no `agents` or `local-copies` folder, and none is taken while an Agent works; Kit then ends its conversations' processes, moves both folders there, across filesystems copying and checking them before it deletes the old ones, and ends so its service starts it there.
 
-`kit resident` keeps the Environment connected and, as it connects, copies the text of each Room you chose for it as a
-Git repository in the workspace's `local-copies`, and keeps a Room's copy as it is, no longer refreshing it, once the
-Room may no longer be copied here. `house fetch` does the same and records House's changes on each copy's
-`refs/house/received`; rebase onto it, commit and run `house push --owner` in the copy. An Agent runs both, without `--owner`. `house upload` and `house download` move a Room's other files straight between disk and House's store, and a broken upload resumes on its own.
+`kit resident` keeps the Environment connected and, as it connects, copies the text of each Room you chose for it into a
+plain folder in the workspace's `local-copies`, beside a hidden `.house` file recording each file's revision and SHA-256, and keeps a
+Room's copy as it is, no longer refreshing it, once the Room may no longer be copied here. `house download` brings House's
+changes into each copy, overwriting only files unchanged here, and with `--with-attachments` the attachments it lacks up to
+`--max-size` megabytes, 10 by default. `house upload --owner`, run in a copy, sends every file changed, added or deleted there;
+House merges a change made on an older revision, and a clash leaves conflict markers in the file to resolve before the next upload.
+An Agent runs both, without `--owner`. With a JSON argument, `house upload` and `house download` move one file between disk and a
+Room, and a broken upload resumes on its own. A copy made by an earlier Kit keeps its files and its `.git`, which Kit no longer reads.
 
 Kit turns each audio file your message to an Agent links into text on this computer before the Agent reads it, and keeps a message whose audio it cannot turn into text from starting. While transcription is on, the speech engine and model use about 425 MB beside the Environment's credential; turning it off deletes them.
 

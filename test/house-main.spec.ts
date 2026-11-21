@@ -20,9 +20,12 @@ const MEMORY = fileURLToPath(new URL('./memory.ts', import.meta.url));
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
-const PUSH = "push [commit]: sends the Local copy's committed changes to House in one push, each .md file as document text and every other file as an attachment";
-const PUSH_HELP = `usage: house push [commit] [--owner]\n${PUSH}`;
-const UPLOAD_USAGE = `usage: house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
+const UPLOAD =
+  "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names";
+const UPLOAD_USAGE = `usage: house upload [--owner], or house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
+const DOWNLOAD =
+  "download: brings House's changes into every Local copy, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file";
+const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 
 function runHouse(
   home: string,
@@ -75,7 +78,7 @@ it("reads a Tool's arguments from stdin after -, so an update larger than one Li
   const house = await startHouse();
   const home = await connected(house, true);
   house.route('POST', '/', ({ body }) => ({ body: { jsonrpc: '2.0', id: (body as { id: string }).id, result: shelled('applied') } }));
-  const changes = [{ op: 'create', path: '/rooms/notes/long.md', content: 'line\n'.repeat(1024 * 1024 / 5) }];
+  const changes = [{ op: 'write', path: '/rooms/notes/long.md', content: 'line\n'.repeat(1024 * 1024 / 5) }];
   const piped = JSON.stringify({ changes });
   expect(Buffer.byteLength(piped)).toBeGreaterThan(1024 * 1024);
 
@@ -372,7 +375,7 @@ it('says a write may have taken effect when House answers with no result, and to
   const home = await connected(house, true);
   house.route('POST', '/', () => ({ status: 502, bytes: { type: 'text/html', content: '<html>Bad Gateway</html>' } }));
 
-  const ran = await runHouse(home, ['update', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}']);
+  const ran = await runHouse(home, ['update', '{"changes":[{"op":"write","path":"/rooms/notes/new.md","content":"new"}]}']);
 
   expect(ran).toEqual({
     status: 1,
@@ -491,7 +494,7 @@ function listing(house: House, tools: unknown[]): void {
   });
 }
 
-it('prints the same help for house help as for house --help, naming house help <tool>, listing help, push, fetch and download, and no Git verb', async () => {
+it('prints the same help for house help as for house --help, naming house help <tool>, listing help and both forms of upload and download, and no Git verb', async () => {
   const house = await startHouse();
   const home = await connected(house, true);
 
@@ -500,14 +503,8 @@ it('prints the same help for house help as for house --help, naming house help <
 
   expect(help).toEqual(dashed);
   expect(help.status).toBe(0);
-  expect(help.stdout.split('\n').slice(0, 5)).toEqual([
-    USAGE,
-    'help [tool]',
-    PUSH,
-    "fetch: records House's changes on each Local copy's refs/house/received",
-    'download: writes a binary file of a Room to the local file named by file',
-  ]);
-  expect(help.stdout).not.toMatch(/\bgit\b/);
+  expect(help.stdout.split('\n').slice(0, 4)).toEqual([USAGE, 'help [tool]', UPLOAD, DOWNLOAD]);
+  expect(help.stdout).not.toMatch(/\bgit\b|\bcommit\b|\brebase\b|house push|house fetch/);
 });
 
 it('lists a Tool without a description in house --help with its top-level arguments, and a described Tool by its line alone', async () => {
@@ -632,7 +629,7 @@ it.each([
 });
 
 it.each([
-  [['update', '{"changes":[{"op":"create","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
+  [['update', '{"changes":[{"op":"write","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
   [['rooms_list', '{}', '--bogus'], '--bogus'],
   [['--version'], '--version'],
   [['help', 'update', '{}'], '{}'],
@@ -651,15 +648,13 @@ it.each([
 });
 
 it.each([
-  [['--help', 'push'], PUSH_HELP],
-  [['--help', 'push', 'HEAD', '--owner'], PUSH_HELP],
-  [['--help', 'fetch'], 'usage: house fetch'],
-  [['help', 'push'], PUSH_HELP],
-  [['help', 'fetch'], 'usage: house fetch'],
-  [['help', 'download'], `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`],
-  [['download', '--help'], `usage: house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`],
-  [['help', 'upload'], UPLOAD_USAGE],
-  [['upload', '--help'], UPLOAD_USAGE],
+  [['--help', 'upload'], `${UPLOAD_USAGE}\n${UPLOAD}`],
+  [['--help', 'upload', '--owner'], `${UPLOAD_USAGE}\n${UPLOAD}`],
+  [['--help', 'download', '--with-attachments'], `${DOWNLOAD_USAGE}\n${DOWNLOAD}`],
+  [['help', 'download'], `${DOWNLOAD_USAGE}\n${DOWNLOAD}`],
+  [['download', '--help'], `${DOWNLOAD_USAGE}\n${DOWNLOAD}`],
+  [['help', 'upload'], `${UPLOAD_USAGE}\n${UPLOAD}`],
+  [['upload', '--help'], `${UPLOAD_USAGE}\n${UPLOAD}`],
 ])('prints house %j as the usage of the command it names and calls nothing', async (argv, usage) => {
   const house = await startHouse();
   const home = await connected(house, true);
@@ -671,10 +666,10 @@ it.each([
 });
 
 it.each([
-  [['push', '--dry-run'], true, '--dry-run', 'usage: house push [commit] [--owner]'],
-  [['push', '--owner', '--dry-run'], false, '--dry-run', 'usage: house push [commit] [--owner]'],
-  [['push', 'HEAD', '--owner', '--dry-run'], false, '--dry-run', 'usage: house push [commit] [--owner]'],
-  [['fetch', '--x'], false, '--x', 'usage: house fetch'],
+  [['upload', '--dry-run'], true, '--dry-run', UPLOAD_USAGE],
+  [['upload', '--owner', '--dry-run'], false, '--dry-run', UPLOAD_USAGE],
+  [['upload', '{"file":"a.md","path":"/rooms/notes/a.md"}', '--owner'], false, '--owner', UPLOAD_USAGE],
+  [['download', '--x'], false, '--x', DOWNLOAD_USAGE],
 ])('refuses house %j with its usage before it opens a Kit connection', async (argv, conversation, unexpected, usage) => {
   const home = await temporaryHome();
   vi.stubEnv('HOME', accountOf(home));

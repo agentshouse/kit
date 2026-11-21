@@ -1,17 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import { randomUUID } from 'node:crypto';
+import { copyFile, rm } from 'node:fs/promises';
 import { downloaded, fetched, fileRange, mediaTypeOf, sentPart, uploaded, type Address, type Finished, type Way } from './files.ts';
-import { blobBytes, blobSizes, isText, storedFile } from './git.ts';
-
-export interface Described {
-  bytes: number;
-  sha256: string;
-  media_type: string;
-}
+import { hashed } from './manifest.ts';
 
 export interface StagedUpload {
   sha256: string;
@@ -23,11 +13,14 @@ export interface Staged {
   staged: true;
 }
 
+export interface Part {
+  bytes: number;
+  sha256: string;
+}
+
+export class Changed extends Error {}
+
 const SENT_AT_ONCE = 10;
-
-const UPLOADS = 'house-uploads';
-
-const DOWNLOADS = 'house-downloads';
 
 const OCTET_STREAM = 'application/octet-stream';
 
@@ -38,38 +31,12 @@ const STORE: Way = {
   refused: (status) => new Error(`the store answered ${status}`),
 };
 
-async function digestOf(repository: string, object: string): Promise<{ bytes: number; sha256: string }> {
-  const digest = createHash('sha256');
-  let bytes = 0;
-  for await (const chunk of blobBytes(repository, object)) {
-    bytes += chunk.length;
-    digest.update(chunk);
-  }
-  return { bytes, sha256: digest.digest('hex') };
-}
-
 export function isDocument(path: string): boolean {
   return MARKDOWN.test(path);
 }
 
-export async function untext(repository: string, documents: readonly (readonly [string, string])[], maxBytes: number): Promise<string[]> {
-  const sizes = await blobSizes(repository, documents.map(([, object]) => object));
-  const refused: string[] = [];
-  for (const [path, object] of documents) {
-    if (!(await isText(repository, object, sizes.get(object)!, maxBytes))) refused.push(path);
-  }
-  return refused;
-}
-
-export async function attachments(repository: string, arriving: readonly (readonly [string, string])[]): Promise<Map<string, Described>> {
-  const described = new Map<string, Described>();
-  for (const [path, object] of arriving) described.set(path, { ...(await digestOf(repository, object)), media_type: mediaTypeOf(path) ?? OCTET_STREAM });
-  return described;
-}
-
-export async function holds(repository: string, object: string, file: { bytes: number; sha256: string }): Promise<boolean> {
-  const held = await digestOf(repository, object);
-  return held.bytes === file.bytes && held.sha256 === file.sha256;
+export function mediaType(path: string): string {
+  return mediaTypeOf(path) ?? OCTET_STREAM;
 }
 
 export async function eachAtOnce<T>(items: readonly T[], work: (item: T) => Promise<void>): Promise<void> {
@@ -81,24 +48,26 @@ export async function eachAtOnce<T>(items: readonly T[], work: (item: T) => Prom
 }
 
 export async function sentBinary(
-  repository: string,
-  object: string,
+  staging: string,
+  file: string,
   name: string,
-  file: Described,
+  part: Part,
   upload: StagedUpload,
   finish: (upload: string, partSha256: string[]) => Promise<Finished<Staged>>,
 ): Promise<void> {
-  const directory = join(repository, '.git', UPLOADS);
-  await mkdir(directory, { recursive: true });
-  const copy = join(directory, randomUUID());
+  const copy = `${staging}${randomUUID()}`;
   try {
-    await pipeline(Readable.from(blobBytes(repository, object)), createWriteStream(copy, { flags: 'wx' }));
+    await copyFile(file, copy).catch(() => {
+      throw new Changed(`${name} is gone since house upload read it`);
+    });
+    const held = await hashed(copy);
+    if (held?.sha256 !== part.sha256 || held.bytes !== part.bytes) throw new Changed(`${name} changed since house upload read it`);
     await uploaded(
       { id: upload.id, part_bytes: upload.part_bytes },
       {
         name,
-        bytes: file.bytes,
-        sha256: file.sha256,
+        bytes: part.bytes,
+        sha256: part.sha256,
         read: (start, end) => fileRange(copy, start, end, (error) => error as Error),
         send: (url, start, end, headers) => sentPart(url, copy, start, end, headers, STORE),
         finish,
@@ -109,16 +78,13 @@ export async function sentBinary(
   }
 }
 
-export async function receivedBinary(repository: string, name: string, address: () => Promise<Address>): Promise<string> {
-  const file = join(repository, '.git', DOWNLOADS, randomUUID());
+export async function receivedBinary(staging: string, name: string, address: () => Promise<Address>): Promise<string> {
+  const file = `${staging}${randomUUID()}`;
   try {
     await downloaded(address, (url) => fetched(url), file, name);
-    return await storedFile(repository, file);
-  } finally {
+    return file;
+  } catch (error) {
     await rm(file, { force: true });
+    throw error;
   }
-}
-
-export async function sweptTransfers(repository: string): Promise<void> {
-  for (const directory of [UPLOADS, DOWNLOADS]) await rm(join(repository, '.git', directory), { recursive: true, force: true });
 }

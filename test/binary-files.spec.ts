@@ -7,7 +7,7 @@ import { stringify } from 'yaml';
 import { until, type Received } from './double.ts';
 import { conversationCredential, hostKit, lastCall, opened, type Hosted, type McpCall } from './environment.ts';
 import { uploadTool } from './store.ts';
-import { commitAll, git, house, serveRooms, type Room, type Rooms } from './rooms.ts';
+import { house, MANIFEST, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
 const REDRAWN = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0, 8, 0x45, 0x78, 0x69, 0x66]);
@@ -41,16 +41,16 @@ async function copied(): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
   room.put('ROOM.md', 'The notes Room\n');
   room.put('plan.md', 'one\n');
   room.upload('photo.jpg', JPEG);
-  await rooms.fetch([room]);
+  await rooms.download([room]);
   return { hosted, rooms, room };
 }
 
-function copyState(hosted: Hosted, room: Room): Promise<string[]> {
-  return Promise.all([
-    readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8'),
-    Promise.resolve(git(room.repository, 'for-each-ref', '--format=%(refname) %(objectname)')),
-    Promise.resolve(git(room.repository, 'status', '--porcelain', '--ignored')),
-  ]);
+async function copyState(hosted: Hosted, room: Room): Promise<string[]> {
+  return [
+    await readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8'),
+    await readFile(join(room.repository, MANIFEST), 'utf8'),
+    (await readdir(room.repository, { recursive: true })).sort().join('\n'),
+  ];
 }
 
 function batches(hosted: Hosted): unknown[] {
@@ -219,7 +219,7 @@ it('refuses a download of a document whose info answer House cut as one of a tex
   expect(existsSync(target)).toBe(false);
 });
 
-it('copies and fetches a Room holding binary files with no binary entry or byte and no byte read, and so does a second Local copy', async () => {
+it('copies and downloads a Room holding attachments with no byte read, recording each as skipped, and so does a second Local copy', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -229,42 +229,39 @@ it('copies and fetches a Room holding binary files with no binary entry or byte 
   own.put('diary.md', 'Private\n');
   own.upload('scans/receipt.pdf', REDRAWN);
 
-  await rooms.fetch([room, own]);
+  await rooms.download([room, own]);
   room.upload('photo.jpg', REDRAWN);
   room.upload('images/cover.jpg', JPEG);
   room.put('plan.md', 'one\ntwo\n');
   own.upload('scans/second.pdf', JPEG);
-  const fetched = await house(hosted, '/', 'fetch');
+  const downloaded = await house(hosted, '/', 'download');
 
-  expect(fetched.status).toBe(0);
-  expect(git(room.repository, 'show', 'refs/house/received:plan.md')).toBe('one\ntwo\n');
-  for (const [copy, documents] of [
-    [room, 'plan.md'],
-    [own, 'diary.md'],
+  expect(downloaded).toEqual({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n', stderr: '' });
+  expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('one\ntwo\n');
+  for (const [copy, skipped] of [
+    [room, ['images/cover.jpg', 'photo.jpg']],
+    [own, ['scans/receipt.pdf', 'scans/second.pdf']],
   ] as const) {
-    expect(git(copy.repository, 'ls-tree', '-r', '--name-only', 'refs/house/received')).not.toMatch(/\.(jpg|pdf)$/m);
-    expect(git(copy.repository, 'ls-files')).toContain(documents);
-    const local = (await readdir(copy.repository, { recursive: true })).filter((path) => !path.startsWith('.git'));
-    expect(local.filter((path) => /\.(jpg|pdf)$/.test(path))).toEqual([]);
-    const manifest = await readFile(join(hosted.home, 'local-copies/rooms', `${copy.ref}.json`), 'utf8');
-    expect(manifest).not.toMatch(/\.(jpg|pdf)/);
+    const local = (await readdir(copy.repository, { recursive: true })).filter((path) => /\.(jpg|pdf)$/.test(path));
+    expect(local).toEqual([]);
+    const { files } = JSON.parse(await readFile(join(copy.repository, MANIFEST), 'utf8')) as { files: Record<string, { skipped?: true }> };
+    expect(Object.entries(files).filter(([, entry]) => entry.skipped).map(([path]) => path).sort()).toEqual([...skipped]);
   }
   expect(hosted.store.requests).toEqual([]);
   expect(hosted.mcp).toEqual([]);
 });
 
-it("refuses a push in House's words when its discovery does not answer the cap, and sends nothing", async () => {
+it("refuses an upload in House's words when its discovery does not answer the cap, and sends nothing", async () => {
   const { hosted, room } = await copied();
   await writeFile(join(room.repository, 'plan.md'), 'one\ntwo\n');
-  commitAll(room.repository, 'text');
   hosted.house.route('POST', '/kit/door/rooms/discover', () => ({
     status: 503,
-    body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; push again shortly', retryable: true } },
+    body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; upload again shortly', retryable: true } },
   }));
 
-  const pushed = await house(hosted, room.repository, 'push', '--owner');
+  const uploaded = await upload(hosted, room);
 
-  expect(pushed).toEqual({ status: 1, stdout: '', stderr: 'house: house_unavailable: House is unavailable; push again shortly\n' });
+  expect(uploaded).toEqual({ status: 1, stdout: '', stderr: 'house: house_unavailable: House is unavailable; upload again shortly\n' });
   expect(batches(hosted)).toEqual([]);
   expect(room.files.get('plan.md')!.content).toBe('one\n');
 });

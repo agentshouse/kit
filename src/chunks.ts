@@ -56,6 +56,9 @@ export async function* chunkEntries(
   chunks: readonly Chunk[],
   models: readonly Text[],
 ): AsyncGenerator<Text | KitBinaryChange> {
+  for (const { hash } of chunks) {
+    for (const line of (await readFile(join(directory, hash), 'utf8')).split('\n')) if (line !== '') JSON.parse(line);
+  }
   yield* models;
   for (const { hash } of chunks) {
     const file = join(directory, hash);
