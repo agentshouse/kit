@@ -2,12 +2,12 @@ import type { KitBinaryChange } from '@agentshouse/kit-wire';
 import { isUtf8 } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
 import { fileInfo, paused, type FileInfo, type Finished } from './files.ts';
-import { kitHome, workspaceRoot } from './home.ts';
+import { kitHome, roomsFolder } from './home.ts';
 import {
   digest,
   hashed,
@@ -25,6 +25,7 @@ import {
 import { ownAgentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
+import { keptName, present as found, rerooted, within } from './workspace.ts';
 
 const ROOMS = 'rooms/';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
@@ -35,6 +36,7 @@ const MEGABYTE = 1_000_000;
 const CUT = /\noutput_cut \d+ of \d+ bytes$/;
 const KIT_IGNORES = ['.gitignore', '.ignore'];
 const KIT_GIT = ['.git/refs/house/received', '.git/house-chunks', '.git/house-uploads', '.git/house-downloads'];
+const KIT_NAMES = ['agents.md', 'claude.md'];
 
 export const DEFAULT_MAX_SIZE = 10;
 export const UPLOAD_NEEDS_OWNER = 'outside an Agent conversation, house upload needs --owner';
@@ -270,16 +272,12 @@ function recordOf(key: string): string {
   return join(kitHome(), 'local-copies', `${key}.json`);
 }
 
-function stagingPrefix(): string {
+export function stagingPrefix(): string {
   return `.${createHash('sha256').update(kitHome()).digest('hex').slice(0, 16)}-`;
 }
 
-export function localCopies(): string {
-  return join(workspaceRoot(), 'local-copies');
-}
-
 async function staging(): Promise<string> {
-  const folder = join(localCopies(), 'rooms', `${stagingPrefix()}work`);
+  const folder = join(roomsFolder(), `${stagingPrefix()}work`);
   await mkdir(folder, { recursive: true });
   return `${folder}/`;
 }
@@ -290,6 +288,10 @@ function rootOf(handle: string): string {
 
 function relative(path: string): string {
   return path.replace(/^\/rooms\/[^/]+\//, '');
+}
+
+function kitsOwn(path: string): boolean {
+  return !path.includes('/') && KIT_NAMES.includes(path.toLowerCase());
 }
 
 function declaredWritable(path: string, copy: Scope): boolean {
@@ -632,7 +634,7 @@ export class LocalCopies {
   }
 
   async swept(): Promise<void> {
-    const rooms = join(localCopies(), 'rooms');
+    const rooms = roomsFolder();
     for (const name of await readdir(rooms).catch(() => [])) {
       if (name.startsWith(stagingPrefix())) await rm(join(rooms, name), { recursive: true, force: true });
     }
@@ -679,7 +681,8 @@ export class LocalCopies {
             continue;
           }
           const { unfollowed, ...followed } = held;
-          current.push(unfollowed === undefined && held.room_handle === handle ? held : await this.save({ ...followed, room_handle: handle }));
+          const named = unfollowed === undefined && held.room_handle === handle ? held : await this.save({ ...followed, room_handle: handle });
+          current.push(await this.renamed(named));
         } catch (error) {
           refused = true;
           said.push(`${rootOf(handle)}: ${causeOf(error)}`);
@@ -819,12 +822,27 @@ export class LocalCopies {
   }
 
   private chunksFolder(): string {
-    return join(localCopies(), 'rooms', `${stagingPrefix()}${randomUUID()}`);
+    return join(roomsFolder(), `${stagingPrefix()}${randomUUID()}`);
+  }
+
+  private async setAside(path: string): Promise<void> {
+    if ((await found(path)) === null) return;
+    const kept = await keptName(path);
+    await rename(path, kept);
+    for (const copy of [...this.copies.values()]) if (within(copy.repository, path)) await this.save(rerooted(copy, path, kept));
+  }
+
+  private async renamed<T extends Held>(copy: T): Promise<T> {
+    const folder = join(roomsFolder(), copy.room_handle);
+    if (dirname(copy.repository) !== roomsFolder() || basename(copy.repository) === copy.room_handle) return copy;
+    await this.setAside(folder);
+    await rename(copy.repository, folder);
+    return this.save(rerooted(copy, copy.repository, folder));
   }
 
   private async materialized({ key, handle, authority }: Wanted, whole: (directory: string) => Promise<Whole>): Promise<Copy> {
-    const repository = join(localCopies(), 'rooms', authority.room_ref);
-    if (await exists(repository)) throw new Error(`${repository} already exists and Kit leaves it as it is`);
+    const repository = join(roomsFolder(), handle);
+    await this.setAside(repository);
     const folder = join(dirname(repository), `${stagingPrefix()}${randomUUID()}`);
     const chunks = this.chunksFolder();
     const scope = { write: authority.operations.write, protected: authority.protected_paths };
@@ -1256,6 +1274,7 @@ export class LocalCopies {
     let adopted = false;
     for (const [path, file] of present) {
       const entry = manifest.files[path];
+      if (kitsOwn(path)) continue;
       if (entry === undefined) added.push(path);
       else if (entry.read_only) continue;
       else if (entry.sha256 !== file.sha256) changed.push(path);
@@ -1265,7 +1284,7 @@ export class LocalCopies {
       }
     }
     for (const [path, entry] of Object.entries(manifest.files)) {
-      if (!entry.read_only && !entry.skipped && !present.has(path)) gone.push(path);
+      if (!kitsOwn(path) && !entry.read_only && !entry.skipped && !present.has(path)) gone.push(path);
     }
     if (adopted) await writeManifest(copy.repository, await staging(), manifest);
     const listed = (paths: string[], file: (path: string) => { sha256: string; bytes: number }) => {

@@ -5,9 +5,10 @@ import { parseArgs } from 'node:util';
 import { HouseRefusal, kitAct } from './api.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { otherAccountKit, takeOverEarlier } from './earlier.ts';
-import { kitHome, readDisconnected, readEnrolment, storedConfiguration, writeConfiguration } from './home.ts';
+import { houseFolder, kitHome, readDisconnected, readEnrolment, storedConfiguration, writeConfiguration } from './home.ts';
 import { DEFAULT_HOUSE, enrol, placeConnection } from './login.ts';
 import { runningRelease } from './owner.ts';
+import { houseRoot } from './settings.ts';
 import { quoted } from './shell.ts';
 import { defineSupervisor, launcher, supervise, systemd } from './supervisor.ts';
 
@@ -73,6 +74,9 @@ export async function connect(argv: string[]): Promise<void> {
   }
   await takeOverEarlier();
   settleHeld();
+  const held = await storedConfiguration();
+  const workspace = held.workspace ?? (await houseRoot());
+  if (workspace === null) throw new Error(`${houseFolder()} holds what is not Kit's; move it elsewhere, then run this command again`);
   const stored = await readEnrolment();
   const other = stored === null && (await readDisconnected()) === null ? otherAccountKit() : null;
   if (other !== null) throw new Error(`this computer's Kit runs as ${other}; run this command as ${other} to update it`);
@@ -91,7 +95,7 @@ export async function connect(argv: string[]): Promise<void> {
   if (install !== undefined && install !== '') await writeFile(join(kitHome(), 'install-command'), `${install}\n`, { mode: 0o600 });
   const settings = await storedConfiguration();
   if (settings.skills === undefined || settings.workspace === undefined) {
-    await writeConfiguration({ skills: true, workspace: kitHome(), ...settings });
+    await writeConfiguration({ skills: true, workspace, ...settings });
   }
   await placeConnection(house);
   const { environment } = (await readEnrolment())!;

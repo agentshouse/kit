@@ -126,8 +126,8 @@ it("reports the release of each CLI the login shell finds, its sign-in state, th
     ...('form' in report ? { form: expect.stringMatching(/^(laptop|desktop|server)$/) } : {}),
     kit_release: KIT_PACKAGE.version,
     wire: KIT_WIRE,
-    agent_base: join(home, 'agents'),
-    settings: { skills: true, workspace: home },
+    agent_base: join(accountOf(home), 'house', 'agents'),
+    settings: { skills: true, workspace: join(accountOf(home), 'house') },
     agents: [
       {
         kind: 'codex-acp',
