@@ -50,6 +50,10 @@ export function oneFolder(account = homedir()): string {
   return join(account, '.agents', 'house');
 }
 
+export function houseFolder(account = homedir()): string {
+  return join(account, 'house');
+}
+
 export function desktopPrefix(): string {
   return join(homedir(), '.local', 'share', 'house-kit');
 }
@@ -100,11 +104,15 @@ export function ownerLock(): string {
 
 export function workspaceRoot(): string {
   if (earlierPrefix() !== null) return process.env.HOUSE_KIT_WORKSPACE ?? '/agents/house';
-  return configuredWorkspace() ?? kitHome();
+  return configuredWorkspace() ?? houseFolder();
 }
 
 export function agentBase(): string {
   return join(workspaceRoot(), 'agents');
+}
+
+export function roomsFolder(): string {
+  return join(workspaceRoot(), 'rooms');
 }
 
 function parsed<T>(name: string, text: string): T {
@@ -224,7 +232,7 @@ function configuredWorkspace(): string | undefined {
 
 export async function readConfiguration(): Promise<Configuration> {
   const stored = await readHome<Partial<Configuration>>(CONFIGURATION);
-  return { skills: stored?.skills !== false, workspace: stored?.workspace ?? kitHome() };
+  return { skills: stored?.skills !== false, workspace: stored?.workspace ?? houseFolder() };
 }
 
 export async function storedConfiguration(): Promise<Partial<Configuration> & Record<string, unknown>> {

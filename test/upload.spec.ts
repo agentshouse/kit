@@ -52,6 +52,30 @@ it('uploads an edit, a new file and a deletion found by hash with the revisions 
   expect(batches(hosted)).toHaveLength(1);
 });
 
+it("sends nothing of an AGENTS.md or a claude.md at the copy's top, whatever their case, and uploads the rest of the copy", async () => {
+  const { hosted, room } = await copied();
+  const plan = room.revision('plan.md');
+  await writeFile(join(room.repository, 'AGENTS.md'), 'what an Agent follows here\n');
+  await writeFile(join(room.repository, 'claude.md'), '@AGENTS.md\n');
+  await mkdir(join(room.repository, 'docs'));
+  await writeFile(join(room.repository, 'docs', 'AGENTS.md'), 'a document\n');
+  await writeFile(join(room.repository, 'plan.md'), 'one\ntwo\nthree\nfour\n');
+
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n', stderr: '' });
+
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [
+      { op: 'write', path: '/rooms/notes/docs/AGENTS.md', content: 'a document\n' },
+      { op: 'write', path: '/rooms/notes/plan.md', content: 'one\ntwo\nthree\nfour\n', base: plan },
+    ],
+  ]);
+  expect([...room.files.keys()].sort()).toEqual(['docs/AGENTS.md', 'old.md', 'plan.md']);
+  expect(Object.keys((await manifestOf(room)).files).sort()).toEqual(['docs/AGENTS.md', 'old.md', 'plan.md']);
+  await rm(join(room.repository, 'claude.md'));
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
+  expect(await readFile(join(room.repository, 'AGENTS.md'), 'utf8')).toBe('what an Agent follows here\n');
+});
+
 it('writes the text House merged with a newer change into the working file and its manifest entry', async () => {
   const { hosted, room } = await copied();
   const base = room.revision('plan.md');

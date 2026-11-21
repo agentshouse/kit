@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, lastCall, type Hosted } from './environment.ts';
-import { temporaryHome } from './kit.ts';
+import { accountOf, temporaryHome } from './kit.ts';
 import { digest, house, manifestOf, ownAgent, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
@@ -265,10 +265,10 @@ it("keeps the copied Rooms beneath the workspace kit.json names and none beneath
 
   await rooms.download([notes]);
 
-  const repository = join(workspace, 'local-copies', 'rooms', notes.ref);
+  const repository = join(workspace, 'rooms', 'notes');
   expect(await readFile(join(repository, 'plan.md'), 'utf8')).toBe('plan\n');
   expect(notes.repository).toBe(repository);
-  expect(existsSync(join(hosted.home, 'local-copies', 'rooms', notes.ref))).toBe(false);
+  expect(existsSync(join(accountOf(hosted.home), 'house', 'rooms', 'notes'))).toBe(false);
 });
 
 it.each([2, 3, 5])(
@@ -322,21 +322,61 @@ it('reads a Room whole again when its grant changed or House no longer holds its
   expect(enumerations(hosted)).toContainEqual({ prefixes: [notes.root, expired.root], positions: [at(notes, 3), at(expired, 3)] });
 });
 
-it('keeps a copy where it is through a handle change and builds its paths with the handle House names', async () => {
+it("renames a copy's folder with the handle House names, every file in it, unuploaded and conflicted ones included, and builds its paths with that handle", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
+  room.put('c.md', 'c\n');
   await rooms.download([room]);
+  const earlier = room.repository;
+  await writeFile(join(earlier, 'draft.md'), 'draft, not uploaded\n');
+  await writeFile(join(earlier, 'c.md'), 'c, mine\n');
+  room.put('c.md', 'c, from House\n');
+  expect(await upload(hosted, room)).toMatchObject({ status: 1 });
+  const conflicted = await text(room, 'c.md');
 
   room.rehandle('renamed-notes');
   room.put('a.md', 'a, from House\n');
   expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: '/rooms/renamed-notes: 1 file updated from House\n' });
 
-  expect(JSON.parse(await readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8'))).toMatchObject({ room_handle: 'renamed-notes' });
+  expect(room.repository).toBe(join(hosted.workspace, 'rooms', 'renamed-notes'));
+  expect(existsSync(earlier)).toBe(false);
+  expect(JSON.parse(await readFile(join(hosted.home, 'local-copies/rooms', `${room.ref}.json`), 'utf8'))).toMatchObject({ room_handle: 'renamed-notes', repository: room.repository });
   expect(await text(room, 'a.md')).toBe('a, from House\n');
-  await writeFile(join(room.repository, 'a.md'), 'a, edited\n');
-  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/renamed-notes.\n' });
+  expect(await text(room, 'draft.md')).toBe('draft, not uploaded\n');
+  expect(await text(room, 'c.md')).toBe(conflicted);
+  expect((await manifestOf(room)).files['c.md']).toMatchObject({ conflicted: true });
+  await writeFile(join(room.repository, 'c.md'), 'c, resolved\n');
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/renamed-notes.\n' });
+});
+
+it("sets aside the folder of a Room it no longer follows as ' (kept)' where another Room's folder takes its name, every file kept, and leaves the folder of a Room it stopped following under its name", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const [notes, design, lowered] = ['notes', 'design', 'lowered'].map((handle) => rooms.room(handle)) as [Room, Room, Room];
+  for (const room of [notes, design, lowered]) room.put('a.md', `a of ${room.handle}\n`);
+  await rooms.download([notes, design, lowered]);
+  await writeFile(join(notes.repository, 'draft.md'), 'draft, not uploaded\n');
+  const taken = join(hosted.workspace, 'rooms', 'notes (kept)');
+  await mkdir(taken);
+  await writeFile(join(taken, 'mine.md'), 'mine\n');
+  const left = notes.repository;
+  await rooms.download([design]);
+  notes.rehandle('old-notes');
+
+  design.rehandle('notes');
+  expect((await rooms.download([design])).status).toBe(0);
+
+  expect(design.repository).toBe(left);
+  expect(await text(design, 'a.md')).toBe('a of design\n');
+  const kept = join(hosted.workspace, 'rooms', 'notes (kept) 2');
+  expect(await readFile(join(kept, 'a.md'), 'utf8')).toBe('a of notes\n');
+  expect(await readFile(join(kept, 'draft.md'), 'utf8')).toBe('draft, not uploaded\n');
+  expect(await readFile(join(taken, 'mine.md'), 'utf8')).toBe('mine\n');
+  expect(JSON.parse(await readFile(join(hosted.home, 'local-copies/rooms', `${notes.ref}.json`), 'utf8'))).toMatchObject({ repository: kept });
+  expect(await text(lowered, 'a.md')).toBe('a of lowered\n');
+  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual(['lowered', 'notes', 'notes (kept)', 'notes (kept) 2']);
 });
 
 const DENIED = 'operation_denied: you may not write here; the Room owner grants Room access, your User widens an Agent at /agents';

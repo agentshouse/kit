@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startHouse, type House } from './double.ts';
@@ -46,7 +46,7 @@ it('connects a fresh Linux account with a login code, writes the absent settings
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout.split('\n').at(-2)).toBe('Kit connected for Environment environment-one.');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({ house: house.origin, environment: 'environment-one', credential: 'ahk_code_credential' });
-  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: true, workspace: home });
+  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: true, workspace: join(accountOf(home), 'house') });
   expect(JSON.parse(await readFile(join(home, 'skill-set.json'), 'utf8'))).toMatchObject({ origin: house.origin });
   expect((await unit(home)).split('\n')).toEqual([
     '[Unit]',
@@ -102,6 +102,27 @@ it("confirms through kit login's link when it carries no login code", async () =
   expect(ran.status).toBe(0);
   expect(ran.stdout).toContain(`Open this link and confirm: ${house.origin}/kit/ahk_login_one\n`);
   expect(ran.stdout).toContain('Kit connected for Environment environment-one.\n');
+});
+
+it("stops in one line, writing nothing, where ~/house holds what is not Kit's", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const tools = await supervision();
+  await tools.systemd();
+  redeems(house);
+  const folder = join(accountOf(home), 'house');
+  await mkdir(folder);
+  await writeFile(join(folder, 'mine.txt'), 'mine\n');
+
+  expect(await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one'])).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: `kit: ${folder} holds what is not Kit's; move it elsewhere, then run this command again\n`,
+  });
+  expect(await readdir(home)).toEqual([]);
+  expect(await readdir(folder)).toEqual(['mine.txt']);
+  expect(house.requests).toEqual([]);
+  expect(tools.calls('systemctl')).toEqual([]);
 });
 
 it('keeps the settings kit.json holds and places no Skill set its person declined', async () => {

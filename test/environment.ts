@@ -230,6 +230,7 @@ export interface Hosted {
   house: House;
   home: string;
   workspace: string;
+  environment: Record<string, string>;
   kit: KitRun;
   connection: KitConnection;
   workingDirectory: string;
@@ -400,7 +401,8 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const hosted: Hosted = {
     house,
     home,
-    workspace: hosting.workspace ?? home,
+    workspace: hosting.workspace ?? join(accountOf(home), 'house'),
+    environment,
     kit,
     connection,
     workingDirectory,

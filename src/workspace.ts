@@ -22,7 +22,7 @@ async function listed(path: string): Promise<string[]> {
   return shown.sort();
 }
 
-async function moved(source: string, target: string): Promise<void> {
+export async function moved(source: string, target: string): Promise<void> {
   try {
     await rename(source, target);
     return;
@@ -43,6 +43,13 @@ async function moved(source: string, target: string): Promise<void> {
   }
   await rename(copy, target);
   await rm(source, { recursive: true, force: true });
+}
+
+export async function keptName(path: string): Promise<string> {
+  for (let count = 1; ; count++) {
+    const name = `${path} (kept)${count === 1 ? '' : ` ${count}`}`;
+    if ((await present(name)) === null) return name;
+  }
 }
 
 export type Placement = 'stays' | 'opens' | 'moves';
@@ -88,6 +95,10 @@ function rewritten(value: unknown, from: string, to: string, kept: readonly stri
     return Object.fromEntries(Object.entries(value).map(([name, held]) => [name, rewritten(held, from, to, kept)]));
   }
   return value;
+}
+
+export function rerooted<T>(value: T, from: string, to: string): T {
+  return rewritten(value, from, to, []) as T;
 }
 
 export async function followRoot(records: string, from: string, to: string, kept: readonly string[] = []): Promise<void> {

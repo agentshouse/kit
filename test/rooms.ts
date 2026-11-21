@@ -226,11 +226,11 @@ export class Room {
   cuts = false;
   private built: { position: number; entries: object[] } | null = null;
 
-  readonly copies: string;
+  readonly workspace: string;
 
-  constructor(handle: string, copies: string) {
+  constructor(handle: string, workspace: string) {
     this.handle = handle;
-    this.copies = copies;
+    this.workspace = workspace;
   }
 
   get root(): string {
@@ -238,7 +238,7 @@ export class Room {
   }
 
   get repository(): string {
-    return join(this.copies, 'rooms', this.ref);
+    return join(this.workspace, 'rooms', this.handle);
   }
 
   rehandle(handle: string): void {
@@ -615,7 +615,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     partBytes: STAGED_PART_BYTES,
     beforeEdit: null,
     room: (handle) => {
-      const room = new Room(handle, join(hosted.workspace, 'local-copies'));
+      const room = new Room(handle, hosted.workspace);
       rooms.push(room);
       onTestFinished(async () => {
         stop(hosted.kit.pid);
