@@ -145,7 +145,7 @@ function unopened(reason: string): (error: unknown) => string {
 
 type Starting = NonNullable<KitOneWayCallOf<'starting'>['step']>;
 
-type TurnAct = 'turns/start' | 'turns/activity/report' | 'turns/end' | 'turns/images/declare' | 'conversations/interaction/ask';
+type TurnAct = 'turns/start' | 'turns/activity/report' | 'turns/end' | 'turns/images/declare' | 'agent_update.conversation_ask';
 
 // A start-up step is shown only once it has lasted a second, so a quick start shows none of them.
 const STARTING_SHOWN_AFTER_MS = 1_000;
@@ -714,7 +714,7 @@ export class Conversations {
         await step(
           unbridged,
           unlessAborted(
-            this.kit.house.deliver('transcripts/keep', { conversation: conversation.id, message: messageId, path, text: said }, () => !signal.aborted),
+            this.kit.house.deliver('agent_update.transcript_keep', { conversation: conversation.id, message: messageId, path, text: said }, () => !signal.aborted),
             signal,
           ),
         );
@@ -1134,7 +1134,7 @@ export class Conversations {
     const answered = new Promise<Response | null>((answer, fail) => {
       this.questions.set(interactionId, { conversation, answer: (response) => answer(response as Response) });
       signal.addEventListener('abort', () => answer(null), { once: true });
-      this.deliver(conversation, 'conversations/interaction/ask', {
+      this.deliver(conversation, 'agent_update.conversation_ask', {
         ...turnOf(conversation, turn),
         interaction_id: interactionId,
         request: { method, params } as KitQuestion['request'],

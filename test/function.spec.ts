@@ -20,7 +20,7 @@ const TREE = 'sleep 300 & echo "child $!"; echo "script $$"; wait';
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const OPERATION = 'agents.house/agent-operation';
-const ISSUE = '/kit/function-runs/credentials/issue';
+const ISSUE = '/kit/agent_update.credentials_issue';
 const OWN_AGENT = 'ahp_own-agent-5d1c';
 
 function send(hosted: Hosted, frame: HouseOneWayCall | KitCall): void {
