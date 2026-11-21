@@ -83,7 +83,11 @@ it('keeps the credential House accepts on a rerun, leaves its login code unused 
 
   const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_two']);
 
-  expect(ran).toEqual({ status: 0, stdout: 'Kit connected for Environment environment-one.\n', stderr: '' });
+  expect(ran).toEqual({
+    status: 0,
+    stdout: 'This computer is already connected as Environment environment-one; the login code was not used.\nKit connected for Environment environment-one.\n',
+    stderr: '',
+  });
   expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
   expect(await readFile(join(home, 'kit.json'), 'utf8')).toBe(settings);
   expect(await unit(home)).toBe(defined);
@@ -181,6 +185,24 @@ it('keeps the stored credential and leaves the login code unused when House does
   expect(ran.stdout.split('\n').at(-2)).toBe('Kit connected for Environment environment-one.');
   expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_held' });
+});
+
+it('stops with the refusal, keeping the stored credential and leaving the login code unused, when its check is refused but not as unauthenticated', async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const tools = await supervision();
+  await tools.systemd();
+  const stored = JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' });
+  await writeFile(join(home, 'credential.json'), stored);
+  house.route('POST', '/kit/agents/desired/list', () => ({ status: 403, body: { error: { code: 'forbidden', retryable: false } } }));
+  redeems(house);
+
+  const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one']);
+
+  expect(ran.status).toBe(1);
+  expect(ran.stderr).toMatch(/^kit: House refused \/kit\/agents\/desired\/list with 403: /);
+  expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
+  expect(await readFile(join(home, 'credential.json'), 'utf8')).toBe(stored);
 });
 
 it('starts nothing on a Linux without systemd and names the kit resident command to supervise', async () => {

@@ -80,10 +80,23 @@ function desktopKit(): Earlier | null {
   return { kind: 'desktop', home: named ?? join(homedir(), '.house-kit'), workspace, seen: workspace, unit: named !== undefined };
 }
 
+function unitAccount(unit: string): string | undefined {
+  return /^User=(.+)$/mu.exec(unit)?.[1];
+}
+
+function account(): string {
+  return spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim();
+}
+
+export function otherAccountKit(): string | null {
+  const unit = readText(SERVER_UNIT);
+  const runs = unit === null ? undefined : unitAccount(unit);
+  return runs === undefined || runs === account() ? null : runs;
+}
+
 function serverKit(): Earlier | null {
   const unit = readText(SERVER_UNIT);
-  const account = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim();
-  if (unit !== null && !new RegExp(`^User=${account}$`, 'mu').test(unit)) return null;
+  if (unit !== null && unitAccount(unit) !== account()) return null;
   if (unit === null && !(root() && existsSync(SERVER_PREFIX))) return null;
   const home = (unit === null ? undefined : unitValue(unit, 'HOUSE_KIT_HOME')) ?? join(homedir(), '.house-kit');
   return { kind: 'server', home, workspace: SERVER_WORKSPACE, seen: SERVER_WORKSPACE, unit: unit !== null };
