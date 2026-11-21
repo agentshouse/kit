@@ -191,3 +191,38 @@ it('takes as the base of a file edited on an older received revision the revisio
   expect(room.files.get('plan.md')!.content).toBe('ONE\ntwo\nthree\nfour\nFIVE, mine\n');
   expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('ONE\ntwo\nthree\nfour\nFIVE, mine\n');
 });
+
+it('downloads every other Room when one copy an earlier Kit kept cannot be converted yet, names that copy, and exits with a failure', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const design = rooms.room('design');
+  design.put('brief.md', 'Brief\n');
+  await rooms.download([design]);
+  const notes = rooms.room('notes');
+  const plan = notes.put('plan.md', 'one\n');
+  rooms.answered = [design, notes];
+  const record = await earlierCopy(hosted, notes, { 'plan.md': 'one\n' }, [[`plan.md=${plan}`]]);
+  notes.put('plan.md', 'one, later\n');
+  design.put('brief.md', 'Brief, from House\n');
+  await hosted.restart();
+  rooms.refusesReads = [
+    { status: 503, body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; call again shortly', retryable: true } } },
+  ];
+
+  const downloaded = await house(hosted, '/', 'download');
+
+  expect(downloaded.status).toBe(1);
+  expect(downloaded.stderr.startsWith('house: ')).toBe(true);
+  expect(downloaded.stderr.slice('house: '.length).split('\n').sort()).toEqual(
+    [
+      '',
+      '/rooms/design: 1 file updated from House',
+      '/rooms/notes: Kit could not convert the copy an earlier Kit kept yet (house_unavailable: House is unavailable; call again shortly); the next house download or house upload converts it',
+    ].sort(),
+  );
+  expect(await readFile(join(design.repository, 'brief.md'), 'utf8')).toBe('Brief, from House\n');
+  expect(JSON.parse(await readFile(record, 'utf8'))).toHaveProperty('manifests');
+
+  expect(await house(hosted, '/', 'download')).toEqual({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n', stderr: '' });
+  expect(await readFile(join(notes.repository, 'plan.md'), 'utf8')).toBe('one, later\n');
+});
