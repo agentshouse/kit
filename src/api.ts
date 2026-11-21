@@ -4,6 +4,7 @@ import {
   type KitActAnswer,
   type KitActName,
   type KitActRequest,
+  kitActRoute,
   type KitDoorAct,
 } from '@agentshouse/kit-wire';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -75,7 +76,13 @@ export function kitAct<Name extends KitActName>(
   credential: string,
   signal?: AbortSignal,
 ): Promise<KitActAnswer<Name>> {
-  return post(house, `/kit/${act}`, request, credential, signal);
+  const { path, body } = routed(act, request);
+  return post(house, path, body, credential, signal);
+}
+
+function routed(act: KitActName, request: object): { path: string; body: object } {
+  const { path, op } = kitActRoute(act);
+  return { path, body: op === null ? request : { op, ...request } };
 }
 
 export interface House {
@@ -95,15 +102,19 @@ async function enrolledPost<T>(path: string, body: unknown, signal?: AbortSignal
 }
 
 export const house: House = {
-  act: (act, request, signal) => enrolledPost(`/kit/${act}`, request, signal),
+  act: (act, request, signal) => {
+    const { path, body } = routed(act, request);
+    return enrolledPost(path, body, signal);
+  },
   door: (act, body, signal) => enrolledPost(`/kit/door/${act}`, body, signal),
   deliver: async (act, request, current = () => true) => {
+    const { path, body } = routed(act, request);
     for (let attempt = 0; ; attempt++) {
       try {
-        return await enrolledPost(`/kit/${act}`, request);
+        return await enrolledPost(path, body);
       } catch (error) {
         if (finalRefusal(error)) throw error;
-        process.stderr.write(`kit: /kit/${act} did not reach House: ${(error as Error).message}\n`);
+        process.stderr.write(`kit: ${path} did not reach House: ${(error as Error).message}\n`);
         // A delivery House did not take is sent again on the jittered curve for as long as it is still current.
         await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
         if (!current()) throw error;

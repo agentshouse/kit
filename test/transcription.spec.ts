@@ -142,7 +142,7 @@ it("posts the transcript of each audio file a message links in the order it link
   const [note, voice] = files;
   const text = linked('listen to these:', files);
   const first = held();
-  hosted.house.route('POST', '/kit/transcripts/keep', async (request) => {
+  hosted.house.route('POST', '/kit/agent_update.transcript_keep', async (request) => {
     hosted.transcripts.push(request);
     return hosted.transcripts.length === 1 ? first.answer : { body: {} };
   });
@@ -215,7 +215,7 @@ it("sends the transcription step while it transcribes a message's audio, then th
   const hosted = await transcribing();
   const [file] = attached(hosted, [{ name: 'note.ogg', media_type: 'audio/ogg', content: fixture('en.ogg') }]);
   const post = held();
-  hosted.house.route('POST', '/kit/transcripts/keep', () => post.answer);
+  hosted.house.route('POST', '/kit/agent_update.transcript_keep', () => post.answer);
   await writeFile(join(hosted.home, 'hold-new'), '');
 
   hosted.call({ kind: 'message', text: linked('listen', [file!]), first: true });

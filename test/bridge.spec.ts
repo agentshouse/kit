@@ -40,7 +40,7 @@ it("reaches House with each process's own conversation credential and never show
     one: `Bearer ${conversationCredential('conversation-1')}`,
     two: `Bearer ${conversationCredential('conversation-2')}`,
   });
-  const asked = hosted.house.requests.filter((received) => received.path === '/kit/conversations/credentials/issue');
+  const asked = hosted.house.requests.filter((received) => received.path === '/kit/agent_update.credentials_issue');
   expect(asked.map((received) => [idOf(received, 'conversation'), received.headers.authorization])).toEqual([
     ['conversation-1', 'Bearer ahk_held'],
     ['conversation-2', 'Bearer ahk_held'],

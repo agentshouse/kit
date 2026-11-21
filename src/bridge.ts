@@ -114,7 +114,7 @@ export async function openBridge(
   signal: AbortSignal,
 ): Promise<Bridge> {
   const { credential } = await retrying(
-    () => house.act('conversations/credentials/issue', { conversation: conversationId }, signal),
+    () => house.act('agent_update.credentials_issue', { conversation: conversationId }, signal),
     signal,
   );
   return bridgeFor(copies, {
@@ -130,7 +130,7 @@ export async function openBridge(
 
 async function runCredential(house: House, run: string, signal: AbortSignal): Promise<string | null> {
   try {
-    return (await retrying(() => house.act('function-runs/credentials/issue', { run }, signal), signal)).credential;
+    return (await retrying(() => house.act('agent_update.credentials_issue', { run }, signal), signal)).credential;
   } catch (error) {
     if (finalRefusal(error)) return null;
     throw error;
