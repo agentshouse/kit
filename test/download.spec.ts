@@ -379,6 +379,31 @@ it("sets aside the folder of a Room it no longer follows as ' (kept)' where anot
   expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual(['lowered', 'notes', 'notes (kept)', 'notes (kept) 2']);
 });
 
+it("keeps a Room's folder an Agent's owner chose as its launch directory through a handle change, and leaves it where another Room's folder is to take its name, saying so", async () => {
+  const home = await temporaryHome();
+  const chosen = join(accountOf(home), 'house', 'rooms', 'notes');
+  const hosted = await hostKit([{ working_directory: chosen }], { home });
+  const rooms = serveRooms(hosted);
+  const [notes, design] = ['notes', 'design'].map((handle) => rooms.room(handle)) as [Room, Room];
+  notes.put('a.md', 'a\n');
+  design.put('brief.md', 'Brief\n');
+  await rooms.download([notes, design]);
+  await writeFile(join(chosen, 'draft.md'), 'draft\n');
+
+  notes.rehandle('renamed-notes');
+  expect((await rooms.download([notes, design])).status).toBe(0);
+
+  expect(await readFile(join(chosen, 'draft.md'), 'utf8')).toBe('draft\n');
+  expect(JSON.parse(await readFile(join(hosted.home, 'local-copies/rooms', `${notes.ref}.json`), 'utf8'))).toMatchObject({ room_handle: 'renamed-notes', repository: chosen });
+  design.rehandle('notes');
+  expect(await rooms.download([notes, design])).toMatchObject({
+    status: 1,
+    stderr: `house: /rooms/notes: ${chosen} holds a folder an Agent works in, so Kit leaves it as it is\n`,
+  });
+  expect(await readFile(join(chosen, 'a.md'), 'utf8')).toBe('a\n');
+  expect(await readFile(join(hosted.workspace, 'rooms', 'design', 'brief.md'), 'utf8')).toBe('Brief\n');
+});
+
 const DENIED = 'operation_denied: you may not write here; the Room owner grants Room access, your User widens an Agent at /agents';
 
 async function unfollowed(rooms: Rooms): Promise<{ notes: Room; design: Room }> {

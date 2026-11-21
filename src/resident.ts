@@ -1,8 +1,9 @@
+import type { DesiredAgentRoute } from '@agentshouse/kit-wire';
 import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { dirname, extname, join } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
@@ -110,12 +111,17 @@ export async function resident(): Promise<void> {
   await mkdir(kitHome(), { recursive: true, mode: 0o700 });
   const lock = await holdOwner();
   await resumeWorkspaceMove();
-  const copies = new LocalCopies(house);
+  let running: { conversations: Conversations; agents: Agents; calls: Calls; stop(then: () => void): Promise<void> } | null = null;
+  const routes = async (): Promise<readonly DesiredAgentRoute[] | null> => {
+    if (running === null) return enrolledRoutes();
+    await running.agents.read();
+    return running.agents.desired.routes;
+  };
+  const copies = new LocalCopies(house, async () => ((await routes()) ?? []).map(({ working_directory }) => resolve(working_directory)));
   await copies.load();
   const moved = await moveIntoHouse(copies);
   if (moved !== null) restart(moved);
   const planned = takePlannedRestart();
-  let running: { conversations: Conversations; agents: Agents; calls: Calls; stop(then: () => void): Promise<void> } | null = null;
   let settings: Promise<unknown> = Promise.resolve();
   const settle = (change: SettingsChange): Promise<Applied> => {
     const applied = settings.then(() =>
@@ -125,11 +131,7 @@ export async function resident(): Promise<void> {
           running?.conversations.stopped();
           killDescendants();
         },
-        routes: async () => {
-          if (running === null) return enrolledRoutes();
-          await running.agents.read();
-          return running.agents.desired.routes;
-        },
+        routes,
       }),
     );
     settings = applied.catch(() => undefined);
