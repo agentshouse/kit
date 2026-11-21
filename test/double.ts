@@ -87,7 +87,7 @@ const DOOR = '/kit/door/';
 const KIT_TOOL = /^\/kit\/[a-z_]+$/u;
 
 function routedAct(path: string, body: unknown): { readonly path: string; readonly body: unknown } {
-  if (!KIT_TOOL.test(path) || body === null || typeof body !== 'object' || Buffer.isBuffer(body)) return { path, body };
+  if (!KIT_TOOL.test(path) || body === null) return { path, body };
   const { op, ...request } = body as { readonly op?: unknown };
   return typeof op === 'string' ? { path: `${path}.${op}`, body: request } : { path, body };
 }
