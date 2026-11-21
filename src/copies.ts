@@ -709,9 +709,15 @@ export class LocalCopies {
       const reading = refreshing ? current : current.filter((copy) => this.waiting.has(copy.room_ref));
       if (reading.length > 0) {
         const reports = new Map<string, Report>(reading.map((copy) => [copy.key, { touched: new Map<string, string | null>(), kept: new Set<string>() }]));
-        const failed = await this.refreshed(reading, unready, caller, fetching, reports).then(() => null, houseCause);
+        const unconverted = new Map<string, string>();
+        const failed = await this.refreshed(reading, unready, unconverted, caller, fetching, reports).then(() => null, houseCause);
         for (const copy of reading) {
-          if (unready.includes(copy.room_ref)) said.push(`${rootOf(copy.room_handle)}: ${NOT_READY}`);
+          const cause = unconverted.get(copy.key);
+          if (cause !== undefined) {
+            refused = true;
+            unsettled.push(copy.room_ref);
+            said.push(cause);
+          } else if (unready.includes(copy.room_ref)) said.push(`${rootOf(copy.room_handle)}: ${NOT_READY}`);
           else said.push(...(await this.reported(this.copies.get(copy.key)!, reports.get(copy.key)!)));
         }
         if (failed !== null) {
@@ -945,14 +951,21 @@ export class LocalCopies {
     return this.received(copy, authority, caller, fetching, report);
   }
 
-  private async refreshed(held: readonly Held[], unready: string[], caller: Caller, fetching: Fetching, reports: Map<string, Report>): Promise<void> {
+  private async refreshed(
+    held: readonly Held[],
+    unready: string[],
+    unconverted: Map<string, string>,
+    caller: Caller,
+    fetching: Fetching,
+    reports: Map<string, Report>,
+  ): Promise<void> {
     const copies: Copy[] = [];
     for (const copy of held) {
       try {
         copies.push(await this.converted(copy));
       } catch (error) {
-        if (!(error instanceof NotReady)) throw error;
-        unready.push(...error.rooms);
+        if (error instanceof NotReady) unready.push(...error.rooms);
+        else unconverted.set(copy.key, causeOf(error));
       }
     }
     if (copies.length === 0) return;
@@ -1449,8 +1462,11 @@ export class LocalCopies {
         continue;
       }
       if (change.op === 'upload') {
-        const file = JSON.stringify({ file: join(copy.repository, nameOf(path)), path: named, base: conflict.revision });
-        lines.push(`${named}: House holds ${conflict.revision}, a version this copy never held, so this file was not sent; to replace House's with it, run house upload '${file}'`);
+        const current = await caller.info(named, conflict.revision);
+        if (current === null) throw new Error(`House holds no attachment at ${named}`);
+        manifest.files[path] = { revision: conflict.revision, sha256: current.sha256, bytes: current.bytes };
+        const theirs = JSON.stringify({ path: named, file: join(copy.repository, nameOf(path)) });
+        lines.push(`${named}: House holds ${conflict.revision}, a version this copy never held; the next house upload replaces it with this file, and house download '${theirs}' brings House's instead`);
         continue;
       }
       if (change.op === 'delete') {

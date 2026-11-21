@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
 import { conversationCredential, hostKit, opened, type Hosted, type McpCall } from './environment.ts';
-import { digest, house, manifestOf, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
+import { digest, house, manifestOf, ownAgent, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
 
@@ -348,24 +348,51 @@ it('uploads one removed and one added attachment of equal bytes as a move, and r
   expect(await upload(hosted, room)).toMatchObject({ stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
 });
 
-it("sends no attachment over a newer version another writer stored that this copy never held, and says how to replace it", async () => {
+it("takes House's current revision as the base of an attachment another writer replaced or stored first, says how to keep House's instead, and the next upload sends it with every other change", async () => {
   const { hosted, room } = await copied();
+  await ownAgent(hosted);
   await placed(room, { 'photo.jpg': JPEG });
   expect((await upload(hosted, room)).status).toBe(0);
-  const held = (await manifestOf(room)).files['photo.jpg'];
   const theirs = room.upload('photo.jpg', RECORDING);
-  await placed(room, { 'photo.jpg': REDRAWN });
-  const advice = `/rooms/notes/photo.jpg: House holds ${theirs}, a version this copy never held, so this file was not sent; to replace House's with it, run house upload '{"file":"${join(room.repository, 'photo.jpg')}","path":"/rooms/notes/photo.jpg","base":"${theirs}"}'\n`;
+  const taken = room.upload('cover.jpg', PDF);
+  await placed(room, { 'photo.jpg': REDRAWN, 'cover.jpg': JPEG });
+  const advice = (path: string, revision: string) =>
+    `/rooms/notes/${path}: House holds ${revision}, a version this copy never held; the next house upload replaces it with this file, and house download '${JSON.stringify({ path: `/rooms/notes/${path}`, file: join(room.repository, path) })}' brings House's instead`;
 
   const refused = await upload(hosted, room);
 
   expect(refused.status).toBe(1);
   expect(refused.stderr).toContain('code: base_revision_stale');
-  expect(refused.stderr.endsWith(advice)).toBe(true);
-  expect((await manifestOf(room)).files['photo.jpg']).toEqual(held);
-  const again = await upload(hosted, room);
-  expect(again.stderr.endsWith(advice)).toBe(true);
-  expect(batches(hosted).at(-1)!.changes).toEqual([part('photo.jpg', REDRAWN, 'image/jpeg', held!.revision)]);
+  expect(refused.stderr.endsWith(`${advice('cover.jpg', taken)}\n${advice('photo.jpg', theirs)}\n`)).toBe(true);
+  const { files } = await manifestOf(room);
+  expect(files['photo.jpg']).toEqual({ revision: theirs, sha256: digest(RECORDING), bytes: RECORDING.length });
+  expect(files['cover.jpg']).toEqual({ revision: taken, sha256: digest(PDF), bytes: PDF.length });
   expect(digest(room.binaries.get('photo.jpg')!.bytes)).toBe(digest(RECORDING));
-  expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(REDRAWN);
+  await writeFile(join(room.repository, 'plan.md'), 'one\ntwo\n');
+
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 3 files of /rooms/notes.\n', stderr: '' });
+
+  expect(batches(hosted).at(-1)!.changes).toEqual([
+    part('cover.jpg', JPEG, 'image/jpeg', taken),
+    part('photo.jpg', REDRAWN, 'image/jpeg', theirs),
+    expect.objectContaining({ op: 'write', path: '/rooms/notes/plan.md', content: 'one\ntwo\n' }),
+  ]);
+  expect(digest(room.binaries.get('photo.jpg')!.bytes)).toBe(digest(REDRAWN));
+  expect(digest(room.binaries.get('cover.jpg')!.bytes)).toBe(digest(JPEG));
+  expect(await upload(hosted, room)).toMatchObject({ stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
+});
+
+it("needs nothing more uploaded once the advised house download brings House's attachment over the one this copy changed", async () => {
+  const { hosted, room } = await copied();
+  await ownAgent(hosted);
+  await placed(room, { 'photo.jpg': JPEG });
+  expect((await upload(hosted, room)).status).toBe(0);
+  room.upload('photo.jpg', RECORDING);
+  await placed(room, { 'photo.jpg': REDRAWN });
+  expect((await upload(hosted, room)).status).toBe(1);
+
+  expect((await house(hosted, room.repository, 'download', JSON.stringify({ path: '/rooms/notes/photo.jpg', file: join(room.repository, 'photo.jpg') }))).status).toBe(0);
+
+  expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(RECORDING);
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
 });
