@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, lastCall, type Hosted } from './environment.ts';
-import { accountOf, temporaryHome } from './kit.ts';
+import { accountOf, runKit, stop, temporaryHome } from './kit.ts';
 import { digest, house, manifestOf, ownAgent, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
@@ -402,6 +402,28 @@ it("keeps a Room's folder an Agent's owner chose as its launch directory through
   });
   expect(await readFile(join(chosen, 'a.md'), 'utf8')).toBe('a\n');
   expect(await readFile(join(hosted.workspace, 'rooms', 'design', 'brief.md'), 'utf8')).toBe('Brief\n');
+});
+
+it("reads which folders its Agents' owners chose from House for a download before its first read of the Agents, so the chosen folder keeps its path", async () => {
+  const home = await temporaryHome();
+  const chosen = join(accountOf(home), 'house', 'rooms', 'notes');
+  const hosted = await hostKit([{ working_directory: chosen }], { home });
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  notes.put('a.md', 'a\n');
+  await rooms.download([notes]);
+  stop(hosted.kit.pid);
+  await hosted.kit.exited;
+  hosted.house.route('POST', '/kit/kits/report-restart', () => new Promise<never>(() => undefined));
+  const restarts = hosted.house.requests.filter((request) => request.path === '/kit/kits/report-restart').length;
+  hosted.kit = runKit(['resident'], hosted.environment);
+  await until(() => hosted.house.requests.filter((request) => request.path === '/kit/kits/report-restart').length > restarts || undefined);
+
+  notes.rehandle('renamed-notes');
+  expect((await rooms.download([notes])).status).toBe(0);
+
+  expect(await readFile(join(chosen, 'a.md'), 'utf8')).toBe('a\n');
+  expect(JSON.parse(await readFile(join(hosted.home, 'local-copies/rooms', `${notes.ref}.json`), 'utf8'))).toMatchObject({ room_handle: 'renamed-notes', repository: chosen });
 });
 
 const DENIED = 'operation_denied: you may not write here; the Room owner grants Room access, your User widens an Agent at /agents';

@@ -55,6 +55,10 @@ export async function enrolledRoutes(): Promise<readonly DesiredAgentRoute[] | n
   return (await readDisconnected()) === null ? [] : null;
 }
 
+export async function launchDirectories(): Promise<readonly string[]> {
+  return ((await enrolledRoutes()) ?? []).map(({ working_directory }) => resolve(working_directory));
+}
+
 const IDLE: Working = { working: () => false, end: () => undefined, routes: enrolledRoutes };
 
 export async function heldSettings(): Promise<KitSettings> {
@@ -249,7 +253,7 @@ async function appliedHere(change: SettingsChange): Promise<Applied> {
   const lock = await holdOwner();
   try {
     await resumeWorkspaceMove();
-    const copies = new LocalCopies(house);
+    const copies = new LocalCopies(house, launchDirectories);
     await copies.load();
     await moveIntoHouse(copies);
     return await applySettings(change, IDLE);

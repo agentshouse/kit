@@ -272,8 +272,14 @@ function recordOf(key: string): string {
   return join(kitHome(), 'local-copies', `${key}.json`);
 }
 
-export function stagingPrefix(): string {
+function stagingPrefix(): string {
   return `.${createHash('sha256').update(kitHome()).digest('hex').slice(0, 16)}-`;
+}
+
+async function sweptIn(folder: string): Promise<void> {
+  for (const name of await readdir(folder).catch(() => [])) {
+    if (name.startsWith(stagingPrefix())) await rm(join(folder, name), { recursive: true, force: true });
+  }
 }
 
 async function staging(): Promise<string> {
@@ -585,7 +591,7 @@ export class LocalCopies {
   private readonly waiting = new Set<string>();
   private answering: Promise<unknown> = Promise.resolve();
 
-  constructor(house: House, launched: () => Promise<readonly string[]> = async () => []) {
+  constructor(house: House, launched: () => Promise<readonly string[]>) {
     this.house = house;
     this.launched = launched;
     this.owner = {
@@ -636,10 +642,7 @@ export class LocalCopies {
   }
 
   async swept(): Promise<void> {
-    const rooms = roomsFolder();
-    for (const name of await readdir(rooms).catch(() => [])) {
-      if (name.startsWith(stagingPrefix())) await rm(join(rooms, name), { recursive: true, force: true });
-    }
+    await sweptIn(roomsFolder());
   }
 
   connected(): Promise<void> {
@@ -857,9 +860,7 @@ export class LocalCopies {
       await carried(source, target);
       if (copy !== undefined) await this.save(rerooted(copy, source, target));
     }
-    for (const name of await readdir(earlier).catch(() => [])) {
-      if (name.startsWith(stagingPrefix())) await rm(join(earlier, name), { recursive: true, force: true });
-    }
+    await sweptIn(earlier);
     await removeFolder(earlier);
     await removeFolder(dirname(earlier));
     return { moved: moving.length > 0, kept: staying };
