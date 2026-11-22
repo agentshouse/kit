@@ -1,8 +1,8 @@
-import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
+import { CONVERSATION_META_KEY, FUNCTION_RUN_META_KEY, KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { access, chmod, open, readFile, writeFile } from 'node:fs/promises';
+import { chmod, open, readFile, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createServer } from 'node:net';
@@ -21,8 +21,8 @@ const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.ur
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
 const UPLOAD =
-  "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
-const UPLOAD_USAGE = `usage: house upload [--owner], house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
+  "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
+const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
 const DOWNLOAD =
   "download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file";
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
@@ -50,10 +50,9 @@ function runHouse(
   });
 }
 
-async function connected(house: House, own: boolean): Promise<string> {
+async function connected(house: House, enrolled = true): Promise<string> {
   const home = await temporaryHome();
-  await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_kit' }));
-  if (own) await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_own' }));
+  if (enrolled) await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_kit' }));
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
     const result = message.method === 'tools/list' ? { tools: LISTING } : shelled(`found for ${String(message.params.arguments?.query)}`);
@@ -62,21 +61,26 @@ async function connected(house: House, own: boolean): Promise<string> {
   return home;
 }
 
-it("sends a Tool call outside a conversation to House's root under the User's own agent's connection and prints House's answer", async () => {
+it("sends a Tool call outside a conversation to House's root under the Kit credential, naming nothing, with an operation id, and prints House's answer", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_own' }));
 
   const ran = await runHouse(home, ['search', '{"query":"invoice"}']);
 
   expect(ran).toEqual({ status: 0, stdout: 'found for invoice\n', stderr: '' });
   const [call] = house.requests;
-  expect(call).toMatchObject({ path: '/', headers: { authorization: 'Bearer ahp_own' } });
-  expect((call!.body as McpCall).params).toMatchObject({ name: 'search', arguments: { query: 'invoice' } });
+  expect(call).toMatchObject({ path: '/', headers: { authorization: 'Bearer ahk_kit' } });
+  const { params } = call!.body as McpCall;
+  expect(params).toMatchObject({ name: 'search', arguments: { query: 'invoice' } });
+  expect(params._meta['agents.house/agent-operation']).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(params._meta).not.toHaveProperty(CONVERSATION_META_KEY);
+  expect(params._meta).not.toHaveProperty(FUNCTION_RUN_META_KEY);
 });
 
 it("reads a Tool's arguments from stdin after -, so an update larger than one Linux argument holds reaches House whole", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   house.route('POST', '/', ({ body }) => ({ body: { jsonrpc: '2.0', id: (body as { id: string }).id, result: shelled('applied') } }));
   const changes = [{ op: 'write', path: '/rooms/notes/long.md', content: 'line\n'.repeat(1024 * 1024 / 5) }];
   const piped = JSON.stringify({ changes });
@@ -90,7 +94,7 @@ it("reads a Tool's arguments from stdin after -, so an update larger than one Li
 
 it('refuses arguments on stdin that are no JSON object with the form they take', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
 
   const ran = await runHouse(home, ['search', '-'], undefined, [], {}, 'invoice');
 
@@ -100,7 +104,7 @@ it('refuses arguments on stdin that are no JSON object with the form they take',
 
 it("names the Kit's wire in a header on its call to House's MCP door", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
 
   await runHouse(home, ['search', '{"query":"invoice"}']);
 
@@ -145,7 +149,7 @@ async function relay(): Promise<{ origin: string; forwarded: string[] }> {
 
 it("uploads a file larger than the house CLI's memory budget from disk in parts outside a conversation, its peak memory under half the file's size, and prints House's answer once House accepts it", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const store = await startStore();
   const uploads = servedUploads(house, store, 32 * 1024 * 1024);
   const file = join(home, 'recording.webm');
@@ -177,7 +181,7 @@ it("uploads a file larger than the house CLI's memory budget from disk in parts 
 
 it("names every part's SHA-256 and the file's path in each finishing call and sends each part with its checksum header, and prints the accepted file", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const store = await startStore();
   const uploads = servedUploads(house, store, 10);
   const content = Buffer.from('a file sent in three parts');
@@ -203,7 +207,7 @@ it("names every part's SHA-256 and the file's path in each finishing call and se
 
 it('gives up an upload whose store keeps refusing every part, saying so without the address, once eight rounds sent nothing', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const store = await startStore();
   const uploads = servedUploads(house, store, 64);
   house.route('POST', '/', async ({ body }) => {
@@ -227,7 +231,7 @@ it('gives up an upload whose store keeps refusing every part, saying so without 
 
 it("resumes an upload outside a conversation after its connection drops, finishing again until House answers and sending only the part the store lost", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const store = await startStore();
   const uploads = uploadTool(store, 3);
   let finishing = 0;
@@ -254,14 +258,16 @@ it("resumes an upload outside a conversation after its connection drops, finishi
   expect(finishing).toBe(5);
 });
 
-it('finishes an upload outside a conversation again while House answers it with a 503, as a conversation resends an unsettled call', async () => {
+it('finishes an upload outside a conversation again while House answers it with a 503, as a conversation resends an unsettled call, under the same operation id', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const store = await startStore();
   const uploads = uploadTool(store, 3);
   let finishing = 0;
+  const operations: unknown[] = [];
   house.route('POST', '/', async ({ body }) => {
     const message = body as { id: string } & McpCall;
+    if (message.params.arguments!.upload !== undefined) operations.push(message.params._meta['agents.house/agent-operation']);
     if (message.params.arguments!.upload !== undefined && ++finishing <= 2) return { status: 503, body: {} };
     return { body: { jsonrpc: '2.0', id: message.id, result: await uploads.answer(message.params.arguments!) } };
   });
@@ -279,11 +285,14 @@ it('finishes an upload outside a conversation again while House answers it with 
     [2, 200],
   ]);
   expect(finishing).toBe(4);
+  const [resent, again, answered, next] = operations;
+  expect([again, answered]).toEqual([resent, resent]);
+  expect(next).not.toBe(resent);
 });
 
 it('sends each part and reads each download at its store address through the Kit relay its User named, as it sends House its calls', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const store = await startStore();
   const uploads = servedUploads(house, store, 3);
   const content = Buffer.from([0, 1, 2, 255]);
@@ -321,12 +330,12 @@ it('sends each part and reads each download at its store address through the Kit
   ]);
 });
 
-it("calls House directly whatever relay the User's own agent's connection records, and through the relay HOUSE_KIT_RELAY names", async () => {
+it("calls House directly whatever relay the Kit credential's record holds, and through the relay HOUSE_KIT_RELAY names", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const recorded = await relay();
   const named = await relay();
-  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, relay: recorded.origin, user: 'user-one', credential: 'ahp_own' }));
+  await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, relay: recorded.origin, environment: 'environment-one', credential: 'ahk_kit' }));
   const direct = await runHouse(home, ['search', '{"query":"invoice"}']);
   const first = house.requests.length;
 
@@ -344,7 +353,7 @@ it("calls House directly whatever relay the User's own agent's connection record
 
 it('prints the revision House answers and posts no bytes when the path already holds the same file', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const file = join(home, 'cover.png');
   await writeFile(file, 'png');
   house.route('POST', '/', ({ body }) => {
@@ -359,20 +368,21 @@ it('prints the revision House answers and posts no bytes when the path already h
   expect((house.requests[0]!.body as McpCall).params.arguments).toMatchObject({ media_type: 'image/png' });
 });
 
-it("lists the Tools House lists to the User's own agent as its help, and never sends the Kit credential", async () => {
+it("lists the Tools House lists as its help, asking under the Kit credential with no operation id", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
 
   const ran = await runHouse(home, ['--help']);
 
   expect(ran.status).toBe(0);
   for (const tool of LISTING) expect(ran.stdout).toContain(helpLine(tool));
-  expect(house.requests.map((request) => request.headers.authorization)).toEqual(['Bearer ahp_own']);
+  expect(house.requests.map((request) => request.headers.authorization)).toEqual(['Bearer ahk_kit']);
+  expect((house.requests[0]!.body as McpCall).params._meta).not.toHaveProperty('agents.house/agent-operation');
 });
 
 it('says a write may have taken effect when House answers with no result, and to read before repeating it', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   house.route('POST', '/', () => ({ status: 502, bytes: { type: 'text/html', content: '<html>Bad Gateway</html>' } }));
 
   const ran = await runHouse(home, ['update', '{"changes":[{"op":"write","path":"/rooms/notes/new.md","content":"new"}]}']);
@@ -403,21 +413,22 @@ it.each([
   expect(ran).toEqual({ status: 1, stdout: '', stderr: `house: ${said}\n` });
 });
 
-it("refuses a Tool call in one line naming kit login while Kit holds no connection for the User's own agent", async () => {
+it('refuses a Tool call in one line naming kit login while Kit home holds no Kit credential', async () => {
   const house = await startHouse();
   const home = await connected(house, false);
+  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_own' }));
 
   const ran = await runHouse(home, ['search', '{"query":"invoice"}']);
 
   expect(ran.status).toBe(1);
   expect(ran.stdout).toBe('');
-  expect(ran.stderr).toMatch(/^house: [^\n]*; run kit login\n$/);
+  expect(ran.stderr).toBe('house: this computer has no House connection; run kit login\n');
   expect(house.requests).toEqual([]);
 });
 
-it("refuses a Tool call naming kit login once kit logout has ended the User's own agent's connection with the Kit's", async () => {
+it("refuses a Tool call naming kit login once kit logout has ended the Kit's connection", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
 
   expect(await runKit(['logout'], { HOME: accountOf(home) }).exited).toBe(0);
@@ -426,40 +437,38 @@ it("refuses a Tool call naming kit login once kit logout has ended the User's ow
   expect(house.requests.map(({ path, headers, body }) => ({ path, authorization: headers.authorization, body }))).toEqual([
     { path: '/kit/kits/log-out', authorization: 'Bearer ahk_kit', body: {} },
   ]);
-  await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(ran.status).toBe(1);
   expect(ran.stderr).toMatch(/^house: [^\n]*; run kit login\n$/);
 });
 
-it("refuses a Tool call in one line naming kit login once House no longer accepts the User's own agent's connection", async () => {
+it('refuses a Tool call in one line naming kit login once House no longer accepts the Kit credential', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
-  house.route('POST', '/', () => ({ status: 401, body: {} }));
+  const home = await connected(house);
+  house.route('POST', '/', () => ({ status: 401, body: { error: 'invalid_token', error_description: 'A valid access token is required' } }));
 
   const ran = await runHouse(home, ['search', '{"query":"invoice"}']);
 
   expect(ran.status).toBe(1);
   expect(ran.stdout).toBe('');
-  expect(ran.stderr).toMatch(/^house: [^\n]*; run kit login\n$/);
-  expect(house.requests.map(({ path, headers }) => [path, headers.authorization])).toEqual([['/', 'Bearer ahp_own']]);
+  expect(ran.stderr).toBe('house: House no longer accepts this computer; run kit login\n');
+  expect(house.requests.map(({ path, headers }) => [path, headers.authorization])).toEqual([['/', 'Bearer ahk_kit']]);
 });
 
 it("stops acting as the User when House had already disconnected the computer", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   house.route('POST', '/kit/kits/log-out', () => ({ status: 401, body: { error: { code: 'kit_credential_rejected' } } }));
 
   const logout = runKit(['logout'], { HOME: accountOf(home) });
 
   expect(await logout.exited).toBe(0);
   expect(logout.stdout()).toBe('Environment environment-one is disconnected; kit login reconnects it.\n');
-  await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect((await runHouse(home, ['search', '{"query":"invoice"}'])).stderr).toMatch(/kit login/);
 });
 
-it("never falls back to the User's own agent's connection when a conversation's bridge is gone", async () => {
+it("never sends a call unlabelled when the conversation's bridge it names is gone", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
 
   const ran = await runHouse(home, ['search', '{"query":"invoice"}'], join(home, 'bridges', 'gone.sock'));
 
@@ -468,9 +477,29 @@ it("never falls back to the User's own agent's connection when a conversation's 
   expect(house.requests).toEqual([]);
 });
 
+it("refuses house upload where the conversation's bridge it names is gone, never sending it as the Environment's own upload", async () => {
+  const home = await temporaryHome();
+  vi.stubEnv('HOME', accountOf(home));
+  const owner = ownerSocket();
+  vi.unstubAllEnvs();
+  const opened: string[] = [];
+  const listener = createServer((connection) => {
+    opened.push(owner);
+    connection.destroy();
+  });
+  listener.listen(owner);
+  await once(listener, 'listening');
+  onTestFinished(() => new Promise<void>((resolve) => listener.close(() => resolve())));
+
+  const ran = await runHouse(home, ['upload'], join(home, 'bridges', 'gone.sock'));
+
+  expect(ran).toEqual({ status: 1, stdout: '', stderr: 'house: this House connection is closed; nothing to do from here\n' });
+  expect(opened).toEqual([]);
+});
+
 it('tells an Agent whose CLI sandbox refuses the bridge to run house directly', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const socket = join(home, 'sandboxed.sock');
   const bridge = createServer((connection) => connection.end());
   bridge.listen(socket);
@@ -496,7 +525,7 @@ function listing(house: House, tools: unknown[]): void {
 
 it('prints the same help for house help as for house --help, naming house help <tool>, listing help and both forms of upload and download, and no Git verb', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
 
   const help = await runHouse(home, ['help']);
   const dashed = await runHouse(home, ['--help']);
@@ -509,7 +538,7 @@ it('prints the same help for house help as for house --help, naming house help <
 
 it('lists a Tool without a description in house --help with its top-level arguments, and a described Tool by its line alone', async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   listing(house, [...LISTING, { name: 'about_house', inputSchema: { type: 'object' } }]);
 
   const help = await runHouse(home, ['--help']);
@@ -555,7 +584,7 @@ it.each([
   ['get_started', ['get_started']],
 ])("prints %s's help as its arguments, each alternative of a oneOf with its own, for house help <tool> as for house <tool> --help", async (tool, expected) => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
 
   const help = await runHouse(home, ['help', tool]);
   const dashed = await runHouse(home, [tool, '--help']);
@@ -616,7 +645,7 @@ it.each([
   ],
 ])('prints the arguments of %s', async (_shape, properties, expected) => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   const $defs = {
     'a/b~1c': { type: 'string', description: 'From the target.' },
     node: { type: 'object', properties: { title: { type: 'string', description: 'Its title.' }, children: { type: 'array', items: { $ref: '#/$defs/node' } } } },
@@ -635,7 +664,7 @@ it.each([
   [['help', 'update', '{}'], '{}'],
 ])('refuses house %j with its usage before it calls House', async (argv, unexpected) => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
 
   const ran = await runHouse(home, argv);
 
@@ -649,7 +678,6 @@ it.each([
 
 it.each([
   [['--help', 'upload'], `${UPLOAD_USAGE}\n${UPLOAD}`],
-  [['--help', 'upload', '--owner'], `${UPLOAD_USAGE}\n${UPLOAD}`],
   [['--help', 'download', '--with-attachments'], `${DOWNLOAD_USAGE}\n${DOWNLOAD}`],
   [['help', 'download'], `${DOWNLOAD_USAGE}\n${DOWNLOAD}`],
   [['download', '--help'], `${DOWNLOAD_USAGE}\n${DOWNLOAD}`],
@@ -657,7 +685,7 @@ it.each([
   [['upload', '--help'], `${UPLOAD_USAGE}\n${UPLOAD}`],
 ])('prints house %j as the usage of the command it names and calls nothing', async (argv, usage) => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
 
   const ran = await runHouse(home, argv);
 
@@ -667,7 +695,8 @@ it.each([
 
 it.each([
   [['upload', '--dry-run'], true, '--dry-run', UPLOAD_USAGE],
-  [['upload', '--owner', '--dry-run'], false, '--dry-run', UPLOAD_USAGE],
+  [['upload', '--owner'], false, '--owner', UPLOAD_USAGE],
+  [['upload', '--owner'], true, '--owner', UPLOAD_USAGE],
   [['upload', '{"file":"a.md","path":"/rooms/notes/a.md"}', '--owner'], false, '--owner', UPLOAD_USAGE],
   [['download', '--x'], false, '--x', DOWNLOAD_USAGE],
 ])('refuses house %j with its usage before it opens a Kit connection', async (argv, conversation, unexpected, usage) => {
@@ -694,7 +723,7 @@ it.each([
 
 it("exits with the status House's shell answer names, and 0 when it names none", async () => {
   const house = await startHouse();
-  const home = await connected(house, true);
+  const home = await connected(house);
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
     const failed = message.params.arguments?.command === 'ls /rooms/private/house';

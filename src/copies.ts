@@ -23,7 +23,7 @@ import {
   type Manifest,
   type Present,
 } from './manifest.ts';
-import { ownAgentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
+import { environmentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
@@ -73,7 +73,6 @@ export interface Opening {
 }
 
 export const DEFAULT_MAX_SIZE = 10;
-export const UPLOAD_NEEDS_OWNER = 'outside an Agent conversation, house upload needs --owner';
 
 // A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
 const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
@@ -246,7 +245,7 @@ function houseCause(error: unknown): string {
 }
 
 async function ownInfo(args: Record<string, unknown>): Promise<string> {
-  const read = toolAnswer({ status: 200, text: await ownAgentCall(rpc('tools/call', { name: 'info', arguments: args })) });
+  const read = toolAnswer({ status: 200, text: await environmentCall(rpc('tools/call', { name: 'info', arguments: args })) });
   if ('refused' in read) throw new Error(read.refused.text);
   return read.text;
 }

@@ -203,7 +203,7 @@ export async function resident(): Promise<void> {
   const update = new KitUpdate(calls);
   takeUnservedRelease((release) => logged(update.takeRefused(release)));
   removeInputs();
-  const scripts = new Scripts(calls, (oneWayCall) => connection?.send(oneWayCall) ?? false, house, copies);
+  const scripts = new Scripts(calls, (oneWayCall) => connection?.send(oneWayCall) ?? false, copies);
   running = { conversations, agents, calls, stop };
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {

@@ -10,7 +10,7 @@ const REJECTED = { status: 400, body: { error: { code: 'kit_login_rejected', ret
 
 const UNDECLARED = { status: 422, body: { error: { code: 'kit_declaration_invalid', retryable: false } } };
 
-const START_FIELDS = ['act', 'environment_id', 'headless', 'rooms', 'code_challenge'];
+const START_FIELDS = ['act', 'environment_id', 'rooms', 'code_challenge'];
 
 const POLL_FIELDS = ['login', 'code_verifier'];
 
@@ -20,7 +20,7 @@ function undeclared(body: unknown, fields: string[]): boolean {
   return Object.keys(body as object).some((field) => !fields.includes(field));
 }
 
-export const REDEEMED = { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' };
+export const REDEEMED = { credential: 'ahk_code_credential', environment: 'environment-one' };
 
 export function redeems(house: House, answer: Record<string, string> = REDEEMED): void {
   house.route('POST', '/kit/token', () => ({ body: answer }));
@@ -31,8 +31,6 @@ export function loginLink(house: House): string {
 }
 
 export interface Served {
-  own?: string;
-  user?: string;
   waiting?: boolean;
   busy?: number;
   gone?: string;
@@ -42,7 +40,7 @@ export function serveLogin(
   house: House,
   environment: string,
   credential: string,
-  { own, user = 'user-one', waiting = false, busy = 0, gone }: Served = {},
+  { waiting = false, busy = 0, gone }: Served = {},
 ) {
   let refusals = busy;
   let challenge = '';
@@ -68,9 +66,7 @@ export function serveLogin(
     if (entered === null) return { status: 400, body: { error: { code: 'kit_login_pending', retryable: true } } };
     ended = true;
     settled.push(act === 'new_environment' ? { act, environment, name: entered } : { act, environment });
-    return {
-      body: { credential, environment, user, ...(own === undefined ? {} : { headless_credential: own }) },
-    };
+    return { body: { credential, environment } };
   });
   return {
     settled,
@@ -81,18 +77,6 @@ export function serveLogin(
       ended = true;
     },
   };
-}
-
-export function answerOwnAgent(house: House, live: string) {
-  house.route('POST', '/', ({ headers }) =>
-    headers.authorization === `Bearer ${live}`
-      ? { body: { jsonrpc: '2.0', id: 1, result: { tools: [] } } }
-      : { status: 401, body: {} },
-  );
-}
-
-export async function ownAgent(home: string): Promise<unknown> {
-  return JSON.parse(await readFile(join(home, 'own-agent.json'), 'utf8'));
 }
 
 export async function opener(home: string, fails = false): Promise<{ path: string; opened: () => Promise<string | undefined> }> {

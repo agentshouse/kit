@@ -39,10 +39,10 @@ it.each([
     hosted.house.requests.filter((received) => received.path === path).map((received) => proxy.carried(received));
   expect({
     stream: reached('/kit/stream'),
-    credential: reached('/kit/agent_update.credentials_issue'),
+    call: [...new Set(reached('/'))],
     transfer: hosted.store.requests.map((request) => proxy.carried(request)),
     git: reached('/app/a_app.git/info/refs'),
-  }).toEqual({ stream: [proxied, proxied], credential: [proxied], transfer: [proxied], git: [proxied] });
+  }).toEqual({ stream: [proxied, proxied], call: [proxied], transfer: [proxied], git: [proxied] });
   expect(hosted.house.requests.filter((received) => proxy.carried(received) !== proxied)).toEqual([]);
   expect(new Set(proxy.tunnels)).toEqual(new Set(proxied ? [new URL(hosted.house.origin).host, new URL(hosted.store.origin).host] : []));
 });

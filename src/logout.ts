@@ -1,5 +1,5 @@
 import { HouseRefusal, kitAct } from './api.ts';
-import { forgetEnrolment, forgetOwnAgent, readEnrolment } from './home.ts';
+import { forgetEnrolment, readEnrolment } from './home.ts';
 
 export async function logout(): Promise<void> {
   const enrolled = await readEnrolment();
@@ -11,7 +11,6 @@ export async function logout(): Promise<void> {
     }
     await forgetEnrolment(enrolled);
   }
-  await forgetOwnAgent();
   process.stdout.write(
     enrolled === null
       ? 'This computer is not connected to House.\n'

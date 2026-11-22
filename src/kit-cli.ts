@@ -20,7 +20,7 @@ const COMMANDS = new Map<string, Command>([
     'logout',
     {
       usage: 'usage: kit logout',
-      about: "disconnects this computer, stops the Kit process and ends your own agent's connection",
+      about: 'disconnects this computer and stops the Kit process',
       operands: 0,
       run: logout,
     },
@@ -47,7 +47,7 @@ const COMMANDS = new Map<string, Command>([
     'git-credential',
     {
       usage: 'usage: kit git-credential <get|store|erase>',
-      about: "answers git with your own agent's House credential; git runs it",
+      about: "answers git with this computer's House credential; git runs it",
       operands: 1,
       run: ([operation]) => answerGitCredential(operation),
     },

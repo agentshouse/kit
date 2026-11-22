@@ -262,16 +262,16 @@ it("carries any file name through the copy, reads a decomposed form of a held na
   expect(existsSync(join(room.repository, 'Readme.md'))).toBe(true);
 });
 
-it('uploads as the owner only with --owner outside a conversation and only inside a Local copy, and explains itself', async () => {
+it("uploads outside a conversation as the Environment's own upload with house upload alone, only inside a Local copy, takes no --owner, and explains itself", async () => {
   const { hosted, room } = await copied();
   await writeFile(join(room.repository, 'plan.md'), 'changed\n');
 
-  expect(await house(hosted, room.repository, 'upload')).toEqual({
+  expect(await house(hosted, room.repository, 'upload', '--owner')).toMatchObject({
     status: 1,
     stdout: '',
-    stderr: 'house: outside an Agent conversation, house upload needs --owner\n',
+    stderr: expect.stringMatching(/^house: unexpected argument --owner; usage: house upload, /),
   });
-  expect(await house(hosted, '/', 'upload', '--owner')).toEqual({
+  expect(await house(hosted, '/', 'upload')).toEqual({
     status: 1,
     stdout: '',
     stderr: 'house: / is not in a House Local copy; run house upload inside one\n',
@@ -281,7 +281,8 @@ it('uploads as the owner only with --owner outside a conversation and only insid
     expect(old.status).toBe(1);
   }
   expect(batches(hosted)).toEqual([]);
-  expect(await house(hosted, join(room.repository), 'upload', '--owner')).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(await house(hosted, join(room.repository), 'upload')).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/door/update').map((received) => received.headers.authorization)).toEqual(['Bearer ahk_held']);
 });
 
 it("brings House's newer version back where a stale deletion removed it, says what House holds, and deletes nothing it never read", async () => {

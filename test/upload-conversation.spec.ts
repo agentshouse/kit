@@ -1,10 +1,11 @@
+import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { agentInstructions } from '@agentshouse/skills';
 import { expect, it, onTestFinished } from 'vitest';
 import { until, type Received } from './double.ts';
-import { conversationCredential, hostKit, type Hosted } from './environment.ts';
+import { hostKit, type Hosted } from './environment.ts';
 import { house, manifestOf, OVERLOADED, serveRooms, type Room, type Rooms } from './rooms.ts';
 
 interface Shelled {
@@ -38,10 +39,10 @@ async function copied(routes = [{}]): Promise<{ hosted: Hosted; rooms: Rooms; ro
   room.put('index.md', 'See [alpha](a.md).\n');
   room.put('plan.md', 'one\n');
   await rooms.download([room]);
-  return { hosted, rooms, room, deny: (conversation) => rooms.denied.add(`Bearer ${conversationCredential(conversation)}`) };
+  return { hosted, rooms, room, deny: (conversation) => rooms.denied.add(conversation) };
 }
 
-it("uploads from a Conversation process under that conversation's own credential and never the Environment's, and refuses --owner there", async () => {
+it("uploads from a Conversation process under the Kit credential naming that conversation, never as the Environment's own upload, and takes no --owner there", async () => {
   const { hosted, rooms, room, deny } = await copied([{}, { kind: 'claude-agent-acp' }]);
   deny('conversation-2');
 
@@ -52,10 +53,12 @@ it("uploads from a Conversation process under that conversation's own credential
   expect(first).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
   expect(second.status).toBe(1);
   expect(second.stderr).toContain('operation_denied');
-  expect(owner).toMatchObject({ status: 1, stderr: 'house: --owner is not for Agent conversations; run house upload without it\n' });
-  expect(rooms.edits().map((received) => received.headers.authorization)).toEqual([
-    `Bearer ${conversationCredential('conversation-1')}`,
-    `Bearer ${conversationCredential('conversation-2')}`,
+  expect(owner).toMatchObject({ status: 1, stderr: expect.stringMatching(/^house: unexpected argument --owner; usage: house upload, /) });
+  expect(
+    rooms.edits().map((received) => [received.headers.authorization, (received.body as { params: { _meta: Record<string, string> } }).params._meta[CONVERSATION_META_KEY]]),
+  ).toEqual([
+    ['Bearer ahk_held', 'conversation-1'],
+    ['Bearer ahk_held', 'conversation-2'],
   ]);
   expect(hosted.house.requests.filter((request) => request.path === '/kit/door/update')).toEqual([]);
   expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');

@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { parseDocument } from 'yaml';
 import { retryDelay } from './api.ts';
 import { Unsettled } from './mcp.ts';
+import { operationId } from './operation.ts';
 import { proxyUnlessRelayed, relayed } from './relay.ts';
 
 export interface UploadParts {
@@ -25,7 +26,7 @@ export interface Uploading<T> {
   sha256: string;
   read(start: number, end: number): Iterable<Uint8Array> | AsyncIterable<Uint8Array>;
   send(url: string, start: number, end: number, headers: Record<string, string>): Promise<void>;
-  finish(upload: string, partSha256: string[]): Promise<Finished<T>>;
+  finish(upload: string, partSha256: string[], operation: string): Promise<Finished<T>>;
 }
 
 export interface Address {
@@ -226,9 +227,10 @@ export async function uploaded<T extends object>(declared: UploadParts, uploadin
 }
 
 async function finishing<T extends object>(uploading: Uploading<T>, upload: string, partSha256: string[]): Promise<Finished<T>> {
+  const operation = operationId();
   for (let unsettled = 1; ; unsettled++) {
     try {
-      return await uploading.finish(upload, partSha256);
+      return await uploading.finish(upload, partSha256, operation);
     } catch (error) {
       if (!(error instanceof Unsettled) || unsettled === STALLED_ROUNDS) throw error;
     }
