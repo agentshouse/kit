@@ -1,11 +1,12 @@
+import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
 import { writeFileSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
-import { conversationCredential, hostKit, opened, type Hosted, type McpCall } from './environment.ts';
-import { digest, fileCalls, house, manifestOf, ownAgent, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
+import { hostKit, opened, type Hosted, type McpCall } from './environment.ts';
+import { digest, fileCalls, house, manifestOf, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
 
@@ -116,7 +117,7 @@ it("uploads a document and an attachment under the conversation's own credential
 
   expect(uploaded).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n' });
   expect(downloaded).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n' });
-  const credential = `Bearer ${conversationCredential('conversation-1')}`;
+  const credential = 'Bearer ahk_held';
   const finishing = { upload: expect.any(String), path: '/rooms/notes/photo.jpg', part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };
   expect(fileCalls(hosted).map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
     [credential, 'update', { changes: expect.any(Array) }],
@@ -129,8 +130,11 @@ it("uploads a document and an attachment under the conversation's own credential
   expect(
     hosted.mcp
       .filter((received) => called(received).name === 'info' && called(received).arguments?.path === room.root)
-      .map((received) => received.headers.authorization),
-  ).toEqual(['Bearer ahp_own', credential]);
+      .map((received) => [received.headers.authorization, (received.body as McpCall).params._meta[CONVERSATION_META_KEY]]),
+  ).toEqual([
+    [credential, undefined],
+    [credential, 'conversation-1'],
+  ]);
   expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(REDRAWN);
 });
 
@@ -355,7 +359,6 @@ it('uploads one removed and one added attachment of equal bytes as a move, and r
 
 it("takes House's current revision as the base of an attachment another writer replaced or stored first, says how to keep House's instead, and the next upload sends it with every other change", async () => {
   const { hosted, room } = await copied();
-  await ownAgent(hosted);
   await placed(room, { 'photo.jpg': JPEG });
   expect((await upload(hosted, room)).status).toBe(0);
   const theirs = room.upload('photo.jpg', RECORDING);
@@ -389,7 +392,6 @@ it("takes House's current revision as the base of an attachment another writer r
 
 it("needs nothing more uploaded once the advised house download brings House's attachment over the one this copy changed", async () => {
   const { hosted, room } = await copied();
-  await ownAgent(hosted);
   await placed(room, { 'photo.jpg': JPEG });
   expect((await upload(hosted, room)).status).toBe(0);
   room.upload('photo.jpg', RECORDING);

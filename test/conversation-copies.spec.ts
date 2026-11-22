@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until, type Received } from './double.ts';
-import { conversationCredential, hostKit, lastCall, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
+import { hostKit, lastCall, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
 import { alive, filesUnder, temporaryDirectory } from './kit.ts';
 import { callUpdate, released, serveRelease } from './release.ts';
 import { house, roomRootReads, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
@@ -248,7 +248,7 @@ it("sends a batch left pending in a conversation's copy only by the next upload 
   said(hosted, '@say again');
   const sent = (await edited(rooms, 2))[1];
 
-  expect(sent!.headers.authorization).toBe(`Bearer ${conversationCredential('conversation-1')}`);
+  expect(sent!.headers.authorization).toBe('Bearer ahk_held');
   expect(changesOf(sent!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\ntwo\n', base: expect.any(String) }]);
   expect(notes.files.get('plan.md')!.content).toBe('Plant beans\ntwo\n');
   expect(lineOf(await prompt(hosted, 2))).toBe('@say again');
@@ -268,7 +268,7 @@ it("uploads the copy at each turn's end as the conversation's call, brings the m
   await writeFile(join(hosted.home, 'merged'), '');
   const [batch] = await edited(rooms, 1);
 
-  expect(batch!.headers.authorization).toBe(`Bearer ${conversationCredential('conversation-1')}`);
+  expect(batch!.headers.authorization).toBe('Bearer ahk_held');
   expect(changesOf(batch!)).toEqual([
     { op: 'write', path: '/rooms/notes/a.md', content: 'ONE\ntwo\nthree\n', base: expect.any(String) },
     { op: 'write', path: '/rooms/notes/new.md', content: 'new\n' },

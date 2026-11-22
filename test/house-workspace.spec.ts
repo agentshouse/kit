@@ -203,7 +203,7 @@ it("keeps where they are the folders an Agent's owner chose inside the earlier w
   expect(await readFile(join(hosted.workspace, 'rooms', `${design.ref} (kept)`, 'draft.md'), 'utf8')).toBe('draft\n');
   routed(hosted, []);
   await hosted.restart();
-  expect(await house(hosted, chosenCopy, 'upload', '--owner')).toMatchObject({
+  expect(await house(hosted, chosenCopy, 'upload')).toMatchObject({
     status: 1,
     stderr: `house: ${notes.root}/c.md still holds conflict markers; resolve it, then run house upload again\n`,
   });

@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { certificate, startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL } from './environment.ts';
 import { accountOf, runKit, stop, temporaryHome } from './kit.ts';
-import { answerOwnAgent, LOGIN, logIn, loginLink, opener, ownAgent, serveLogin } from './login.ts';
+import { LOGIN, logIn, loginLink, opener, serveLogin } from './login.ts';
 
 it('prints the link, opens it with the host opener, waits for the confirmation and stores the credential, reading nothing from standard input', async () => {
   const house = await startHouse();
@@ -85,17 +85,10 @@ it('ends with the cause and no credential when House refuses the exchange', asyn
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
 });
 
-it('redeems a login code once with nothing but the code, stores both credentials and prints no link', async () => {
+it('redeems a login code once with nothing but the code, stores the Kit credential alone and prints no link', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
-  house.route('POST', '/kit/token', () => ({
-    body: {
-      credential: 'ahk_code_credential',
-      environment: 'environment-one',
-      user: 'user-one',
-      headless_credential: 'ahp_code_credential',
-    },
-  }));
+  house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one' } }));
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
     HOME: accountOf(home),
@@ -109,11 +102,7 @@ it('redeems a login code once with nothing but the code, stores both credentials
     environment: 'environment-one',
     credential: 'ahk_code_credential',
   });
-  expect(await ownAgent(home)).toEqual({
-    house: house.origin,
-    user: 'user-one',
-    credential: 'ahp_code_credential',
-  });
+  await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 async function placeHouse(directory: string): Promise<string> {
@@ -131,7 +120,7 @@ it("writes Codex's rule for a lone house at a login by code from a Kit home of i
   const home = await temporaryHome();
   const onPath = await placeHouse(join(home, 'bin'));
   const inUserBin = await placeHouse(join(accountOf(home), '.local', 'bin'));
-  house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' } }));
+  house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one' } }));
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
     HOME: accountOf(home),
@@ -187,14 +176,7 @@ it('logs in through the relay HOUSE_KIT_RELAY names and records none, so its res
   const prefix = `/${new URL(house.origin).host}`;
   const relay = await startHouse(tls, `${prefix}/kit/stream`);
   const home = await temporaryHome();
-  relay.route('POST', `${prefix}/kit/token`, () => ({
-    body: {
-      credential: 'ahk_code_credential',
-      environment: 'environment-one',
-      user: 'user-one',
-      headless_credential: 'ahp_code_credential',
-    },
-  }));
+  relay.route('POST', `${prefix}/kit/token`, () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one' } }));
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
     HOME: accountOf(home),
@@ -210,7 +192,6 @@ it('logs in through the relay HOUSE_KIT_RELAY names and records none, so its res
     environment: 'environment-one',
     credential: 'ahk_code_credential',
   });
-  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_code_credential' });
 
   runKit(['resident'], { HOME: accountOf(home) });
 
@@ -242,7 +223,7 @@ it('calls House directly from a Kit home an earlier Kit recorded a relay in, and
   expect(relay.requests.map((request) => request.path)).toContain(`${prefix}/kit/stream`);
 });
 
-it('forgets the relay an earlier Kit recorded in its Kit home once, as its resident starts, keeping every other value', async () => {
+it("forgets the relay an earlier Kit recorded in its Kit credential's record once, as its resident starts, keeping every other value and leaving the own agent's file unread", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   const recorded = 'https://kit.relay.example';
@@ -266,7 +247,7 @@ it('forgets the relay an earlier Kit recorded in its Kit home once, as its resid
     environment: 'environment-one',
     credential: 'ahk_held',
   });
-  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_own' });
+  expect(JSON.parse(await readFile(join(home, 'own-agent.json'), 'utf8'))).toEqual({ house: house.origin, relay: recorded, user: 'user-one', credential: 'ahp_own' });
   expect((await stat(join(home, 'credential.json'))).mode & 0o777).toBe(0o600);
   expect(first.stderr().split('\n').filter((line) => line.includes(recorded))).toEqual([
     `kit: Kit forgot the relay ${recorded} an earlier install recorded; it takes a relay only from HOUSE_KIT_RELAY`,
@@ -530,113 +511,20 @@ it('fails, placing nothing, naming the install command its bootstrap recorded, w
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
 });
 
-it("ends saying House does not serve its wire when House's MCP door refuses the User's own agent's check for its wire, and starts no login", async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_live' }));
-  house.route('POST', '/', () => ({
-    status: 426,
-    body: {
-      jsonrpc: '2.0',
-      id: 1,
-      error: {
-        code: -32000,
-        message: "kit_update_required: House does not serve this Kit's wire; install Kit 0.2.2-c0ffee000002 with this computer's command in commands",
-        data: { code: 'kit_update_required', retryable: false },
-      },
-    },
-  }));
-
-  const login = runKit(['login', '--house', house.origin], { HOME: accountOf(home) });
-
-  expect(await login.exited).toBe(1);
-  expect(login.stderr()).toContain("kit: House does not serve this Kit's wire; install it again.\n");
-  expect(house.requests.filter((request) => request.path === '/kit')).toHaveLength(0);
-});
-
-it("asks for the User's own agent's connection when Kit holds none and keeps it owner-only beside the Kit credential", async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  serveLogin(house, 'environment-one', 'ahk_first', { own: 'ahp_own' });
-
-  const { started, exit } = await logIn(house, home);
-
-  expect(exit).toBe(0);
-  expect(started.headless).toBe(true);
-  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_own' });
-  expect((await stat(join(home, 'own-agent.json'))).mode & 0o777).toBe(0o600);
-  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
-});
-
-it("asks for no connection while House accepts the User's own agent's one Kit holds", async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  const held = { house: house.origin, user: 'user-one', credential: 'ahp_live' };
-  await writeFile(join(home, 'own-agent.json'), JSON.stringify(held));
-  answerOwnAgent(house, 'ahp_live');
-  serveLogin(house, 'environment-one', 'ahk_first');
-
-  const { started, exit } = await logIn(house, home);
-
-  expect(exit).toBe(0);
-  expect(started).not.toHaveProperty('headless');
-  expect(await ownAgent(home)).toEqual(held);
-});
-
-it("asks again when House answers the User's own agent's connection as revoked, and keeps the new one", async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_revoked' }));
-  answerOwnAgent(house, 'ahp_other');
-  serveLogin(house, 'environment-one', 'ahk_first', { own: 'ahp_new' });
-
-  const { started, exit } = await logIn(house, home);
-
-  expect(exit).toBe(0);
-  expect(started.headless).toBe(true);
-  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_new' });
-});
-
-it("never sends the User's own agent's connection to another House, and asks that House for one of its own", async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: 'https://elsewhere.example', user: 'user-one', credential: 'ahp_elsewhere' }));
-  serveLogin(house, 'environment-one', 'ahk_first', { own: 'ahp_here' });
-
-  const { started, exit } = await logIn(house, home);
-
-  expect(exit).toBe(0);
-  expect(started.headless).toBe(true);
-  expect(JSON.stringify(house.requests.map((request) => request.headers))).not.toContain('ahp_elsewhere');
-  expect(await ownAgent(home)).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_here' });
-});
-
-it("drops the User's own agent's connection when another User confirms the login, and says to log in again", async () => {
-  const house = await startHouse();
-  const home = await temporaryHome();
-  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-two', credential: 'ahp_two' }));
-  answerOwnAgent(house, 'ahp_two');
-  serveLogin(house, 'environment-one', 'ahk_first');
-
-  const { exit, login } = await logIn(house, home);
-
-  expect(exit).toBe(0);
-  expect(login.stdout()).toMatch(/kit login/);
-  await expect(access(join(home, 'own-agent.json'))).rejects.toMatchObject({ code: 'ENOENT' });
-});
-
-it("stops with House's answer when House cannot say whether the User's own agent's connection still stands", async () => {
+it("asks for no own agent's credential, makes none, and never reads or sends one Kit home holds", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_held' }));
-  house.route('POST', '/', () => ({ status: 503, body: { error: { code: 'house_unavailable' } } }));
   serveLogin(house, 'environment-one', 'ahk_first');
 
-  const login = runKit(['login', '--house', house.origin], { HOME: accountOf(home) });
+  const { started, exit } = await logIn(house, home);
 
-  expect(await login.exited).toBe(1);
-  expect(login.stderr()).toContain('503');
-  expect(house.requests.map((request) => request.path)).toEqual(['/']);
+  expect(exit).toBe(0);
+  expect(Object.keys(started).sort()).toEqual(['act', 'code_challenge']);
+  expect(house.requests.map((request) => request.path)).toEqual(['/kit', '/kit/token']);
+  expect(JSON.stringify(house.requests.map((request) => [request.headers, request.body]))).not.toContain('ahp_held');
+  expect(JSON.parse(await readFile(join(home, 'own-agent.json'), 'utf8'))).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_held' });
+  expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
 });
 
 it('logs out by revoking and deleting the credential and stopping the resident, and a later login reconnects the same Environment', async () => {
@@ -684,7 +572,7 @@ it('logs out and connects this computer as a new Environment of the other accoun
   await logIn(house, home);
   house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
   expect(await runKit(['logout'], { HOME: accountOf(home) }).exited).toBe(0);
-  serveLogin(house, 'environment-two', 'ahk_second', { user: 'user-two' });
+  serveLogin(house, 'environment-two', 'ahk_second');
 
   const { started, exit, login } = await logIn(house, home);
 
@@ -740,7 +628,7 @@ async function serviceManager(
 }
 
 async function loginWithCode(house: House, home: string, path: string, node: string[] = []) {
-  house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one', user: 'user-one' } }));
+  house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one' } }));
   return runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], { HOME: accountOf(home), PATH: path }, node);
 }
 

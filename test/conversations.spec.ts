@@ -9,7 +9,7 @@ import { expect, it, onTestFinished, vi } from 'vitest';
 import { socketDirectory } from '../src/home.ts';
 import { attached, bridgeSockets, infoCalls } from './attachments.ts';
 import { idOf, settle, until, without, type Received } from './double.ts';
-import { conversationCredential, emit, hostKit, installHeld, lastCall, lastMessage, outcome, userBin, type Hosted } from './environment.ts';
+import { emit, hostKit, installHeld, lastCall, lastMessage, outcome, userBin, type Hosted } from './environment.ts';
 import { accountOf, alive, placeHostKey, runKit, temporaryHome } from './kit.ts';
 
 const FAST_REPORTS = fileURLToPath(new URL('./fast-reports.ts', import.meta.url));
@@ -443,7 +443,11 @@ it("prepares a new conversation's first message, reading what it links and House
     [...agentInstructions(), '', 'Be useful.'].join('\n'),
     text,
   ]);
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/agent_update.credentials_issue')).toHaveLength(1);
+  const bridges = (await hosted.adapterLog()).flatMap((entry) => {
+    const bridge = entry.method === 'initialize' ? (entry.env as Record<string, string>).HOUSE_BRIDGE : undefined;
+    return bridge === undefined ? [] : [bridge];
+  });
+  expect(new Set(bridges).size).toBe(1);
 });
 
 it("prompts a first message with House's instructions through the CLI it starts itself when its open's start failed while it read them", async () => {
@@ -460,19 +464,14 @@ it("prompts a first message with House's instructions through the CLI it starts 
     if (reads++ === 0) await released;
     return { body: { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: '' }] } } };
   });
-  let credentials = 0;
-  hosted.house.route('POST', '/kit/agent_update.credentials_issue', async (request) => {
-    if (credentials++ === 1) await released;
-    return { body: { credential: conversationCredential(idOf(request, 'conversation')) } };
-  });
 
   hosted.call({ kind: 'open' });
   const open = lastCall();
-  hosted.call({ kind: 'message', text: '@say hello', first: true });
-  const message = lastCall();
 
   expect(await hosted.result(open)).toEqual({ refused: "the Agent's CLI did not open a session" });
   await rm(join(hosted.home, 'refuse-new'));
+  hosted.call({ kind: 'message', text: '@say hello', first: true });
+  const message = lastCall();
   release();
   expect(await hosted.result(message)).toHaveProperty('provider_session_id');
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
@@ -804,40 +803,6 @@ it("refuses a conversation whose connection cannot open in the Kit's words, and 
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's computer could not open this conversation; try again" });
   expect(hosted.kit.stderr()).toContain(`${sockets} is not a directory`);
-});
-
-it('opens a conversation whose credential House refused as retryable while it restarted, once House answers it', async () => {
-  const hosted = await hostKit();
-  let refusals = 2;
-  hosted.house.route('POST', '/kit/agent_update.credentials_issue', (request) =>
-    refusals-- > 0
-      ? { status: 503, body: { error: { code: 'house_overloaded', retryable: true } } }
-      : { body: { credential: conversationCredential(idOf(request, 'conversation')) } },
-  );
-
-  hosted.call({ kind: 'open' });
-
-  const result = await hosted.result(lastCall());
-  expect(result).toEqual({ provider_session_id: expect.any(String) });
-  const opened = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
-  expect(result).toEqual({ provider_session_id: opened.sessionId });
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/agent_update.credentials_issue')).toHaveLength(3);
-});
-
-it.each([
-  [404, 'conversation_not_found', 'House no longer holds this conversation; start a new one'],
-  [409, 'conversation_historical', "this conversation's Agent is retired, so it cannot start"],
-])('refuses a conversation House answers %s %s for in its own words, without asking again', async (status, code, refused) => {
-  const hosted = await hostKit();
-  hosted.house.route('POST', '/kit/agent_update.credentials_issue', () => ({
-    status,
-    body: { error: { code, retryable: false } },
-  }));
-
-  hosted.call({ kind: 'open' });
-
-  expect(await hosted.result(lastCall())).toEqual({ refused });
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/agent_update.credentials_issue')).toHaveLength(1);
 });
 
 const KINDS = ['codex-acp', 'claude-agent-acp', 'grok-build'];
@@ -1420,7 +1385,6 @@ it('ends the running process, every process it started and its bridge for an ope
   await until(() => !alive(job.spawned as number) && !alive(job.clean as number));
   expect(alive(sessions[1]!.pid as number)).toBe(true);
   expect(processes(hosted)).toEqual([true, false, true]);
-  expect(hosted.house.requests.filter((request) => request.path === '/kit/agent_update.credentials_issue')).toHaveLength(2);
   hosted.call({ kind: 'message', provider_session_id: old, text: '@say after\n@exit 3', first: false });
   await ends(hosted, 2);
   hosted.call({ kind: 'message', provider_session_id: old, text: '@say again', first: false });

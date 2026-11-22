@@ -13,10 +13,10 @@ import {
   type UploadParts,
   type Way,
 } from './files.ts';
-import { DEFAULT_MAX_SIZE, UPLOAD_NEEDS_OWNER } from './copies.ts';
+import { DEFAULT_MAX_SIZE } from './copies.ts';
 import { ownerSocket } from './home.ts';
 import { fileDigest } from './manifest.ts';
-import { ownAgentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
+import { DISCONNECTED, environmentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { parse } from 'yaml';
 
@@ -48,9 +48,9 @@ type Finishing = { upload: UploadParts } | { text: string };
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const HELP = 'help [tool]';
-const UPLOAD_USAGE = `usage: house upload [--owner], house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
+const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
 const UPLOAD =
-  "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
+  "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 const DOWNLOAD = `download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
 const MAX_SIZE = `--max-size takes a number of megabytes; ${DOWNLOAD_USAGE}`;
@@ -59,6 +59,7 @@ const ARGUMENTS = `the arguments are one JSON object, in single quotes or on std
 const CLOSED = 'this House connection is closed; nothing to do from here';
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
+const NOT_LIVE = 'conversation_not_live';
 const socketPath = process.env.HOUSE_BRIDGE;
 const WAY: Way = {
   ...(socketPath === undefined ? {} : { socketPath }),
@@ -67,10 +68,14 @@ const WAY: Way = {
   refused: (status) => storeRefusal('upload', status),
 };
 
+function said(text: string): string {
+  return refusalOf(text)?.code === NOT_LIVE ? REVOKED : text;
+}
+
 function refused(path: string, status: number, text: string, local: boolean): string {
+  if (status === 401) return DISCONNECTED;
   const refusal = refusalOf(text);
-  if (refusal !== null) return refusal.text;
-  if (status === 401) return REVOKED;
+  if (refusal !== null) return said(refusal.text);
   if (status === 502 && local) return text;
   return path === '/' ? unconfirmed(status) : `${path} answered ${status}`;
 }
@@ -95,11 +100,11 @@ function bridged(path: string, body: unknown, to = socketPath): Promise<string> 
 
 async function mcp<T>(method: string, params: Record<string, unknown>): Promise<T> {
   const message = rpc(method, params);
-  const answer = JSON.parse(socketPath === undefined ? await ownAgentCall(message) : await bridged('/', message)) as {
+  const answer = JSON.parse(socketPath === undefined ? await environmentCall(message) : await bridged('/', message)) as {
     result?: T;
     error?: { message: string };
   };
-  if (answer.error !== undefined) throw new Error(answer.error.message);
+  if (answer.error !== undefined) throw new Error(said(answer.error.message));
   return answer.result!;
 }
 
@@ -203,15 +208,10 @@ async function copyVerb(path: string, body: Record<string, unknown>): Promise<st
 }
 
 async function uploadVerb(args: string[]): Promise<string> {
-  const { flags, positionals: [argument] } = accepted(args, ['--help', '--owner'], 1, UPLOAD_USAGE);
+  const { flags, positionals: [argument] } = accepted(args, ['--help'], 1, UPLOAD_USAGE);
   if (flags.has('--help')) return `${UPLOAD_USAGE}\n${UPLOAD}`;
-  if (argument !== undefined) {
-    if (flags.has('--owner')) throw unexpected('--owner', UPLOAD_USAGE);
-    return upload(await argumentsOf(argument));
-  }
-  const owner = flags.has('--owner');
-  if (!owner && socketPath === undefined) throw new Error(UPLOAD_NEEDS_OWNER);
-  return copyVerb('/copy/upload', { cwd: process.cwd(), owner });
+  if (argument !== undefined) return upload(await argumentsOf(argument));
+  return copyVerb('/copy/upload', { cwd: process.cwd() });
 }
 
 async function argumentsOf(argument: string | undefined): Promise<Record<string, unknown>> {
@@ -304,7 +304,7 @@ async function house(args: string[]): Promise<string> {
 async function called(name: string, args: Record<string, unknown>): Promise<string> {
   const result = await mcp<ToolResult>('tools/call', { name, arguments: args });
   const text = result.content.map((content) => content.text).join('\n');
-  if (result.isError === true) throw new Error(text.replace(/\n+$/, ''));
+  if (result.isError === true) throw new Error(said(text.replace(/\n+$/, '')));
   return text;
 }
 

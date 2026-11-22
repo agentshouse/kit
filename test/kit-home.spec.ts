@@ -67,17 +67,17 @@ it('places no Skill set when the configuration an earlier Kit wrote declines it,
   expect(JSON.parse(await readFile(join(unwritten, 'skill-set.json'), 'utf8'))).toMatchObject({ version: KIT_RELEASE });
 });
 
-it("calls House outside a conversation with the User's own agent's connection an earlier Kit wrote", async () => {
+it('calls House outside a conversation under the Kit credential an earlier Kit wrote', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
-  await writeFile(join(home, 'own-agent.json'), `{"house":"${house.origin}","user":"user-one","credential":"ahp_own"}\n`);
+  await writeFile(join(home, 'credential.json'), `{"house":"${house.origin}","environment":"environment-one","credential":"ahk_earlier"}\n`);
   house.route('POST', '/', ({ body }) => ({
     body: { jsonrpc: '2.0', id: (body as { id: string }).id, result: { content: [{ type: 'text', text: 'found' }] } },
   }));
 
   expect(await runHouse(home, ['search', '{"query":"invoice"}'])).toMatchObject({ status: 0, stdout: 'found\n' });
 
-  expect(house.requests[0]!.headers.authorization).toBe('Bearer ahp_own');
+  expect(house.requests[0]!.headers.authorization).toBe('Bearer ahk_earlier');
 });
 
 it('returns the Result of a call an earlier Kit kept, without carrying the call out again', async () => {

@@ -15,16 +15,9 @@ export interface Configuration {
   workspace: string;
 }
 
-export interface OwnAgent {
-  house: string;
-  user: string;
-  credential: string;
-}
-
 const ENROLMENT = 'credential.json';
 const DISCONNECTED = 'disconnected.json';
 const CONFIGURATION = 'kit.json';
-const OWN_AGENT = 'own-agent.json';
 const PLANNED_RESTART = 'planned-restart';
 
 const EARLIER_PREFIXES = ['/kit-home/kit', '/opt/house-kit'];
@@ -206,28 +199,12 @@ export function enrolled(): boolean {
   return existsSync(join(kitHome(), ENROLMENT));
 }
 
-export function readOwnAgent(): Promise<OwnAgent | null> {
-  return readHome<OwnAgent>(OWN_AGENT);
-}
-
-export function writeOwnAgent(ownAgent: OwnAgent): Promise<void> {
-  return writeHome(OWN_AGENT, ownAgent);
-}
-
 export async function forgetRecordedRelay(): Promise<string | null> {
-  let forgotten: string | null = null;
-  for (const name of [ENROLMENT, OWN_AGENT]) {
-    const held = await readHome<Record<string, unknown>>(name);
-    if (held === null || !('relay' in held)) continue;
-    const { relay, ...kept } = held;
-    await writeHome(name, kept);
-    forgotten = String(relay);
-  }
-  return forgotten;
-}
-
-export function forgetOwnAgent(): Promise<void> {
-  return rm(join(kitHome(), OWN_AGENT), { force: true });
+  const held = await readHome<Record<string, unknown>>(ENROLMENT);
+  if (held === null || !('relay' in held)) return null;
+  const { relay, ...kept } = held;
+  await writeHome(ENROLMENT, kept);
+  return String(relay);
 }
 
 function configuredWorkspace(): string | undefined {

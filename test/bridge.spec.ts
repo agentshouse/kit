@@ -1,15 +1,14 @@
-import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
+import { CONVERSATION_META_KEY, KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { idOf, until, type Received } from './double.ts';
+import { until, type Received } from './double.ts';
 import { temporaryDirectory } from './kit.ts';
 import {
   appRemote,
-  conversationCredential,
   directed,
   hostKit,
   lastCall,
@@ -24,7 +23,7 @@ const OPERATION = 'agents.house/agent-operation';
 
 const called = (received: Received) => received.body as McpCall;
 
-it("reaches House with each process's own conversation credential and never shows it to the CLI", async () => {
+it("reaches House under the Kit credential naming each process's own conversation, and never shows the credential to the CLI", async () => {
   const hosted = await hostKit([{}, { kind: 'claude-agent-acp' }]);
   await opened(hosted);
   await opened(hosted, 'conversation-2', 'agent-2');
@@ -33,21 +32,19 @@ it("reaches House with each process's own conversation credential and never show
   directed(hosted, '@house search {"query":"two"}', 'conversation-2', 'agent-2');
 
   expect((await runs(hosted, 2)).map((ran) => ran.status)).toEqual([0, 0]);
-  const bearers = Object.fromEntries(
-    hosted.mcp.map((received) => [called(received).params.arguments!.query, received.headers.authorization]),
+  const presented = Object.fromEntries(
+    hosted.mcp.map((received) => [
+      called(received).params.arguments!.query,
+      [received.headers.authorization, called(received).params._meta[CONVERSATION_META_KEY]],
+    ]),
   );
-  expect(bearers).toEqual({
-    one: `Bearer ${conversationCredential('conversation-1')}`,
-    two: `Bearer ${conversationCredential('conversation-2')}`,
+  expect(presented).toEqual({
+    one: ['Bearer ahk_held', 'conversation-1'],
+    two: ['Bearer ahk_held', 'conversation-2'],
   });
-  const asked = hosted.house.requests.filter((received) => received.path === '/kit/agent_update.credentials_issue');
-  expect(asked.map((received) => [idOf(received, 'conversation'), received.headers.authorization])).toEqual([
-    ['conversation-1', 'Bearer ahk_held'],
-    ['conversation-2', 'Bearer ahk_held'],
-  ]);
+  expect(hosted.house.requests.filter((received) => received.path.startsWith('/kit/agent_update.credentials'))).toEqual([]);
   const seen = JSON.stringify([await hosted.adapterLog(), hosted.connection.oneWayCalls]);
-  expect(seen).not.toContain(conversationCredential('conversation-1'));
-  expect(seen).not.toContain(conversationCredential('conversation-2'));
+  expect(seen).not.toContain('ahk_held');
 });
 
 it.each([60, 120])("opens a conversation and answers its house calls under a Kit home %i characters deeper than a temporary directory", async (deeper) => {
@@ -62,18 +59,6 @@ it.each([60, 120])("opens a conversation and answers its house calls under a Kit
   expect((await runs(hosted, 1)).map((ran) => ran.status)).toEqual([0]);
 });
 
-it("keeps a conversation's house on its bridge credential while Kit home holds the User's own agent's connection", async () => {
-  const hosted = await hostKit([{}], { prepare: (home) => writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: 'http://127.0.0.1:9', user: 'user-one', credential: 'ahp_own' })) });
-  await opened(hosted);
-
-  directed(hosted, '@house search {"query":"one"}');
-
-  expect((await runs(hosted, 1)).map((ran) => ran.status)).toEqual([0]);
-  expect(hosted.mcp.map((received) => received.headers.authorization)).toEqual([
-    `Bearer ${conversationCredential('conversation-1')}`,
-  ]);
-});
-
 it("serves House's listed tools as the house verbs with House's help", async () => {
   const hosted = await hostKit();
   await opened(hosted);
@@ -85,7 +70,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
     [
       "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments",
       'help [tool]',
-      "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder",
+      "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder",
       "download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file",
       'search',
       '  query',
@@ -187,7 +172,8 @@ it("uploads the local file named by file to its path in the Room, filling its si
   });
   const [declared] = hosted.mcp;
   expect(hosted.mcp).toHaveLength(3);
-  expect(declared!.headers.authorization).toBe(`Bearer ${conversationCredential('conversation-1')}`);
+  expect(declared!.headers.authorization).toBe('Bearer ahk_held');
+  expect(called(declared!).params._meta[CONVERSATION_META_KEY]).toBe('conversation-1');
   expect(called(declared!).params.name).toBe('upload');
   expect(called(declared!).params.arguments).toEqual({
     path: '/rooms/porting/evidence/messenger-next-light.jpg',
@@ -230,6 +216,21 @@ it("prints House's own line for a refused call, and no route, status or body", a
   expect((await runs(hosted, 2)).map((ran) => [ran.status, ran.stderr])).toEqual([
     [1, 'house: room_not_found: you have no Room with that room_ref; pass an r_… ref from rooms_list, not a handle\n'],
     [1, 'house: internal_error: House failed on this call; call again once\n'],
+  ]);
+});
+
+it("says the conversation no longer has House access when House refuses its label as no longer live", async () => {
+  const hosted = await hostKit();
+  hosted.tools.search = () => ({
+    isError: true,
+    content: [{ type: 'text', text: 'conversation_not_live: this conversation no longer acts on this Environment\n' }],
+  });
+  await opened(hosted);
+
+  directed(hosted, '@house search {"query":"one"}');
+
+  expect((await runs(hosted, 1)).map((ran) => [ran.status, ran.stderr])).toEqual([
+    [1, 'house: this conversation no longer has House access; nothing to do from here\n'],
   ]);
 });
 
@@ -305,7 +306,7 @@ it('gives every call it sends its own request id', async () => {
   expect(new Set(ids).size).toBe(ids.length);
 });
 
-it('carries the credential on a Git call to a House App source remote', async () => {
+it('carries the Kit credential and names the conversation on a Git call to a House App source remote', async () => {
   const hosted = await hostKit();
   const commit = 'a'.repeat(40);
   const credentials = appRemote(hosted.house, commit);
@@ -315,7 +316,7 @@ it('carries the credential on a Git call to a House App source remote', async ()
 
   const [ran] = await runs(hosted, 1);
   expect(ran).toMatchObject({ status: 0, stdout: `${commit}\tHEAD\n${commit}\trefs/heads/main\n` });
-  expect(credentials).toEqual([conversationCredential('conversation-1')]);
+  expect(credentials).toEqual([{ credential: 'ahk_held', conversation: 'conversation-1' }]);
 });
 
 it("closes the process's socket and Git proxy when the process exits", async () => {

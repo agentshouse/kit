@@ -13,20 +13,10 @@ import type { z } from 'zod';
 import { HouseRefusal, post, retrying } from './api.ts';
 import { placeAppGit } from './app-git.ts';
 import { writeCodexRule } from './clis.ts';
-import {
-  forgetDisconnected,
-  forgetOwnAgent,
-  readDisconnected,
-  readEnrolment,
-  readOwnAgent,
-  writeEnrolment,
-  writeOwnAgent,
-} from './home.ts';
-import { callHouse, rpc } from './mcp.ts';
+import { forgetDisconnected, readDisconnected, readEnrolment, writeEnrolment } from './home.ts';
 import { refusalOf } from './refusals.ts';
 import { startService } from './supervisor.ts';
 import { placeSkillSet } from './skills.ts';
-import { endUnserved } from './wire.ts';
 
 export const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -49,14 +39,6 @@ function open(link: string): void {
   spawn(OPENER, [link], { detached: true, stdio: 'ignore' })
     .on('error', () => undefined)
     .unref();
-}
-
-async function accepted(house: string, credential: string): Promise<boolean> {
-  const checked = await callHouse(house, credential, rpc('tools/list', {}));
-  if (checked.status === 200) return true;
-  if (checked.status === 401) return false;
-  endUnserved(checked.text);
-  throw new Error(`House answered ${checked.status} when Kit checked this computer's own agent's connection: ${checked.text}`);
 }
 
 const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms <ref>[,<ref>...] | --no-private]
@@ -120,7 +102,7 @@ export async function login(argv: string[]): Promise<void> {
 export async function placeConnection(house: string): Promise<void> {
   await placeSkillSet(house);
   await writeCodexRule().catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
-  await placeAppGit(await readOwnAgent()).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
+  await placeAppGit(house).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
 }
 
 export async function enrol(values: Chosen): Promise<string> {
@@ -138,14 +120,11 @@ export async function enrol(values: Chosen): Promise<string> {
   if (environment !== undefined && rooms.rooms !== undefined) {
     throw new Error(`Environment ${environment} keeps its Rooms; change them on its page in House`);
   }
-  const ownAgent = await readOwnAgent();
-  let held = false;
   let named = environment;
   let exchanged: Issued;
   if (values.code !== undefined) {
     exchanged = await pollLogin(house, { code: values.code });
   } else {
-    held = ownAgent !== null && ownAgent.house === house && (await accepted(house, ownAgent.credential));
     const verifier = randomBytes(32).toString('base64url');
     const start = () =>
       retrying(() =>
@@ -153,7 +132,6 @@ export async function enrol(values: Chosen): Promise<string> {
           ...(named === undefined ? { act: 'new_environment' } : { act: 'existing_environment', environment_id: named }),
           ...rooms,
           code_challenge: createHash('sha256').update(verifier).digest('base64url'),
-          ...(held ? {} : { headless: true }),
         }),
       );
     let started: Started;
@@ -181,13 +159,5 @@ export async function enrol(values: Chosen): Promise<string> {
     credential: exchanged.credential,
   });
   process.stdout.write(connected(house, named, exchanged.environment));
-  if (exchanged.headless_credential !== undefined) {
-    await writeOwnAgent({ house, user: exchanged.user, credential: exchanged.headless_credential });
-  } else if (held && ownAgent !== null && ownAgent.user !== exchanged.user) {
-    await forgetOwnAgent();
-    process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
-  } else if (held && ownAgent !== null) {
-    await writeOwnAgent({ house, user: ownAgent.user, credential: ownAgent.credential });
-  }
   return house;
 }

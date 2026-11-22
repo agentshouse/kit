@@ -2,9 +2,9 @@ import { chmod, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'nod
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, type Hosted } from './environment.ts';
+import { hostKit, ProtocolRefusal, type Hosted } from './environment.ts';
 import { accountOf, temporaryHome } from './kit.ts';
-import { house, manifestOf, ownAgent, roomRootReads, serveRooms, upload, type Room } from './rooms.ts';
+import { house, manifestOf, roomRootReads, serveRooms, upload, type Room } from './rooms.ts';
 
 const FIRST = 'These instructions come after House’s and your own.\n\nWrite dates as YYYY-MM-DD.\n';
 const SECOND = 'These instructions come after House’s and your own.\n\nWrite dates as YYYY-MM-DD.\nPut new tasks on the map.\n';
@@ -85,7 +85,7 @@ it("makes the folder of a Room held at the Open level holding the two files alon
   expect(await readFile(join(folderOf(hosted, 'garden'), 'AGENTS.md'), 'utf8')).toBe(FIRST);
   expect(await readOnly(join(folderOf(hosted, 'garden'), 'AGENTS.md'))).toBe(true);
   expect(chunked(hosted, garden)).toEqual([]);
-  expect(await house(hosted, folderOf(hosted, 'garden'), 'upload', '--owner')).toMatchObject({
+  expect(await house(hosted, folderOf(hosted, 'garden'), 'upload')).toMatchObject({
     status: 1,
     stderr: `house: ${folderOf(hosted, 'garden')} is not in a House Local copy; run house upload inside one\n`,
   });
@@ -227,15 +227,18 @@ it("deletes the two files once House answers a Room's instructions empty, and ke
   });
   expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(FIRST);
 
-  await rm(join(hosted.home, 'own-agent.json'));
+  const info = hosted.tools.info!;
+  hosted.tools.info = () => {
+    throw new ProtocolRefusal(401, { code: -32000, message: 'token_rejected: sign in again', data: { code: 'token_rejected', retryable: false } });
+  };
   notes.instructions = SECOND;
   expect(await rooms.download([notes])).toMatchObject({
     status: 0,
-    stdout: `${garden.root}, ${notes.root}: AGENTS.md kept as it was: this computer's own agent has no House connection; run kit login\n`,
+    stdout: `${garden.root}, ${notes.root}: AGENTS.md kept as it was: House no longer accepts this computer; run kit login\n`,
   });
   expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(FIRST);
 
-  await ownAgent(hosted);
+  hosted.tools.info = info;
   notes.instructions = '';
   garden.instructions = '';
   expect(await rooms.download([notes])).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });

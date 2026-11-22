@@ -1,4 +1,4 @@
-import type { KitCall } from '@agentshouse/kit-wire';
+import { CONVERSATION_GIT_HEADER, type KitCall } from '@agentshouse/kit-wire';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -184,14 +184,6 @@ export const LISTING: Listed[] = [
 ];
 
 
-export function conversationCredential(conversation: string): string {
-  return `ahc_${conversation}`;
-}
-
-export function runCredential(run: string): string {
-  return `ahj_${run}`;
-}
-
 export interface McpCall {
   method: string;
   params: { name?: string; arguments?: Record<string, unknown>; _meta: Record<string, unknown> };
@@ -324,14 +316,6 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });
   serveKitFiles(house, home);
-  house.route('POST', '/kit/agent_update.credentials_issue', (request) => ({
-    body: {
-      credential:
-        (request.body as { run?: unknown }).run === undefined
-          ? conversationCredential(idOf(request, 'conversation'))
-          : runCredential(idOf(request, 'run')),
-    },
-  }));
   house.route('POST', '/kit/kits/report-restart', () => ({ body: {} }));
   house.route('POST', '/kit/local-copies/selection/read', () => ({ body: { local_copy: { rooms: [] } } }));
   let transcribe = hosting.transcribe ?? false;
@@ -554,12 +538,21 @@ function line(text: string): string {
   return `${(Buffer.byteLength(text) + 4).toString(16).padStart(4, '0')}${text}`;
 }
 
-export function appRemote(house: House, commit: string): string[] {
-  const credentials: string[] = [];
+export interface Presented {
+  credential: string;
+  conversation?: string;
+}
+
+export function appRemote(house: House, commit: string): Presented[] {
+  const credentials: Presented[] = [];
   house.route('GET', '/app/:app/info/refs', (received) => {
     const basic = /^Basic (.+)$/.exec(received.headers.authorization ?? '')?.[1];
     const presented = Buffer.from(basic ?? '', 'base64').toString('utf8');
-    credentials.push(presented.slice(presented.indexOf(':') + 1));
+    const conversation = received.headers[CONVERSATION_GIT_HEADER];
+    credentials.push({
+      credential: presented.slice(presented.indexOf(':') + 1),
+      ...(typeof conversation === 'string' ? { conversation } : {}),
+    });
     if (basic === undefined) {
       return {
         status: 401,

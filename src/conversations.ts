@@ -800,7 +800,7 @@ export class Conversations {
 
   private bridged(conversation: Conversation): Promise<Bridge> {
     if (conversation.bridge === null) {
-      const bridging = openBridge(this.kit.house, this.kit.copies, conversation.id, conversation.killed.signal);
+      const bridging = openBridge(this.kit.copies, conversation.id);
       conversation.bridge = bridging;
       bridging.catch(() => {
         if (conversation.bridge === bridging) conversation.bridge = null;

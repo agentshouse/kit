@@ -1,7 +1,8 @@
+import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
 import { agentInstructions } from '@agentshouse/skills';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { conversationCredential, hostKit, lastCall, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
+import { hostKit, lastCall, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
 import { alive } from './kit.ts';
 
 const DOCUMENT = '# Owner rules\n\nWork goes into the Room it belongs to.';
@@ -49,13 +50,10 @@ it("begins a first message with the package's Agent instructions, the base instr
   expect(sent[0]![0]!.text).not.toMatch(/`conversation` action/i);
   for (const prompt of sent) expect(prompt).toEqual(sent[0]);
   expect(
-    hosted.mcp.map((received) => [received.headers.authorization, (received.body as McpCall).params.arguments]).sort(),
-  ).toEqual(
-    kinds.map((_, index) => [
-      `Bearer ${conversationCredential(`conversation-${index + 1}`)}`,
-      { command: READ },
-    ]),
-  );
+    hosted.mcp
+      .map((received) => [received.headers.authorization, (received.body as McpCall).params._meta[CONVERSATION_META_KEY], (received.body as McpCall).params.arguments])
+      .sort(),
+  ).toEqual(kinds.map((_, index) => ['Bearer ahk_held', `conversation-${index + 1}`, { command: READ }]));
 });
 
 it.each([

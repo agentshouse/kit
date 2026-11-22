@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { until, type Received } from './double.ts';
-import { conversationCredential, hostKit, lastCall, opened, type Hosted, type McpCall } from './environment.ts';
+import { hostKit, lastCall, opened, type Hosted, type McpCall } from './environment.ts';
 import { uploadTool } from './store.ts';
 import { fileCalls, house, MANIFEST, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
@@ -94,7 +94,7 @@ it("uploads a local file in the parts House answers, finishes it naming its path
       { ...declared, path: '/rooms/notes/cover.jpg', base: 'v_9.1.x' },
       finishing('/rooms/notes/cover.jpg'),
       finishing('/rooms/notes/cover.jpg'),
-    ].map((args) => [`Bearer ${conversationCredential('conversation-1')}`, 'upload', args]),
+    ].map((args) => ['Bearer ahk_held', 'upload', args]),
   );
   expect(storeCalls(hosted)).toEqual([1, 2, 3, 1, 2, 3].map((part) => ['PUT', part, part === 3 ? 2 : 5, 200]));
 });
@@ -156,8 +156,8 @@ it('downloads the head or a named revision of a binary Path to the file the call
   expect(await readFile(head)).toEqual(REDRAWN);
   expect(await readFile(earlier)).toEqual(JPEG);
   expect(fileCalls(hosted).map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
-    [`Bearer ${conversationCredential('conversation-1')}`, 'info', { path: '/rooms/notes/photo.jpg' }],
-    [`Bearer ${conversationCredential('conversation-1')}`, 'info', { path: '/rooms/notes/photo.jpg', ref: first }],
+    ['Bearer ahk_held', 'info', { path: '/rooms/notes/photo.jpg' }],
+    ['Bearer ahk_held', 'info', { path: '/rooms/notes/photo.jpg', ref: first }],
   ]);
   expect(storeCalls(hosted)).toEqual([
     ['GET', null, REDRAWN.length, 200],
@@ -188,7 +188,6 @@ it('replaces a download address the store refuses as expired by asking House aga
 
 it("refuses a download whose bytes do not match House's SHA-256 and one of a text file, and writes nothing", async () => {
   const { hosted, rooms } = await copied();
-  await writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' }));
   rooms.damages = true;
   const target = join(hosted.workingDirectory, 'photo.jpg');
 
@@ -199,12 +198,11 @@ it("refuses a download whose bytes do not match House's SHA-256 and one of a tex
   expect(text).toEqual({ status: 1, stdout: '', stderr: 'house: /rooms/notes/plan.md holds no binary file; shell reads its text\n' });
   expect(existsSync(target)).toBe(false);
   expect((await readdir(hosted.workingDirectory)).filter((name) => name.includes('photo'))).toEqual([]);
-  expect(fileCalls(hosted).map((received) => received.headers.authorization)).toEqual(['Bearer ahp_own', 'Bearer ahp_own']);
+  expect(fileCalls(hosted).map((received) => received.headers.authorization)).toEqual(['Bearer ahk_held', 'Bearer ahk_held']);
 });
 
 it('refuses a download of a document whose info answer House cut as one of a text file, and writes nothing', async () => {
   const { hosted } = await copied();
-  await writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' }));
   const read = hosted.tools.info!;
   hosted.tools.info = async (args, request) => {
     const result = (await read(args, request))!;

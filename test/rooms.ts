@@ -1,7 +1,7 @@
+import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
@@ -626,7 +626,6 @@ function toolResults(room: Room, writes: Write[]): Record<string, unknown>[] {
 }
 
 export function serveRooms(hosted: Hosted): Rooms {
-  writeFileSync(join(hosted.home, 'own-agent.json'), ownAgentRecord(hosted));
   const rooms: Room[] = [];
   const receipts = new Map<string, Receipt>();
   const state: Rooms = {
@@ -892,15 +891,14 @@ export function serveRooms(hosted: Hosted): Rooms {
   });
   hosted.tools.update = (args, request) => {
     if (args.op === 'stage') return stage(args);
-    const bearer = request.headers.authorization!;
-    if (state.denied.has(bearer)) {
+    const meta = (request.body as { params: { _meta: Record<string, string> } }).params._meta;
+    if (state.denied.has(meta[CONVERSATION_META_KEY] ?? '')) {
       return { isError: true, content: [{ type: 'text', text: 'operation_denied: you may not write here; the Room owner grants Room access, your User widens an Agent at /agents\n' }] };
     }
     const upload = args.upload as { url: string } | undefined;
     const changes = (
       upload === undefined ? args.changes : (JSON.parse(staged.get(upload.url)!.toString('utf8')) as { changes: unknown }).changes
     ) as EditChange[];
-    const meta = (request.body as { params: { _meta: Record<string, string> } }).params._meta;
     const operation = meta['agents.house/agent-operation']!;
     const outcome = edited(changes, operation);
     if ('stopped' in outcome) throw toolStopped(outcome.stopped);
@@ -950,16 +948,8 @@ export function fileCalls(hosted: Hosted): Received[] {
   return hosted.mcp.filter((received) => !readsRoomRoot(received));
 }
 
-function ownAgentRecord(hosted: Hosted): string {
-  return JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' });
-}
-
-export async function ownAgent(hosted: Hosted): Promise<void> {
-  await writeFile(join(hosted.home, 'own-agent.json'), ownAgentRecord(hosted));
-}
-
 export function upload(hosted: Hosted, room: Room, ...flags: string[]): Promise<HouseRun> {
-  return house(hosted, room.repository, 'upload', '--owner', ...flags);
+  return house(hosted, room.repository, 'upload', ...flags);
 }
 
 export interface ManifestEntry {

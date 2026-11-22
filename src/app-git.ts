@@ -1,5 +1,5 @@
 import { run, type Ran } from './git.ts';
-import { kitHome, readOwnAgent, type OwnAgent } from './home.ts';
+import { kitHome, readEnrolment } from './home.ts';
 
 const HELPER = '!kit git-credential';
 
@@ -16,11 +16,10 @@ async function configured(args: string[]): Promise<Ran | null> {
   }
 }
 
-export async function placeAppGit(ownAgent: OwnAgent | null): Promise<void> {
-  if (ownAgent === null) return;
-  await configured(['--remove-section', section(ownAgent.house)]);
+export async function placeAppGit(house: string): Promise<void> {
+  await configured(['--remove-section', section(house)]);
   for (const value of ['', HELPER]) {
-    const ran = await configured(['--add', `${section(ownAgent.house)}.helper`, value]);
+    const ran = await configured(['--add', `${section(house)}.helper`, value]);
     if (ran === null) return;
     if (ran.status !== 0) throw new Error(`git config failed: ${ran.stderr.trim()}`);
   }
@@ -36,12 +35,12 @@ export async function answerGitCredential(operation: string | undefined): Promis
       .filter((line) => line.includes('='))
       .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
   );
-  const ownAgent = await readOwnAgent();
-  if (ownAgent === null) {
+  const enrolment = await readEnrolment();
+  if (enrolment === null) {
     process.stderr.write(`kit: Kit home ${kitHome()} is not signed in; run kit login\n`);
     return;
   }
-  const house = new URL(ownAgent.house);
+  const house = new URL(enrolment.house);
   if (attributes.get('protocol') !== house.protocol.slice(0, -1) || attributes.get('host') !== house.host) return;
-  process.stdout.write(`username=house\npassword=${ownAgent.credential}\n`);
+  process.stdout.write(`username=house\npassword=${enrolment.credential}\n`);
 }

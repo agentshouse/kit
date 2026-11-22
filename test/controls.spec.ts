@@ -120,24 +120,6 @@ it('refuses an open and returns the result of the kill at once while the Kit sti
   expect(await hosted.result(open)).toEqual({ refused: 'the conversation was killed' });
 });
 
-it('refuses an open and returns the result of the kill at once while House holds the credential for its process', async () => {
-  const hosted = await hostKit();
-  let release!: (answer: Answer) => void;
-  const held = new Promise<Answer>((resolve) => {
-    release = resolve;
-  });
-  onTestFinished(() => release({ status: 503, body: {} }));
-  hosted.house.route('POST', '/kit/agent_update.credentials_issue', () => held);
-  hosted.call({ kind: 'open' });
-  const open = lastCall();
-  await until(() => hosted.house.requests.find((request) => request.path === '/kit/agent_update.credentials_issue'));
-
-  hosted.call({ kind: 'kill' });
-
-  expect(await hosted.result(lastCall())).toEqual({});
-  expect(await hosted.result(open)).toEqual({ refused: 'the conversation was killed' });
-});
-
 it.each(['SIGTERM', 'SIGINT'] as const)(
   'kills every process it started, of a running conversation and of one still opening, when %s stops it',
   async (signal) => {

@@ -1,7 +1,8 @@
 import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { randomUUID } from 'node:crypto';
 import { KIT_RELEASE } from './clis.ts';
-import { readOwnAgent } from './home.ts';
+import { readEnrolment } from './home.ts';
+import { operationId } from './operation.ts';
 import { refusalOf, retryable, type Refusal } from './refusals.ts';
 import { proxyUnlessRelayed, relayed } from './relay.ts';
 
@@ -25,8 +26,8 @@ export interface ToolResult {
 const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 export const UNREACHABLE = 'House is unreachable; call again in a minute';
-const UNCONNECTED = "this computer's own agent has no House connection; run kit login";
-export const DISCONNECTED = "House no longer accepts this computer's own agent; run kit login";
+const UNCONNECTED = 'this computer has no House connection; run kit login';
+export const DISCONNECTED = 'House no longer accepts this computer; run kit login';
 const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 
 export class Unsettled extends Error {}
@@ -80,11 +81,12 @@ export function unconfirmed(status: number): string {
   return `House answered ${status} ${UNCONFIRMED}`;
 }
 
-export async function ownAgentCall(message: Message): Promise<string> {
-  const ownAgent = await readOwnAgent();
-  if (ownAgent === null) throw new Error(UNCONNECTED);
+export async function environmentCall(message: Message): Promise<string> {
+  const enrolment = await readEnrolment();
+  if (enrolment === null) throw new Error(UNCONNECTED);
   proxyUnlessRelayed();
-  const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
+  const operation = message.method === 'tools/call' ? operationId() : null;
+  const answer = await callHouse(enrolment.house, enrolment.credential, message, { operation }).catch(() => {
     throw new Unsettled(UNREACHABLE);
   });
   if (answer.status === 200) return answer.text;

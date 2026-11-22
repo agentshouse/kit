@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, lastCall, type Hosted } from './environment.ts';
 import { accountOf, runKit, stop, temporaryHome } from './kit.ts';
-import { digest, house, manifestOf, ownAgent, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
+import { digest, house, manifestOf, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
 const REDRAWN = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0, 8, 0x45, 0x78, 0x69, 0x66]);
@@ -208,7 +208,6 @@ it('keeps each attachment the copy holds current, moving or removing it as the R
   room.put('ROOM.md', 'The notes Room\n');
   room.upload('photos/small.jpg', JPEG);
   room.upload('photos/large.jpg', Buffer.alloc(2_000_001, 1));
-  await ownAgent(hosted);
   await rooms.download([room]);
   expect(existsSync(join(room.repository, 'photos'))).toBe(false);
   expect((await manifestOf(room)).files['photos/small.jpg']).toEqual({ revision: room.revision('photos/small.jpg'), sha256: digest(JPEG), bytes: JPEG.length, skipped: true });
