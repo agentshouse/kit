@@ -178,14 +178,6 @@ export const LISTING: Listed[] = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
-    name: 'find_command',
-    inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
-  },
-  {
-    name: 'run_command',
-    inputSchema: { type: 'object', properties: { command: { type: 'string' }, arguments: { type: 'object' } } },
-  },
-  {
     name: 'get_started',
     inputSchema: { type: 'object', properties: {} },
   },

@@ -281,7 +281,7 @@ function listed(tool: Tool): string {
 
 async function toolHelp(name: string): Promise<string> {
   const tool = (await tools()).find((one) => one.name === name);
-  if (tool === undefined) throw new Error(`${name} is no Tool; house find_command '{"query":"${name}"}' finds Commands`);
+  if (tool === undefined) throw new Error(`${name} is no Tool; house --help lists the Tools`);
   return [listed(tool), ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', true)].join('\n');
 }
 
