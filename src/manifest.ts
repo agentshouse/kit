@@ -21,6 +21,7 @@ export interface Entry {
 export interface Manifest {
   room_ref: string;
   files: Record<string, Entry>;
+  kit?: string[];
 }
 
 export interface Present {
@@ -69,7 +70,8 @@ export async function placed(staging: string, target: string, content: Buffer | 
 
 export async function writeManifest(repository: string, staging: string, manifest: Manifest): Promise<void> {
   const files = Object.fromEntries(Object.entries(manifest.files).sort(([left], [right]) => (left < right ? -1 : 1)));
-  await placed(staging, join(repository, MANIFEST), `${JSON.stringify({ room_ref: manifest.room_ref, files })}\n`);
+  const kit = manifest.kit === undefined ? {} : { kit: manifest.kit };
+  await placed(staging, join(repository, MANIFEST), `${JSON.stringify({ room_ref: manifest.room_ref, files, ...kit })}\n`);
 }
 
 export async function removed(repository: string, name: string): Promise<void> {

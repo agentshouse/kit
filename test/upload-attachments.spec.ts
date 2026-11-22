@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
 import { conversationCredential, hostKit, opened, type Hosted, type McpCall } from './environment.ts';
-import { digest, house, manifestOf, ownAgent, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
+import { digest, fileCalls, house, manifestOf, ownAgent, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
 
@@ -102,7 +102,7 @@ it('uploads documents and attachments once as the owner, each attachment staged 
   expect(puts(hosted).filter(([, status]) => status === 200)).toHaveLength(9 + 4 + 2 + 2);
   expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
   expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
-  expect(hosted.mcp).toEqual([]);
+  expect(fileCalls(hosted)).toEqual([]);
 });
 
 it("uploads a document and an attachment under the conversation's own credential, finishing each staged upload through upload by its path, and a download there brings the attachment's new bytes", async () => {
@@ -118,7 +118,7 @@ it("uploads a document and an attachment under the conversation's own credential
   expect(downloaded).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n' });
   const credential = `Bearer ${conversationCredential('conversation-1')}`;
   const finishing = { upload: expect.any(String), path: '/rooms/notes/photo.jpg', part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };
-  expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
+  expect(fileCalls(hosted).map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
     [credential, 'update', { changes: expect.any(Array) }],
     [credential, 'upload', finishing],
     [credential, 'upload', finishing],
@@ -126,6 +126,11 @@ it("uploads a document and an attachment under the conversation's own credential
     [credential, 'info', { path: '/rooms/notes/photo.jpg', ref: room.binaries.get('photo.jpg')!.revision }],
   ]);
   expect(new Set(hosted.mcp.filter((received) => called(received).name === 'update').map(operationOf)).size).toBe(1);
+  expect(
+    hosted.mcp
+      .filter((received) => called(received).name === 'info' && called(received).arguments?.path === room.root)
+      .map((received) => received.headers.authorization),
+  ).toEqual(['Bearer ahp_own', credential]);
   expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(REDRAWN);
 });
 

@@ -21,7 +21,7 @@ import {
   type Submitted,
   type Upload,
 } from './copies.ts';
-import { fileInfo, type Finished } from './files.ts';
+import { fileInfo, instructionsText, type Finished } from './files.ts';
 import { readEnrolment, readOwnAgent, socketDirectory } from './home.ts';
 import { callHouse, DISCONNECTED, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
@@ -218,6 +218,12 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
     return send(message, message.method === 'tools/call' ? operationId() : null);
   };
 
+  const info = async (args: Record<string, unknown>): Promise<string> => {
+    const answer = toolAnswer(await send(call('info', args), operationId()));
+    if ('refused' in answer) throw new Error(answer.refused.text);
+    return answer.text;
+  };
+
   const caller: Caller = {
     key: holder.key,
     submit: async (operation, changes, held, retain) => {
@@ -240,11 +246,8 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
       if ('refused' in answer) throw new Error(answer.refused.text);
       return parse(answer.text) as Finished<Staged>;
     },
-    info: async (path, revision) => {
-      const answer = toolAnswer(await send(call('info', { path, ...(revision === undefined ? {} : { ref: revision }) }), operationId()));
-      if ('refused' in answer) throw new Error(answer.refused.text);
-      return fileInfo(answer.text);
-    },
+    info: async (path, revision) => fileInfo(await info({ path, ...(revision === undefined ? {} : { ref: revision }) })),
+    instructions: async (root) => instructionsText(await info({ path: root })),
   };
 
   const uploader = holder.owner ? copies.owner : caller;

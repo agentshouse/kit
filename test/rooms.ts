@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
@@ -16,6 +17,7 @@ const CHUNK_BYTES = 1024 * 1024;
 const BODY_BYTES = 4 * 1024 * 1024;
 const STAGED_PART_BYTES = 8;
 const BATCH_FILES = 1000;
+const ANSWER_BYTES = 32_000;
 const RETRY_AT = '2026-11-17T00:00:00.000Z';
 const DOCUMENT = /\.md$/i;
 const REVISION = /^v_(\d+)\.1\.x$/;
@@ -223,6 +225,7 @@ export class Room {
   readonly log: { position: number; paths: string[] }[] = [];
   readonly batches: EditChange[][] = [];
   models: Record<string, unknown>[] = [];
+  instructions = '';
   cuts = false;
   private built: { position: number; entries: object[] } | null = null;
 
@@ -521,6 +524,7 @@ type Receipt = { authority: string; position: string; log_epoch: string; writes:
 
 export interface Rooms {
   answered: Room[];
+  open: Room[];
   room(handle: string): Room;
   download(rooms: Room[], ...flags: string[]): Promise<HouseRun>;
   unreadable: Set<string>;
@@ -584,10 +588,12 @@ function toolResults(writes: Write[]): Record<string, unknown>[] {
 }
 
 export function serveRooms(hosted: Hosted): Rooms {
+  writeFileSync(join(hosted.home, 'own-agent.json'), ownAgentRecord(hosted));
   const rooms: Room[] = [];
   const receipts = new Map<string, Receipt>();
   const state: Rooms = {
     answered: [],
+    open: [],
     unreadable: new Set(),
     denied: new Set(),
     expired: new Set(),
@@ -697,7 +703,14 @@ export function serveRooms(hosted: Hosted): Rooms {
   };
   const refusalStatus = (refusal: Refused) => (refusal.code === 'batch_too_large' ? 413 : refusal.code === 'protected_path' ? 403 : 409);
   hosted.house.route('POST', '/kit/local-copies/selection/read', () => ({
-    body: { local_copy: { rooms: state.answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle })) } },
+    body: {
+      local_copy: {
+        rooms: [
+          ...state.answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle, level: 'keep' })),
+          ...state.open.map((room) => ({ room_ref: room.ref, room_handle: room.handle, level: 'open' })),
+        ],
+      },
+    },
   }));
   hosted.house.route('POST', '/kit/door/rooms/discover', (request) => {
     const { prefixes } = request.body as { prefixes: string[] };
@@ -784,6 +797,12 @@ export function serveRooms(hosted: Hosted): Rooms {
   hosted.tools.info = (args) => {
     const path = String(args.path);
     const room = roomOf(path);
+    if (!path.slice('/rooms/'.length).includes('/')) {
+      const instructions = room.instructions === '' ? {} : { instructions: { version: 1, approved_version: 1, text: room.instructions } };
+      const answer = Buffer.from(stringify({ ref: room.ref, path, ...instructions }));
+      const text = answer.length <= ANSWER_BYTES ? answer.toString() : `${answer.subarray(0, ANSWER_BYTES).toString()}\ninfo: output_cut at ${ANSWER_BYTES} bytes`;
+      return { content: [{ type: 'text', text }] };
+    }
     const local = path.slice(room.root.length + 1);
     const ref = args.ref as string | undefined;
     if (ref !== undefined && !REFERENCE.test(ref)) {
@@ -879,8 +898,25 @@ export function house(hosted: Hosted, cwd: string, ...args: string[]): Promise<H
   });
 }
 
+function readsRoomRoot(received: Received): boolean {
+  const { name, arguments: args } = (received.body as { params: { name?: string; arguments?: { path?: unknown } } }).params;
+  return name === 'info' && typeof args?.path === 'string' && /^\/rooms\/[^/]+$/.test(args.path);
+}
+
+export function roomRootReads(hosted: Hosted): string[] {
+  return hosted.mcp.filter(readsRoomRoot).map((received) => (received.body as { params: { arguments: { path: string } } }).params.arguments.path);
+}
+
+export function fileCalls(hosted: Hosted): Received[] {
+  return hosted.mcp.filter((received) => !readsRoomRoot(received));
+}
+
+function ownAgentRecord(hosted: Hosted): string {
+  return JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' });
+}
+
 export async function ownAgent(hosted: Hosted): Promise<void> {
-  await writeFile(join(hosted.home, 'own-agent.json'), JSON.stringify({ house: hosted.house.origin, user: 'user-one', credential: 'ahp_own' }));
+  await writeFile(join(hosted.home, 'own-agent.json'), ownAgentRecord(hosted));
 }
 
 export function upload(hosted: Hosted, room: Room, ...flags: string[]): Promise<HouseRun> {
