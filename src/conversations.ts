@@ -54,6 +54,7 @@ export interface Kit {
   calls: Calls;
   send(oneWayCall: KitOneWayCall): boolean;
   changed(): void;
+  turnEnded(stamped: Promise<void>): void;
 }
 
 type ConversationCall = Extract<KitCall, { conversation_id: string }>;
@@ -1139,7 +1140,8 @@ export class Conversations {
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
     void this.deliver(conversation, 'turns/end', body).catch(logged);
-    if (conversation.place?.copy === true) void this.kit.copies.turnEnded(conversation.place.directory).catch(logged);
+    const stamped = conversation.place?.copy === true ? this.kit.copies.turnEnded(conversation.place.directory) : Promise.resolve();
+    this.kit.turnEnded(stamped.catch(logged));
     this.uploaded(conversation);
     this.next(conversation);
     this.kit.changed();

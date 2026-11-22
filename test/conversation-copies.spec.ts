@@ -544,7 +544,7 @@ it("removes on a deletion's kill a clean copy of a Room no longer reached and on
   expect(await readFile(join(copy(3), 'plan.md'), 'utf8')).toBe('Plant beans\n');
 });
 
-it("removes a clean copy idle for 24 hours and keeps one used within them and one holding a changed or conflicted file or a pending batch however long idle, notifying nobody, then makes the removed copy again at its path for the next turn, which resumes its session there, while a new conversation of its name takes another path", async () => {
+it("removes a clean copy idle for 24 hours at the next turn's end, even one ending while another turn runs, and nothing while nothing happens, keeps one used within them and one holding a changed or conflicted file or a pending batch however long idle, notifying nobody, then makes the removed copy again at its path for the next turn, which resumes its session there, while a new conversation of its name takes another path", async () => {
   const clock = await clocked();
   const { hosted, rooms, notes } = await staged([{}, {}, {}, {}, {}, {}, {}], clock.hosting);
   const sessions: string[] = [];
@@ -571,23 +571,36 @@ it("removes a clean copy idle for 24 hours and keeps one used within them and on
   const kept = await Promise.all([3, 4, 5].map((index) => contents(copy(index))));
 
   await clock.shift(25 * HOUR);
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  expect(await held(copy(1))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
+
+  const before = ended(hosted).length;
+  const prompts = (await logged(hosted, 'session/prompt')).length;
+  told(hosted, 2, '@gate held', { provider_session_id: sessions[1] });
+  await prompt(hosted, prompts);
+  expect(await held(copy(1))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
+  told(hosted, 6, '@say again', { provider_session_id: sessions[5] });
+  await turned(hosted, before + 1);
   await until(async () => !existsSync(copy(1)));
+  expect(ended(hosted)).toHaveLength(before + 1);
+  await writeFile(join(hosted.home, 'held'), '');
+  await turned(hosted, before + 2);
   await settle();
 
   expect(await held(copy(2))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
   for (const [at, index] of [3, 4, 5].entries()) expect(await contents(copy(index))).toEqual(kept[at]);
-  expect(hosted.results).toHaveLength(results);
+  expect(hosted.results.slice(results).filter((one) => JSON.stringify(one.body).includes('"kept"'))).toEqual([]);
 
   await opened(hosted, notes, 'Plan 1', 'conversation-7', 'agent-7');
   expect(await cwdOf(hosted, 'session/new', 6)).toBe(`${copy(1)} 2`);
   told(hosted, 1, '@say again', { provider_session_id: sessions[0] });
 
-  expect(await cwdOf(hosted, 'session/resume', 1)).toBe(copy(1));
+  expect(await cwdOf(hosted, 'session/resume', 3)).toBe(copy(1));
   expect(await held(copy(1))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
   expect(await readFile(join(copy(1), 'plan.md'), 'utf8')).toBe('Plant peas\n');
 });
 
-it("reports a Sandbox idle only once a running removal has ended, and starts no idle removal while its idle report stands", async () => {
+it("removes an idle copy at the Kit's start, reporting a Sandbox idle only once that removal has ended, and nothing while the idle report stands and nothing happens", async () => {
   const clock = await clocked();
   const { hosted, rooms, notes } = await staged([{}], { ...clock.hosting, environment: { ...clock.hosting.environment, HOUSE_KIT_SANDBOX: '1' } });
   for (let index = 0; index < 400; index++) notes.put(`notes/${index}.md`, `note ${index}\n`);
@@ -615,7 +628,7 @@ it("reports a Sandbox idle only once a running removal has ended, and starts no 
   expect(seen[0]).toBe(false);
 });
 
-it('runs the next turn of a conversation whose Kit ended halfway through removing its idle copy in a whole copy made again from House, whose turn-end upload deletes nothing', async () => {
+it('removes an idle copy once the Kit goes idle after a call, and runs the next turn of a conversation whose Kit ended halfway through that removal in a whole copy made again from House, whose turn-end upload deletes nothing', async () => {
   const clock = await clocked();
   const halted = join(await temporaryDirectory(), 'halted-removal');
   const { hosted, rooms, notes } = await staged([{}], { environment: { ...clock.hosting.environment, KIT_HALTED_REMOVAL: halted }, node: [...MOVED_CLOCK, ...HALTED_REMOVAL] });
@@ -627,6 +640,7 @@ it('runs the next turn of a conversation whose Kit ended halfway through removin
   await writeFile(halted, join(copy, 'a.md'));
 
   await clock.shift(25 * HOUR);
+  hosted.call({ kind: 'kill', conversation_id: 'conversation-1', agent_id: 'agent-1' });
   await hosted.kit.exited;
   await absent(join(copy, 'a.md'));
   expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans\n');
