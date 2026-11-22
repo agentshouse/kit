@@ -106,6 +106,14 @@ export function fileInfo(answer: string): FileInfo | null {
   };
 }
 
+export function instructionsText(root: string, answer: string): string {
+  const document = parseDocument(answer);
+  if (document.errors.length > 0) throw new Error(`House's answer for ${root} could not be read`);
+  const details = document.toJS() as { instructions?: { text?: unknown } } | null;
+  const text = details?.instructions?.text;
+  return typeof text === 'string' ? text : '';
+}
+
 export function paused(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

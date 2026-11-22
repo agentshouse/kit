@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
-import { fileInfo, paused, type FileInfo, type Finished } from './files.ts';
+import { fileInfo, instructionsText, paused, type FileInfo, type Finished } from './files.ts';
 import { kitHome, roomsFolder } from './home.ts';
 import {
   digest,
@@ -36,7 +36,9 @@ const MEGABYTE = 1_000_000;
 const CUT = /\noutput_cut \d+ of \d+ bytes$/;
 const KIT_IGNORES = ['.gitignore', '.ignore'];
 const KIT_GIT = ['.git/refs/house/received', '.git/house-chunks', '.git/house-uploads', '.git/house-downloads'];
-const KIT_NAMES = ['agents.md', 'claude.md'];
+const KIT_FILES = ['AGENTS.md', 'CLAUDE.md'];
+const IMPORTED = '@AGENTS.md\n';
+const FOLDERS = 'folders.json';
 
 export const DEFAULT_MAX_SIZE = 10;
 export const UPLOAD_NEEDS_OWNER = 'outside an Agent conversation, house upload needs --owner';
@@ -186,6 +188,7 @@ export interface Caller {
   ): Promise<Submitted>;
   finish(upload: string, path: string, partSha256: string[]): Promise<Finished<Staged>>;
   info(path: string, revision?: string): Promise<FileInfo | null>;
+  instructions(root: string): Promise<string>;
 }
 
 export interface Answered {
@@ -205,6 +208,12 @@ function causeOf(error: unknown): string {
 
 function houseCause(error: unknown): string {
   return error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error);
+}
+
+async function ownInfo(args: Record<string, unknown>): Promise<string> {
+  const read = toolAnswer({ status: 200, text: await ownAgentCall(rpc('tools/call', { name: 'info', arguments: args })) });
+  if ('refused' in read) throw new Error(read.refused.text);
+  return read.text;
 }
 
 function logged(error: unknown): void {
@@ -297,7 +306,21 @@ function relative(path: string): string {
 }
 
 function kitsOwn(path: string): boolean {
-  return !path.includes('/') && KIT_NAMES.includes(path.toLowerCase());
+  return !path.includes('/') && KIT_FILES.some((name) => name.toLowerCase() === path.toLowerCase());
+}
+
+async function kitFiles(folder: string, text: string): Promise<void> {
+  const contents = new Map(text === '' ? [] : [['AGENTS.md', text], ['CLAUDE.md', IMPORTED]]);
+  for (const name of KIT_FILES) {
+    const content = contents.get(name);
+    const target = join(folder, name);
+    if (content === undefined) await rm(target, { force: true });
+    else if ((await readFile(target, 'utf8').catch(() => null)) !== content) {
+      const temporary = `${await staging()}${randomUUID()}`;
+      await writeFile(temporary, content, { mode: 0o444 });
+      await rename(temporary, target);
+    }
+  }
 }
 
 function declaredWritable(path: string, copy: Scope): boolean {
@@ -587,6 +610,7 @@ export class LocalCopies {
   private readonly house: House;
   private readonly launched: () => Promise<readonly string[]>;
   private readonly copies = new Map<string, Held>();
+  private readonly folders = new Map<string, string>();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly waiting = new Set<string>();
   private answering: Promise<unknown> = Promise.resolve();
@@ -617,21 +641,15 @@ export class LocalCopies {
           throw retryable(error.text) === false ? new Error(houseCause(error)) : new Unsettled(houseCause(error));
         }
       },
-      info: async (path, revision) => {
-        const read = toolAnswer({
-          status: 200,
-          text: await ownAgentCall(
-            rpc('tools/call', { name: 'info', arguments: { path, ...(revision === undefined ? {} : { ref: revision }) } }),
-          ),
-        });
-        if ('refused' in read) throw new Error(read.refused.text);
-        return fileInfo(read.text);
-      },
+      info: async (path, revision) => fileInfo(await ownInfo({ path, ...(revision === undefined ? {} : { ref: revision }) })),
+      instructions: async (root) => instructionsText(root, await ownInfo({ path: root })),
     };
   }
 
   async load(): Promise<void> {
     const home = join(kitHome(), 'local-copies');
+    const folders = await readFile(join(home, FOLDERS), 'utf8').catch(() => null);
+    if (folders !== null) for (const [ref, name] of Object.entries(JSON.parse(folders) as Record<string, string>)) this.folders.set(ref, name);
     const names = (await readdir(join(home, 'rooms')).catch(() => [])).filter((name) => name.endsWith('.json'));
     for (const path of names.map((name) => join(home, 'rooms', name))) {
       const text = await readFile(path, 'utf8').catch(() => null);
@@ -666,10 +684,12 @@ export class LocalCopies {
 
   private async fetched(refreshing: boolean, caller: Caller, fetching: Fetching): Promise<Answered> {
     const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
-    const synced = new Map(answer.rooms.map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
+    const reached = new Map(answer.rooms.map((room) => [room.room_ref, room.room_handle]));
+    const synced = new Map(answer.rooms.filter((room) => room.level === 'keep').map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
     return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
       const chosen = await this.launched();
       const said: string[] = [];
+      const made = new Set<string>();
       let refused = false;
       const mark = refreshing ? 'said' : 'unsaid';
       for (const copy of [...this.copies.values()]) {
@@ -702,7 +722,9 @@ export class LocalCopies {
           const authority = authorities.find((entry) => `${ROOMS}${entry.room_ref}` === key);
           try {
             if (authority === undefined) throw new Error('House serves nothing of it to copy');
+            await this.vacated(authority.room_ref);
             said.push(await this.copied({ key, handle, authority }, fetching, chosen));
+            made.add(authority.room_ref);
           } catch (error) {
             if (error instanceof NotReady) {
               unready.push(...error.rooms);
@@ -735,6 +757,9 @@ export class LocalCopies {
           said.push(failed);
         }
       }
+      const unwritten = await this.foldered(reached, new Set(synced.keys()), made, refreshing, caller, chosen);
+      if (refreshing) said.push(...unwritten);
+      else unwritten.forEach(logged);
       for (const room of [...this.waiting]) {
         if (!unready.includes(room) && !unsettled.includes(room)) this.waiting.delete(room);
       }
@@ -837,6 +862,106 @@ export class LocalCopies {
     const kept = await keptName(path);
     await rename(path, kept);
     for (const copy of [...this.copies.values()]) if (within(copy.repository, path)) await this.save(rerooted(copy, path, kept));
+    const named = [...this.folders].filter(([, name]) => join(roomsFolder(), name) === path);
+    for (const [ref] of named) this.folders.set(ref, basename(kept));
+    if (named.length > 0) await this.savedFolders();
+  }
+
+  private async savedFolders(): Promise<void> {
+    const path = join(kitHome(), 'local-copies', FOLDERS);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = `${path}.${process.pid}`;
+    await writeFile(temporary, JSON.stringify(Object.fromEntries(this.folders)), { mode: 0o600 });
+    await rename(temporary, path);
+  }
+
+  private async vacated(ref: string): Promise<void> {
+    const name = this.folders.get(ref);
+    if (name === undefined) return;
+    const folder = join(roomsFolder(), name);
+    for (const file of KIT_FILES) await rm(join(folder, file), { force: true });
+    await removeFolder(folder);
+    this.folders.delete(ref);
+    await this.savedFolders();
+  }
+
+  private async foldered(
+    reached: ReadonlyMap<string, string>,
+    synced: ReadonlySet<string>,
+    made: ReadonlySet<string>,
+    refreshing: boolean,
+    caller: Caller,
+    chosen: readonly string[],
+  ): Promise<string[]> {
+    const lines: string[] = [];
+    for (const copy of [...this.copies.values()]) {
+      if (!reached.has(copy.room_ref) && !earlier(copy) && (await exists(copy.repository))) await this.kitWritten(copy.repository, '', true);
+    }
+    for (const [ref, name] of [...this.folders]) {
+      if (reached.has(ref)) continue;
+      await kitFiles(join(roomsFolder(), name), '');
+      this.folders.delete(ref);
+    }
+    const due: { root: string; folder: string; copied: boolean }[] = [];
+    for (const [ref, handle] of reached) {
+      const key = `${ROOMS}${ref}`;
+      try {
+        const copy = this.copies.get(key);
+        if (copy !== undefined && (await exists(copy.repository))) {
+          if (earlier(copy)) continue;
+          const named = copy.unfollowed === undefined || copy.room_handle === handle ? copy : await this.save({ ...copy, room_handle: handle });
+          const current = copy.unfollowed === undefined ? named : await this.renamed(named, chosen);
+          if (refreshing || made.has(ref)) due.push({ root: rootOf(handle), folder: current.repository, copied: true });
+          continue;
+        }
+        if (synced.has(key)) continue;
+        const target = join(roomsFolder(), handle);
+        const name = this.folders.get(ref);
+        const held = name === undefined ? null : join(roomsFolder(), name);
+        let folder = target;
+        if (held !== null && (await found(held)) !== null) {
+          if (held === target || chosen.some((launch) => within(launch, held))) folder = held;
+          else {
+            await this.setAside(target, chosen);
+            await rename(held, target);
+          }
+          if (refreshing) due.push({ root: rootOf(handle), folder, copied: false });
+        } else {
+          await this.setAside(target, chosen);
+          await mkdir(target, { recursive: true, mode: 0o700 });
+          due.push({ root: rootOf(handle), folder, copied: false });
+        }
+        this.folders.set(ref, basename(folder));
+      } catch (error) {
+        lines.push(`${rootOf(handle)}: ${causeOf(error)}`);
+      }
+    }
+    await this.savedFolders();
+    const unread = new Map<string, string[]>();
+    await eachAtOnce(due, async ({ root, folder, copied }) => {
+      try {
+        await this.kitWritten(folder, await caller.instructions(root), copied);
+      } catch (error) {
+        const cause = houseCause(error);
+        unread.set(cause, [...(unread.get(cause) ?? []), root]);
+      }
+    });
+    for (const [cause, roots] of unread) lines.push(`${roots.sort().join(', ')}: AGENTS.md kept as it was: ${cause}`);
+    return lines;
+  }
+
+  private async kitWritten(folder: string, text: string, copied: boolean): Promise<void> {
+    if (!copied) {
+      await kitFiles(folder, text);
+      return;
+    }
+    const manifest = await readManifest(folder);
+    if (text === '' && manifest.kit === undefined) return;
+    await kitFiles(folder, text);
+    if (text === '') delete manifest.kit;
+    else if (manifest.kit === undefined) manifest.kit = [...KIT_FILES];
+    else return;
+    await writeManifest(folder, await staging(), manifest);
   }
 
   async laidOut(earlier: string, rooms: string, kept: readonly string[]): Promise<{ moved: boolean; kept: string[] }> {

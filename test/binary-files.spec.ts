@@ -7,7 +7,7 @@ import { stringify } from 'yaml';
 import { until, type Received } from './double.ts';
 import { conversationCredential, hostKit, lastCall, opened, type Hosted, type McpCall } from './environment.ts';
 import { uploadTool } from './store.ts';
-import { house, MANIFEST, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
+import { fileCalls, house, MANIFEST, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
 const REDRAWN = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0, 8, 0x45, 0x78, 0x69, 0x66]);
@@ -155,7 +155,7 @@ it('downloads the head or a named revision of a binary Path to the file the call
   expect(revision).toMatchObject({ status: 0, stdout: `${earlier}\n`, stderr: '' });
   expect(await readFile(head)).toEqual(REDRAWN);
   expect(await readFile(earlier)).toEqual(JPEG);
-  expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
+  expect(fileCalls(hosted).map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
     [`Bearer ${conversationCredential('conversation-1')}`, 'info', { path: '/rooms/notes/photo.jpg' }],
     [`Bearer ${conversationCredential('conversation-1')}`, 'info', { path: '/rooms/notes/photo.jpg', ref: first }],
   ]);
@@ -176,7 +176,7 @@ it('replaces a download address the store refuses as expired by asking House aga
 
   expect(fetched).toMatchObject({ status: 0, stdout: `${target}\n`, stderr: '' });
   expect(await readFile(target)).toEqual(JPEG);
-  expect(hosted.mcp.map((received) => [called(received).name, called(received).arguments])).toEqual([
+  expect(fileCalls(hosted).map((received) => [called(received).name, called(received).arguments])).toEqual([
     ['info', { path: '/rooms/notes/photo.jpg' }],
     ['info', { path: '/rooms/notes/photo.jpg' }],
   ]);
@@ -199,7 +199,7 @@ it("refuses a download whose bytes do not match House's SHA-256 and one of a tex
   expect(text).toEqual({ status: 1, stdout: '', stderr: 'house: /rooms/notes/plan.md holds no binary file; shell reads its text\n' });
   expect(existsSync(target)).toBe(false);
   expect((await readdir(hosted.workingDirectory)).filter((name) => name.includes('photo'))).toEqual([]);
-  expect(hosted.mcp.map((received) => received.headers.authorization)).toEqual(['Bearer ahp_own', 'Bearer ahp_own']);
+  expect(fileCalls(hosted).map((received) => received.headers.authorization)).toEqual(['Bearer ahp_own', 'Bearer ahp_own']);
 });
 
 it('refuses a download of a document whose info answer House cut as one of a text file, and writes nothing', async () => {
@@ -248,7 +248,7 @@ it('copies and downloads a Room holding attachments with no byte read, recording
     expect(Object.entries(files).filter(([, entry]) => entry.skipped).map(([path]) => path).sort()).toEqual([...skipped]);
   }
   expect(hosted.store.requests).toEqual([]);
-  expect(hosted.mcp).toEqual([]);
+  expect(fileCalls(hosted)).toEqual([]);
 });
 
 it("refuses an upload in House's words when its discovery does not answer the cap, and sends nothing", async () => {
