@@ -24,7 +24,6 @@ import {
 } from './home.ts';
 import { callHouse, rpc } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
-import { selectRelay } from './relay.ts';
 import { startService } from './supervisor.ts';
 import { placeSkillSet } from './skills.ts';
 import { endUnserved } from './wire.ts';
@@ -133,8 +132,6 @@ export async function enrol(values: Chosen): Promise<string> {
   if (values.code !== undefined && enrolled !== null) {
     throw new Error(`--code connects a new machine; this Kit home records Environment ${enrolled.environment}, so run kit login to reconnect it`);
   }
-  const relay = process.env.HOUSE_KIT_RELAY || undefined;
-  selectRelay(relay);
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
   const remembered = values.environment === undefined && enrolled?.house === house ? enrolled.environment : undefined;
   const environment = values.environment ?? remembered;
@@ -178,21 +175,19 @@ export async function enrol(values: Chosen): Promise<string> {
       () => POLL_INTERVAL_MS,
     );
   }
-  const relayRecord = relay === undefined ? {} : { relay };
   await writeEnrolment({
     house,
-    ...relayRecord,
     environment: exchanged.environment,
     credential: exchanged.credential,
   });
   process.stdout.write(connected(house, named, exchanged.environment));
   if (exchanged.headless_credential !== undefined) {
-    await writeOwnAgent({ house, ...relayRecord, user: exchanged.user, credential: exchanged.headless_credential });
+    await writeOwnAgent({ house, user: exchanged.user, credential: exchanged.headless_credential });
   } else if (held && ownAgent !== null && ownAgent.user !== exchanged.user) {
     await forgetOwnAgent();
     process.stdout.write("This computer's own agent was another User's; run kit login again to connect it to you.\n");
   } else if (held && ownAgent !== null) {
-    await writeOwnAgent({ house, ...relayRecord, user: ownAgent.user, credential: ownAgent.credential });
+    await writeOwnAgent({ house, user: ownAgent.user, credential: ownAgent.credential });
   }
   return house;
 }

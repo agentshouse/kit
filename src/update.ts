@@ -8,7 +8,7 @@ import { KIT_RELEASE } from './clis.ts';
 import { restartPlaced, updateLine } from './end.ts';
 import { kitHome, readEnrolment } from './home.ts';
 import { placedPrefix } from './placement.ts';
-import { childEnvironment, relayOrigin } from './relay.ts';
+import { childEnvironment } from './relay.ts';
 
 export type UpdateCall = KitCallOf<'update'>;
 
@@ -31,10 +31,9 @@ function causeOf(error: unknown): string {
 
 function placing(installer: string, house: string, prefix: string, signal: AbortSignal): Promise<string | null> {
   return new Promise((resolve) => {
-    const relay = relayOrigin();
     const child = spawn('bash', [installer, '--house', house, '--place', prefix], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...childEnvironment(), ...(relay === undefined ? {} : { HOUSE_KIT_RELAY: relay }) },
+      env: childEnvironment(),
       detached: true,
     });
     const stop = () => {

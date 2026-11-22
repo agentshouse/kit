@@ -5,7 +5,7 @@ $Container = 'house-kit'
 $Copied = '.house-kit-home'
 $Shortcut = 'Kit.lnk'
 $Installer = 'connect-linux.sh'
-$Passed = @('HOUSE_KIT_RELAY/u', 'HOUSE_KIT_INSTALL_COMMAND/u')
+$Passed = @('HOUSE_KIT_INSTALL_COMMAND/u')
 $BootstrapArguments = @($args | ForEach-Object { [string]$_ })
 $CopyScript = @'
 set -eu
@@ -278,12 +278,10 @@ function Move-ContainerKit([string] $Ubuntu) {
 }
 
 function Connect-Ubuntu([string] $Ubuntu, [hashtable] $Given) {
-  $served = $Given['--house']
-  if ($env:HOUSE_KIT_RELAY) { $served = "$($env:HOUSE_KIT_RELAY)/$(([uri]$Given['--house']).Authority)" }
   $handed = @('--house', $Given['--house'])
   if ($Given.ContainsKey('--code')) { $handed += @('--code', $Given['--code']) }
   $env:WSLENV = (@($env:WSLENV -split ':' | Where-Object { $_ -and $Passed -notcontains $_ }) + $Passed) -join ':'
-  $words = @('--distribution', $Ubuntu, '--cd', '~', '--exec', 'bash', '-c', $HandoverScript, "$served/kit-installer/$Installer") + $handed
+  $words = @('--distribution', $Ubuntu, '--cd', '~', '--exec', 'bash', '-c', $HandoverScript, "$($Given['--house'])/kit-installer/$Installer") + $handed
   & wsl.exe @($words | ForEach-Object { ConvertTo-NativeArgument $_ })
   if ($LASTEXITCODE -ne 0) { Stop-Bootstrap "the install in Ubuntu ended with status $LASTEXITCODE" }
 }

@@ -137,7 +137,7 @@ foreach ($tool in $tools.Keys) {
   [IO.File]::WriteAllText((Join-Path $bin $tool), $tools[$tool].Replace("`r`n", "`n"))
   & chmod 755 (Join-Path $bin $tool)
 }
-[IO.File]::WriteAllText((Join-Path $fake 'bootstrap.sh'), "printf '%s\n' `"`$*`" > `"`$FAKE/bootstrap.args`"`nprintf '%s|%s|%s\n' `"`${HOUSE_KIT_RELAY-unset}`" `"`${HOUSE_KIT_INSTALL_COMMAND-unset}`" `"`${HOUSE_KIT_FROM_WINDOWS-unset}`" > `"`$FAKE/bootstrap.env`"`nexit `"`$(cat `"`$FAKE/bootstrap.status`" 2>/dev/null || echo 0)`"`n")
+[IO.File]::WriteAllText((Join-Path $fake 'bootstrap.sh'), "printf '%s\n' `"`$*`" > `"`$FAKE/bootstrap.args`"`nprintf '%s|%s\n' `"`${HOUSE_KIT_INSTALL_COMMAND-unset}`" `"`${HOUSE_KIT_FROM_WINDOWS-unset}`" > `"`$FAKE/bootstrap.env`"`nexit `"`$(cat `"`$FAKE/bootstrap.status`" 2>/dev/null || echo 0)`"`n")
 
 function Read-Fake([string] $Name) {
   $path = Join-Path $fake $Name
@@ -240,11 +240,10 @@ if ($refused -cne 'kit_bootstrap_refused: Kit runs in Docker Desktop on this com
 Remove-Item -LiteralPath (Join-Path $profileFolder 'AgentsHouse')
 
 foreach ($case in @(
-  @{ Name = 'a direct install'; Relay = $null; Given = @{ '--house' = 'https://agents.house'; '--code' = 'ahk_code_one' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house --code ahk_code_one'; Environment = "unset|irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'|1" },
-  @{ Name = 'a relayed install with no code'; Relay = 'https://kit-relay.example'; Given = @{ '--house' = 'https://agents.house' }; Url = '-fsSL -o * https://kit-relay.example/agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house'; Environment = "https://kit-relay.example|irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'|1" }
+  @{ Name = 'an install with a code'; Given = @{ '--house' = 'https://agents.house'; '--code' = 'ahk_code_one' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house --code ahk_code_one'; Environment = "irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'|1" },
+  @{ Name = 'an install with no code'; Given = @{ '--house' = 'https://agents.house' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house'; Environment = "irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'|1" }
 )) {
   Reset-Fake
-  $env:HOUSE_KIT_RELAY = $case.Relay
   $env:HOUSE_KIT_INSTALL_COMMAND = "irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'"
   $env:WSLENV = 'USERPROFILE/p'
   $refused = Refusal { Connect-Ubuntu $distribution $case.Given }
@@ -255,10 +254,9 @@ foreach ($case in @(
   if ($handed -cne $case.Arguments) { $findings += "$($case.Name) handed the Linux bootstrap: $handed" }
   $carried = (Read-Fake 'bootstrap.env') -join '|'
   if ($carried -cne $case.Environment) { $findings += "$($case.Name) passed the Linux bootstrap: $carried" }
-  if ($env:WSLENV -cne 'USERPROFILE/p:HOUSE_KIT_RELAY/u:HOUSE_KIT_INSTALL_COMMAND/u') { $findings += "$($case.Name) left WSLENV as $env:WSLENV" }
+  if ($env:WSLENV -cne 'USERPROFILE/p:HOUSE_KIT_INSTALL_COMMAND/u') { $findings += "$($case.Name) left WSLENV as $env:WSLENV" }
   if (@(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Filter 'tmp.*' -File | Where-Object { [IO.File]::ReadAllText($_.FullName).Contains('bootstrap.args') }).Count -ne 0) { $findings += "$($case.Name) left its download behind" }
 }
-Remove-Item Env:HOUSE_KIT_RELAY -ErrorAction Ignore
 Reset-Fake
 [IO.File]::WriteAllText((Join-Path $fake 'bootstrap.status'), '7')
 $refused = Refusal { Connect-Ubuntu $distribution @{ '--house' = 'https://agents.house' } }
