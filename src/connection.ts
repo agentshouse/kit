@@ -8,9 +8,11 @@ import {
 } from '@agentshouse/kit-wire';
 import { subscribe } from 'node:diagnostics_channel';
 import { setTimeout as delay } from 'node:timers/promises';
-import { HouseRefusal, retryDelay } from './api.ts';
+import { HouseRefusal, resendDelay } from './api.ts';
 import { end, REPLACED, signInAgain } from './end.ts';
+import { answered, held, judgement, passed, THROUGH, type Answer } from './hold.ts';
 import { readEnrolment } from './home.ts';
+import { REFUSAL_HEADER } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { Silence } from './silence.ts';
 import { endUnserved, unserved } from './wire.ts';
@@ -33,7 +35,6 @@ interface Answered {
 }
 
 const SUBPROTOCOL = `${KIT_CONNECTION_PROTOCOL_PREFIX}${KIT_WIRE}`;
-const REFUSAL_HEADER = 'x-house-refusal';
 // House beats each Kit connection every thirty seconds, so two silent beats mean this Kit process cannot hear House.
 export const CONNECTION_SILENCE_MS = 60_000;
 // A stopping Kit waits up to two seconds for House to answer its close, so what it sent last reaches House and a House that does not answer holds no stop.
@@ -53,11 +54,14 @@ function header(headers: Buffer[], name: string): string {
 }
 
 let refused: HouseRefusal | null = null;
+let refusal: Answer | null = null;
 
 subscribe('undici:request:headers', (message) => {
   const { request, response } = message as Answered;
   if (!request.path.endsWith(KIT_CONNECTION_PATH)) return;
-  refused = new HouseRefusal(KIT_CONNECTION_PATH, response.statusCode, header(response.headers, REFUSAL_HEADER) || response.statusText);
+  const said = header(response.headers, REFUSAL_HEADER);
+  refused = new HouseRefusal(KIT_CONNECTION_PATH, response.statusCode, said || response.statusText);
+  refusal = judgement(response.statusCode, header(response.headers, 'retry-after') || null, said || null);
 });
 
 export function holdConnection(handlers: ConnectionHandlers): Connection {
@@ -67,9 +71,14 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
   let stopping = false;
 
   const connect = async () => {
+    const pass = await held();
     const { house, credential } = (await readEnrolment())!;
-    if (socket !== null || unserved() || stopping) return;
+    if (socket !== null || unserved() || stopping) {
+      passed(pass);
+      return;
+    }
     refused = null;
+    refusal = null;
     const opening = new WebSocket(relayed(connectionUrl(house)), {
       protocols: [SUBPROTOCOL],
       headers: { authorization: `Bearer ${credential}` },
@@ -82,6 +91,7 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       silence = null;
       if (socket === opening) socket = null;
       if (connection === opening) connection = null;
+      if (!opened) answered(pass, refusal);
       handlers.closed();
       process.stderr.write(`kit: connection closed ${event.code} ${event.reason}\n`);
       if (stopping) return;
@@ -92,12 +102,13 @@ export function holdConnection(handlers: ConnectionHandlers): Connection {
       }
       if (refused !== null) endUnserved(refused.text);
       if (!opened && refused !== null) process.stderr.write(`kit: ${refused.message}\n`);
-      // A closed connection reopens in one to three seconds, spread so Kit processes one restart closed return apart; an opening House refused or left unanswered backs off on the jittered curve, retryable or not, since a resident outlives a House deploy.
-      setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : retryDelay(failures++));
+      // A closed connection reopens in one to three seconds, spread so Kit processes one restart closed return apart; an opening House refused or left unanswered waits what House's refusal names, else backs off on the jittered curve, retryable or not, since a resident outlives a House deploy.
+      setTimeout(() => void connect(), opened ? 1000 + Math.random() * 2000 : resendDelay(refused, failures++));
     };
     opening.onopen = () => {
       opened = true;
       failures = 0;
+      answered(pass, THROUGH);
       connection = opening;
       silence = new Silence(CONNECTION_SILENCE_MS, () => {
         if (connection !== opening) return;

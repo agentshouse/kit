@@ -7,7 +7,7 @@ import { basename, dirname, extname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { parseDocument } from 'yaml';
-import { retryDelay } from './api.ts';
+import { resendDelay, retryDelay } from './api.ts';
 import { Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { proxyUnlessRelayed, relayed } from './relay.ts';
@@ -229,13 +229,15 @@ export async function uploaded<T extends object>(declared: UploadParts, uploadin
 async function finishing<T extends object>(uploading: Uploading<T>, upload: string, partSha256: string[]): Promise<Finished<T>> {
   const operation = operationId();
   for (let unsettled = 1; ; unsettled++) {
+    let settling: Unsettled;
     try {
       return await uploading.finish(upload, partSha256, operation);
     } catch (error) {
       if (!(error instanceof Unsettled) || unsettled === STALLED_ROUNDS) throw error;
+      settling = error;
     }
-    // A finishing call House did not settle, unreached or refused short of final, is sent again on the jittered curve as a conversation resends it, so a dropped connection or a House restart resumes the upload instead of ending it.
-    await paused(retryDelay(unsettled - 1));
+    // A finishing call House did not settle, unreached or refused short of final, is sent again after the wait House names, else on the jittered curve as a conversation resends it, so a dropped connection or a House restart resumes the upload instead of ending it.
+    await paused(settling.after ?? resendDelay(null, unsettled - 1));
   }
 }
 

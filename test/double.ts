@@ -225,7 +225,7 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
         response.end(answer.bytes.content);
         return;
       }
-      response.writeHead(answer.status ?? 200, { 'content-type': 'application/json' });
+      response.writeHead(answer.status ?? 200, { 'content-type': 'application/json', ...answer.headers });
       response.end(answer.body === undefined ? '{}' : JSON.stringify(answer.body));
     });
   };
@@ -254,6 +254,7 @@ export async function startHouse(tls?: Certificate, streamPath = '/kit/stream'):
         [
           `HTTP/1.1 ${refusal.status} ${STATUS_CODES[refusal.status]}`,
           'Connection: close',
+          ...Object.entries(refusal.headers ?? {}).map(([name, value]) => `${name}: ${value}`),
           ...(refusal.body === undefined ? [] : [`X-House-Refusal: ${body}`]),
           'Content-Type: application/json',
           `Content-Length: ${Buffer.byteLength(body)}`,

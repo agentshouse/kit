@@ -7,15 +7,16 @@ import type { AddressInfo } from 'node:net';
 import { delimiter, dirname, join } from 'node:path';
 import { CONVERSATION_GIT_HEADER, CONVERSATION_META_KEY, FUNCTION_RUN_META_KEY } from '@agentshouse/kit-wire';
 import { parse } from 'yaml';
-import { finalRefusal, HouseRefusal, retryDelay, retrying } from './api.ts';
+import { finalRefusal, HouseRefusal, resendDelay, retrying } from './api.ts';
 import type { Staged } from './binaries.ts';
 import { loginPath } from './clis.ts';
 import { changedPaths, DEFAULT_MAX_SIZE, type Caller, type Change, type LocalCopies, type Submitted, type Upload } from './copies.ts';
 import { fileInfo, instructionsText, type Finished } from './files.ts';
+import { answered, carried, held, judgement, type Answer, type Pass } from './hold.ts';
 import { readEnrolment, socketDirectory } from './home.ts';
 import { callHouse, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
-import { refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
+import { namedWait, REFUSAL_HEADER, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { relayed } from './relay.ts';
 
 export interface Bridge {
@@ -41,21 +42,32 @@ export async function received(request: IncomingMessage): Promise<string> {
   return text;
 }
 
-function relay(request: IncomingMessage, response: ServerResponse, house: URL, added: Record<string, string> = {}): void {
+function relay(request: IncomingMessage, response: ServerResponse, house: URL, called?: { headers: Record<string, string>; pass: Pass }): void {
+  let settled = called === undefined;
+  const settle = (answer: Answer | null) => {
+    if (!settled) answered(called!.pass, answer);
+    settled = true;
+  };
   const target = relayed(house);
   const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
   const forwarded = send(
     target,
     {
       method: request.method,
-      headers: { ...request.headers, host: target.host, ...added },
+      headers: { ...request.headers, host: target.host, ...called?.headers },
     },
     (answer) => {
-      response.writeHead(answer.statusCode!, answer.headers);
+      const status = answer.statusCode!;
+      const refusal = answer.headers[REFUSAL_HEADER];
+      settle(judgement(status, answer.headers['retry-after'] ?? null, typeof refusal === 'string' ? refusal : null));
+      response.writeHead(status, answer.headers);
       answer.pipe(response);
     },
   );
-  forwarded.on('error', () => response.destroy());
+  forwarded.on('error', () => {
+    settle(null);
+    response.destroy();
+  });
   request.pipe(forwarded);
 }
 
@@ -70,11 +82,11 @@ function pendingSeconds(forwarded: Forwarded): number | null {
 }
 
 function resendAfter(forwarded: Forwarded | null, attempt: number, pushing: boolean): number | null {
-  if (forwarded === null) return retryDelay(attempt);
+  if (forwarded === null) return resendDelay(null, attempt);
   if (forwarded.status === 401) return null;
   if (forwarded.status !== 200) {
     if (pushing && stopsPush(refusalOf(forwarded.text))) return null;
-    return retryable(forwarded.text) === false ? null : retryDelay(attempt);
+    return retryable(forwarded.text) === false ? null : (namedWait(forwarded.text) ?? resendDelay(null, attempt));
   }
   const seconds = pendingSeconds(forwarded);
   return seconds === null ? null : seconds * 1000;
@@ -122,7 +134,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
       });
       const after = resendAfter(forwarded, attempt, pushing);
       if (after === null) return forwarded!;
-      // A Tool call House did not settle is sent again on the jittered curve, or after the wait House names for a pending one.
+      // A Tool call House did not settle is sent again after the wait House names for a refused or a pending one, else on the jittered curve.
       await delay(after, undefined, { signal: closed.signal });
     }
   };
@@ -143,7 +155,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
     let text: string;
     try {
       text = await retrying(async () => {
-        const posted = await fetch(relayed(transfer.url), {
+        const posted = await carried(transfer.url, {
           method: 'POST',
           headers: { 'content-type': 'text/plain; charset=utf-8' },
           body: Buffer.concat([Buffer.from(`${transfer.operation}\n`), bytes]),
@@ -236,13 +248,13 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
   const app = new URL('/app/', origin).href;
   const authorization = `Basic ${Buffer.from(`house:${credential}`).toString('base64')}`;
   const presented = { ...holder.git, authorization };
-  const git = createServer((request, response) => {
+  const git = createServer(async (request, response) => {
     const target = new URL(request.url ?? '', app);
     if (!target.href.startsWith(app)) {
       response.writeHead(404).end();
       return;
     }
-    relay(request, response, target, presented);
+    relay(request, response, target, { headers: presented, pass: await held() });
   });
   git.listen(0, '127.0.0.1');
   await once(git, 'listening');
