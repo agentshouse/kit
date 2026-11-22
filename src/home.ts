@@ -210,6 +210,18 @@ export function writeOwnAgent(ownAgent: OwnAgent): Promise<void> {
   return writeHome(OWN_AGENT, ownAgent);
 }
 
+export async function forgetRecordedRelay(): Promise<string | null> {
+  let forgotten: string | null = null;
+  for (const name of [ENROLMENT, OWN_AGENT]) {
+    const held = await readHome<Record<string, unknown>>(name);
+    if (held === null || !('relay' in held)) continue;
+    const { relay, ...kept } = held;
+    await writeHome(name, kept);
+    forgotten = String(relay);
+  }
+  return forgotten;
+}
+
 export function forgetOwnAgent(): Promise<void> {
   return rm(join(kitHome(), OWN_AGENT), { force: true });
 }
