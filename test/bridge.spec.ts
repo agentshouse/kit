@@ -97,11 +97,6 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       'records_append: Add a record to a Room, stored as given.',
       'upload: Store a file of any kind at a path in a Room.',
       'rooms_list: Your Rooms and what you may do in each.',
-      'find_command',
-      '  query',
-      'run_command',
-      '  command',
-      '  arguments',
       'get_started',
     ].join('\n') + '\n',
   );
@@ -136,11 +131,11 @@ it('attaches a fresh operation id to every Tool call, a read included, and never
   await opened(hosted);
   const record = '{"room_ref":"r_room","source_ref":"s_source","body":"hello"}';
 
-  const command = '{"command":"rooms/create","arguments":{"name":"Notes"}}';
+  const changes = '{"changes":[{"op":"mkdir","path":"/rooms","name":"Notes"}]}';
 
   directed(
     hosted,
-    `@house records_append ${record}\n@house records_append ${record}\n@house run_command ${command}\n@house search {"query":"hello"}`,
+    `@house records_append ${record}\n@house records_append ${record}\n@house update ${changes}\n@house search {"query":"hello"}`,
   );
 
   await runs(hosted, 4);
@@ -281,7 +276,7 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
     'house: upload needs "file", a local file\n',
     'house: absent.txt is not a readable file\n',
     'house: . is a folder; upload one file at a time\n',
-    `house: agents/list is no Tool; house find_command '{"query":"agents/list"}' finds Commands\n`,
+    'house: agents/list is no Tool; house --help lists the Tools\n',
   ]);
   expect(hosted.mcp.filter((received) => called(received).method === 'tools/call')).toEqual([]);
 });
