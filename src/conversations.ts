@@ -54,6 +54,7 @@ export interface Kit {
   calls: Calls;
   send(oneWayCall: KitOneWayCall): boolean;
   changed(): void;
+  turnEnded(stamped: Promise<void>): void;
 }
 
 type ConversationCall = Extract<KitCall, { conversation_id: string }>;
@@ -403,6 +404,12 @@ export class Conversations {
     return this.idle() && !this.turnOpen();
   }
 
+  runsIn(directory: string): boolean {
+    return [...this.conversations.values()].some(
+      (conversation) => (conversation.running !== null || conversation.launch !== null) && conversation.place?.directory === directory,
+    );
+  }
+
   turnOpen(): boolean {
     return this.uploads > 0 || [...this.conversations.values()].some((conversation) => conversation.turns.size > 0);
   }
@@ -467,6 +474,11 @@ export class Conversations {
       await this.kill(conversation);
       await conversation.sending;
       if (--conversation.kills === 0) conversation.killed = new AbortController();
+      if (call.deleted === true) {
+        const kept = await this.kit.copies.deleted(conversation.id);
+        const result: KitCallResult = kept.length === 0 ? {} : { kept };
+        return { result: Promise.resolve(result) };
+      }
     }
     if (call.kind === 'option') await this.option(conversation, call);
     if (call.kind === 'answer') {
@@ -1128,6 +1140,8 @@ export class Conversations {
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
     void this.deliver(conversation, 'turns/end', body).catch(logged);
+    const stamped = conversation.place?.copy === true ? this.kit.copies.turnEnded(conversation.place.directory) : Promise.resolve();
+    this.kit.turnEnded(stamped.catch(logged));
     this.uploaded(conversation);
     this.next(conversation);
     this.kit.changed();

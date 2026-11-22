@@ -15,6 +15,7 @@ import { agentBase, enrolled, forgetRecordedRelay, kitHome, ownerSocket, readEnr
 import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
+import { IdleCopies } from './idle-copies.ts';
 import { holdOwner } from './owner.ts';
 import { killDescendants } from './scope.ts';
 import { removeInputs, Scripts } from './scripts.ts';
@@ -168,8 +169,15 @@ export async function resident(): Promise<void> {
     await connection?.close();
     then();
   };
-  const idle = () => calls.idle() && conversations.idle() && agents.idle();
+  const working = () => !calls.idle() || !conversations.idle() || !agents.idle();
+  const idle = () => !working() && idleCopies.idle();
+  let worked = false;
   const changed = () => {
+    if (working()) worked = true;
+    else if (worked) {
+      worked = false;
+      idleCopies.look();
+    }
     if (!idle()) {
       reported = false;
     } else if (update.placedRelease() !== null && conversations.quiet() && process.env.HOUSE_KIT_SANDBOX !== '1') {
@@ -188,7 +196,9 @@ export async function resident(): Promise<void> {
     calls,
     send: (oneWayCall) => connection?.send(oneWayCall) ?? false,
     changed,
+    turnEnded: (stamped) => idleCopies.look(stamped),
   });
+  const idleCopies = new IdleCopies(copies, (directory) => conversations.runsIn(directory), changed);
   const signIns = new SignIns(house, agents, calls);
   const update = new KitUpdate(calls);
   takeUnservedRelease((release) => logged(update.takeRefused(release)));
@@ -213,6 +223,7 @@ export async function resident(): Promise<void> {
   await house.deliver('kits/report-restart', planned ? { planned } : {}).catch(report);
   logged(agents.refresh());
   agents.keepCurrent(() => process.env.HOUSE_KIT_SANDBOX === '1' && reported);
+  idleCopies.look();
   connection = holdConnection({
     opened: () => {
       conversations.opened();

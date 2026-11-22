@@ -1,10 +1,12 @@
 import { agentInstructions } from '@agentshouse/skills';
+import { existsSync } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until, type Received } from './double.ts';
-import { conversationCredential, hostKit, lastCall, shelled, type Hosted, type RouteOverrides } from './environment.ts';
-import { alive, temporaryDirectory } from './kit.ts';
+import { conversationCredential, hostKit, lastCall, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
+import { alive, filesUnder, temporaryDirectory } from './kit.ts';
 import { callUpdate, released, serveRelease } from './release.ts';
 import { house, roomRootReads, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
@@ -12,6 +14,9 @@ const INSTRUCTIONS = 'These instructions come after House’s and your own.\n\nW
 const OWNER_RULES = 'Keep the work in its Room.\n';
 const IMPORTED = '@AGENTS.md\n';
 const PLACED = '0.2.1-c000000000002';
+const HOUR = 60 * 60_000;
+const MOVED_CLOCK = ['./fast-intervals.ts', './moved-clock.ts'].flatMap((module) => ['--import', fileURLToPath(new URL(module, import.meta.url))]);
+const HALTED_REMOVAL = ['--import', fileURLToPath(new URL('./halted-removal.ts', import.meta.url))];
 
 function copyOf(hosted: Hosted, handle: string, name: string): string {
   return join(hosted.workspace, 'conversations', handle, name);
@@ -76,6 +81,49 @@ async function edited(rooms: Rooms, count: number): Promise<Received[]> {
   return until(() => (rooms.edits().length >= count ? rooms.edits() : undefined));
 }
 
+function told(hosted: Hosted, index: number, text: string, fields: Record<string, unknown> = {}): void {
+  hosted.call({ kind: 'message', conversation_id: `conversation-${index}`, agent_id: `agent-${index}`, text, first: false, ...fields });
+}
+
+async function killed(hosted: Hosted, index: number, deleted?: true): Promise<unknown> {
+  hosted.call({ kind: 'kill', conversation_id: `conversation-${index}`, agent_id: `agent-${index}`, ...(deleted === undefined ? {} : { deleted }) });
+  return hosted.result(lastCall());
+}
+
+async function clocked(): Promise<{ shift: (by: number) => Promise<void>; hosting: Hosting }> {
+  const file = join(await temporaryDirectory(), 'clock-shift');
+  return { shift: (by) => writeFile(file, String(by)), hosting: { environment: { KIT_CLOCK_SHIFT: file }, node: MOVED_CLOCK } };
+}
+
+async function contents(folder: string, skipped = ''): Promise<Record<string, string>> {
+  const files = (await filesUnder(folder)).filter((file) => skipped === '' || !file.startsWith(`${skipped}/`)).sort();
+  return Object.fromEntries(await Promise.all(files.map(async (file) => [file, (await readFile(file)).toString('base64')] as const)));
+}
+
+async function conflicted(hosted: Hosted, rooms: Rooms, marked: number, other: number): Promise<void> {
+  const copy = copyOf(hosted, 'notes', `Plan ${marked}`);
+  const edits = rooms.edits().length;
+  told(hosted, marked, "@sh sed -i 's/beans/corn/' plan.md\n@gate other-landed");
+  await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')) === 'Plant corn\n' ? true : undefined));
+  told(hosted, other, "@sh sed -i 's/beans/peas/' plan.md");
+  await edited(rooms, edits + 1);
+  await writeFile(join(hosted.home, 'other-landed'), '');
+  await edited(rooms, edits + 2);
+  await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')).includes('<<<<<<<') ? true : undefined));
+  await settle();
+}
+
+async function pending(hosted: Hosted, rooms: Rooms, index: number): Promise<void> {
+  const copy = copyOf(hosted, 'notes', `Plan ${index}`);
+  const edits = rooms.edits().length;
+  rooms.writeUnits = 0;
+  told(hosted, index, '@sh echo two >> plan.md');
+  await edited(rooms, edits + 1);
+  await settle();
+  rooms.writeUnits = Infinity;
+  await writeFile(join(copy, 'plan.md'), 'Plant beans\n');
+}
+
 function lineOf(text: string): string {
   return text.split('\n').at(-1)!;
 }
@@ -84,8 +132,8 @@ function bytes(text: string): Buffer {
   return Buffer.from(text);
 }
 
-async function staged(routes: RouteOverrides[] = [{}]): Promise<{ hosted: Hosted; rooms: Rooms; notes: Room }> {
-  const hosted = await hostKit(routes);
+async function staged(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): Promise<{ hosted: Hosted; rooms: Rooms; notes: Room }> {
+  const hosted = await hostKit(routes, hosting);
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
   notes.put('a.md', 'one\ntwo\nthree\n');
@@ -436,4 +484,173 @@ it('moves the conversations folder with the workspace and its records, so the ne
   await absent(join(hosted.workspace, 'conversations'));
   expect(await readFile(join(moved, 'plan.md'), 'utf8')).toBe('Plant beans\n');
   await turned(hosted, 2);
+});
+
+it("removes on a deletion's kill a copy whose every file matches its manifest and keeps, naming them, copies holding a changed, a new, a deleted or a conflicted file, while a Conversation kill removes and names nothing", async () => {
+  const { hosted, rooms, notes } = await staged([{}, {}, {}, {}, {}, {}]);
+  for (const index of [1, 2, 3, 4, 5, 6]) await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`);
+  const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  await writeFile(join(copy(2), 'a.md'), 'one\ntwo\nchanged\n');
+  await writeFile(join(copy(3), 'new.md'), 'new\n');
+  await rm(join(copy(4), 'plan.md'));
+  await conflicted(hosted, rooms, 5, 6);
+  const kept = await Promise.all([2, 3, 4, 5].map((index) => contents(copy(index))));
+
+  expect(await killed(hosted, 1)).toEqual({});
+  expect(await held(copy(1))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
+
+  expect(await killed(hosted, 1, true)).toEqual({});
+  await absent(copy(1));
+  for (const [at, index] of [2, 3, 4, 5].entries()) {
+    expect(await killed(hosted, index, true)).toEqual({ kept: [{ room_ref: notes.ref, path: copy(index) }] });
+    expect(await contents(copy(index))).toEqual(kept[at]);
+  }
+});
+
+it('removes or keeps each copy of a conversation in two Rooms by its own state on its deletion, changing nothing outside conversations', async () => {
+  const { hosted, rooms, notes } = await staged();
+  const garden = rooms.room('garden');
+  garden.put('beds.md', 'Two beds\n');
+  rooms.answered = [notes, garden];
+  await rooms.download([notes, garden]);
+  await opened(hosted, notes, 'Plan');
+  await opened(hosted, garden, 'Plan');
+  await writeFile(join(copyOf(hosted, 'garden', 'Plan'), 'beds.md'), 'Three beds\n');
+  const outside = await contents(hosted.workspace, join(hosted.workspace, 'conversations'));
+
+  expect(await killed(hosted, 1, true)).toEqual({ kept: [{ room_ref: garden.ref, path: copyOf(hosted, 'garden', 'Plan') }] });
+  await absent(copyOf(hosted, 'notes', 'Plan'));
+  expect(await readFile(join(copyOf(hosted, 'garden', 'Plan'), 'beds.md'), 'utf8')).toBe('Three beds\n');
+  expect(await contents(hosted.workspace, join(hosted.workspace, 'conversations'))).toEqual(outside);
+});
+
+it("removes on a deletion's kill a clean copy of a Room no longer reached and one differing only in a read-only or Kit-marked path, and keeps one whose files match but which holds a pending batch", async () => {
+  const { hosted, rooms, notes } = await staged([{}, {}, {}]);
+  notes.put('capture/log.md', 'House wrote this\n');
+  await rooms.download([notes]);
+  for (const index of [1, 2, 3]) await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`);
+  const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  await writeFile(join(copy(2), 'capture', 'log.md'), 'changed here\n');
+  await rm(join(copy(2), 'AGENTS.md'));
+  await pending(hosted, rooms, 3);
+  rooms.answered = [];
+  await rooms.download([]);
+
+  expect(await killed(hosted, 1, true)).toEqual({});
+  await absent(copy(1));
+  expect(await killed(hosted, 2, true)).toEqual({});
+  await absent(copy(2));
+  expect(await killed(hosted, 3, true)).toEqual({ kept: [{ room_ref: notes.ref, path: copy(3) }] });
+  expect(await readFile(join(copy(3), 'plan.md'), 'utf8')).toBe('Plant beans\n');
+});
+
+it("removes a clean copy idle for 24 hours at the next turn's end, even one ending while another turn runs, and nothing while nothing happens, keeps one used within them and one holding a changed or conflicted file or a pending batch however long idle, notifying nobody, then makes the removed copy again at its path for the next turn, which resumes its session there, while a new conversation of its name takes another path", async () => {
+  const clock = await clocked();
+  const { hosted, rooms, notes } = await staged([{}, {}, {}, {}, {}, {}, {}], clock.hosting);
+  const sessions: string[] = [];
+  for (const index of [1, 2, 3, 4, 5, 6]) sessions.push(await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`));
+  const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  told(hosted, 1, '@say first');
+  await turned(hosted, 1);
+  told(hosted, 2, '@say first');
+  await turned(hosted, 2);
+  await writeFile(join(copy(3), 'a.md'), 'one\ntwo\nchanged\n');
+  await pending(hosted, rooms, 4);
+  await conflicted(hosted, rooms, 5, 6);
+  for (const index of [1, 2, 3, 4, 5, 6]) expect(await killed(hosted, index)).toEqual({});
+
+  await clock.shift(20 * HOUR);
+  const turns = ended(hosted).length;
+  told(hosted, 2, '@say later', { provider_session_id: sessions[1] });
+  expect(await hosted.result(lastCall())).toEqual({});
+  await turned(hosted, turns + 1);
+  expect(await killed(hosted, 2)).toEqual({});
+  await settle();
+  expect(await held(copy(1))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
+  const results = hosted.results.length;
+  const kept = await Promise.all([3, 4, 5].map((index) => contents(copy(index))));
+
+  await clock.shift(25 * HOUR);
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  expect(await held(copy(1))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
+
+  const before = ended(hosted).length;
+  const prompts = (await logged(hosted, 'session/prompt')).length;
+  told(hosted, 2, '@gate held', { provider_session_id: sessions[1] });
+  await prompt(hosted, prompts);
+  expect(await held(copy(1))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
+  told(hosted, 6, '@say again', { provider_session_id: sessions[5] });
+  await turned(hosted, before + 1);
+  await until(async () => !existsSync(copy(1)));
+  expect(ended(hosted)).toHaveLength(before + 1);
+  await writeFile(join(hosted.home, 'held'), '');
+  await turned(hosted, before + 2);
+  await settle();
+
+  expect(await held(copy(2))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
+  for (const [at, index] of [3, 4, 5].entries()) expect(await contents(copy(index))).toEqual(kept[at]);
+  expect(hosted.results.slice(results).filter((one) => JSON.stringify(one.body).includes('"kept"'))).toEqual([]);
+
+  await opened(hosted, notes, 'Plan 1', 'conversation-7', 'agent-7');
+  expect(await cwdOf(hosted, 'session/new', 6)).toBe(`${copy(1)} 2`);
+  told(hosted, 1, '@say again', { provider_session_id: sessions[0] });
+
+  expect(await cwdOf(hosted, 'session/resume', 3)).toBe(copy(1));
+  expect(await held(copy(1))).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md']);
+  expect(await readFile(join(copy(1), 'plan.md'), 'utf8')).toBe('Plant peas\n');
+});
+
+it("removes an idle copy at the Kit's start, reporting a Sandbox idle only once that removal has ended, and nothing while the idle report stands and nothing happens", async () => {
+  const clock = await clocked();
+  const { hosted, rooms, notes } = await staged([{}], { ...clock.hosting, environment: { ...clock.hosting.environment, HOUSE_KIT_SANDBOX: '1' } });
+  for (let index = 0; index < 400; index++) notes.put(`notes/${index}.md`, `note ${index}\n`);
+  await rooms.download([notes]);
+  await opened(hosted, notes, 'Plan');
+  const copy = copyOf(hosted, 'notes', 'Plan');
+  said(hosted, '@say first');
+  await turned(hosted, 1);
+  const idled = hosted.idles.length;
+  expect(await killed(hosted, 1)).toEqual({});
+  await until(() => hosted.idles.length > idled);
+
+  await clock.shift(25 * HOUR);
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  expect(existsSync(join(copy, 'notes', '399.md'))).toBe(true);
+
+  const seen: boolean[] = [];
+  hosted.house.route('POST', '/kit/kits/report-idle', (request) => {
+    seen.push(existsSync(copy));
+    hosted.idles.push(request);
+    return { body: {} };
+  });
+  await hosted.restart();
+
+  expect(seen[0]).toBe(false);
+});
+
+it('removes an idle copy once the Kit goes idle after a call, and runs the next turn of a conversation whose Kit ended halfway through that removal in a whole copy made again from House, whose turn-end upload deletes nothing', async () => {
+  const clock = await clocked();
+  const halted = join(await temporaryDirectory(), 'halted-removal');
+  const { hosted, rooms, notes } = await staged([{}], { environment: { ...clock.hosting.environment, KIT_HALTED_REMOVAL: halted }, node: [...MOVED_CLOCK, ...HALTED_REMOVAL] });
+  const session = await opened(hosted, notes, 'Plan');
+  const copy = copyOf(hosted, 'notes', 'Plan');
+  said(hosted, '@say first');
+  await turned(hosted, 1);
+  expect(await killed(hosted, 1)).toEqual({});
+  await writeFile(halted, join(copy, 'a.md'));
+
+  await clock.shift(25 * HOUR);
+  hosted.call({ kind: 'kill', conversation_id: 'conversation-1', agent_id: 'agent-1' });
+  await hosted.kit.exited;
+  await absent(join(copy, 'a.md'));
+  expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans\n');
+  await hosted.restart();
+
+  said(hosted, '@sh echo again >> plan.md', { provider_session_id: session });
+  const [batch] = await edited(rooms, 1);
+
+  expect(await cwdOf(hosted, 'session/resume', 0)).toBe(copy);
+  expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
+  expect(changesOf(batch!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nagain\n', base: expect.any(String) }]);
+  expect(notes.files.get('a.md')!.content).toBe('one\ntwo\nthree\n');
 });
