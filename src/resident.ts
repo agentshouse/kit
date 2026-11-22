@@ -11,7 +11,7 @@ import { received } from './bridge.ts';
 import { Conversations } from './conversations.ts';
 import { DEFAULT_MAX_SIZE, LocalCopies, type Answered } from './copies.ts';
 import { restart, restartPlaced } from './end.ts';
-import { agentBase, enrolled, kitHome, ownerSocket, readEnrolment, recordPlannedRestart, roomsFolder, takePlannedRestart } from './home.ts';
+import { agentBase, enrolled, forgetRecordedRelay, kitHome, ownerSocket, readEnrolment, recordPlannedRestart, roomsFolder, takePlannedRestart } from './home.ts';
 import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
@@ -109,6 +109,8 @@ export async function resident(): Promise<void> {
   await moveEarlier();
   await mkdir(kitHome(), { recursive: true, mode: 0o700 });
   const lock = await holdOwner();
+  const forgotten = await forgetRecordedRelay();
+  if (forgotten !== null) process.stderr.write(`kit: Kit forgot the relay ${forgotten} an earlier install recorded; it takes a relay only from HOUSE_KIT_RELAY\n`);
   await resumeWorkspaceMove();
   const copies = new LocalCopies(house, launchDirectories);
   await copies.load();
