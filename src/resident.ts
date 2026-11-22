@@ -56,8 +56,8 @@ async function serveOwner(lock: DatabaseSync, copies: LocalCopies, settling: Set
         return;
       }
       if (request.url === '/copy/download') {
-        const { attachments = false, max_size: maxSize = DEFAULT_MAX_SIZE } = JSON.parse(text) as { attachments?: boolean; max_size?: number };
-        answered = await copies.download(copies.owner, { attachments, maxSize });
+        const { attachments = false, max_size: maxSize = DEFAULT_MAX_SIZE, cwd } = JSON.parse(text) as { attachments?: boolean; max_size?: number; cwd: string };
+        answered = await copies.download(copies.owner, { attachments, maxSize }, cwd);
       } else if (request.url === '/copy/upload') {
         const { cwd } = JSON.parse(text) as { cwd: string };
         answered = await copies.upload(cwd, copies.owner);

@@ -31,14 +31,14 @@ import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
-import type { LocalCopies } from './copies.ts';
+import type { Answered, LocalCopies, Opening, Place } from './copies.ts';
 import { Content } from './content.ts';
 import { answeredFailure, readerFor, type CallEvent, type Event, type Message, type Reader, type Stop } from './events.ts';
 import { fileInfo, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, type GrokPlan, type GrokQuestions } from './grok.ts';
 import { agentBase } from './home.ts';
 import type { Calls } from './calls.ts';
-import { instructions } from './instructions.ts';
+import { copyInstructions, instructions } from './instructions.ts';
 import type { ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
@@ -93,6 +93,10 @@ const ENDED: Readonly<Record<string, string>> = {
 };
 
 const NO_START = "the Agent's CLI did not start";
+
+const NO_COPY = "the Agent's computer could not copy this conversation's Room; try again";
+
+const KIT_LINE = 'Kit: ';
 
 const NO_SESSION = "the Agent's CLI did not open a session";
 
@@ -317,6 +321,9 @@ class Conversation {
   told: Starting | null = null;
   untold = false;
   shown: ReturnType<typeof setTimeout> | null = null;
+  place: Place | null = null;
+  uploading: Promise<void> = Promise.resolve();
+  refused: { directory: string; answer: Answered } | null = null;
 
   constructor(id: string) {
     this.id = id;
@@ -347,6 +354,7 @@ export class Conversations {
   private readonly conversations = new Map<string, Conversation>();
   private readonly questions = new Map<string, Question>();
   private reporting = 0;
+  private uploads = 0;
   private watched = false;
   private stopping = false;
 
@@ -377,7 +385,7 @@ export class Conversations {
   }
 
   idle(): boolean {
-    if (this.reporting > 0) return false;
+    if (this.reporting > 0 || this.uploads > 0) return false;
     for (const conversation of this.conversations.values()) {
       const turn = conversation.turn;
       const asking = turn !== null && turn.questions > 0 && turn.secrets === 0;
@@ -396,7 +404,7 @@ export class Conversations {
   }
 
   turnOpen(): boolean {
-    return [...this.conversations.values()].some((conversation) => conversation.turns.size > 0);
+    return this.uploads > 0 || [...this.conversations.values()].some((conversation) => conversation.turns.size > 0);
   }
 
   private look(): void {
@@ -482,9 +490,10 @@ export class Conversations {
 
   private async open(conversation: Conversation, call: KitCallOf<'open'>): Promise<{ result: Promise<KitCallResult> }> {
     await this.stop(conversation);
+    const opening = { room_ref: call.room_ref, name: call.name };
     const launch =
       conversation.launch ??
-      this.launch(conversation, this.route(conversation, call.agent_id).then((route) => conversationRoute(route, call)), null, true);
+      this.launch(conversation, this.route(conversation, call.agent_id).then((route) => conversationRoute(route, call)), null, true, opening);
     return {
       result: launch.session.then(
         (session) => ({ provider_session_id: session }),
@@ -499,7 +508,13 @@ export class Conversations {
     await running?.adapter.exited;
   }
 
-  private launch(conversation: Conversation, route: Promise<DesiredAgentRoute>, sessionId: string | null, empty: boolean): Launch {
+  private launch(
+    conversation: Conversation,
+    route: Promise<DesiredAgentRoute>,
+    sessionId: string | null,
+    empty: boolean,
+    opening: Opening | null,
+  ): Launch {
     let opened!: (bridge: Bridge) => void;
     let failed!: (error: unknown) => void;
     const bridge = new Promise<Bridge>((resolve, reject) => {
@@ -507,7 +522,7 @@ export class Conversations {
       failed = reject;
     });
     bridge.catch(() => undefined);
-    const session = this.start(conversation, route, sessionId, empty, opened);
+    const session = this.start(conversation, route, sessionId, empty, opened, opening);
     session.catch(failed);
     const launch: Launch = { bridge, session };
     conversation.launch = launch;
@@ -530,7 +545,7 @@ export class Conversations {
   private instructed(conversation: Conversation, route: DesiredAgentRoute): Promise<string> | null {
     const bridge = conversation.running === null ? conversation.launch?.bridge : Promise.resolve(conversation.running.bridge);
     if (bridge === undefined) return null;
-    const read = bridge.then((opened) => instructions(opened, route.base_instructions));
+    const read = bridge.then((opened) => (conversation.place?.copy === true ? '' : instructions(opened, route.base_instructions)));
     read.catch(() => undefined);
     return read;
   }
@@ -632,7 +647,7 @@ export class Conversations {
       if (conversation.running === null) {
         const stored = conversation.session ?? call.provider_session_id;
         const empty = call.first === true && conversation.prompted !== stored;
-        const launch = this.launch(conversation, Promise.resolve(waiting.route), stored, empty);
+        const launch = this.launch(conversation, Promise.resolve(waiting.route), stored, empty, null);
         if (call.first === true) instructing = this.instructed(conversation, waiting.route);
         started = (await launch.session) !== stored;
       }
@@ -640,8 +655,13 @@ export class Conversations {
       if (started || (call.first === true && session !== call.provider_session_id)) {
         result = { provider_session_id: session };
       }
+      await conversation.uploading;
+      const place = conversation.place!;
+      if (place.copy) await this.freshened(conversation, place);
       if (call.first === true) {
-        prompt.push({ type: 'text', text: await (instructing ?? this.instructed(conversation, waiting.route)!) });
+        const reads = CLIS[waiting.route.kind]!.reads !== null;
+        const block = place.copy ? copyInstructions(waiting.route.base_instructions, place.directory, reads) : (instructing ?? this.instructed(conversation, waiting.route)!);
+        prompt.push({ type: 'text', text: await block });
       }
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
@@ -656,8 +676,47 @@ export class Conversations {
       return;
     }
     this.starts(conversation, null);
-    this.prompt(conversation, [...prompt, ...waiting.content], () => this.kit.calls.keepResult(call.input_id, result));
+    const line = call.text.startsWith('/') ? null : await this.line(conversation);
+    const said: ContentBlock[] = line === null ? [] : [{ type: 'text', text: line }];
+    this.prompt(conversation, [...prompt, ...waiting.content, ...said], () => this.kit.calls.keepResult(call.input_id, result));
     waiting.settle(result);
+  }
+
+  private async freshened(conversation: Conversation, place: Place): Promise<void> {
+    const answer = await this.kit.copies
+      .freshened(place.directory, conversation.running!.bridge.caller)
+      .catch((error: unknown) => ({ refused: true, text: causeOf(error) }));
+    if (answer.refused) logged(new Error(`conversation ${conversation.id} runs its turn on its copy as it stands: ${answer.text}`));
+  }
+
+  private async line(conversation: Conversation): Promise<string | null> {
+    const refused = conversation.refused;
+    conversation.refused = null;
+    if (refused === null) return null;
+    if (refused.answer.conflicted !== true) return `${KIT_LINE}the upload at your last turn's end was refused: ${refused.answer.text.split('\n').join(' ')}`;
+    const marked = await this.kit.copies.markedIn(refused.directory);
+    if (marked.length === 0) return null;
+    const [named, hold] = marked.length === 1 ? [marked[0]!, 'still holds'] : [`${marked.slice(0, -1).join(', ')} and ${marked.at(-1)!}`, 'still hold'];
+    return `${KIT_LINE}${named} ${hold} conflict markers from the upload at your last turn's end; resolve them, and this turn's end uploads again.`;
+  }
+
+  private uploaded(conversation: Conversation): void {
+    const running = conversation.running;
+    const place = conversation.place;
+    if (running === null || running.killed || running.adapter.connection.signal.aborted || place === null || !place.copy) return;
+    this.uploads++;
+    conversation.uploading = this.kit.copies
+      .ended(place.directory, running.bridge.caller)
+      .then(
+        (answer) => {
+          conversation.refused = answer === null || !answer.refused || answer.kept === true ? null : { directory: place.directory, answer };
+        },
+        logged,
+      )
+      .finally(() => {
+        this.uploads--;
+        this.kit.changed();
+      });
   }
 
   private starts(conversation: Conversation, step: Starting | null): void {
@@ -825,6 +884,7 @@ export class Conversations {
     sessionId: string | null,
     empty: boolean,
     bridged: (bridge: Bridge) => void,
+    opening: Opening | null,
   ): Promise<string> {
     const route = await routed;
     const reader = readerFor(route.kind);
@@ -846,12 +906,18 @@ export class Conversations {
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridging = this.bridged(conversation);
     const bridge = await step(unbridged, bridging);
-    if (conversation.kills > 0) {
+    let place: Place;
+    try {
+      if (conversation.kills > 0) throw new Error(KILLED);
+      place = await step(NO_COPY, this.kit.copies.placed(conversation.id, opening, bridge.caller, route.working_directory));
+      if (conversation.kills > 0) throw new Error(KILLED);
+    } catch (error) {
       this.closeBridge(conversation, bridging, bridge);
-      throw new Error(KILLED);
+      throw conversation.kills > 0 ? new Error(KILLED) : error;
     }
+    conversation.place = place;
     conversation.opening = bridge;
-    const work = workFor(route.kind, route.working_directory, () => this.kit.changed(), (message) => this.tapped(conversation, reader, message));
+    const work = workFor(route.kind, place.directory, () => this.kit.changed(), (message) => this.tapped(conversation, reader, message));
     const scope = new Scope(marker(bridge), randomUUID(), cli);
     let adapter: Adapter | null = null;
     try {
@@ -864,7 +930,7 @@ export class Conversations {
         startAdapter(
           route.kind,
           cli,
-          route.working_directory,
+          place.directory,
           app,
           (message) => {
             work.read(message);
@@ -877,7 +943,7 @@ export class Conversations {
       );
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
       const agent = adapter.connection.agent;
-      const cwd = route.working_directory;
+      const cwd = place.directory;
       const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!);
       const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
       const opened =
@@ -1062,6 +1128,7 @@ export class Conversations {
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
     void this.deliver(conversation, 'turns/end', body).catch(logged);
+    this.uploaded(conversation);
     this.next(conversation);
     this.kit.changed();
   }

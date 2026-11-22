@@ -30,6 +30,7 @@ import { relayed } from './relay.ts';
 
 export interface Bridge {
   env: Record<string, string>;
+  caller: Caller;
   tool(name: string, args: Record<string, unknown>): Promise<ToolResult>;
   close(): void;
 }
@@ -260,8 +261,8 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
       return { status: 200, text: JSON.stringify(uploaded) };
     }
     if (path === '/copy/download') {
-      const { attachments = false, max_size: maxSize = DEFAULT_MAX_SIZE } = JSON.parse(text) as { attachments?: boolean; max_size?: number };
-      return { status: 200, text: JSON.stringify(await copies.download(uploader, { attachments, maxSize })) };
+      const { attachments = false, max_size: maxSize = DEFAULT_MAX_SIZE, cwd } = JSON.parse(text) as { attachments?: boolean; max_size?: number; cwd: string };
+      return { status: 200, text: JSON.stringify(await copies.download(uploader, { attachments, maxSize }, cwd)) };
     }
     if (path !== '/') return { status: 404, text: '' };
     const forwarded = await forward(text);
@@ -317,6 +318,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
       GIT_CONFIG_KEY_0: `url.${proxy}/app/.insteadOf`,
       GIT_CONFIG_VALUE_0: app,
     },
+    caller: uploader,
     tool: async (name, args) => {
       const forwarded = await forward(JSON.stringify(call(name, args)));
       if (forwarded.status !== 200) throw new Error(`House refused ${name} with ${forwarded.status}: ${forwarded.text}`);

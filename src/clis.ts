@@ -17,6 +17,7 @@ export interface Cli {
   update: string;
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
+  reads: 'AGENTS.md' | 'CLAUDE.md' | null;
   fullAccess: string | null;
   sessionMeta(bridge: string): Record<string, unknown>;
   unknownSession(error: unknown): boolean;
@@ -135,6 +136,7 @@ export const CLIS: Record<string, Cli> = {
       env: { CODEX_CONFIG: JSON.stringify({ features: { shell_zsh_fork: true } }) },
     },
     args: [],
+    reads: 'AGENTS.md',
     fullAccess: 'agent-full-access',
     sessionMeta: () => ({}),
     unknownSession: (error) => {
@@ -161,6 +163,7 @@ export const CLIS: Record<string, Cli> = {
       env: { CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1' },
     },
     args: [],
+    reads: 'CLAUDE.md',
     fullAccess: 'bypassPermissions',
     sessionMeta: (bridge) => ({
       claudeCode: {
@@ -188,6 +191,7 @@ export const CLIS: Record<string, Cli> = {
     update: 'grok update',
     adapter: null,
     args: ['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio'],
+    reads: null,
     fullAccess: null,
     sessionMeta: () => ({}),
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',

@@ -1,4 +1,6 @@
 import { agentInstructions } from '@agentshouse/skills';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Bridge } from './bridge.ts';
 
 const OWNER_RULES = '/rooms/private/owner-rules.md';
@@ -29,6 +31,14 @@ async function readOwnerRules(bridge: Bridge): Promise<string> {
   return document;
 }
 
+function block(base: string, last: string): string {
+  return [agentInstructions().join('\n'), base, last.replace(/\n$/, '')].filter((part) => part !== '').join('\n\n');
+}
+
 export async function instructions(bridge: Bridge, base: string): Promise<string> {
-  return [agentInstructions().join('\n'), base, (await readOwnerRules(bridge)).replace(/\n$/, '')].filter((part) => part !== '').join('\n\n');
+  return block(base, await readOwnerRules(bridge));
+}
+
+export async function copyInstructions(base: string, copy: string, reads: boolean): Promise<string> {
+  return block(base, reads ? '' : await readFile(join(copy, 'AGENTS.md'), 'utf8').catch(() => ''));
 }

@@ -24,7 +24,7 @@ const UPLOAD =
   "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names";
 const UPLOAD_USAGE = `usage: house upload [--owner], or house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
 const DOWNLOAD =
-  "download: brings House's changes into every Local copy, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file";
+  "download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file";
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 
 function runHouse(

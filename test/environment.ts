@@ -437,6 +437,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
         agent_id: 'agent-1',
         provider_session_id: null,
         ...(fields.kind === 'message' ? { message_id: `message-${calls}` } : {}),
+        ...(fields.kind === 'open' ? { room_ref: null, name: String(fields.conversation_id ?? 'conversation-1') } : {}),
         ...fields,
       } as KitCall);
     },

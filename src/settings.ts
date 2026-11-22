@@ -43,8 +43,9 @@ interface Move {
   kept?: string[];
 }
 
-const FOLDERS = ['agents', 'rooms'] as const;
+const FOLDERS = ['agents', 'rooms', 'conversations'] as const;
 const RECORDS = join('local-copies', 'rooms');
+const FOLLOWED = [RECORDS, join('local-copies', 'conversations'), join('local-copies', 'places')];
 const MOVE = 'workspace-move.json';
 const WORKING = 'an Agent is working; change the workspace once its turn ends';
 const UNCHOSEN = "Kit is logged out, so it cannot tell which Agents' folders their owners chose";
@@ -65,8 +66,8 @@ export async function heldSettings(): Promise<KitSettings> {
   return { skills: (await readConfiguration()).skills, workspace: workspaceRoot() };
 }
 
-function records(): string {
-  return join(kitHome(), RECORDS);
+async function followed(from: string, to: string, kept: readonly string[]): Promise<void> {
+  for (const records of FOLLOWED) await followRoot(join(kitHome(), records), from, to, kept);
 }
 
 function placing(kept: readonly string[]): (source: string) => Placement {
@@ -110,14 +111,14 @@ async function refusedRoot(from: string, to: string): Promise<string | null> {
 async function forward({ from, to, kept = [] }: Move): Promise<void> {
   await mkdir(to, { recursive: true, mode: 0o700 });
   for (const name of FOLDERS) await merged(join(from, name), join(to, name), placing(kept));
-  await followRoot(records(), from, to, kept);
+  await followed(from, to, kept);
   await writeConfiguration({ ...(await storedConfiguration()), workspace: to });
   await rm(join(kitHome(), MOVE), { force: true });
 }
 
 async function backward({ from, to, kept = [] }: Move): Promise<void> {
   for (const name of FOLDERS) await merged(join(to, name), join(from, name), placing([]));
-  await followRoot(records(), to, from, kept);
+  await followed(to, from, kept);
   await rm(join(kitHome(), MOVE), { force: true });
 }
 
@@ -167,7 +168,7 @@ export async function houseRoot(): Promise<string | null> {
 
 function chosenFolders(routes: readonly DesiredAgentRoute[], from: string): string[] {
   const agents = join(from, 'agents');
-  const roots = [agents, join(from, 'rooms'), join(from, RECORDS)];
+  const roots = [agents, join(from, 'rooms'), join(from, 'conversations'), join(from, RECORDS)];
   return routes
     .filter(({ agent_id, working_directory }) => resolve(working_directory) !== join(agents, agent_id))
     .map(({ working_directory }) => resolve(working_directory))
