@@ -106,7 +106,7 @@ it('uploads documents and attachments once as the owner, each attachment staged 
   expect(fileCalls(hosted)).toEqual([]);
 });
 
-it("uploads a document and an attachment under the conversation's own credential, finishing each staged upload through upload by its path, and a download there brings the attachment's new bytes", async () => {
+it("uploads a document and an attachment under the Kit credential naming the conversation, finishing each staged upload through upload by its path, and a download there brings the attachment's new bytes", async () => {
   const { hosted, room } = await copied();
   await opened(hosted);
   await placed(room, { 'photo.jpg': JPEG, 'plan.md': 'one\ntwo\n' });
@@ -118,7 +118,9 @@ it("uploads a document and an attachment under the conversation's own credential
   expect(uploaded).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n' });
   expect(downloaded).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n' });
   const credential = 'Bearer ahk_held';
+  const labelOf = (received: Received) => (received.body as McpCall).params._meta[CONVERSATION_META_KEY];
   const finishing = { upload: expect.any(String), path: '/rooms/notes/photo.jpg', part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };
+  expect(fileCalls(hosted).map(labelOf)).toEqual(Array(5).fill('conversation-1'));
   expect(fileCalls(hosted).map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
     [credential, 'update', { changes: expect.any(Array) }],
     [credential, 'upload', finishing],
