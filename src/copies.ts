@@ -303,6 +303,10 @@ async function staging(): Promise<string> {
   return `${folder}/`;
 }
 
+function leftForAgents(path: string, chosen: readonly string[]): void {
+  if (chosen.some((folder) => within(folder, path))) throw new Error(`${path} holds a folder an Agent works in, so Kit leaves it as it is`);
+}
+
 function rootOf(handle: string): string {
   return `/rooms/${handle}`;
 }
@@ -863,7 +867,7 @@ export class LocalCopies {
 
   private async setAside(path: string, chosen: readonly string[]): Promise<void> {
     if ((await found(path)) === null) return;
-    if (chosen.some((folder) => within(folder, path))) throw new Error(`${path} holds a folder an Agent works in, so Kit leaves it as it is`);
+    leftForAgents(path, chosen);
     const kept = await keptName(path);
     await rename(path, kept);
     for (const copy of [...this.copies.values()]) if (within(copy.repository, path)) await this.save(rerooted(copy, path, kept));
@@ -898,6 +902,7 @@ export class LocalCopies {
 
   private async placedIn(staged: string, folder: string, chosen: readonly string[]): Promise<void> {
     const names = (await readdir(staged)).sort((left, right) => Number(left === MANIFEST) - Number(right === MANIFEST));
+    for (const name of names) if ((await found(join(folder, name))) !== null) leftForAgents(join(folder, name), chosen);
     for (const name of names) {
       await this.setAside(join(folder, name), chosen);
       await rename(join(staged, name), join(folder, name));

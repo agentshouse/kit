@@ -144,6 +144,28 @@ it("copies a Room raised from the Open to the Keep level into its folder beside 
   expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.'))).toEqual(['garden']);
 });
 
+it("leaves a raised Room's folder as it was where a document of the Room takes the name of an entry holding an Agent's chosen launch directory, saying so at each download", async () => {
+  const home = await temporaryHome();
+  const chosen = join(accountOf(home), 'house', 'rooms', 'garden', 'docs', 'work');
+  const hosted = await hostKit([{ working_directory: chosen }], { home });
+  const rooms = serveRooms(hosted);
+  const garden = rooms.room('garden');
+  for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) garden.put(`${name}.md`, `${name}\n`);
+  garden.put('docs/x.md', 'x\n');
+  garden.instructions = FIRST;
+  rooms.open = [garden];
+  await rooms.download([]);
+  await mkdir(chosen, { recursive: true });
+  rooms.open = [];
+  const refused = { status: 1, stderr: `house: ${garden.root}: ${join(folderOf(hosted, 'garden'), 'docs')} holds a folder an Agent works in, so Kit leaves it as it is\n` };
+
+  expect(await rooms.download([garden])).toMatchObject(refused);
+  expect(await rooms.download([garden])).toMatchObject(refused);
+
+  expect(await held(folderOf(hosted, 'garden'))).toEqual(['AGENTS.md', 'CLAUDE.md', 'docs']);
+  expect(await held(join(folderOf(hosted, 'garden'), 'docs'))).toEqual(['work']);
+});
+
 it('changes AGENTS.md at the next download after an approval or a new version, and not at a reconnect before it', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
