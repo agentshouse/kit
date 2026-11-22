@@ -325,9 +325,13 @@ it("puts a file a stale move took away back at its path with House's newer versi
   expect(room.files.get('b.md')!.content).toBe('Alpha, theirs\n');
 });
 
-it("marks the whole text against House's current one when House cuts the merged text of a conflict, and refuses the next upload until it is resolved", async () => {
+it.each([
+  ['leaving it out', 'notice'],
+  ['cutting it with cut beside it', 'cut'],
+] as const)("marks the whole text against House's current one when House cuts the merged text of a conflict by %s, and refuses the next upload until it is resolved", async (_way, cutWith) => {
   const { hosted, room } = await copied();
-  room.cuts = true;
+  room.bound = 16;
+  room.cutWith = cutWith;
   const current = room.put('plan.md', 'one\nTWO, theirs\nthree\n');
   await writeFile(join(room.repository, 'plan.md'), 'one\ntwo, mine\nthree\n');
   const marked = '<<<<<<< current\none\nTWO, theirs\nthree\n=======\none\ntwo, mine\nthree\n>>>>>>> yours\n';

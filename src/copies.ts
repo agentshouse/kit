@@ -83,6 +83,7 @@ export interface Written {
   path: string;
   revision: string | null;
   content?: string | null;
+  cut?: unknown;
 }
 
 export interface Upload {
@@ -696,7 +697,7 @@ export class LocalCopies {
         }
       },
       info: async (path, revision) => fileInfo(await ownInfo({ path, ...(revision === undefined ? {} : { ref: revision }) })),
-      instructions: async (root) => instructionsText(await ownInfo({ path: root })),
+      instructions: (root) => instructionsText(ownInfo, root),
     };
   }
 
@@ -1974,7 +1975,7 @@ export class LocalCopies {
   }
 
   private async textOf(written: Written, sent: string | undefined): Promise<string> {
-    if (typeof written.content === 'string' && !CUT.test(written.content)) return written.content;
+    if (typeof written.content === 'string' && written.cut === undefined && !CUT.test(written.content)) return written.content;
     if (written.content === undefined && sent !== undefined) return sent;
     return this.revisionText(written.path, written.revision!);
   }

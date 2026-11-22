@@ -99,11 +99,11 @@ function resendAfter(forwarded: Forwarded | null, attempt: number, pushing: bool
 function editAnswer(forwarded: Forwarded): Submitted {
   const answer = toolAnswer(forwarded);
   if ('refused' in answer) return answer;
-  const { results } = parse(answer.text) as { results: { path: string; revision?: string; from?: string; content?: string }[] };
+  const { results } = parse(answer.text) as { results: { path: string; revision?: string; from?: string; content?: string; cut?: unknown }[] };
   return {
-    accepted: results.flatMap((result) => [
-      ...(result.from === undefined ? [] : [{ path: result.from, revision: null, content: null }]),
-      { path: result.path, revision: result.revision ?? null, ...(result.content === undefined ? {} : { content: result.content }) },
+    accepted: results.flatMap(({ from, revision, ...written }) => [
+      ...(from === undefined ? [] : [{ path: from, revision: null, content: null }]),
+      { ...written, revision: revision ?? null },
     ]),
   };
 }
@@ -248,7 +248,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
       return parse(answer.text) as Finished<Staged>;
     },
     info: async (path, revision) => fileInfo(await info({ path, ...(revision === undefined ? {} : { ref: revision }) })),
-    instructions: async (root) => instructionsText(await info({ path: root })),
+    instructions: (root) => instructionsText(info, root),
   };
 
   const uploader = holder.owner ? copies.owner : caller;

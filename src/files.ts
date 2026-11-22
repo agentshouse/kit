@@ -108,14 +108,29 @@ export function fileInfo(answer: string): FileInfo | null {
   };
 }
 
-export function instructionsText(answer: string): string {
+interface InstructionsPart {
+  info?: unknown;
+  instructions?: { text?: unknown; cut?: unknown };
+  next_cursor?: string;
+}
+
+function instructionsPart(answer: string): InstructionsPart {
   const document = parseDocument(answer);
   if (document.errors.length > 0) throw new Error("House's answer could not be read");
-  const details = document.toJS() as { info?: unknown; instructions?: { text?: unknown } } | null;
-  const cut = typeof details?.info === 'string' ? ANSWER_CUT.exec(details.info) : null;
+  const details = (document.toJS() ?? {}) as InstructionsPart;
+  const cut = typeof details.info === 'string' ? ANSWER_CUT.exec(details.info) : null;
   if (cut !== null) throw new Error(`House cut its answer at ${cut[1]} bytes`);
-  const text = details?.instructions?.text;
-  return typeof text === 'string' ? text : '';
+  return details;
+}
+
+export async function instructionsText(info: (args: Record<string, unknown>) => Promise<string>, path: string): Promise<string> {
+  let text = '';
+  for (let args: Record<string, unknown> | null = { path }; args !== null; ) {
+    const { instructions, next_cursor: cursor } = instructionsPart(await info(args));
+    if (typeof instructions?.text === 'string') text += instructions.text;
+    args = instructions?.cut === undefined ? null : { path, cursor };
+  }
+  return text;
 }
 
 export function paused(milliseconds: number): Promise<void> {

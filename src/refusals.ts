@@ -38,14 +38,14 @@ function detailOf(text: string): Record<string, unknown> {
 
 function conflictsOf(detail: Record<string, unknown>): Conflict[] {
   if (!Array.isArray(detail.conflicts)) return [];
-  return detail.conflicts.flatMap((conflict: { code?: unknown; path?: unknown; revision?: unknown; content?: unknown } | null) =>
+  return detail.conflicts.flatMap((conflict: { code?: unknown; path?: unknown; revision?: unknown; content?: unknown; cut?: unknown } | null) =>
     typeof conflict?.code === 'string'
       ? [
           {
             code: conflict.code,
             path: typeof conflict.path === 'string' ? conflict.path : '',
             ...(typeof conflict.revision === 'string' ? { revision: conflict.revision } : {}),
-            ...(typeof conflict.content === 'string' ? { content: conflict.content } : {}),
+            ...(typeof conflict.content === 'string' && conflict.cut === undefined ? { content: conflict.content } : {}),
           },
         ]
       : [],
