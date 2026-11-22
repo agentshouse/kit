@@ -98,9 +98,9 @@ function bridged(path: string, body: unknown, to = socketPath): Promise<string> 
   });
 }
 
-async function mcp<T>(method: string, params: Record<string, unknown>): Promise<T> {
+async function mcp<T>(method: string, params: Record<string, unknown>, operation?: string): Promise<T> {
   const message = rpc(method, params);
-  const answer = JSON.parse(socketPath === undefined ? await environmentCall(message) : await bridged('/', message)) as {
+  const answer = JSON.parse(socketPath === undefined ? await environmentCall(message, operation) : await bridged('/', message)) as {
     result?: T;
     error?: { message: string };
   };
@@ -163,8 +163,8 @@ async function described(file: string): Promise<Description> {
   return { bytes: held.bytes, sha256: held.sha256, ...(mediaType === undefined ? {} : { media_type: mediaType }) };
 }
 
-async function finished(upload: string, path: unknown, partSha256: string[]): Promise<Finishing> {
-  const text = await called('upload', { upload, path, part_sha256: partSha256 });
+async function finished(upload: string, path: unknown, partSha256: string[], operation: string): Promise<Finishing> {
+  const text = await called('upload', { upload, path, part_sha256: partSha256 }, operation);
   const answer = parse(text) as object | null;
   return answer !== null && 'upload' in answer ? (answer as Finishing) : { text };
 }
@@ -182,7 +182,7 @@ async function upload({ file, ...destination }: Record<string, unknown>): Promis
     sha256: description.sha256,
     read: (start, end) => fileRange(file, start, end, (error) => unreadable(file, error)),
     send: (url, start, end, headers) => sentPart(url, file, start, end, headers, WAY),
-    finish: (id, partSha256) => finished(id, destination.path, partSha256),
+    finish: (id, partSha256, operation) => finished(id, destination.path, partSha256, operation),
   });
   return accepted.text;
 }
@@ -301,8 +301,8 @@ async function house(args: string[]): Promise<string> {
   return called(verb, await argumentsOf(argument));
 }
 
-async function called(name: string, args: Record<string, unknown>): Promise<string> {
-  const result = await mcp<ToolResult>('tools/call', { name, arguments: args });
+async function called(name: string, args: Record<string, unknown>, operation?: string): Promise<string> {
+  const result = await mcp<ToolResult>('tools/call', { name, arguments: args }, operation);
   const text = result.content.map((content) => content.text).join('\n');
   if (result.isError === true) throw new Error(said(text.replace(/\n+$/, '')));
   return text;

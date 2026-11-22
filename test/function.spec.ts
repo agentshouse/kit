@@ -315,9 +315,9 @@ it("closes a run's bridge as the run ends, so a house call its process makes aft
   expect(searched(hosted)).toEqual([['in-run', 'Bearer ahk_held']]);
 });
 
-it("answers a run's house call House refuses for its Kit credential by saying House no longer accepts this computer", async () => {
+it("answers a run's house call House refuses for its Kit credential at once by saying House no longer accepts this computer", async () => {
   const hosted = await hostKit([]);
-  hosted.house.route('POST', '/', () => ({ status: 401, body: { error: { code: 'token_rejected', retryable: false } } }));
+  hosted.house.route('POST', '/', () => ({ status: 401, body: { error: 'invalid_token', error_description: 'A valid access token is required' } }));
   const id = run(hosted, `house search '{"query":"rejected"}' 2>&1; echo "exit $?"`);
 
   expect(await ended(hosted, id)).toEqual({
@@ -325,6 +325,7 @@ it("answers a run's house call House refuses for its Kit credential by saying Ho
     output: 'house: House no longer accepts this computer; run kit login\nexit 1\n',
     cut: false,
   });
+  expect(hosted.house.requests.filter((received) => received.path === '/' && (received.body as McpCall).params.name === 'search')).toHaveLength(1);
 });
 
 it("uploads a run's Local copy with house upload through the run's bridge, naming the run, and takes no --owner", async () => {

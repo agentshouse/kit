@@ -258,14 +258,16 @@ it("resumes an upload outside a conversation after its connection drops, finishi
   expect(finishing).toBe(5);
 });
 
-it('finishes an upload outside a conversation again while House answers it with a 503, as a conversation resends an unsettled call', async () => {
+it('finishes an upload outside a conversation again while House answers it with a 503, as a conversation resends an unsettled call, under the same operation id', async () => {
   const house = await startHouse();
   const home = await connected(house);
   const store = await startStore();
   const uploads = uploadTool(store, 3);
   let finishing = 0;
+  const operations: unknown[] = [];
   house.route('POST', '/', async ({ body }) => {
     const message = body as { id: string } & McpCall;
+    if (message.params.arguments!.upload !== undefined) operations.push(message.params._meta['agents.house/agent-operation']);
     if (message.params.arguments!.upload !== undefined && ++finishing <= 2) return { status: 503, body: {} };
     return { body: { jsonrpc: '2.0', id: message.id, result: await uploads.answer(message.params.arguments!) } };
   });
@@ -283,6 +285,9 @@ it('finishes an upload outside a conversation again while House answers it with 
     [2, 200],
   ]);
   expect(finishing).toBe(4);
+  const [resent, again, answered, next] = operations;
+  expect([again, answered]).toEqual([resent, resent]);
+  expect(next).not.toBe(resent);
 });
 
 it('sends each part and reads each download at its store address through the Kit relay its User named, as it sends House its calls', async () => {
@@ -439,7 +444,7 @@ it("refuses a Tool call naming kit login once kit logout has ended the Kit's con
 it('refuses a Tool call in one line naming kit login once House no longer accepts the Kit credential', async () => {
   const house = await startHouse();
   const home = await connected(house);
-  house.route('POST', '/', () => ({ status: 401, body: {} }));
+  house.route('POST', '/', () => ({ status: 401, body: { error: 'invalid_token', error_description: 'A valid access token is required' } }));
 
   const ran = await runHouse(home, ['search', '{"query":"invoice"}']);
 

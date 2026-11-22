@@ -81,11 +81,10 @@ export function unconfirmed(status: number): string {
   return `House answered ${status} ${UNCONFIRMED}`;
 }
 
-export async function environmentCall(message: Message): Promise<string> {
+export async function environmentCall(message: Message, operation = message.method === 'tools/call' ? operationId() : null): Promise<string> {
   const enrolment = await readEnrolment();
   if (enrolment === null) throw new Error(UNCONNECTED);
   proxyUnlessRelayed();
-  const operation = message.method === 'tools/call' ? operationId() : null;
   const answer = await callHouse(enrolment.house, enrolment.credential, message, { operation }).catch(() => {
     throw new Unsettled(UNREACHABLE);
   });

@@ -71,6 +71,7 @@ function pendingSeconds(forwarded: Forwarded): number | null {
 
 function resendAfter(forwarded: Forwarded | null, attempt: number, pushing: boolean): number | null {
   if (forwarded === null) return retryDelay(attempt);
+  if (forwarded.status === 401) return null;
   if (forwarded.status !== 200) {
     if (pushing && stopsPush(refusalOf(forwarded.text))) return null;
     return retryable(forwarded.text) === false ? null : retryDelay(attempt);
