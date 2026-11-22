@@ -266,6 +266,32 @@ it("uploads the copy at each turn's end as the conversation's call, brings the m
   expect(changesOf(rooms.edits()[1]!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nkilled\n', base: expect.any(String) }]);
 });
 
+it.each([
+  ['the cut notice ending it', 'notice'],
+  ['cut beside it', 'cut'],
+] as const)("brings back the whole text House merged where its update answer cuts that text, with %s", async (_way, cutWith) => {
+  const { hosted, rooms, notes } = await staged();
+  const copy = copyOf(hosted, 'notes', 'Plan');
+  await opened(hosted, notes, 'Plan');
+  notes.bound = 8;
+  notes.cutWith = cutWith;
+
+  said(hosted, "@sh sed -i 's/one/ONE/' a.md\n@gate merged");
+  await until(async () => ((await readFile(join(copy, 'a.md'), 'utf8')) === 'ONE\ntwo\nthree\n' ? true : undefined));
+  notes.put('a.md', 'one\ntwo\nTHREE\n');
+  await writeFile(join(hosted.home, 'merged'), '');
+  await edited(rooms, 1);
+  const merged = notes.revision('a.md');
+  const files = await until(async () => {
+    const { files } = (await manifestAt(copy)) as { files: Record<string, { revision: string }> };
+    return files['a.md']!.revision === merged ? files : undefined;
+  });
+
+  expect(notes.files.get('a.md')!.content).toBe('ONE\ntwo\nTHREE\n');
+  expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('ONE\ntwo\nTHREE\n');
+  expect(files['a.md']).toMatchObject({ bytes: 14 });
+});
+
 it("ends the next prompt with the Kit's line after a refused upload, naming each file still holding conflict markers or giving the upload's answer, and skips a /command and a prompt after an upload that landed", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}]);
   const copy = copyOf(hosted, 'notes', 'Plan');

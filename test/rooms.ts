@@ -58,6 +58,13 @@ export interface Conflict {
   state: 'absent' | 'current';
   revision?: string;
   content?: string;
+  cut?: Cut;
+}
+
+interface Cut {
+  field: string;
+  shown: number;
+  total: number;
 }
 
 type Refused = { code: string; path?: string; held?: string; current_path?: string; documents?: number; conflicts?: Conflict[] };
@@ -187,6 +194,14 @@ function minted(): string {
   return `v_${revisions}.1.x`;
 }
 
+function cutOf(text: string, bound: number, field: string): { text: string; cut: Cut } | null {
+  const bytes = Buffer.from(text);
+  if (bytes.length <= bound) return null;
+  let shown = bound;
+  while ((bytes[shown]! & 0xc0) === 0x80) shown--;
+  return { text: bytes.subarray(0, shown).toString(), cut: { field, shown, total: bytes.length } };
+}
+
 function covers(path: string, prefix: string): boolean {
   return prefix === '' || path === prefix || path.startsWith(`${prefix}/`);
 }
@@ -226,7 +241,8 @@ export class Room {
   readonly batches: EditChange[][] = [];
   models: Record<string, unknown>[] = [];
   instructions = '';
-  cuts = false;
+  bound = ANSWER_BYTES;
+  cutWith: 'notice' | 'cut' = 'notice';
   private built: { position: number; entries: object[] } | null = null;
 
   readonly workspace: string;
@@ -301,6 +317,28 @@ export class Room {
 
   revision(path: string): string {
     return (this.files.get(path) ?? this.binaries.get(path))!.revision;
+  }
+
+  merged(content: string): Record<string, unknown> {
+    const part = cutOf(content, this.bound, 'content');
+    if (part === null) return { content };
+    return this.cutWith === 'cut' ? { content: part.text, cut: part.cut } : { content: `${part.text}\noutput_cut ${part.cut.shown} of ${part.cut.total} bytes` };
+  }
+
+  conflicted(content: string): Partial<Conflict> {
+    const part = cutOf(content, this.bound, 'content');
+    if (part === null) return { content };
+    return this.cutWith === 'cut' ? { content: part.text, cut: part.cut } : {};
+  }
+
+  instructionsFrom(start: number): Record<string, unknown> {
+    if (this.instructions === '') return {};
+    const held = { version: 1, approved_version: 1 };
+    const rest = Buffer.from(this.instructions).subarray(start).toString();
+    const part = cutOf(rest, this.bound, 'text');
+    if (part === null) return { instructions: { ...held, text: rest } };
+    const cut = { ...part.cut, total: Buffer.byteLength(this.instructions) };
+    return { instructions: { ...held, text: part.text, cut }, next_cursor: String(start + cut.shown) };
   }
 
   advance(paths: string[]): void {
@@ -456,7 +494,7 @@ export class Room {
           const text = this.history.get(change.base as string);
           const result = text === undefined ? null : merged3(text, current.content, change.content!);
           if (result === null) conflict('base_revision_stale');
-          else if ('conflicted' in result) conflict('merge_conflict', this.cuts ? {} : { content: result.conflicted });
+          else if ('conflicted' in result) conflict('merge_conflict', this.conflicted(result.conflicted));
           else set(path, result.merged, { merged: true });
         }
       } else if (change.op === 'delete') {
@@ -578,12 +616,12 @@ function doorContents(writes: Write[]): Record<string, unknown>[] {
   ]);
 }
 
-function toolResults(writes: Write[]): Record<string, unknown>[] {
+function toolResults(room: Room, writes: Write[]): Record<string, unknown>[] {
   return writes.map((write) => ({
     path: write.path,
     ...(write.revision === null ? {} : { revision: write.revision }),
     ...(write.from === undefined ? {} : { from: write.from }),
-    ...(write.merged === true ? { content: write.content } : {}),
+    ...(write.merged === true ? room.merged(write.content!) : {}),
   }));
 }
 
@@ -798,9 +836,10 @@ export function serveRooms(hosted: Hosted): Rooms {
     const path = String(args.path);
     const room = roomOf(path);
     if (!path.slice('/rooms/'.length).includes('/')) {
+      if (room.cutWith === 'cut') return { content: [{ type: 'text', text: stringify({ ref: room.ref, path, ...room.instructionsFrom(Number(args.cursor ?? 0)) }) }] };
       const instructions = room.instructions === '' ? {} : { instructions: { version: 1, approved_version: 1, text: room.instructions } };
       const answer = Buffer.from(stringify({ ref: room.ref, path, ...instructions }));
-      const text = answer.length <= ANSWER_BYTES ? answer.toString() : `${answer.subarray(0, ANSWER_BYTES).toString()}\ninfo: output_cut at ${ANSWER_BYTES} bytes`;
+      const text = answer.length <= room.bound ? answer.toString() : `${answer.subarray(0, room.bound).toString()}\ninfo: output_cut at ${room.bound} bytes`;
       return { content: [{ type: 'text', text }] };
     }
     const local = path.slice(room.root.length + 1);
@@ -870,7 +909,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       state.dropsEdits--;
       return null;
     }
-    return { content: [{ type: 'text', text: stringify({ results: toolResults(outcome.writes) }) }] };
+    return { content: [{ type: 'text', text: stringify({ results: toolResults(roomOf(changes[0]!.path), outcome.writes) }) }] };
   };
   return state;
 }

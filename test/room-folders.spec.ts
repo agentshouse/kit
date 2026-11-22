@@ -195,6 +195,20 @@ it('changes AGENTS.md at the next download after an approval or a new version, a
   expect(await readFile(join(folderOf(hosted, 'garden'), 'AGENTS.md'), 'utf8')).toBe(SECOND);
 });
 
+it("writes AGENTS.md whole from a Room's instructions House cuts in two parts, reading on through next_cursor to the last part", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  notes.put('a.md', 'a\n');
+  notes.cutWith = 'cut';
+  notes.instructions = LONG;
+
+  expect(await rooms.download([notes])).toMatchObject({ status: 0, stdout: `${notes.root}: copied to ${notes.repository}\n` });
+
+  expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(LONG);
+  expect(roomRootReads(hosted)).toEqual([notes.root, notes.root]);
+});
+
 it("deletes the two files once House answers a Room's instructions empty, and keeps the last text where it cannot read them or House cuts its answer, saying so", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
