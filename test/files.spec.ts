@@ -57,15 +57,15 @@ it('keeps a link info refuses in the text, into a Room the Environment does not 
   expect(hosted.transcripts).toEqual([]);
 });
 
-it('keeps a link in the text whose info answer is no mapping, a captured item or a history or listing info cut, and goes on to the prompt', async () => {
+it('keeps a link in the text whose info answer is no mapping, a captured item or a history or listing info pages, and goes on to the prompt', async () => {
   const hosted = await hostKit();
   const item = '/rooms/notes/inbox/2026-10-21.md';
   const history = '/rooms/notes/log.md';
   const folder = '/rooms/notes/drafts';
   const answers: Record<string, string> = {
     [item]: `${item}:4-6 revision=v_3.1.x ref=ep_1\nepisode: ep_1\nthe item's own words: a note\n`,
-    [history]: `${stringify({ ref: 'd_4.x', path: history, media_type: 'text/markdown', revisions: [{ revision: 'v_4.2.x' }] })}info: output_cut 1 newest revisions; continue with: info ref=v_4.1.x path=${history} view=history`,
-    [folder]: `${stringify({ path: folder, documents: [{ path: `${folder}/a.md` }] })}info: output_cut 1 newest documents; continue with: ls -lt ${folder}`,
+    [history]: stringify({ ref: 'd_4.x', path: history, media_type: 'text/markdown', revisions: [{ revision: 'v_4.2.x' }], next_cursor: 'v_4.2.x' }),
+    [folder]: stringify({ path: folder, documents: [{ path: `${folder}/a.md` }], next_cursor: 'ZHJhZnRz' }),
   };
   hosted.tools.info = (args) => ({ content: [{ type: 'text', text: answers[String(args.path)]! }] });
   const text = `see ${link(item)}, ${link(history)} and ${link(folder)}`;

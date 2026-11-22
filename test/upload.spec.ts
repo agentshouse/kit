@@ -91,6 +91,19 @@ it('writes the text House merged with a newer change into the working file and i
   expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
 });
 
+it('writes a merged text that ends like the cut notice House no longer writes as House answered it, reading no revision of it', async () => {
+  const notice = '\noutput_cut 1 of 2 bytes';
+  const { hosted, room } = await copied((held) => held.put('plan.md', `one\ntwo\nthree\nfour${notice}`));
+  room.put('plan.md', `ONE\ntwo\nthree\nfour${notice}`);
+  await writeFile(join(room.repository, 'plan.md'), `one\ntwo\nthree\nFOUR${notice}`);
+  const before = hosted.house.requests.length;
+
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+
+  expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe(`ONE\ntwo\nthree\nFOUR${notice}`);
+  expect(hosted.house.requests.slice(before).map((received) => received.path)).not.toContain('/kit/door/files/revisions/list');
+});
+
 it('writes the conflict markers House answers, refuses the next upload naming the file while a marker remains, and uploads the resolution on the current revision', async () => {
   const { hosted, room } = await copied();
   room.put('plan.md', 'one\nTWO, theirs\nthree\n');
@@ -327,12 +340,12 @@ it("puts a file a stale move took away back at its path with House's newer versi
 });
 
 it.each([
-  ['leaving it out', 'notice'],
+  ['leaving it out', 'omit'],
   ['cutting it with cut beside it', 'cut'],
-] as const)("marks the whole text against House's current one when House cuts the merged text of a conflict by %s, and refuses the next upload until it is resolved", async (_way, cutWith) => {
+] as const)("marks the whole text against House's current one when House cuts the merged text of a conflict by %s, and refuses the next upload until it is resolved", async (_way, conflictText) => {
   const { hosted, room } = await copied();
   room.bound = 16;
-  room.cutWith = cutWith;
+  room.conflictText = conflictText;
   const current = room.put('plan.md', 'one\nTWO, theirs\nthree\n');
   await writeFile(join(room.repository, 'plan.md'), 'one\ntwo, mine\nthree\n');
   const marked = '<<<<<<< current\none\nTWO, theirs\nthree\n=======\none\ntwo, mine\nthree\n>>>>>>> yours\n';

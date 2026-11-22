@@ -335,15 +335,11 @@ it("uploads the copy at each turn's end as the conversation's call, brings the m
   expect(changesOf(rooms.edits()[1]!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nkilled\n', base: expect.any(String) }]);
 });
 
-it.each([
-  ['the cut notice ending it', 'notice'],
-  ['cut beside it', 'cut'],
-] as const)("brings back the whole text House merged where its update answer cuts that text, with %s", async (_way, cutWith) => {
+it("brings back the whole text House merged where its update answer cuts that text with cut beside it", async () => {
   const { hosted, rooms, notes } = await staged();
   const copy = copyOf(hosted, 'notes', 'Plan');
   await opened(hosted, notes, 'Plan');
   notes.bound = 8;
-  notes.cutWith = cutWith;
 
   said(hosted, "@sh sed -i 's/one/ONE/' a.md\n@gate merged");
   await until(async () => ((await readFile(join(copy, 'a.md'), 'utf8')) === 'ONE\ntwo\nthree\n' ? true : undefined));
