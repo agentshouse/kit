@@ -17,6 +17,7 @@ const CHUNK_BYTES = 1024 * 1024;
 const BODY_BYTES = 4 * 1024 * 1024;
 const STAGED_PART_BYTES = 8;
 const BATCH_FILES = 1000;
+const ANSWER_BYTES = 32_000;
 const RETRY_AT = '2026-11-17T00:00:00.000Z';
 const DOCUMENT = /\.md$/i;
 const REVISION = /^v_(\d+)\.1\.x$/;
@@ -798,7 +799,9 @@ export function serveRooms(hosted: Hosted): Rooms {
     const room = roomOf(path);
     if (!path.slice('/rooms/'.length).includes('/')) {
       const instructions = room.instructions === '' ? {} : { instructions: { version: 1, approved_version: 1, text: room.instructions } };
-      return { content: [{ type: 'text', text: stringify({ ref: room.ref, path, ...instructions }) }] };
+      const answer = Buffer.from(stringify({ ref: room.ref, path, ...instructions }));
+      const text = answer.length <= ANSWER_BYTES ? answer.toString() : `${answer.subarray(0, ANSWER_BYTES).toString()}\ninfo: output_cut at ${ANSWER_BYTES} bytes`;
+      return { content: [{ type: 'text', text }] };
     }
     const local = path.slice(room.root.length + 1);
     const ref = args.ref as string | undefined;

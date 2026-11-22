@@ -1,13 +1,15 @@
-import { chmod, lstat, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, type Hosted } from './environment.ts';
+import { accountOf, temporaryHome } from './kit.ts';
 import { house, manifestOf, ownAgent, roomRootReads, serveRooms, upload, type Room } from './rooms.ts';
 
 const FIRST = 'These instructions come after House’s and your own.\n\nWrite dates as YYYY-MM-DD.\n';
 const SECOND = 'These instructions come after House’s and your own.\n\nWrite dates as YYYY-MM-DD.\nPut new tasks on the map.\n';
 const IMPORTED = '@AGENTS.md\n';
+const LONG = 'Write dates as YYYY-MM-DD.\n'.repeat(1500);
 
 function folderOf(hosted: Hosted, handle: string): string {
   return join(hosted.workspace, 'rooms', handle);
@@ -29,7 +31,7 @@ function chunked(hosted: Hosted, room: Room): unknown[] {
   return hosted.house.requests.filter((request) => request.path.startsWith('/kit/door/') && JSON.stringify(request.body).includes(room.root));
 }
 
-it("writes a copied Room's AGENTS.md and CLAUDE.md read-only, rewrites a hand-edited AGENTS.md, uploads neither, and deletes both with their manifest entries once the Environment no longer reaches the Room", async () => {
+it("writes a copied Room's AGENTS.md and CLAUDE.md read-only, rewrites a hand-edited AGENTS.md, uploads neither, deletes both with their manifest entries once the Environment no longer reaches the Room, and reads that copy no more once it holds no .house", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -60,9 +62,13 @@ it("writes a copied Room's AGENTS.md and CLAUDE.md read-only, rewrites a hand-ed
 
   expect(await held(notes.repository)).toEqual(['.house', 'a.md']);
   expect(await manifestOf(notes)).not.toHaveProperty('kit');
+
+  await rm(join(notes.repository, '.house'));
+  expect(await rooms.download([])).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+  expect(await held(notes.repository)).toEqual(['a.md']);
 });
 
-it("makes the folder of a Room held at the Open level holding the two files alone, renames it with the Room's handle, and keeps the folder and files of a Room lowered from the Keep to the Open level", async () => {
+it("makes the folder of a Room held at the Open level holding the two files alone, renames it with the Room's handle, keeps the folder and files of a Room lowered from the Keep to the Open level, and takes a lost Room's folder back once the Room is reached again", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const garden = rooms.room('garden');
@@ -99,21 +105,41 @@ it("makes the folder of a Room held at the Open level holding the two files alon
 
   expect(await held(folderOf(hosted, 'garden-club'))).toEqual([]);
   expect(await held(notes.repository)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md']);
+
+  await writeFile(join(folderOf(hosted, 'garden-club'), 'AGENTS.md'), 'my own words\n');
+  expect(await rooms.download([])).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+  expect(await readFile(join(folderOf(hosted, 'garden-club'), 'AGENTS.md'), 'utf8')).toBe('my own words\n');
+
+  rooms.open = [garden, notes];
+  expect(await rooms.download([])).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+
+  expect(await held(folderOf(hosted, 'garden-club'))).toEqual(['AGENTS.md', 'CLAUDE.md']);
+  expect(await readFile(join(folderOf(hosted, 'garden-club'), 'AGENTS.md'), 'utf8')).toBe(FIRST);
+  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual(['garden-club', 'notes']);
 });
 
-it('copies a Room raised from the Open to the Keep level into its folder, setting nothing aside', async () => {
-  const hosted = await hostKit();
+it("copies a Room raised from the Open to the Keep level into its folder beside what else the folder holds, an Agent's chosen launch directory, setting aside only what a document of the Room takes the name of", async () => {
+  const home = await temporaryHome();
+  const chosen = join(accountOf(home), 'house', 'rooms', 'garden');
+  const hosted = await hostKit([{ working_directory: chosen }], { home });
   const rooms = serveRooms(hosted);
   const garden = rooms.room('garden');
   garden.put('plan.md', 'Plant beans\n');
   garden.instructions = FIRST;
   rooms.open = [garden];
   await rooms.download([]);
+  await mkdir(join(chosen, '.claude'));
+  await writeFile(join(chosen, '.claude', 'settings.local.json'), '{}\n');
+  await writeFile(join(chosen, 'plan.md'), 'my plan\n');
   rooms.open = [];
 
-  expect(await rooms.download([garden])).toMatchObject({ status: 0, stdout: `${garden.root}: copied to ${garden.repository}\n` });
+  expect(await rooms.download([garden])).toMatchObject({ status: 0, stdout: `${garden.root}: copied to ${chosen}\n` });
 
-  expect(await held(garden.repository)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'plan.md']);
+  expect(await held(chosen)).toEqual(['.claude', '.house', 'AGENTS.md', 'CLAUDE.md', 'plan.md', 'plan.md (kept)']);
+  expect(await readFile(join(chosen, 'plan.md'), 'utf8')).toBe('Plant beans\n');
+  expect(await readFile(join(chosen, 'plan.md (kept)'), 'utf8')).toBe('my plan\n');
+  expect(await readFile(join(chosen, '.claude', 'settings.local.json'), 'utf8')).toBe('{}\n');
+  expect(await readFile(join(chosen, 'AGENTS.md'), 'utf8')).toBe(FIRST);
   expect(await manifestOf(garden)).toMatchObject({ kit: ['AGENTS.md', 'CLAUDE.md'] });
   expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.'))).toEqual(['garden']);
 });
@@ -147,7 +173,7 @@ it('changes AGENTS.md at the next download after an approval or a new version, a
   expect(await readFile(join(folderOf(hosted, 'garden'), 'AGENTS.md'), 'utf8')).toBe(SECOND);
 });
 
-it("deletes the two files once House answers a Room's instructions empty, and keeps the last text where it cannot read them, saying so", async () => {
+it("deletes the two files once House answers a Room's instructions empty, and keeps the last text where it cannot read them or House cuts its answer, saying so", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -157,6 +183,13 @@ it("deletes the two files once House answers a Room's instructions empty, and ke
   garden.instructions = FIRST;
   rooms.open = [garden];
   await rooms.download([notes]);
+
+  notes.instructions = LONG;
+  expect(await rooms.download([notes])).toMatchObject({
+    status: 0,
+    stdout: `${notes.root}: AGENTS.md kept as it was: House cut its answer at 32000 bytes\n`,
+  });
+  expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(FIRST);
 
   await rm(join(hosted.home, 'own-agent.json'));
   notes.instructions = SECOND;

@@ -247,7 +247,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
       return parse(answer.text) as Finished<Staged>;
     },
     info: async (path, revision) => fileInfo(await info({ path, ...(revision === undefined ? {} : { ref: revision }) })),
-    instructions: async (root) => instructionsText(root, await info({ path: root })),
+    instructions: async (root) => instructionsText(await info({ path: root })),
   };
 
   const uploader = holder.owner ? copies.owner : caller;

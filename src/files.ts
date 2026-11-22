@@ -54,6 +54,8 @@ const STALLED_ROUNDS = 8;
 
 const PART_CHECKSUM = 'x-amz-checksum-sha256';
 
+const ANSWER_CUT = /^output_cut at (\d+) bytes$/u;
+
 const LINK = /\]\((\/rooms\/[^/)\s]+\/[^)\s]+)\)/gu;
 
 const MEDIA_TYPES = new Map([
@@ -106,10 +108,12 @@ export function fileInfo(answer: string): FileInfo | null {
   };
 }
 
-export function instructionsText(root: string, answer: string): string {
+export function instructionsText(answer: string): string {
   const document = parseDocument(answer);
-  if (document.errors.length > 0) throw new Error(`House's answer for ${root} could not be read`);
-  const details = document.toJS() as { instructions?: { text?: unknown } } | null;
+  if (document.errors.length > 0) throw new Error("House's answer could not be read");
+  const details = document.toJS() as { info?: unknown; instructions?: { text?: unknown } } | null;
+  const cut = typeof details?.info === 'string' ? ANSWER_CUT.exec(details.info) : null;
+  if (cut !== null) throw new Error(`House cut its answer at ${cut[1]} bytes`);
   const text = details?.instructions?.text;
   return typeof text === 'string' ? text : '';
 }
