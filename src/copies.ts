@@ -116,7 +116,6 @@ interface Copied {
   write: string[];
   protected: string[];
   unfollowed?: 'unsaid' | 'said';
-  conversation?: string;
 }
 
 interface Copy extends Copied {
@@ -353,6 +352,14 @@ function relative(path: string): string {
 
 function kitsOwn(path: string): boolean {
   return !path.includes('/') && KIT_FILES.some((name) => name.toLowerCase() === path.toLowerCase());
+}
+
+async function stillMarked(directory: string, manifest: Manifest, present: Map<string, Present>): Promise<string[]> {
+  const named: string[] = [];
+  for (const [path, entry] of Object.entries(manifest.files)) {
+    if (entry.conflicted && (await marked(directory, present.get(path)?.name ?? path))) named.push(path);
+  }
+  return named;
 }
 
 async function kitFiles(folder: string, text: string): Promise<void> {
@@ -937,12 +944,7 @@ export class LocalCopies {
   async markedIn(directory: string): Promise<string[]> {
     const manifest = await readManifest(directory).catch(() => null);
     if (manifest === null) return [];
-    const present = await scanned(directory);
-    const named: string[] = [];
-    for (const [path, entry] of Object.entries(manifest.files)) {
-      if (entry.conflicted && (await marked(directory, present.get(path)?.name ?? path))) named.push(path);
-    }
-    return named.sort();
+    return (await stillMarked(directory, manifest, await scanned(directory))).sort();
   }
 
   private roomCopies(): Held[] {
@@ -1012,7 +1014,7 @@ export class LocalCopies {
     if (authority === undefined) throw new Error('House serves nothing of it to copy');
     const wanted = { key, handle: room.room_handle, authority };
     const taken = await this.takenFrom(room.room_ref);
-    await this.copied(wanted, HELD, caller, (whole) => this.madeIn(wanted, directory, whole, placing, taken, { conversation }));
+    await this.copied(wanted, HELD, caller, (whole) => this.madeIn(wanted, directory, whole, placing, taken));
   }
 
   private async takenFrom(room: string): Promise<(entry: KitBinaryChange, folder: string) => Promise<boolean>> {
@@ -1036,12 +1038,16 @@ export class LocalCopies {
 
   private async instructed(directory: string, root: string, caller: Caller, kept: boolean): Promise<string | null> {
     try {
-      const text = await caller.instructions(root);
-      await (kept ? this.kitMarked(directory, text, await readManifest(directory)) : kitFiles(directory, text));
+      await this.written(directory, root, caller, kept);
       return null;
     } catch (error) {
       return `${root}: AGENTS.md kept as it was: ${houseCause(error)}`;
     }
+  }
+
+  private async written(folder: string, root: string, caller: Caller, kept: boolean): Promise<void> {
+    const text = await caller.instructions(root);
+    await (kept ? this.kitMarked(folder, text, await readManifest(folder)) : kitFiles(folder, text));
   }
 
   private unreached(key: string, directory: string): Promise<void> {
@@ -1216,8 +1222,7 @@ export class LocalCopies {
     const unread = new Map<string, string[]>();
     await eachAtOnce(due, async ({ root, folder, copied }) => {
       try {
-        const text = await caller.instructions(root);
-        await (copied ? this.kitMarked(folder, text, await readManifest(folder)) : kitFiles(folder, text));
+        await this.written(folder, root, caller, copied);
       } catch (error) {
         const cause = houseCause(error);
         unread.set(cause, [...(unread.get(cause) ?? []), root]);
@@ -1289,7 +1294,6 @@ export class LocalCopies {
     whole: (directory: string) => Promise<Whole>,
     placing: (folder: string) => Promise<void>,
     taken: (entry: KitBinaryChange, folder: string) => Promise<boolean>,
-    extra: Pick<Copied, 'conversation'> = {},
   ): Promise<Copy> {
     const folder = join(roomsFolder(), `${stagingPrefix()}${randomUUID()}`);
     const chunks = this.chunksFolder();
@@ -1317,7 +1321,7 @@ export class LocalCopies {
       }
       await writeManifest(folder, work, manifest);
       await placing(folder);
-      copy = { key, room_ref: authority.room_ref, room_handle: handle, repository, position: read.position, log_epoch: read.log_epoch, ...scope, ...extra };
+      copy = { key, room_ref: authority.room_ref, room_handle: handle, repository, position: read.position, log_epoch: read.log_epoch, ...scope };
     } catch (error) {
       await rm(folder, { recursive: true, force: true });
       throw error;
@@ -1674,10 +1678,7 @@ export class LocalCopies {
     const root = rootOf(copy.room_handle);
     const manifest = await readManifest(copy.repository);
     const present = await scanned(copy.repository);
-    const unresolved: string[] = [];
-    for (const [path, entry] of Object.entries(manifest.files)) {
-      if (entry.conflicted && (await marked(copy.repository, present.get(path)?.name ?? path))) unresolved.push(`${root}/${path}`);
-    }
+    const unresolved = (await stillMarked(copy.repository, manifest, present)).map((path) => `${root}/${path}`);
     if (unresolved.length > 0) {
       const [named, they] = unresolved.length === 1 ? [`${unresolved[0]} still holds`, 'it'] : [`${unresolved.join(', ')} still hold`, 'each'];
       return { refused: true, text: `${named} conflict markers; resolve ${they}, then run house upload again` };
