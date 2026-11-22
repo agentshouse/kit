@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { KIT_RELEASE } from './clis.ts';
 import { readOwnAgent } from './home.ts';
 import { refusalOf, retryable, type Refusal } from './refusals.ts';
-import { relayed, selectRelay } from './relay.ts';
+import { proxyUnlessRelayed, relayed } from './relay.ts';
 
 export interface Message {
   jsonrpc: '2.0';
@@ -83,7 +83,7 @@ export function unconfirmed(status: number): string {
 export async function ownAgentCall(message: Message): Promise<string> {
   const ownAgent = await readOwnAgent();
   if (ownAgent === null) throw new Error(UNCONNECTED);
-  selectRelay(process.env.HOUSE_KIT_RELAY || ownAgent.relay);
+  proxyUnlessRelayed();
   const answer = await callHouse(ownAgent.house, ownAgent.credential, message).catch(() => {
     throw new Unsettled(UNREACHABLE);
   });

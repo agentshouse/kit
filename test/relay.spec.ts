@@ -41,16 +41,13 @@ it("keeps the proxy variables for every process it starts when no relay is named
   });
 });
 
-it.each([
-  ['the environment names', (module: typeof import('../src/relay.ts')) => vi.stubEnv('HOUSE_KIT_RELAY', 'https://relay.example')],
-  ['the enrolment records', (module: typeof import('../src/relay.ts')) => module.selectRelay('https://relay.example')],
-])('removes the proxy variables from every process it starts when %s a relay', async (_case, select) => {
+it('removes the proxy variables from every process it starts when the environment names a relay', async () => {
   for (const [name, value] of Object.entries(PROXIES)) vi.stubEnv(name, value);
-  const module = await relay();
-  select(module);
-  const started = module.childEnvironment();
+  vi.stubEnv('HOUSE_KIT_RELAY', 'https://relay.example');
+  const started = (await relay()).childEnvironment();
   expect(Object.keys(started).filter((name) => /^https?_proxy$/i.test(name))).toEqual([]);
   expect(started.PATH).toBe(process.env.PATH);
+  expect(started.HOUSE_KIT_RELAY).toBe('https://relay.example');
 });
 
 it('calls House through the proxy the variables name unless a relay is named, then directly', async () => {
@@ -62,7 +59,8 @@ it('calls House through the proxy the variables name unless a relay is named, th
   module.proxyUnlessRelayed();
   await fetch(`${house.origin}/answer`).catch(() => undefined);
   const proxied = [...proxy.tunnels];
-  module.selectRelay('https://relay.example');
+  vi.stubEnv('HOUSE_KIT_RELAY', 'https://relay.example');
+  module.proxyUnlessRelayed();
   await fetch(`${house.origin}/answer`).catch(() => undefined);
 
   expect(proxied).toEqual([new URL(house.origin).host]);

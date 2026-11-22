@@ -7,18 +7,11 @@ declare module 'node:http' {
 const PROXY = /^https?_proxy$/i;
 const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
 
-let selected: string | null | undefined;
 let restoreProxy: (() => void) | undefined;
 
-export function selectRelay(relay: string | undefined): void {
-  selected = relay === undefined || relay === '' ? null : relay;
-  proxyUnlessRelayed();
-}
-
-export function relayOrigin(): string | undefined {
-  if (selected !== undefined) return selected ?? undefined;
-  const ambient = process.env.HOUSE_KIT_RELAY;
-  return ambient === undefined || ambient === '' ? undefined : ambient;
+function relayOrigin(): string | undefined {
+  const relay = process.env.HOUSE_KIT_RELAY;
+  return relay === undefined || relay === '' ? undefined : relay;
 }
 
 function unlessRelayed(): NodeJS.ProcessEnv {

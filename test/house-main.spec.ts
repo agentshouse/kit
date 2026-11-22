@@ -321,24 +321,24 @@ it('sends each part and reads each download at its store address through the Kit
   ]);
 });
 
-it("calls House through the relay the User's own agent's connection records, and HOUSE_KIT_RELAY still wins", async () => {
+it("calls House directly whatever relay the User's own agent's connection records, and through the relay HOUSE_KIT_RELAY names", async () => {
   const house = await startHouse();
   const home = await connected(house, true);
   const recorded = await relay();
   const named = await relay();
   await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, relay: recorded.origin, user: 'user-one', credential: 'ahp_own' }));
-  const through = await runHouse(home, ['search', '{"query":"invoice"}']);
+  const direct = await runHouse(home, ['search', '{"query":"invoice"}']);
   const first = house.requests.length;
 
   const ambient = await runHouse(home, ['search', '{"query":"plans"}'], undefined, [], { HOUSE_KIT_RELAY: named.origin });
 
-  expect([through, ambient]).toEqual([
+  expect([direct, ambient]).toEqual([
     { status: 0, stdout: 'found for invoice\n', stderr: '' },
     { status: 0, stdout: 'found for plans\n', stderr: '' },
   ]);
   const posted = `POST ${new URL(house.origin).host}`;
   expect(first).toBeGreaterThan(0);
-  expect(recorded.forwarded).toEqual(Array(first).fill(posted));
+  expect(recorded.forwarded).toEqual([]);
   expect(named.forwarded).toEqual(Array(house.requests.length - first).fill(posted));
 });
 
