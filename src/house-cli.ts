@@ -48,7 +48,7 @@ type Finishing = { upload: UploadParts } | { text: string };
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const HELP = 'help [tool]';
-const UPLOAD_USAGE = `usage: house upload [--owner], or house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
+const UPLOAD_USAGE = `usage: house upload [--owner], house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
 const UPLOAD =
   "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
