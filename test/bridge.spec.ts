@@ -85,7 +85,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
     [
       "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments",
       'help [tool]',
-      "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names",
+      "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder",
       "download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file",
       'search',
       '  query',
@@ -251,6 +251,20 @@ it("prints House's refusal of an upload's finishing call as House words it", asy
   });
 });
 
+it("sends upload with no file to House as given and prints House's answer, the link", async () => {
+  const hosted = await hostKit();
+  const link = 'path: /rooms/room/scans\nurl: https://agents.house/rooms/room/scans?upload\n';
+  hosted.tools.upload = () => ({ content: [{ type: 'text', text: link }] });
+  await opened(hosted);
+
+  directed(hosted, '@house upload {"path":"/rooms/room/scans"}');
+
+  expect((await runs(hosted, 1))[0]).toMatchObject({ status: 0, stdout: `${link}\n` });
+  expect(hosted.mcp.map(called).filter((sent) => sent.method === 'tools/call').map((sent) => sent.params)).toEqual([
+    expect.objectContaining({ name: 'upload', arguments: { path: '/rooms/room/scans' } }),
+  ]);
+});
+
 it('refuses arguments that are no JSON object and a file it cannot read in one line each', async () => {
   const hosted = await hostKit();
   await opened(hosted);
@@ -260,8 +274,7 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
     [
       '@house search invoice',
       '@house search ["invoice"]',
-      '@house upload {}',
-      '@house upload {"path":"/rooms/room/report.txt"}',
+      '@house upload {"file":"","path":"/rooms/room/report.txt"}',
       '@house upload {"file":"absent.txt","path":"/rooms/room/absent.txt"}',
       '@house upload {"file":".","path":"/rooms/room/folder"}',
       '@house agents/list --help',
@@ -269,10 +282,9 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
   );
 
   const form = `house: the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'\n`;
-  expect((await runs(hosted, 7)).map((ran) => ran.stderr)).toEqual([
+  expect((await runs(hosted, 6)).map((ran) => ran.stderr)).toEqual([
     form,
     form,
-    'house: upload needs "file", a local file\n',
     'house: upload needs "file", a local file\n',
     'house: absent.txt is not a readable file\n',
     'house: . is a folder; upload one file at a time\n',

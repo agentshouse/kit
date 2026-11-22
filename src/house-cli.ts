@@ -48,9 +48,9 @@ type Finishing = { upload: UploadParts } | { text: string };
 
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const HELP = 'help [tool]';
-const UPLOAD_USAGE = `usage: house upload [--owner], or house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces`;
+const UPLOAD_USAGE = `usage: house upload [--owner], house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
 const UPLOAD =
-  "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names";
+  "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 const DOWNLOAD = `download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
 const MAX_SIZE = `--max-size takes a number of megabytes; ${DOWNLOAD_USAGE}`;
@@ -165,6 +165,7 @@ async function finished(upload: string, path: unknown, partSha256: string[]): Pr
 }
 
 async function upload({ file, ...destination }: Record<string, unknown>): Promise<string> {
+  if (file === undefined) return called('upload', destination);
   if (typeof file !== 'string' || file === '') throw new Error('upload needs "file", a local file');
   const description = await described(file);
   const answer = await called('upload', { ...destination, ...description });
