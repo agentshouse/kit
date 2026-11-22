@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until, type Received } from './double.ts';
 import { conversationCredential, hostKit, lastCall, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
-import { alive, filesUnder, stop, temporaryDirectory } from './kit.ts';
+import { alive, filesUnder, temporaryDirectory } from './kit.ts';
 import { callUpdate, released, serveRelease } from './release.ts';
 import { house, roomRootReads, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
@@ -16,6 +16,7 @@ const IMPORTED = '@AGENTS.md\n';
 const PLACED = '0.2.1-c000000000002';
 const HOUR = 60 * 60_000;
 const MOVED_CLOCK = ['./fast-intervals.ts', './moved-clock.ts'].flatMap((module) => ['--import', fileURLToPath(new URL(module, import.meta.url))]);
+const HALTED_REMOVAL = ['--import', fileURLToPath(new URL('./halted-removal.ts', import.meta.url))];
 
 function copyOf(hosted: Hosted, handle: string, name: string): string {
   return join(hosted.workspace, 'conversations', handle, name);
@@ -615,17 +616,20 @@ it("reports a Sandbox idle only once a running removal has ended, and starts no 
 });
 
 it('runs the next turn of a conversation whose Kit ended halfway through removing its idle copy in a whole copy made again from House, whose turn-end upload deletes nothing', async () => {
-  const { hosted, rooms, notes } = await staged();
+  const clock = await clocked();
+  const halted = join(await temporaryDirectory(), 'halted-removal');
+  const { hosted, rooms, notes } = await staged([{}], { environment: { ...clock.hosting.environment, KIT_HALTED_REMOVAL: halted }, node: [...MOVED_CLOCK, ...HALTED_REMOVAL] });
   const session = await opened(hosted, notes, 'Plan');
   const copy = copyOf(hosted, 'notes', 'Plan');
   said(hosted, '@say first');
   await turned(hosted, 1);
   expect(await killed(hosted, 1)).toEqual({});
-  stop(hosted.kit.pid);
+  await writeFile(halted, join(copy, 'a.md'));
+
+  await clock.shift(25 * HOUR);
   await hosted.kit.exited;
-  const place = join(hosted.home, 'local-copies', 'places', 'conversation-1.json');
-  await writeFile(place, JSON.stringify({ ...(JSON.parse(await readFile(place, 'utf8')) as object), removed: [notes.ref] }));
-  await rm(join(copy, 'a.md'));
+  await absent(join(copy, 'a.md'));
+  expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans\n');
   await hosted.restart();
 
   said(hosted, '@sh echo again >> plan.md', { provider_session_id: session });
