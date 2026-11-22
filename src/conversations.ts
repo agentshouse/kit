@@ -403,6 +403,12 @@ export class Conversations {
     return this.idle() && !this.turnOpen();
   }
 
+  runsIn(directory: string): boolean {
+    return [...this.conversations.values()].some(
+      (conversation) => (conversation.running !== null || conversation.launch !== null) && conversation.place?.directory === directory,
+    );
+  }
+
   turnOpen(): boolean {
     return this.uploads > 0 || [...this.conversations.values()].some((conversation) => conversation.turns.size > 0);
   }
@@ -467,6 +473,11 @@ export class Conversations {
       await this.kill(conversation);
       await conversation.sending;
       if (--conversation.kills === 0) conversation.killed = new AbortController();
+      if (call.deleted === true) {
+        const kept = await this.kit.copies.deleted(conversation.id);
+        const result: KitCallResult = kept.length === 0 ? {} : { kept };
+        return { result: Promise.resolve(result) };
+      }
     }
     if (call.kind === 'option') await this.option(conversation, call);
     if (call.kind === 'answer') {
@@ -1128,6 +1139,7 @@ export class Conversations {
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
     void this.deliver(conversation, 'turns/end', body).catch(logged);
+    if (conversation.place?.copy === true) void this.kit.copies.turnEnded(conversation.place.directory).catch(logged);
     this.uploaded(conversation);
     this.next(conversation);
     this.kit.changed();

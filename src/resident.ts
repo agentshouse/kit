@@ -15,6 +15,7 @@ import { agentBase, enrolled, forgetRecordedRelay, kitHome, ownerSocket, readEnr
 import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
+import { IdleCopies } from './idle-copies.ts';
 import { holdOwner } from './owner.ts';
 import { killDescendants } from './scope.ts';
 import { removeInputs, Scripts } from './scripts.ts';
@@ -168,7 +169,7 @@ export async function resident(): Promise<void> {
     await connection?.close();
     then();
   };
-  const idle = () => calls.idle() && conversations.idle() && agents.idle();
+  const idle = () => calls.idle() && conversations.idle() && agents.idle() && idleCopies.idle();
   const changed = () => {
     if (!idle()) {
       reported = false;
@@ -189,6 +190,7 @@ export async function resident(): Promise<void> {
     send: (oneWayCall) => connection?.send(oneWayCall) ?? false,
     changed,
   });
+  const idleCopies = new IdleCopies(copies, (directory) => conversations.runsIn(directory), changed);
   const signIns = new SignIns(house, agents, calls);
   const update = new KitUpdate(calls);
   takeUnservedRelease((release) => logged(update.takeRefused(release)));
@@ -213,6 +215,7 @@ export async function resident(): Promise<void> {
   await house.deliver('kits/report-restart', planned ? { planned } : {}).catch(report);
   logged(agents.refresh());
   agents.keepCurrent(() => process.env.HOUSE_KIT_SANDBOX === '1' && reported);
+  idleCopies.keepRemoving(() => process.env.HOUSE_KIT_SANDBOX === '1' && reported);
   connection = holdConnection({
     opened: () => {
       conversations.opened();
