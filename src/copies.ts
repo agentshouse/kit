@@ -1,13 +1,13 @@
-import type { KitBinaryChange } from '@agentshouse/kit-wire';
+import type { KitBinaryChange, LocalCopyRoom } from '@agentshouse/kit-wire';
 import { isUtf8 } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
 import { fileInfo, instructionsText, paused, type FileInfo, type Finished } from './files.ts';
-import { kitHome, roomsFolder } from './home.ts';
+import { conversationsFolder, kitHome, roomsFolder } from './home.ts';
 import {
   digest,
   hashed,
@@ -29,6 +29,10 @@ import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refu
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
 
 const ROOMS = 'rooms/';
+const CONVERSATIONS = 'conversations/';
+const PLACES = 'places';
+const REFUSED_CHARACTER = /[/\\:*?"<>|\p{Cc}]/gu;
+const COPY_NAME_BYTES = 240;
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
 const PROVENANCE = '_provenance';
 const BATCH_FILES = 1000;
@@ -44,6 +48,21 @@ const FOLDERS = 'folders.json';
 interface RoomFolder {
   name: string;
   lost?: true;
+}
+
+interface Placed {
+  copies: Record<string, string>;
+  session?: string;
+}
+
+export interface Place {
+  directory: string;
+  copy: boolean;
+}
+
+export interface Opening {
+  room_ref: string | null;
+  name: string;
 }
 
 export const DEFAULT_MAX_SIZE = 10;
@@ -200,6 +219,8 @@ export interface Caller {
 export interface Answered {
   refused: boolean;
   text: string;
+  kept?: true;
+  conflicted?: true;
 }
 
 type Settled = { refused: true; text: string } | { refused: false; files: number; lines: string[] };
@@ -311,12 +332,34 @@ function rootOf(handle: string): string {
   return `/rooms/${handle}`;
 }
 
+function copyKey(conversation: string, room: string): string {
+  return `${CONVERSATIONS}${conversation}.${room}`;
+}
+
+function placeOf(conversation: string): string {
+  return join(kitHome(), 'local-copies', PLACES, `${conversation}.json`);
+}
+
+function copyName(name: string): string {
+  const characters = [...name.replace(REFUSED_CHARACTER, '-')];
+  while (Buffer.byteLength(characters.join('')) > COPY_NAME_BYTES) characters.pop();
+  return characters.join('').replace(/[ .]$/u, '-');
+}
+
 function relative(path: string): string {
   return path.replace(/^\/rooms\/[^/]+\//, '');
 }
 
 function kitsOwn(path: string): boolean {
   return !path.includes('/') && KIT_FILES.some((name) => name.toLowerCase() === path.toLowerCase());
+}
+
+async function stillMarked(directory: string, manifest: Manifest, present: Map<string, Present>): Promise<string[]> {
+  const named: string[] = [];
+  for (const [path, entry] of Object.entries(manifest.files)) {
+    if (entry.conflicted && (await marked(directory, present.get(path)?.name ?? path))) named.push(path);
+  }
+  return named;
 }
 
 async function kitFiles(folder: string, text: string): Promise<void> {
@@ -621,6 +664,7 @@ export class LocalCopies {
   private readonly launched: () => Promise<readonly string[]>;
   private readonly copies = new Map<string, Held>();
   private readonly folders = new Map<string, RoomFolder>();
+  private readonly places = new Map<string, Placed>();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly waiting = new Set<string>();
   private answering: Promise<unknown> = Promise.resolve();
@@ -660,12 +704,18 @@ export class LocalCopies {
     const home = join(kitHome(), 'local-copies');
     const folders = await readFile(join(home, FOLDERS), 'utf8').catch(() => null);
     if (folders !== null) for (const [ref, folder] of Object.entries(JSON.parse(folders) as Record<string, RoomFolder>)) this.folders.set(ref, folder);
-    const names = (await readdir(join(home, 'rooms')).catch(() => [])).filter((name) => name.endsWith('.json'));
-    for (const path of names.map((name) => join(home, 'rooms', name))) {
-      const text = await readFile(path, 'utf8').catch(() => null);
-      if (text === null) continue;
-      const copy = JSON.parse(text) as Held;
-      this.copies.set(copy.key, copy);
+    for (const records of ['rooms', 'conversations']) {
+      const names = (await readdir(join(home, records)).catch(() => [])).filter((name) => name.endsWith('.json'));
+      for (const path of names.map((name) => join(home, records, name))) {
+        const text = await readFile(path, 'utf8').catch(() => null);
+        if (text === null) continue;
+        const copy = JSON.parse(text) as Held;
+        this.copies.set(copy.key, copy);
+      }
+    }
+    for (const name of (await readdir(join(home, PLACES)).catch(() => [])).filter((held) => held.endsWith('.json'))) {
+      const text = await readFile(join(home, PLACES, name), 'utf8').catch(() => null);
+      if (text !== null) this.places.set(name.slice(0, -'.json'.length), JSON.parse(text) as Placed);
     }
   }
 
@@ -677,8 +727,9 @@ export class LocalCopies {
     return this.selected();
   }
 
-  download(caller: Caller, fetching: Fetching): Promise<Answered> {
-    return this.answered(() => this.fetched(true, caller, fetching));
+  async download(caller: Caller, fetching: Fetching, cwd: string): Promise<Answered> {
+    const copy = await this.copyAt(cwd);
+    return copy === null ? this.answered(() => this.fetched(true, caller, fetching)) : this.freshened(copy, caller, fetching);
   }
 
   private async selected(): Promise<void> {
@@ -696,13 +747,13 @@ export class LocalCopies {
     const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
     const reached = new Map(answer.rooms.map((room) => [room.room_ref, room.room_handle]));
     const synced = new Map(answer.rooms.filter((room) => room.level === 'keep').map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
-    return this.holding([...new Set([...this.copies.keys(), ...synced.keys()])].sort(), async () => {
+    return this.holding([...new Set([...this.roomCopies().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
       const chosen = await this.launched();
       const said: string[] = [];
       const made = new Set<string>();
       let refused = false;
       const mark = refreshing ? 'said' : 'unsaid';
-      for (const copy of [...this.copies.values()]) {
+      for (const copy of this.roomCopies()) {
         if (synced.has(copy.key) || copy.unfollowed === 'said' || copy.unfollowed === mark) continue;
         await this.save({ ...copy, unfollowed: mark });
         if (refreshing) said.push(`${rootOf(copy.room_handle)}: no longer followed; kept as it is`);
@@ -732,7 +783,9 @@ export class LocalCopies {
           const authority = authorities.find((entry) => `${ROOMS}${entry.room_ref}` === key);
           try {
             if (authority === undefined) throw new Error('House serves nothing of it to copy');
-            said.push(await this.copied({ key, handle, authority }, fetching, chosen));
+            const wanted = { key, handle, authority };
+            const copy = await this.copied(wanted, fetching, this.owner, (whole) => this.materialized(wanted, whole, chosen));
+            said.push(`${rootOf(handle)}: copied to ${copy.repository}`);
             made.add(authority.room_ref);
           } catch (error) {
             if (error instanceof NotReady) {
@@ -810,6 +863,210 @@ export class LocalCopies {
       if (key !== undefined) return key;
       if (dirname(folder) === folder) return undefined;
     }
+  }
+
+  async placed(conversation: string, opening: Opening | null, caller: Caller, launch: string): Promise<Place> {
+    const held = this.places.get(conversation) ?? { copies: {} };
+    if (opening === null) {
+      const directory = held.session ?? launch;
+      const room = Object.keys(held.copies).find((ref) => held.copies[ref] === directory);
+      if (room === undefined) return { directory, copy: false };
+      if (!(await exists(directory))) {
+        const reached = await this.reachedRoom(room);
+        if (reached === null) await mkdir(directory, { recursive: true, mode: 0o700 });
+        else await this.made(conversation, reached, directory, caller);
+      }
+      return { directory, copy: true };
+    }
+    const reached = opening.room_ref === null ? null : await this.reachedRoom(opening.room_ref);
+    if (reached === null) {
+      await this.savePlace(conversation, { ...held, session: launch });
+      return { directory: launch, copy: false };
+    }
+    const directory = await this.exclusive(PLACES, async () => {
+      const recorded = this.places.get(conversation) ?? { copies: {} };
+      const path = recorded.copies[reached.room_ref] ?? (await this.freePath(reached.room_handle, opening.name));
+      await this.savePlace(conversation, { copies: { ...recorded.copies, [reached.room_ref]: path }, session: path });
+      return path;
+    });
+    if (!(await exists(directory))) await this.made(conversation, reached, directory, caller);
+    return { directory, copy: true };
+  }
+
+  async freshened(directory: string, caller: Caller, fetching: Fetching = HELD): Promise<Answered> {
+    const held = this.conversationCopyAt(directory);
+    if (held === null) return { refused: false, text: 'Nothing new from House.' };
+    const { key, room } = held;
+    const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
+    const reached = answer.rooms.find((one) => one.room_ref === room);
+    return this.exclusive(key, async () => {
+      const copy = this.copies.get(key) as Copy | undefined;
+      if (reached === undefined) {
+        await this.unreachedHeld(key, directory);
+        return { refused: false, text: `${directory}: no longer followed; kept as it is` };
+      }
+      const root = rootOf(reached.room_handle);
+      const lines: string[] = [];
+      let refused = false;
+      if (reached.level === 'keep') {
+        try {
+          if (copy === undefined) {
+            await this.madeKept(held.conversation, reached, directory, caller, (folder) => this.placedIn(folder, directory, []));
+            lines.push(`${root}: copied to ${directory}`);
+          } else {
+            const named = copy.room_handle === reached.room_handle ? copy : await this.save({ ...copy, room_handle: reached.room_handle });
+            const report: Report = { touched: new Map<string, string | null>(), kept: new Set<string>() };
+            const unready: string[] = [];
+            const unconverted = new Map<string, string>();
+            await this.refreshed([named], unready, unconverted, caller, fetching, new Map([[key, report]]));
+            lines.push(...(unready.length > 0 ? [`${root}: ${NOT_READY}`] : await this.reported(this.copies.get(key)!, report)));
+          }
+        } catch (error) {
+          refused = true;
+          lines.push(`${root}: ${houseCause(error)}`);
+        }
+      }
+      const unwritten = await this.instructed(directory, root, caller, this.copies.has(key));
+      if (unwritten !== null) lines.push(unwritten);
+      return { refused, text: lines.length === 0 ? 'Nothing new from House.' : lines.join('\n') };
+    });
+  }
+
+  async ended(directory: string, caller: Caller): Promise<Answered | null> {
+    const held = this.conversationCopyAt(directory);
+    if (held === null || !this.copies.has(held.key)) return null;
+    const answer = await this.exclusive(held.key, () => this.uploaded(held.key, caller));
+    if (!answer.refused) return answer;
+    if ((this.copies.get(held.key) as Copy).pending !== undefined) return { ...answer, kept: true };
+    return (await this.markedIn(directory)).length > 0 ? { ...answer, conflicted: true } : answer;
+  }
+
+  async markedIn(directory: string): Promise<string[]> {
+    const manifest = await readManifest(directory).catch(() => null);
+    if (manifest === null) return [];
+    return (await stillMarked(directory, manifest, await scanned(directory))).sort();
+  }
+
+  private roomCopies(): Held[] {
+    return [...this.copies.values()].filter((copy) => copy.key.startsWith(ROOMS));
+  }
+
+  private conversationCopyAt(directory: string): { key: string; conversation: string; room: string } | null {
+    for (const [conversation, place] of this.places) {
+      for (const [room, path] of Object.entries(place.copies)) {
+        if (path === directory) return { key: copyKey(conversation, room), conversation, room };
+      }
+    }
+    return null;
+  }
+
+  private async copyAt(cwd: string): Promise<string | null> {
+    const physical = await realpath(cwd).catch(() => cwd);
+    for (const place of this.places.values()) {
+      for (const path of Object.values(place.copies)) {
+        if (within(physical, await realpath(path).catch(() => path))) return path;
+      }
+    }
+    return null;
+  }
+
+  private async reachedRoom(room: string): Promise<LocalCopyRoom | null> {
+    const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
+    return answer.rooms.find((one) => one.room_ref === room) ?? null;
+  }
+
+  private async freePath(handle: string, name: string): Promise<string> {
+    const taken = new Set([...this.places.values()].flatMap((place) => Object.values(place.copies)));
+    const folder = join(conversationsFolder(), handle);
+    for (let count = 1; ; count++) {
+      const path = join(folder, count === 1 ? copyName(name) : `${copyName(name)} ${count}`);
+      if (!taken.has(path) && (await found(path)) === null) return path;
+    }
+  }
+
+  private async savePlace(conversation: string, place: Placed): Promise<void> {
+    const path = placeOf(conversation);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = `${path}.${process.pid}`;
+    await writeFile(temporary, JSON.stringify(place), { mode: 0o600 });
+    await rename(temporary, path);
+    this.places.set(conversation, place);
+  }
+
+  private async made(conversation: string, room: LocalCopyRoom, directory: string, caller: Caller): Promise<void> {
+    const key = copyKey(conversation, room.room_ref);
+    await mkdir(dirname(directory), { recursive: true, mode: 0o700 });
+    await this.exclusive(key, async () => {
+      if (room.level === 'keep') await this.madeKept(conversation, room, directory, caller, (folder) => rename(folder, directory));
+      else {
+        await this.forgotten(key);
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+      }
+      const unwritten = await this.instructed(directory, rootOf(room.room_handle), caller, room.level === 'keep');
+      if (unwritten !== null) logged(unwritten);
+    });
+  }
+
+  private async madeKept(conversation: string, room: LocalCopyRoom, directory: string, caller: Caller, placing: (folder: string) => Promise<void>): Promise<void> {
+    const key = copyKey(conversation, room.room_ref);
+    const { authorities } = await this.discovered([room.room_handle]);
+    const authority = authorities.find((entry) => entry.room_ref === room.room_ref);
+    if (authority === undefined) throw new Error('House serves nothing of it to copy');
+    const wanted = { key, handle: room.room_handle, authority };
+    const taken = await this.takenFrom(room.room_ref);
+    await this.copied(wanted, HELD, caller, (whole) => this.madeIn(wanted, directory, whole, placing, taken));
+  }
+
+  private async takenFrom(room: string): Promise<(entry: KitBinaryChange, folder: string) => Promise<boolean>> {
+    const copy = this.copies.get(`${ROOMS}${room}`);
+    const manifest = copy === undefined || earlier(copy) ? null : await readManifest(copy.repository).catch(() => null);
+    return async ({ path, revision, sha256 }, folder) => {
+      const entry = manifest?.files[path];
+      if (copy === undefined || entry === undefined || entry.skipped || entry.revision !== revision || entry.sha256 !== sha256) return false;
+      const target = join(folder, path);
+      await mkdir(dirname(target), { recursive: true });
+      try {
+        await copyFile(join(copy.repository, path), target);
+      } catch {
+        return false;
+      }
+      if (await holding(folder, path, sha256)) return true;
+      await rm(target, { force: true });
+      return false;
+    };
+  }
+
+  private async instructed(directory: string, root: string, caller: Caller, kept: boolean): Promise<string | null> {
+    try {
+      await this.written(directory, root, caller, kept);
+      return null;
+    } catch (error) {
+      return `${root}: AGENTS.md kept as it was: ${houseCause(error)}`;
+    }
+  }
+
+  private async written(folder: string, root: string, caller: Caller, kept: boolean): Promise<void> {
+    const text = await caller.instructions(root);
+    await (kept ? this.kitMarked(folder, text, await readManifest(folder)) : kitFiles(folder, text));
+  }
+
+  private unreached(key: string, directory: string): Promise<void> {
+    return this.exclusive(key, () => this.unreachedHeld(key, directory));
+  }
+
+  private async unreachedHeld(key: string, directory: string): Promise<void> {
+    if (!(await exists(directory))) return;
+    if (!this.copies.has(key)) {
+      await kitFiles(directory, '');
+      return;
+    }
+    const manifest = await readManifest(directory).catch(() => null);
+    if (manifest !== null) await this.kitMarked(directory, '', manifest);
+  }
+
+  private async forgotten(key: string): Promise<void> {
+    if (!this.copies.delete(key)) return;
+    await rm(recordOf(key), { force: true });
   }
 
   private exclusive<T>(key: string, work: () => Promise<T>): Promise<T> {
@@ -919,10 +1176,15 @@ export class LocalCopies {
     chosen: readonly string[],
   ): Promise<string[]> {
     const lines: string[] = [];
-    for (const copy of [...this.copies.values()]) {
+    for (const copy of this.roomCopies()) {
       if (reached.has(copy.room_ref) || earlier(copy)) continue;
       const manifest = await readManifest(copy.repository).catch(() => null);
       if (manifest !== null) await this.kitMarked(copy.repository, '', manifest);
+    }
+    for (const [conversation, place] of [...this.places]) {
+      for (const [room, path] of Object.entries(place.copies)) {
+        if (!reached.has(room)) await this.unreached(copyKey(conversation, room), path);
+      }
     }
     for (const [ref, folder] of [...this.folders]) {
       if (reached.has(ref) || folder.lost) continue;
@@ -960,8 +1222,7 @@ export class LocalCopies {
     const unread = new Map<string, string[]>();
     await eachAtOnce(due, async ({ root, folder, copied }) => {
       try {
-        const text = await caller.instructions(root);
-        await (copied ? this.kitMarked(folder, text, await readManifest(folder)) : kitFiles(folder, text));
+        await this.written(folder, root, caller, copied);
       } catch (error) {
         const cause = houseCause(error);
         unread.set(cause, [...(unread.get(cause) ?? []), root]);
@@ -1016,11 +1277,25 @@ export class LocalCopies {
     return this.save(rerooted(copy, copy.repository, folder));
   }
 
-  private async materialized({ key, handle, authority }: Wanted, whole: (directory: string) => Promise<Whole>, chosen: readonly string[]): Promise<Copy> {
+  private async materialized(wanted: Wanted, whole: (directory: string) => Promise<Whole>, chosen: readonly string[]): Promise<Copy> {
+    const { handle, authority } = wanted;
     const held = await this.heldFolder(authority.room_ref, handle, chosen);
     const repository = held ?? join(roomsFolder(), handle);
     if (held === null) await this.setAside(repository, chosen);
-    const folder = join(dirname(repository), `${stagingPrefix()}${randomUUID()}`);
+    const placing = (folder: string) => (held === null ? rename(folder, repository) : this.placedIn(folder, repository, chosen));
+    const saved = await this.madeIn(wanted, repository, whole, placing, async () => false);
+    if (this.folders.delete(authority.room_ref)) await this.savedFolders();
+    return saved;
+  }
+
+  private async madeIn(
+    { key, handle, authority }: Wanted,
+    repository: string,
+    whole: (directory: string) => Promise<Whole>,
+    placing: (folder: string) => Promise<void>,
+    taken: (entry: KitBinaryChange, folder: string) => Promise<boolean>,
+  ): Promise<Copy> {
+    const folder = join(roomsFolder(), `${stagingPrefix()}${randomUUID()}`);
     const chunks = this.chunksFolder();
     const scope = { write: authority.operations.write, protected: authority.protected_paths };
     const manifest: Manifest = { room_ref: authority.room_ref, files: {} };
@@ -1030,31 +1305,22 @@ export class LocalCopies {
       const read = await whole(chunks);
       const work = await staging();
       for await (const entry of read.entries) {
+        const writable = declaredWritable(entry.path, scope) ? {} : { read_only: true as const };
         if (!('content' in entry)) {
-          manifest.files[entry.path] = {
-            revision: entry.revision,
-            sha256: entry.sha256,
-            bytes: entry.bytes,
-            skipped: true,
-            ...(declaredWritable(entry.path, scope) ? {} : { read_only: true as const }),
-          };
+          const held = await taken(entry, folder);
+          manifest.files[entry.path] = { revision: entry.revision, sha256: entry.sha256, bytes: entry.bytes, ...(held ? {} : { skipped: true as const }), ...writable };
           continue;
         }
         const { path, content, revision, provenance } = entry;
         await placed(work, join(folder, path), content);
-        manifest.files[path] = {
-          revision,
-          sha256: digest(content),
-          bytes: Buffer.byteLength(content),
-          ...(declaredWritable(path, scope) ? {} : { read_only: true as const }),
-        };
+        manifest.files[path] = { revision, sha256: digest(content), bytes: Buffer.byteLength(content), ...writable };
         if (provenance !== undefined) {
           await placed(work, join(folder, sidecar(path)), provenance);
           manifest.files[sidecar(path)] = { revision, sha256: digest(provenance), bytes: Buffer.byteLength(provenance), read_only: true };
         }
       }
       await writeManifest(folder, work, manifest);
-      await (held === null ? rename(folder, repository) : this.placedIn(folder, repository, chosen));
+      await placing(folder);
       copy = { key, room_ref: authority.room_ref, room_handle: handle, repository, position: read.position, log_epoch: read.log_epoch, ...scope };
     } catch (error) {
       await rm(folder, { recursive: true, force: true });
@@ -1062,12 +1328,15 @@ export class LocalCopies {
     } finally {
       await rm(chunks, { recursive: true, force: true });
     }
-    const saved = await this.save(copy);
-    if (this.folders.delete(authority.room_ref)) await this.savedFolders();
-    return saved;
+    return this.save(copy);
   }
 
-  private async copied(wanted: Wanted, fetching: Fetching, chosen: readonly string[]): Promise<string> {
+  private async copied(
+    wanted: Wanted,
+    fetching: Fetching,
+    caller: Caller,
+    made: (whole: (directory: string) => Promise<Whole>) => Promise<Copy>,
+  ): Promise<Copy> {
     const { handle, authority } = wanted;
     const root = rootOf(handle);
     let answer: { authorities: Enumerated[] } | null = null;
@@ -1087,15 +1356,15 @@ export class LocalCopies {
     if (answer !== null && view === undefined) throw new Error('House serves nothing of it to copy');
     if (view !== undefined && view.next === undefined) {
       const entries = view.changes.filter((change): change is Entered => !('removed' in change));
-      const copy = await this.materialized(wanted, async () => ({ position: view.position, log_epoch: view.log_epoch, entries }), chosen);
-      await this.attached(copy, this.owner, fetching, { touched: new Map<string, string | null>(), kept: new Set<string>() });
-      return `${root}: copied to ${copy.repository}`;
+      const copy = await made(async () => ({ position: view.position, log_epoch: view.log_epoch, entries }));
+      await this.attached(copy, caller, fetching, { touched: new Map<string, string | null>(), kept: new Set<string>() });
+      return copy;
     }
-    const copy = await this.materialized(wanted, (directory) => this.chunked(root, authority.room_ref, directory), chosen);
+    const copy = await made((directory) => this.chunked(root, authority.room_ref, directory));
     const report = { touched: new Map<string, string | null>(), kept: new Set<string>() };
-    const [caught] = await this.caughtUp([copy], true, this.owner, fetching, new Map([[copy.key, report]]));
-    await this.attached(caught!, this.owner, fetching, report);
-    return `${root}: copied to ${copy.repository}`;
+    const [caught] = await this.caughtUp([copy], true, caller, fetching, new Map([[copy.key, report]]));
+    await this.attached(caught!, caller, fetching, report);
+    return caught!;
   }
 
   private applying(copy: Copy, manifest: Manifest, scope: Scope, work: string, report: Report, fetching: Fetching, caller: Caller): Applying {
@@ -1409,10 +1678,7 @@ export class LocalCopies {
     const root = rootOf(copy.room_handle);
     const manifest = await readManifest(copy.repository);
     const present = await scanned(copy.repository);
-    const unresolved: string[] = [];
-    for (const [path, entry] of Object.entries(manifest.files)) {
-      if (entry.conflicted && (await marked(copy.repository, present.get(path)?.name ?? path))) unresolved.push(`${root}/${path}`);
-    }
+    const unresolved = (await stillMarked(copy.repository, manifest, present)).map((path) => `${root}/${path}`);
     if (unresolved.length > 0) {
       const [named, they] = unresolved.length === 1 ? [`${unresolved[0]} still holds`, 'it'] : [`${unresolved.join(', ')} still hold`, 'each'];
       return { refused: true, text: `${named} conflict markers; resolve ${they}, then run house upload again` };

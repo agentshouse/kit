@@ -52,7 +52,7 @@ const UPLOAD_USAGE = `usage: house upload [--owner], or house upload '{"file":"<
 const UPLOAD =
   "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, with --owner outside an Agent conversation; with JSON, sends one local file to the Room path it names";
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
-const DOWNLOAD = `download: brings House's changes into every Local copy, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
+const DOWNLOAD = `download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload, and with --with-attachments each attachment it lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
 const MAX_SIZE = `--max-size takes a number of megabytes; ${DOWNLOAD_USAGE}`;
 const MEGABYTES = /^\d+(?:\.\d+)?$/;
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
@@ -125,7 +125,7 @@ async function download(args: string[]): Promise<string> {
   if (argument === undefined) {
     if (valued !== -1 && !MEGABYTES.test(size ?? '')) throw new Error(MAX_SIZE);
     const maxSize = size === undefined ? DEFAULT_MAX_SIZE : Number(size);
-    return copyVerb('/copy/download', { attachments: flags.has('--with-attachments'), max_size: maxSize });
+    return copyVerb('/copy/download', { attachments: flags.has('--with-attachments'), max_size: maxSize, cwd: process.cwd() });
   }
   if (valued !== -1 || flags.has('--with-attachments')) throw unexpected(valued !== -1 ? '--max-size' : '--with-attachments', DOWNLOAD_USAGE);
   const { file, ...selected } = await argumentsOf(argument);
