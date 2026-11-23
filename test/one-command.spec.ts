@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmod, lstat, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { KIT_RELEASE } from '../src/clis.ts';
@@ -133,5 +133,31 @@ it("says in one line to run house resident where its owner's own service manager
   const hosted = await hostKit([], { home, skills: false });
 
   expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
+  await absent(join(home, 'bin', 'kit'));
+});
+
+it("ends before it connects while the step fails, naming why and keeping kit, and passes at the start that follows", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  const locked = join(accountOf(home), '.gitconfig.lock');
+  await namingKit(home);
+  await put(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_held' }));
+  await put(locked, '');
+
+  const kit = runKit(['resident'], { HOME: accountOf(home) });
+
+  expect(await kit.exited).toBe(1);
+  expect(kit.stderr()).toMatch(
+    /^kit: the kit command could not be folded into house, so Kit does not connect; it tries again at its next start: git config failed: [^\n]*could not lock config file[^\n]*\n$/,
+  );
+  expect(house.requests).toEqual([]);
+  expect(helpers(home)).toBe('\n!kit git-credential\n');
+  await lstat(join(home, 'bin', 'kit'));
+
+  await rm(locked);
+  const hosted = await hostKit([], { home, skills: false });
+
+  expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
+  await folded(home);
   await absent(join(home, 'bin', 'kit'));
 });

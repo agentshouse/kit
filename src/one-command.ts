@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { configured, HELPER } from './app-git.ts';
+import { restart } from './end.ts';
 import { earlierPrefix, kitHome, oneFolder } from './home.ts';
 import { quoted } from './shell.ts';
 import { defineSupervisor, launchAgent, launcher, reloadLaunchAgent, required, systemd, userUnit } from './supervisor.ts';
@@ -55,6 +56,6 @@ export async function foldKitIntoHouse(): Promise<void> {
   delete process.env[STARTED_AS];
   if (earlierPrefix() !== null) return;
   await folded(asKit).catch((error: unknown) => {
-    process.stderr.write(`kit: the kit command could not be folded into house; Kit tries again at its next start: ${error instanceof Error ? error.message : String(error)}\n`);
+    restart(`the kit command could not be folded into house, so Kit does not connect; it tries again at its next start: ${error instanceof Error ? error.message : String(error)}`);
   });
 }
