@@ -297,7 +297,7 @@ it("downloads a notice that arrives during a turn into the copy once that turn e
   await shows(join(copy, 'a.md'), 'one\n');
 });
 
-it("takes a change of the Environment's rights in the copy's Room at House's notice, and at a notice for the Private Room rewrites the instructions of every copy", async () => {
+it("takes a change of the Environment's rights in the copy's Room at House's notice, and at a notice for the Private Room only rewrites the instructions of every copy", async () => {
   const { hosted, rooms, notes } = await staged();
   const own = rooms.room('private');
   rooms.answered = [notes, own];
@@ -311,9 +311,17 @@ it("takes a change of the Environment's rights in the copy's Room at House's not
   noticed(hosted, notes);
 
   await until(async () => ((await entriesOf(copy))['a.md']!.read_only === true ? true : undefined));
+  await settle();
+  const asked = roomAsks(hosted);
+  const read = roomRootReads(hosted).length;
   notes.instructions = `${INSTRUCTIONS}Your owner rules changed.\n`;
+  notes.put('a.md', 'one\n');
   noticed(hosted, own);
   await shows(join(copy, 'AGENTS.md'), `${INSTRUCTIONS}Your owner rules changed.\n`);
+  await settle();
+  expect(roomRootReads(hosted).slice(read)).toEqual(['/rooms/notes']);
+  expect(roomAsks(hosted)).toBe(asked + 1);
+  expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
 });
 
 it('downloads into each copy once at a reconnection, which a notice lost to the disconnection leaves owed', async () => {

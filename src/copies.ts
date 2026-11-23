@@ -746,6 +746,7 @@ export class LocalCopies {
   private readonly waiting = new Set<string>();
   private readonly asking = new Set<string>();
   private readonly owed = new Set<string>();
+  private readonly instructing = new Set<string>();
   private marks = 0;
   private sweeping = false;
   private turning: ((directory: string) => boolean) | null = null;
@@ -835,8 +836,9 @@ export class LocalCopies {
   private owe(room: string | null): void {
     for (const [conversation, place] of this.places) {
       for (const copied of Object.keys(place.copies)) {
-        if (place.removed?.includes(copied) || (room !== null && room !== copied && room !== this.privateRoom)) continue;
-        this.owed.add(copyKey(conversation, copied));
+        if (place.removed?.includes(copied)) continue;
+        if (room === null || room === copied) this.owed.add(copyKey(conversation, copied));
+        else if (room === this.privateRoom) this.instructing.add(copyKey(conversation, copied));
       }
     }
     this.freshenOwed();
@@ -853,7 +855,7 @@ export class LocalCopies {
       for (let marks = -1; marks !== this.marks; ) {
         marks = this.marks;
         const owed = [...this.places].flatMap(([conversation, place]) =>
-          Object.entries(place.copies).flatMap(([room, directory]) => (this.owed.has(copyKey(conversation, room)) ? [directory] : [])),
+          Object.entries(place.copies).flatMap(([room, directory]) => (this.owes(copyKey(conversation, room)) ? [directory] : [])),
         );
         for (const directory of owed) {
           if (turning(directory) || !(await exists(directory))) continue;
@@ -864,6 +866,10 @@ export class LocalCopies {
     } finally {
       this.sweeping = false;
     }
+  }
+
+  private owes(key: string): boolean {
+    return this.owed.has(key) || this.instructing.has(key);
   }
 
   private async selection(): Promise<LocalCopyRoom[]> {
@@ -1019,7 +1025,7 @@ export class LocalCopies {
     const held = this.conversationCopyAt(directory);
     if (held === null) return;
     await this.exclusive(PLACES, () => this.used(held.conversation, held.room));
-    if (this.owed.has(held.key)) this.freshenOwed();
+    if (this.owes(held.key)) this.freshenOwed();
   }
 
   async deleted(conversation: string): Promise<KeptCopy[]> {
@@ -1139,8 +1145,11 @@ export class LocalCopies {
     if (held === null) return { refused: false, text: NOTHING_NEW };
     const { key, room } = held;
     return this.exclusive(key, async () => {
-      if (owed && !this.owed.has(key)) return { refused: false, text: NOTHING_NEW };
+      if (owed && !this.owes(key)) return { refused: false, text: NOTHING_NEW };
+      const kept = this.copies.get(key);
+      if (owed && !this.owed.has(key) && kept !== undefined) return this.reinstructed(key, directory, kept, caller);
       this.owed.delete(key);
+      this.instructing.delete(key);
       try {
         const reached = (await this.selection()).find((one) => one.room_ref === room);
         const copy = this.copies.get(key) as Copy | undefined;
@@ -1178,6 +1187,13 @@ export class LocalCopies {
         throw error;
       }
     });
+  }
+
+  private async reinstructed(key: string, directory: string, copy: Held, caller: Caller): Promise<Answered> {
+    this.instructing.delete(key);
+    const unwritten = await this.instructed(directory, rootOf(copy.room_handle), caller, true);
+    if (unwritten !== null) this.instructing.add(key);
+    return { refused: false, text: unwritten ?? NOTHING_NEW };
   }
 
   async ended(directory: string, caller: Caller): Promise<Answered | null> {
