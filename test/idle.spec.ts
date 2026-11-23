@@ -14,12 +14,12 @@ import { callUpdate, released, serveRelease } from './release.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
-const FAST_SILENCE = fileURLToPath(new URL('./fast-silence.ts', import.meta.url));
+const FAST_MODEL_READ = fileURLToPath(new URL('./fast-model-read.ts', import.meta.url));
 
 const MINUTE = 60_000;
 
-// A model read waits two quiet seconds and its silent CLI ends five seconds later under fast-silence, so twenty seconds see the idle report on a loaded runner.
-const SILENT_READ_ENDED_MS = 20_000;
+// A model read waits two quiet seconds and ends five seconds later under fast-model-read, so twenty seconds see the idle report on a loaded runner.
+const HUNG_READ_ENDED_MS = 20_000;
 
 async function opened(hosted: Hosted): Promise<void> {
   hosted.call({ kind: 'open' });
@@ -48,15 +48,15 @@ it('reports idle once no turn runs and not while a turn runs without waiting on 
   await until(() => hosted.idles[2]);
 });
 
-it('reports idle once the silence bound ends a model read whose CLI never answers', async () => {
-  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_SILENCE}` } });
+it('reports idle once its deadline ends a model read whose CLI never answers', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_MODEL_READ}` } });
   await mkdir(join(hosted.home, 'signed-in'), { recursive: true });
   await writeFile(join(hosted.home, 'signed-in', 'claude-agent-acp'), '');
   await writeFile(join(hosted.home, 'probe-hold'), MODELS['claude-agent-acp']![0]!.id);
   await rm(await installHeld(hosted));
   const held = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.heldProbe !== undefined))).pid as number;
 
-  await until(() => hosted.idles[1], SILENT_READ_ENDED_MS);
+  await until(() => hosted.idles[1], HUNG_READ_ENDED_MS);
 
   await until(() => !alive(held));
   expect((await hosted.adapterLog()).some((entry) => entry.releasedProbe !== undefined)).toBe(false);

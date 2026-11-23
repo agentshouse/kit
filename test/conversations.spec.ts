@@ -1491,93 +1491,19 @@ it('ends a turn failed as exited when its process exits during it, with the part
   await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
 });
 
-const FAST_SILENCE = fileURLToPath(new URL('./fast-silence.ts', import.meta.url));
+const FAST_HOLDS = fileURLToPath(new URL('./fast-holds.ts', import.meta.url));
 
-// A silent CLI ends five seconds after its last message under fast-silence, so twenty seconds see it end on a loaded runner.
-const SILENCE_SEEN_MS = 20_000;
+// The CLI says nothing for three seconds, ten times the third of a second fast-holds gives every wait longer than a minute, so a Kit that ended a quiet CLI on any long wait would have ended it.
+const QUIET_MS = 3_000;
 
-// Seven seconds outlast the five-second silence a CLI that owed the Kit an answer would be ended after.
-const PAST_SILENCE_MS = 7_000;
-
-async function silenced(kind = 'codex-acp'): Promise<Hosted> {
-  const hosted = await hostKit([{ kind }], { environment: { NODE_OPTIONS: `--import=${FAST_SILENCE}` } });
+it.each(KINDS)('keeps a turn whose %s sends nothing past every long wait the Kit holds, until the CLI ends it', async (kind) => {
+  const hosted = await hostKit([{ kind }], { environment: { NODE_OPTIONS: `--import=${FAST_HOLDS}` } });
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-  return hosted;
-}
 
-it.each(KINDS)(
-  'ends a turn whose %s sends nothing for the silence bound as failed silent, ends that CLI, and resumes its session in a new one for the next message',
-  async (kind) => {
-    const hosted = await silenced(kind);
-    const session = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.sessionId as string;
+  hosted.call({ kind: 'message', text: `@hold ${QUIET_MS}\n@say done`, first: true });
 
-    hosted.call({ kind: 'message', text: '@wait', first: false });
-
-    const hung = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'))).pid as number;
-    expect(await ends(hosted, 1, SILENCE_SEEN_MS)).toEqual([{ failed: 'silent' }]);
-    expect(alive(hung)).toBe(false);
-    expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 turn \S+ failed: the CLI sent nothing for 30 minutes$/m);
-    hosted.call({ kind: 'message', text: '@say back', first: false, provider_session_id: session });
-    expect(await ends(hosted, 2)).toEqual([{ failed: 'silent' }, { text: 'back' }]);
-    const log = await hosted.adapterLog();
-    expect(log.find((entry) => entry.method === 'session/resume')!.params).toMatchObject({ sessionId: session });
-    expect(new Set(log.filter((entry) => entry.method === 'session/prompt').map((entry) => entry.pid)).size).toBe(2);
-  },
-);
-
-it('ends a turn the CLI started itself and then went silent in as failed silent, with the parts it had', async () => {
-  const hosted = await silenced('claude-agent-acp');
-
-  hosted.call({ kind: 'message', text: '@say ok\n@itself 100 @gate never-opened', first: false });
-
-  expect(await ends(hosted, 2, SILENCE_SEEN_MS)).toEqual([{ text: 'ok' }, { failed: 'silent' }]);
-  await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
-});
-
-it("keeps a turn whose CLI waits on the owner's answer to its question past the silence bound, and ends it with the answer", async () => {
-  const hosted = await silenced();
-  hosted.call({ kind: 'message', text: '@ask', first: false });
-  const question = await until(() => hosted.interactions[0]);
-  const asking = (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt')!.pid as number;
-
-  await new Promise((resolve) => setTimeout(resolve, PAST_SILENCE_MS));
-
-  expect(alive(asking)).toBe(true);
-  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/end')).toEqual([]);
-  const response = { outcome: { outcome: 'selected', optionId: 'allow' } };
-  hosted.call({ kind: 'answer', interaction_id: (question.body as { interaction_id: string }).interaction_id, response });
-  expect(await ends(hosted, 1)).toEqual([{ text: JSON.stringify(response) }]);
-});
-
-it("refuses an open whose CLI never answers its session's opening once the silence bound passes, and opens the next one", async () => {
-  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_SILENCE}` } });
-  await writeFile(join(hosted.home, 'hold-new'), '');
-
-  hosted.call({ kind: 'open' });
-
-  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI did not open a session" });
-  expect(hosted.kit.stderr()).toMatch(/^kit: conversation conversation-1 did not start: .*the CLI sent nothing for 30 minutes$/m);
-  await rm(join(hosted.home, 'hold-new'));
-  hosted.call({ kind: 'open' });
-  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
-});
-
-it('ends a CLI that never answers an option the owner changed once the silence bound passes, so the next message reaches a new one', async () => {
-  const hosted = await silenced();
-  await writeFile(join(hosted.home, 'hold-option'), '');
-
-  hosted.call({ kind: 'option', model: 'gpt-5.5-mini' });
-
-  expect(await hosted.result(lastCall())).toEqual({});
-  const held = (await hosted.adapterLog()).find(
-    (entry) => entry.method === 'session/set_config_option' && (entry.params as { value: string }).value === 'gpt-5.5-mini',
-  )!.pid as number;
-  await until(() => !alive(held));
-  await rm(join(hosted.home, 'hold-option'));
-  hosted.call({ kind: 'message', text: '@say next', first: true });
-  expect(await ends(hosted, 1)).toEqual([{ text: 'next' }]);
-  expect((await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt')!.pid).not.toBe(held);
+  expect(await ends(hosted, 1)).toEqual([{ text: 'done' }]);
 });
 
 it.each(['codex-acp', 'claude-agent-acp'])(

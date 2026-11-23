@@ -36,6 +36,9 @@ const CLI_UPDATE_MS = 60 * 60_000;
 // A sign-in's model read that has not answered in ten seconds leaves its sign-in to the status check, so a hung CLI never holds the sign-in's result.
 const SIGNED_IN_READ_MS = 10_000;
 
+// A model read opens one session and reads each model's settings within seconds, so one unfinished after ten minutes has hung, and ending it frees the idle report every update and restart waits for.
+export const MODEL_READ_MS = 10 * 60_000;
+
 const UNNAMED = { default_model: null, default_effort: null };
 
 const SIGNED_OUT: Offer = { signed_in: false, models: [], ...UNNAMED, modes: [] };
@@ -526,7 +529,7 @@ export class Agents {
       seen = this.starts;
       await delay(MODEL_PROBE_QUIET_MS);
     }
-    return offer(kind, cli, known);
+    return offer(kind, cli, known, AbortSignal.timeout(MODEL_READ_MS));
   }
 
   private async load(kind: string): Promise<void> {
