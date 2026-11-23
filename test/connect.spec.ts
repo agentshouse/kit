@@ -215,7 +215,7 @@ it('stops with the refusal, changing nothing and leaving the login code unused, 
   const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one'], ROOTED, { HOUSE_KIT_INSTALL_COMMAND: 'curl -fsSL agents.house/kit | sh' });
 
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toMatch(/^kit: House refused \/kit\/agents\/desired\/list with 403: /);
+  expect(ran.stderr).toMatch(/^house: House refused \/kit\/agents\/desired\/list with 403: /);
   expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
   expect(await readFile(join(home, 'credential.json'), 'utf8')).toBe(stored);
   await expect(readFile(join(home, 'install-command'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });

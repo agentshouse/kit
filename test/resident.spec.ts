@@ -111,12 +111,12 @@ it('refuses a second resident of a Kit home whose Kit process runs, naming that 
   const second = runKit(['resident'], { HOME: accountOf(home) });
 
   expect(await ended(second)).toBe(1);
-  expect(second.stderr()).toBe(`kit: Kit process ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another Kit process here\n`);
+  expect(second.stderr()).toBe(`house: Kit process ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another Kit process here\n`);
   await settle();
   expect(openings(house)).toBe(1);
   const third = runKit(['resident'], { HOME: accountOf(home) });
   expect(await ended(third)).toBe(1);
-  expect(third.stderr()).toContain(`kit: Kit process ${first.pid} already runs`);
+  expect(third.stderr()).toContain(`house: Kit process ${first.pid} already runs`);
 });
 
 it('refuses a second resident while the first waits for a login, and leaves the first holding the Environment once it connects', async () => {
@@ -128,7 +128,7 @@ it('refuses a second resident while the first waits for a login, and leaves the 
   const second = runKit(['resident'], { HOME: accountOf(home) });
 
   expect(await ended(second)).toBe(1);
-  expect(second.stderr()).toBe(`kit: Kit process ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another Kit process here\n`);
+  expect(second.stderr()).toBe(`house: Kit process ${first.pid} already runs this Environment from Kit home ${home}; stop it first to run another Kit process here\n`);
   await loggedIn(house, home, 'ahk_held');
   await until(() => house.connections[0]);
   await settle();
@@ -148,7 +148,7 @@ it('refuses a second resident that starts while the first removes the owner sock
   const second = runKit(['resident'], { HOME: accountOf(home) });
 
   expect(await ended(second)).toBe(1);
-  expect(second.stderr()).toBe(`kit: another Kit process already runs this Environment from Kit home ${home}; stop it first to run another Kit process here\n`);
+  expect(second.stderr()).toBe(`house: another Kit process already runs this Environment from Kit home ${home}; stop it first to run another Kit process here\n`);
   first.input.write('\n');
   await until(() => first.stderr().includes('run house login'));
   await loggedIn(house, home, 'ahk_held');
@@ -169,7 +169,7 @@ it('refuses a second resident that reaches the running Kit home through a symbol
 
   expect(await ended(second)).toBe(1);
   expect(second.stderr()).toBe(
-    `kit: Kit process ${first.pid} already runs this Environment from Kit home ${join(alias, '.agents', 'house')}; stop it first to run another Kit process here\n`,
+    `house: Kit process ${first.pid} already runs this Environment from Kit home ${join(alias, '.agents', 'house')}; stop it first to run another Kit process here\n`,
   );
   await settle();
   expect(openings(house)).toBe(1);

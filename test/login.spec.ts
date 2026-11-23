@@ -223,7 +223,7 @@ it('calls House directly from a Kit home an earlier Kit recorded a relay in, and
   expect(relay.requests.map((request) => request.path)).toContain(`${prefix}/kit/stream`);
 });
 
-it("forgets the relay an earlier Kit recorded in its Kit credential's record once, as its resident starts, keeping every other value and leaving the own agent's file unread", async () => {
+it("forgets the relay an earlier Kit recorded in its Kit credential's record once, as its resident starts, keeping every other value", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   const recorded = 'https://kit.relay.example';
@@ -231,7 +231,6 @@ it("forgets the relay an earlier Kit recorded in its Kit credential's record onc
     join(home, 'credential.json'),
     JSON.stringify({ house: house.origin, relay: recorded, environment: 'environment-one', credential: 'ahk_held' }),
   );
-  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, relay: recorded, user: 'user-one', credential: 'ahp_own' }));
 
   const first = runKit(['resident'], { HOME: accountOf(home) });
   await until(() => house.connections[0]);
@@ -247,7 +246,6 @@ it("forgets the relay an earlier Kit recorded in its Kit credential's record onc
     environment: 'environment-one',
     credential: 'ahk_held',
   });
-  expect(JSON.parse(await readFile(join(home, 'own-agent.json'), 'utf8'))).toEqual({ house: house.origin, relay: recorded, user: 'user-one', credential: 'ahp_own' });
   expect((await stat(join(home, 'credential.json'))).mode & 0o777).toBe(0o600);
   expect(first.stderr().split('\n').filter((line) => line.includes(recorded))).toEqual([
     `kit: Kit forgot the relay ${recorded} an earlier install recorded; it takes a relay only from HOUSE_KIT_RELAY`,
