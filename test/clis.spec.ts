@@ -1,16 +1,17 @@
-import { chmod, mkdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { BINS, RELEASES, linkUserCli, placeUserCli, updatesRun } from './cli.ts';
 import { LOCATIONS } from './curl.ts';
 import { idOf, settle, until } from './double.ts';
-import { hostKit, lastCall, outcome, userBin, type Hosted } from './environment.ts';
+import { clocked, hostKit, lastCall, outcome, userBin, type Hosted } from './environment.ts';
 import { accountOf, alive } from './kit.ts';
 
 const KINDS = Object.keys(BINS);
 const NEXT: Record<string, string> = { 'codex-acp': '0.167.0', 'claude-agent-acp': '2.1.318', 'grok-build': '1.0.48' };
-const FAST_UPDATES = fileURLToPath(new URL('./fast-updates.ts', import.meta.url));
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 const FAST_DEADLINES = fileURLToPath(new URL('./fast-deadlines.ts', import.meta.url));
 const EXECUTABLES: Record<string, string> = { 'codex-acp': 'HOUSE_KIT_CODEX', 'claude-agent-acp': 'CLAUDE_CODE_EXECUTABLE' };
 
@@ -49,6 +50,16 @@ async function signIn(home: string, kind: string): Promise<void> {
 
 async function probes(hosted: Hosted): Promise<number> {
   return (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new' && entry.params !== undefined && (entry.params as { cwd: string }).cwd === hosted.home).length;
+}
+
+async function versionReads(hosted: Hosted): Promise<number> {
+  const log = await readFile(join(hosted.home, 'started.log'), 'utf8').catch(() => '');
+  return log.split('\n').filter((line) => line !== '' && (JSON.parse(line) as { name: string }).name === 'version').length;
+}
+
+async function idled(hosted: Hosted, after: number): Promise<void> {
+  await until(() => hosted.idles.length > after);
+  await settle();
 }
 
 async function initialized(hosted: Hosted): Promise<Record<string, unknown>[]> {
@@ -265,8 +276,9 @@ it('reports the read of the latest Conversation process start when an earlier re
 });
 
 it.each(KINDS)("runs a %s whose link its update command moved at the new version in the next conversation, while the running one keeps its own and Kit runs on", async (kind) => {
+  const clock = await clocked();
   const hosted = await hostKit([{ kind }], {
-    environment: { NODE_OPTIONS: `--import=${FAST_UPDATES}` },
+    ...clock.hosting,
     prepare: async (home) => {
       linkUserCli(home, userBin(home), kind);
     },
@@ -274,14 +286,22 @@ it.each(KINDS)("runs a %s whose link its update command moved at the new version
   const cli = join(userBin(hosted.home), BINS[kind]!);
   await open(hosted, 'conversation-1');
   expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
-
   await writeFile(join(hosted.home, `update-${kind}`), NEXT[kind]!);
-  await report(hosted, (agents) => agents.some((agent) => agent.release === NEXT[kind]));
+  await writeFile(join(hosted.home, 'update-hold'), '');
+  await clock.shift(HOUR + MINUTE);
+  hosted.call({ kind: 'kill', conversation_id: 'conversation-1' });
+  await hosted.result(lastCall());
+  await until(() => updatesRun(hosted.home).findLast((update) => update.held));
+
   await open(hosted, 'conversation-2');
+  expect(await answer(hosted, 'conversation-2', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
+  await rm(join(hosted.home, 'update-hold'));
+  await report(hosted, (agents) => agents.some((agent) => agent.release === NEXT[kind]));
+  await open(hosted, 'conversation-3');
 
   expect(await readlink(cli)).toBe(join(hosted.home, 'versions', NEXT[kind]!, BINS[kind]!));
-  expect(await answer(hosted, 'conversation-2', '@version')).toBe(`${cli} ${NEXT[kind]}`);
-  expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
+  expect(await answer(hosted, 'conversation-3', '@version')).toBe(`${cli} ${NEXT[kind]}`);
+  expect(await answer(hosted, 'conversation-2', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
   expect(alive(hosted.kit.pid)).toBe(true);
   expect(hosted.house.requests.filter((request) => request.path === '/kit/kits/report-restart')).toHaveLength(1);
 });
@@ -300,26 +320,132 @@ it("runs each chosen CLI's own update command once when Kit starts, through the 
   expect(updatesRun(hosted.home)).toEqual(expect.arrayContaining(ran));
 });
 
-it("runs each chosen CLI's update command again at its interval while a turn runs, and no message waits for one", async () => {
-  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], { environment: { NODE_OPTIONS: `--import=${FAST_UPDATES}` } });
+it("runs each chosen CLI's update command again when the Kit goes idle after a turn once an hour has passed since its last run, never sooner and never while the Kit stays idle", async () => {
+  const clock = await clocked();
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], clock.hosting);
+  const path = join(userBin(hosted.home), 'claude');
+  const run = [{ kind: 'claude-agent-acp', path }, { kind: 'claude-agent-acp', path, ended: true }];
+  expect(updatesRun(hosted.home)).toEqual(run);
+  await open(hosted, 'conversation-1');
+
+  await clock.shift(HOUR - MINUTE);
+  const early = hosted.idles.length;
+  await answer(hosted, 'conversation-1', '@say early');
+  await idled(hosted, early);
+  expect(updatesRun(hosted.home)).toEqual(run);
+
+  await clock.shift(4 * HOUR);
+  // Two seconds of a Kit that stays idle four hours after its last run show no timer starts the update command.
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  expect(updatesRun(hosted.home)).toEqual(run);
+
+  const later = hosted.idles.length;
+  await answer(hosted, 'conversation-1', '@say later');
+  await until(() => updatesRun(hosted.home)[3]?.ended);
+  await idled(hosted, later);
+  expect(updatesRun(hosted.home)).toEqual([...run, ...run]);
+
+  const again = hosted.idles.length;
+  await answer(hosted, 'conversation-1', '@say again');
+  await idled(hosted, again);
+  expect(updatesRun(hosted.home)).toEqual([...run, ...run]);
+});
+
+it("runs a Sandbox's CLI update commands only at its Kit's start, never when the Kit goes idle", async () => {
+  const clock = await clocked();
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], { ...clock.hosting, environment: { ...clock.hosting.environment, HOUSE_KIT_SANDBOX: '1' } });
+  expect(updatesRun(hosted.home)).toHaveLength(2);
+  await open(hosted, 'conversation-1');
+
+  await clock.shift(2 * HOUR);
+  const idles = hosted.idles.length;
+  await answer(hosted, 'conversation-1', '@say later');
+  await idled(hosted, idles);
+
+  expect(updatesRun(hosted.home)).toHaveLength(2);
+});
+
+it("runs a CLI's update command beside a conversation, and no message waits for one", async () => {
+  const clock = await clocked();
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], clock.hosting);
+  await open(hosted, 'conversation-1');
   await writeFile(join(hosted.home, 'update-hold'), '');
+  await clock.shift(HOUR + MINUTE);
+  await answer(hosted, 'conversation-1', '@say first');
   const held = await until(() => updatesRun(hosted.home).findLast((update) => update.held));
 
-  await open(hosted, 'conversation-1');
   expect(await answer(hosted, 'conversation-1', '@say answered')).toBe('answered');
   expect(updatesRun(hosted.home).at(-1)).toEqual(held);
 
   await rm(join(hosted.home, 'update-hold'));
   await until(() => updatesRun(hosted.home).at(-1)?.ended);
-  const before = hosted.turns.length;
-  // The turn holds six seconds, outlasting the second after which a test-only Kit runs the update command again.
-  hosted.call({ kind: 'message', text: '@hold 6000\n@say done', first: false });
-  await until(() => hosted.turns.slice(before).find((turn) => turn.path === '/kit/turns/start'));
-  const ran = updatesRun(hosted.home).length;
-
-  await until(() => updatesRun(hosted.home).length > ran);
-  expect(hosted.turns.slice(before).filter((turn) => turn.path === '/kit/turns/end')).toEqual([]);
   expect(updatesRun(hosted.home).every((update) => update.kind === 'claude-agent-acp' && update.path === join(userBin(hosted.home), 'claude'))).toBe(true);
+});
+
+it("reads a CLI whose link is repointed to another version, and reports that version with the models it offers", async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], {
+    prepare: async (home) => {
+      linkUserCli(home, userBin(home), 'grok-build');
+      await signIn(home, 'grok-build');
+    },
+  });
+  await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
+  await mkdir(join(hosted.home, 'models'));
+  await writeFile(join(hosted.home, 'models', 'grok-build'), JSON.stringify([{ id: 'grok-5', name: 'Grok 5', efforts: ['high'] }]));
+
+  linkUserCli(hosted.home, userBin(hosted.home), 'grok-build', NEXT['grok-build']);
+
+  await reportOf(hosted, [
+    {
+      kind: 'grok-build',
+      release: NEXT['grok-build'],
+      failure: null,
+      signed_in: true,
+      models: [{ model: 'grok-5', name: 'Grok 5', efforts: ['high'] }],
+      modes: [],
+      full_access: null,
+      default_model: 'grok-5',
+      default_effort: 'medium',
+    },
+  ]);
+});
+
+it.each([
+  ['its file is replaced at the same version', async (hosted: Hosted) => {
+    placeUserCli(userBin(hosted.home), 'grok-build');
+  }],
+  ['another file in its folder changes', (hosted: Hosted) => writeFile(join(userBin(hosted.home), 'other-tool'), '')],
+])("reads only a CLI's version when %s", async (_case, change) => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => signIn(home, 'grok-build') });
+  const [known] = await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
+  await settle();
+  const reads = await versionReads(hosted);
+  const probed = await probes(hosted);
+  const reports = reported(hosted).length;
+
+  await change(hosted);
+
+  await until(async () => (await versionReads(hosted)) > reads);
+  await settle();
+  expect(await probes(hosted)).toBe(probed);
+  expect(reported(hosted)).toHaveLength(reports);
+  expect(reported(hosted).at(-1)!.agents).toEqual([known]);
+});
+
+it("reads no CLI's version or models while its link's folder stays unchanged and no conversation opens, however long the Kit waits", async () => {
+  const clock = await clocked();
+  const hosted = await hostKit([{ kind: 'grok-build' }], { ...clock.hosting, prepare: (home) => signIn(home, 'grok-build') });
+  await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
+  await settle();
+  const reads = await versionReads(hosted);
+  const probed = await probes(hosted);
+
+  await clock.shift(6 * HOUR);
+  // Two seconds of a Kit six hours past its start show no timer reads the CLI.
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+
+  expect(await versionReads(hosted)).toBe(reads);
+  expect(await probes(hosted)).toBe(probed);
 });
 
 it("ends a CLI's update command still running at its deadline, with every process it started, and reports idle with the CLI as it was", async () => {
@@ -385,7 +511,8 @@ it('reads a CLI a conversation finds at a new version again, its sign-in and eve
       { id: 'grok-4.6', name: 'Grok 4.6', efforts: ['low'] },
     ]),
   );
-  placeUserCli(userBin(hosted.home), 'grok-build', '1.0.48');
+  placeUserCli(join(hosted.home, 'newer-bin'), 'grok-build', '1.0.48');
+  await writeFile(join(accountOf(hosted.home), '.profile'), `PATH="${join(hosted.home, 'newer-bin')}:${userBin(hosted.home)}:$PATH"\n`);
 
   await open(hosted, 'conversation-1');
 

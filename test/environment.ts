@@ -7,7 +7,7 @@ import { onTestFinished } from 'vitest';
 import { CLIS } from '../src/clis.ts';
 import { BINS, placeUserCli } from './cli.ts';
 import { type Answer, certificate, idOf, startHouse, until, without, type House, type KitConnection, type Received } from './double.ts';
-import { accountOf, fakeBin, runKit, stop, temporaryHome, type KitRun } from './kit.ts';
+import { accountOf, fakeBin, runKit, stop, temporaryDirectory, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './adapters.ts';
 import { serveKitFiles } from './building.ts';
 import { MISMATCH, startStore, type Store } from './store.ts';
@@ -18,6 +18,8 @@ const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.
 };
 
 export const LOGIN_SHELL = { SHELL: '/bin/sh' };
+
+export const MOVED_CLOCK = ['./fast-intervals.ts', './moved-clock.ts'].flatMap((module) => ['--import', fileURLToPath(new URL(module, import.meta.url))]);
 
 export function userBin(home: string): string {
   return join(home, 'user-bin');
@@ -237,6 +239,11 @@ export interface Hosted {
   transcribe(on: boolean): void;
   result(callId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
+}
+
+export async function clocked(): Promise<{ shift: (by: number) => Promise<void>; hosting: Hosting }> {
+  const file = join(await temporaryDirectory(), 'clock-shift');
+  return { shift: (by) => writeFile(file, String(by)), hosting: { environment: { KIT_CLOCK_SHIFT: file }, node: MOVED_CLOCK } };
 }
 
 const IMAGE_PART_BYTES = 32;

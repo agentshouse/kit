@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until, type Received } from './double.ts';
-import { hostKit, lastCall, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
+import { clocked, hostKit, lastCall, MOVED_CLOCK, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
 import { alive, filesUnder, temporaryDirectory } from './kit.ts';
 import { callUpdate, released, serveRelease } from './release.ts';
 import { house, roomRootReads, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
@@ -15,7 +15,6 @@ const OWNER_RULES = 'Keep the work in its Room.\n';
 const IMPORTED = '@AGENTS.md\n';
 const PLACED = '0.2.1-c000000000002';
 const HOUR = 60 * 60_000;
-const MOVED_CLOCK = ['./fast-intervals.ts', './moved-clock.ts'].flatMap((module) => ['--import', fileURLToPath(new URL(module, import.meta.url))]);
 const HALTED_REMOVAL = ['--import', fileURLToPath(new URL('./halted-removal.ts', import.meta.url))];
 
 function copyOf(hosted: Hosted, handle: string, name: string): string {
@@ -88,11 +87,6 @@ function told(hosted: Hosted, index: number, text: string, fields: Record<string
 async function killed(hosted: Hosted, index: number, deleted?: true): Promise<unknown> {
   hosted.call({ kind: 'kill', conversation_id: `conversation-${index}`, agent_id: `agent-${index}`, ...(deleted === undefined ? {} : { deleted }) });
   return hosted.result(lastCall());
-}
-
-async function clocked(): Promise<{ shift: (by: number) => Promise<void>; hosting: Hosting }> {
-  const file = join(await temporaryDirectory(), 'clock-shift');
-  return { shift: (by) => writeFile(file, String(by)), hosting: { environment: { KIT_CLOCK_SHIFT: file }, node: MOVED_CLOCK } };
 }
 
 async function contents(folder: string, skipped = ''): Promise<Record<string, string>> {

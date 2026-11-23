@@ -170,13 +170,14 @@ export async function resident(): Promise<void> {
     then();
   };
   const working = () => !calls.idle() || !conversations.idle() || !agents.idle();
-  const idle = () => !working() && idleCopies.idle();
+  const idle = () => !working() && idleCopies.idle() && agents.linksRead();
   let worked = false;
   const changed = () => {
     if (working()) worked = true;
     else if (worked) {
       worked = false;
       idleCopies.look();
+      if (process.env.HOUSE_KIT_SANDBOX !== '1') agents.wentIdle();
     }
     if (!idle()) {
       reported = false;
@@ -222,7 +223,7 @@ export async function resident(): Promise<void> {
 
   await house.deliver('kits/report-restart', planned ? { planned } : {}).catch(report);
   logged(agents.refresh());
-  agents.keepCurrent(() => process.env.HOUSE_KIT_SANDBOX === '1' && reported);
+  agents.updateClis();
   idleCopies.look();
   connection = holdConnection({
     opened: () => {
