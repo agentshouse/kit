@@ -8,12 +8,14 @@ import { hostKit, type Hosted } from './environment.ts';
 import { temporaryHome } from './kit.ts';
 import { house, MANIFEST, manifestOf, serveRooms, upload, type ManifestEntry, type Room } from './rooms.ts';
 
-const ASKED_AGAIN = fileURLToPath(new URL('./asked-again.ts', import.meta.url));
 const COLLECTING = fileURLToPath(new URL('./collecting.ts', import.meta.url));
 const FORMER_BUNDLE_BYTES = 512 * 1024 * 1024;
 const KIT_HEAP_MEGABYTES = 96;
 const LIST = '/kit/door/room-chunks/list';
 const NOT_READY = 'not ready yet; Kit copies it once House has built it';
+// Two and a half seconds is past the first two asks of the schedule the notice replaced, so a Kit still asking on its own is seen.
+const UNASKED_MS = 2_500;
+const LOCAL_COPY_READS = new Set(['/kit/local-copies/selection/read', '/kit/door/rooms/discover', '/kit/door/changes/enumerate', LIST]);
 
 function record(hosted: Hosted, room: Room): string {
   return join(hosted.home, 'local-copies/rooms', `${room.ref}.json`);
@@ -29,6 +31,18 @@ function tracked(room: Room, repository = room.repository): string[] {
 
 function listed(hosted: Hosted): unknown[] {
   return hosted.house.requests.filter((request) => request.path === LIST).map((request) => request.body);
+}
+
+function copyReads(hosted: Hosted): string[] {
+  return hosted.house.requests.filter((request) => LOCAL_COPY_READS.has(request.path)).map((request) => request.path);
+}
+
+function noticed(hosted: Hosted, room: Room): void {
+  hosted.house.connections.at(-1)!.send({ type: 'work_available', subject: 'rooms', room_ref: room.ref });
+}
+
+async function unasked(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, UNASKED_MS));
 }
 
 function enumerated(hosted: Hosted): unknown[] {
@@ -202,23 +216,25 @@ it('reads a Room whose carry from zero fits no one answer from its chunks, and l
   expect(tracked(small)).toEqual(['a.md']);
 });
 
-it('asks a Room answered not ready again after 1, 2, 3, 5, 8, 11 and 15 seconds, then every 15 seconds, and copies it once its build job builds it', async () => {
-  const pauses = join(await temporaryHome(), 'pauses');
-  await writeFile(pauses, '');
-  const hosted = await hostKit([{}], { node: ['--import', ASKED_AGAIN], environment: { KIT_TEST_PAUSES: pauses } });
+it("asks a Room answered not ready again only when House's notice that its chunks are built arrives, then once, and copies it", async () => {
+  const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
   rooms.carriedDocuments = 0;
-  rooms.notReady.set(room.ref, 9);
+  rooms.notReady.set(room.ref, 1);
 
   expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
-
+  await unasked();
+  expect(listed(hosted)).toHaveLength(1);
   expect(existsSync(room.repository)).toBe(false);
+
+  noticed(hosted, room);
+
   await until(() => existsSync(record(hosted, room)));
-  expect(listed(hosted)).toHaveLength(10);
+  await unasked();
+  expect(listed(hosted)).toHaveLength(2);
   expect(enumerated(hosted).filter((body) => (body as { positions: { position: string }[] }).positions[0]!.position === '0')).toHaveLength(1);
-  expect((await readFile(pauses, 'utf8')).trim().split('\n').map(Number)).toEqual([1000, 2000, 3000, 5000, 8000, 11_000, 15_000, 15_000, 15_000]);
   expect(tracked(room)).toEqual(['a.md']);
 });
 
@@ -231,19 +247,20 @@ it('keeps what a held Room shows while House answers it not ready, and takes it 
   await writeFile(join(room.repository, 'a.md'), 'a, local\n');
   room.put('b.md', 'b, from House\n');
   rooms.carriedDocuments = 0;
-  rooms.notReady.set(room.ref, 2);
+  rooms.notReady.set(room.ref, 1);
 
   expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
   expect(existsSync(join(room.repository, 'b.md'))).toBe(false);
+  noticed(hosted, room);
 
   await until(() => existsSync(join(room.repository, 'b.md')));
   await until(async () => JSON.parse(await readFile(record(hosted, room), 'utf8')).position === String(room.position));
   expect(await readFile(join(room.repository, 'b.md'), 'utf8')).toBe('b, from House\n');
   expect(await readFile(join(room.repository, 'a.md'), 'utf8')).toBe('a, local\n');
-  expect(listed(hosted)).toHaveLength(3);
+  expect(listed(hosted)).toHaveLength(2);
 });
 
-it('keeps asking a Room answered not ready when one of its asks fails, and copies it once House answers', async () => {
+it('copies a Room it waits for in the download its next connection opens with, with no notice', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -252,16 +269,15 @@ it('keeps asking a Room answered not ready when one of its asks fails, and copie
   rooms.notReady.set(room.ref, 1);
 
   expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
-  rooms.unreadable.add(room.ref);
-  const asked = listed(hosted).length;
-  await until(() => listed(hosted).length > asked);
-  rooms.unreadable.clear();
+  hosted.connection.close(1012, 'deploy');
+  await until(() => hosted.house.connections[1]);
 
   await until(() => existsSync(record(hosted, room)));
+  expect(listed(hosted)).toHaveLength(2);
   expect(tracked(room)).toEqual(['a.md']);
 });
 
-it("asks a Room answered not ready again when another Room's read fails in the same fetch", async () => {
+it("keeps waiting for a Room answered not ready when another Room's read fails in the same fetch, and asks it again at its notice", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const regranted = rooms.room('regranted');
@@ -277,30 +293,30 @@ it("asks a Room answered not ready again when another Room's read fails in the s
 
   expect(fetched.status).toBe(1);
   expect(fetched.stderr).toContain(`${regranted.root}: ${NOT_READY}\n`);
+  noticed(hosted, regranted);
   await until(() => listed(hosted).length >= 2);
   await until(async () => JSON.parse(await readFile(record(hosted, regranted), 'utf8')).protected.includes('archive'));
 });
 
-it('stops asking a Room answered not ready once it leaves the selection', async () => {
-  const pauses = join(await temporaryHome(), 'pauses');
-  await writeFile(pauses, '');
-  const hosted = await hostKit([{}], { node: ['--import', ASKED_AGAIN], environment: { KIT_TEST_PAUSES: pauses } });
+it('reads nothing at a notice for a Room it does not wait for, one that left the selection while it waited among them', async () => {
+  const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
   room.put('a.md', 'a\n');
+  const held = rooms.room('held');
+  held.put('b.md', 'b\n');
   rooms.carriedDocuments = 0;
-  rooms.notReady.set(room.ref, Infinity);
-  const selections = () => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read').length;
+  rooms.notReady.set(room.ref, 1);
 
-  await rooms.download([room]);
-  await until(() => listed(hosted).length >= 3);
-  rooms.answered = [];
-  const left = selections();
-  await until(() => selections() > left);
-  const asked = (await readFile(pauses, 'utf8')).trim().split('\n').length;
-  await house(hosted, '/', 'download');
+  expect(await rooms.download([room, held])).toMatchObject({ status: 0 });
+  expect(await rooms.download([held])).toMatchObject({ status: 0 });
+  const read = copyReads(hosted).length;
 
-  expect((await readFile(pauses, 'utf8')).trim().split('\n').length).toBeLessThanOrEqual(asked + 1);
+  noticed(hosted, room);
+  noticed(hosted, held);
+  await unasked();
+
+  expect(copyReads(hosted).slice(read)).toEqual([]);
   expect(existsSync(room.repository)).toBe(false);
 });
 

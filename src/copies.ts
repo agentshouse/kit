@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
-import { fileInfo, instructionsText, paused, type FileInfo, type Finished } from './files.ts';
+import { fileInfo, instructionsText, type FileInfo, type Finished } from './files.ts';
 import { conversationsFolder, kitHome, roomsFolder } from './home.ts';
 import {
   digest,
@@ -73,9 +73,6 @@ export interface Opening {
 }
 
 export const DEFAULT_MAX_SIZE = 10;
-
-// A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
-const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
 
 export type Change =
   | { op: 'write'; path: string; content: string; base?: string }
@@ -806,6 +803,10 @@ export class LocalCopies {
     return this.selected();
   }
 
+  noticed(room: string): Promise<void> {
+    return this.waiting.has(room) ? this.selected() : Promise.resolve();
+  }
+
   async download(caller: Caller, fetching: Fetching, cwd: string): Promise<Answered> {
     const copy = await this.copyAt(cwd);
     return copy === null ? this.answered(() => this.fetched(true, caller, fetching)) : this.freshened(copy, caller, fetching);
@@ -904,9 +905,7 @@ export class LocalCopies {
       for (const room of [...this.waiting]) {
         if (!unready.includes(room) && !unsettled.includes(room)) this.waiting.delete(room);
       }
-      const due = unready.filter((room) => !this.waiting.has(room));
-      for (const room of due) this.waiting.add(room);
-      if (due.length > 0) void this.askedAgain(due);
+      for (const room of unready) this.waiting.add(room);
       return { refused, text: said.length === 0 ? 'Nothing new from House.' : said.join('\n') };
     });
   }
@@ -922,14 +921,6 @@ export class LocalCopies {
     ];
   }
 
-  private async askedAgain(rooms: readonly string[]): Promise<void> {
-    let asking = rooms;
-    for (let step = 0; asking.length > 0; step++) {
-      await paused(ASKED_AGAIN_MS[Math.min(step, ASKED_AGAIN_MS.length - 1)]!);
-      await this.selected().catch(logged);
-      asking = asking.filter((room) => this.waiting.has(room));
-    }
-  }
 
   upload(cwd: string, caller: Caller): Promise<Answered> {
     return this.keyAt(cwd).then((key) => (key === undefined ? outside(cwd) : this.exclusive(key, () => this.uploaded(key, caller))));
