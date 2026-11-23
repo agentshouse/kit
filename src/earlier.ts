@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { KIT_RELEASE } from './clis.ts';
 import { restart } from './end.ts';
 import { awaitsTakeover, desktopPrefix, earlierHome, earlierPrefix, oneFolder } from './home.ts';
+import { placedLink } from './placement.ts';
 import { defineSupervisor, launchAgent, linger, manage, reloadLaunchAgent, required, systemd, userUnit } from './supervisor.ts';
 import { placeServedRelease } from './update.ts';
 import { followRoot, merged, removeFolder } from './workspace.ts';
@@ -158,6 +159,10 @@ async function relocate(earlier: Earlier): Promise<void> {
   if (copied) await rm(earlier.home, { recursive: true, force: true });
 }
 
+function earlierCommands(folder: string): string[] {
+  return COMMANDS.filter((command) => !placedLink(folder, command)).map((command) => join(folder, command));
+}
+
 function elevated(args: string[], failed: string): void {
   if (root()) required(args[0]!, args.slice(1), failed);
   else required('sudo', args, failed);
@@ -173,14 +178,14 @@ function removeServer(earlier: Earlier): void {
     elevated(['rm', '-f', SERVER_UNIT], `${SERVER_UNIT} could not be removed`);
     elevated(['systemctl', 'daemon-reload'], 'systemd could not forget the earlier Kit service');
   }
-  elevated(['rm', '-rf', SERVER_PREFIX, ...COMMANDS.map((command) => join(SERVER_BIN, command))], `${SERVER_PREFIX} could not be removed`);
+  elevated(['rm', '-rf', SERVER_PREFIX, ...earlierCommands(SERVER_BIN)], `${SERVER_PREFIX} could not be removed`);
   const emptied = [SERVER_WORKSPACE, '/agents'].filter((path) => existsSync(path));
   if (emptied.length > 0) elevated(['rmdir', '--ignore-fail-on-non-empty', ...emptied], `${SERVER_WORKSPACE} could not be removed`);
 }
 
 async function removeDesktop(): Promise<void> {
   await rm(desktopPrefix(), { recursive: true, force: true });
-  for (const command of COMMANDS) await rm(join(desktopBin(), command), { force: true });
+  for (const path of earlierCommands(desktopBin())) await rm(path, { force: true });
 }
 
 function stopDesktop(): void {

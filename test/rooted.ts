@@ -11,11 +11,11 @@ function mapped(path: unknown): unknown {
   return ROOTS.some((held) => path === held || path.startsWith(`${held}/`)) ? `${root}${path}` : path;
 }
 
-const SINGLE = ['existsSync', 'readFileSync', 'lstat', 'readdir', 'rm', 'rmdir', 'mkdir', 'readFile', 'writeFile', 'stat', 'access'];
+const SINGLE = ['existsSync', 'readFileSync', 'readlinkSync', 'lstat', 'readdir', 'rm', 'rmdir', 'mkdir', 'readFile', 'writeFile', 'stat', 'access'];
 const DOUBLE = ['rename', 'cp'];
 
 for (const [module, names] of [
-  [fs, ['existsSync', 'readFileSync']],
+  [fs, ['existsSync', 'readFileSync', 'readlinkSync']],
   [promises, [...SINGLE.filter((name) => !name.endsWith('Sync')), ...DOUBLE]],
 ] as const) {
   for (const name of names) {

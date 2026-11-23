@@ -54,6 +54,8 @@ export interface Asked {
 export interface Host {
   home: string;
   kitHome: string;
+  systemBin: string;
+  path: string;
   run(argv?: string[], added?: Record<string, string>): Ran;
   ask(argv: string[], added: Record<string, string>, answer: string): Promise<Asked>;
   shell(line: string): Ran;
@@ -124,7 +126,10 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   spawnSync('tar', ['-czf', join(fake, 'adapter.tar.gz'), '-C', adapter, 'node_modules']);
   await writeFile(join(fake, 'ca-certificates.crt'), "-----BEGIN CERTIFICATE-----\nthe computer's own authority\n-----END CERTIFICATE-----\n");
   const bootstrap = await published();
-  let text = (await readFile(bootstrap, 'utf8')).replace('/etc/ssl/certs/ca-certificates.crt', join(fake, 'ca-certificates.crt'));
+  const systemBin = join(fake, 'usr-local-bin');
+  let text = (await readFile(bootstrap, 'utf8'))
+    .replace('/etc/ssl/certs/ca-certificates.crt', join(fake, 'ca-certificates.crt'))
+    .replace('SYSTEM_BIN=/usr/local/bin', `SYSTEM_BIN=${systemBin}`);
   if (platform.system === 'Linux') {
     const osRelease = join(fake, 'os-release');
     await writeFile(osRelease, platform.osRelease ?? UBUNTU_26_04);
@@ -150,6 +155,8 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   return {
     home,
     kitHome: join(home, '.agents', 'house'),
+    systemBin,
+    path,
     run: (argv = [], added = {}) => ran('bash', [bootstrap, ...argv], added),
     ask: (argv, added, answer) =>
       new Promise((resolve) => {

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { configured, HELPER } from './app-git.ts';
 import { restart } from './end.ts';
 import { earlierPrefix, kitHome, oneFolder } from './home.ts';
+import { removePlacedLinks } from './placement.ts';
 import { quoted } from './shell.ts';
 import { defineSupervisor, launchAgent, launcher, reloadLaunchAgent, required, systemd, userUnit } from './supervisor.ts';
 
@@ -49,6 +50,7 @@ async function folded(asKit: boolean): Promise<void> {
     process.exit(0);
   }
   await rm(kitLauncher(), { force: true });
+  await removePlacedLinks('kit');
 }
 
 export async function foldKitIntoHouse(): Promise<void> {

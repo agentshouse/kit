@@ -8,6 +8,7 @@ ADAPTERS='__ADAPTERS__'
 HOUSE='https://agents.house'
 HOUSE_SELECTED=0
 KIT_HOME="$HOME/.agents/house"
+SYSTEM_BIN=/usr/local/bin
 CODE=()
 PLACE=''
 PLACING=0
@@ -174,24 +175,44 @@ place_release() {
   umask "$mask"
 }
 
-add_path_line() {
-  local profile="$HOME/.profile" line="export PATH=\"$1:\$PATH\""
-  case "${SHELL:-}" in
-    */zsh) profile="$("$SHELL" -c 'printf "\n%s" "${ZDOTDIR:-$HOME}"' | tail -n 1)/.zprofile" ;;
-    */bash)
-      for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
-        [[ ! -f "$profile" ]] || break
-      done
-      ;;
-    */fish)
-      profile="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
-      line="set -gx PATH \"$1\" \$PATH"
-      ;;
+linked() {
+  [[ -L "$1/$2" && "$(readlink "$1/$2")" == "$KIT_HOME/bin/$2" ]]
+}
+
+place_links() {
+  local into="$HOME/.local/bin" folder command names placed=()
+  [[ ! -d "$SYSTEM_BIN" || ! -w "$SYSTEM_BIN" ]] || into=$SYSTEM_BIN
+  for command in house kit; do
+    for folder in "$SYSTEM_BIN" "$HOME/.local/bin"; do
+      [[ "$folder" == "$into" && -e "$KIT_HOME/bin/$command" ]] || ! linked "$folder" "$command" ||
+        rm -f "$folder/$command" || refuse "$folder/$command could not be removed"
+    done
+    [[ -e "$KIT_HOME/bin/$command" ]] && ! linked "$into" "$command" || continue
+    mkdir -p "$into" && ln -sfn "$KIT_HOME/bin/$command" "$into/$command" || refuse "$into/$command could not be written"
+    placed+=("$command")
+  done
+  ((${#placed[@]})) || return 0
+  names=$(named "${placed[@]}")
+  case ":$PATH:" in
+    *":$into:"*) printf 'Placed %s in %s.\n' "$names" "$into" ;;
+    *) printf 'Placed %s in %s, which is not on your PATH; add %s to your PATH to run %s by name.\n' "$names" "$into" "$into" "$names" ;;
   esac
-  grep -Fqx "$line" "$profile" 2>/dev/null && return
-  if [[ -s "$profile" && -n "$(tail -c 1 "$profile")" ]]; then printf '\n' >> "$profile"; fi
-  mkdir -p "${profile%/*}" && printf '%s\n' "$line" >> "$profile" || refuse "$profile could not be written"
-  printf 'Added %s to the path in %s; new terminals find house.\n' "$1" "$profile"
+}
+
+drop_line() {
+  local kept
+  grep -Fqx -- "$2" "$1" 2>/dev/null || return 0
+  kept=$(mktemp) && { grep -Fvx -- "$2" "$1" || true; } > "$kept" && cat "$kept" > "$1" && rm -f "$kept" || refuse "$1 could not be written"
+  printf 'Removed the PATH line Kit added to %s.\n' "$1"
+}
+
+drop_path_lines() {
+  local zdot=$HOME profile
+  [[ "${SHELL:-}" != */zsh ]] || zdot=$("$SHELL" -c 'printf "\n%s" "${ZDOTDIR:-$HOME}"' | tail -n 1)
+  for profile in "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.zprofile" "$zdot/.zprofile"; do
+    drop_line "$profile" "export PATH=\"$KIT_HOME/bin:\$PATH\""
+  done
+  drop_line "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" "set -gx PATH \"$KIT_HOME/bin\" \$PATH"
 }
 
 prepare_home() {
@@ -311,7 +332,8 @@ read_host
 if ((PLACING)); then
   if [[ "$PLACE" == "$KIT_HOME/kit" ]]; then
     place_release "$PLACE" "$KIT_HOME/bin"
-    add_path_line "$KIT_HOME/bin"
+    place_links
+    drop_path_lines
   else
     place_release "$PLACE" "$PLACE/bin"
   fi
@@ -323,5 +345,6 @@ notice_host
 ((MACOS)) || establish_native_packages
 prepare_home
 place_release "$KIT_HOME/kit" "$KIT_HOME/bin"
-add_path_line "$KIT_HOME/bin"
+place_links
+drop_path_lines
 exec "$KIT_HOME/bin/house" connect --house "$HOUSE" ${CODE[@]+"${CODE[@]}"}

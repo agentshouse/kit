@@ -224,6 +224,15 @@ it("reports a script that cannot start with the Kit's cause", async () => {
   await keepsNothing(hosted, ['input-0c4a']);
 });
 
+it("finds Kit's own house first in a run whose login shell's PATH holds no house", async () => {
+  const hosted = await hostKit([], {
+    prepare: (home) => writeFile(join(accountOf(home), '.profile'), 'PATH="/usr/bin:/bin"\n'),
+  });
+  const id = run(hosted, 'command -v house');
+
+  expect(await ended(hosted, id)).toEqual({ exit_code: 0, output: `${join(hosted.home, 'bin', 'house')}\n`, cut: false });
+});
+
 it('reports 128 plus the signal for a script a signal ended', async () => {
   const hosted = await hostKit([]);
   const id = run(hosted, 'echo before; kill -KILL $$');
