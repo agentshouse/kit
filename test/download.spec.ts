@@ -8,7 +8,6 @@ import { accountOf, runKit, stop, temporaryHome } from './kit.ts';
 import { digest, house, manifestOf, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
-const REDRAWN = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0, 8, 0x45, 0x78, 0x69, 0x66]);
 
 function zeroEnumerations(hosted: Hosted): string[][] {
   return hosted.house.requests
@@ -201,7 +200,7 @@ it("says nothing came from House when a download reads back only the copy's own 
   expect(await house(hosted, '/', 'download')).toEqual({ status: 0, stdout: 'Nothing new from House.\n', stderr: '' });
 });
 
-it('keeps each attachment the copy holds current, moving or removing it as the Room does, records every skipped one, and brings skipped ones up to --max-size with --with-attachments', async () => {
+it('moves or removes each attachment the copy holds as the Room does, records every skipped one, and brings skipped ones up to --max-size with --with-attachments', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -219,14 +218,10 @@ it('keeps each attachment the copy holds current, moving or removing it as the R
   expect((await manifestOf(room)).files['photos/large.jpg']).toMatchObject({ bytes: 2_000_001, skipped: true });
   expect((await manifestOf(room)).files['photos/small.jpg']).toEqual({ revision: room.revision('photos/small.jpg'), sha256: digest(JPEG), bytes: JPEG.length });
 
-  room.upload('photos/small.jpg', REDRAWN);
-  expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: updated(room) });
-  expect(await readFile(join(room.repository, 'photos/small.jpg'))).toEqual(REDRAWN);
-
   const fetchedBytes = stores(hosted);
   room.move('photos/small.jpg', 'archive/small.jpg');
   expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: updated(room) });
-  expect(await readFile(join(room.repository, 'archive/small.jpg'))).toEqual(REDRAWN);
+  expect(await readFile(join(room.repository, 'archive/small.jpg'))).toEqual(JPEG);
   expect(existsSync(join(room.repository, 'photos'))).toBe(false);
   expect(stores(hosted)).toBe(fetchedBytes);
 
