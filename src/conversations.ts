@@ -361,8 +361,6 @@ export class Conversations {
 
   constructor(kit: Kit) {
     this.kit = kit;
-    // A process or a durable schedule ends without a report, so the Kit looks at both again every two seconds.
-    setInterval(() => this.look(), 2_000);
   }
 
   call(call: ConversationCall): void {
@@ -414,15 +412,21 @@ export class Conversations {
     return this.uploads > 0 || [...this.conversations.values()].some((conversation) => conversation.turns.size > 0);
   }
 
-  private look(): void {
-    for (const conversation of this.conversations.values()) {
-      for (const scope of conversation.leftovers) {
-        if (!scope.empty()) continue;
-        scope.close();
-        conversation.leftovers.delete(scope);
-      }
-    }
+  private scopeChanged(conversation: Conversation, scope: Scope): void {
+    if (conversation.leftovers.has(scope)) this.drop(conversation, scope);
     this.kit.changed();
+  }
+
+  private leave(conversation: Conversation, scope: Scope): void {
+    scope.ended();
+    conversation.leftovers.add(scope);
+    this.drop(conversation, scope);
+  }
+
+  private drop(conversation: Conversation, scope: Scope): void {
+    if (!scope.empty()) return;
+    scope.close();
+    conversation.leftovers.delete(scope);
   }
 
   stopped(): void {
@@ -929,8 +933,16 @@ export class Conversations {
     }
     conversation.place = place;
     conversation.opening = bridge;
-    const work = workFor(route.kind, place.directory, () => this.kit.changed(), (message) => this.tapped(conversation, reader, message));
-    const scope = new Scope(marker(bridge), randomUUID(), cli);
+    const scope: Scope = new Scope(marker(bridge), randomUUID(), cli, () => this.scopeChanged(conversation, scope));
+    const work = workFor(
+      route.kind,
+      place.directory,
+      () => {
+        scope.heard();
+        this.kit.changed();
+      },
+      (message) => this.tapped(conversation, reader, message),
+    );
     let adapter: Adapter | null = null;
     try {
       bridged(bridge);
@@ -964,7 +976,10 @@ export class Conversations {
       if (opened.sessionId !== conversation.session) conversation.state = QUIET;
       const running: Running = { adapter, bridging, bridge, sessionId: opened.sessionId, killed: false, reader, work, scope };
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
-      void work.settled().then(() => scope.record());
+      void work.settled().then(() => {
+        scope.record();
+        this.kit.changed();
+      });
       conversation.running = running;
       adapter.turn(conversation.turns.size > 0);
       conversation.session = running.sessionId;
@@ -975,7 +990,7 @@ export class Conversations {
     } catch (error) {
       adapter?.retire();
       work.close();
-      conversation.leftovers.add(scope);
+      this.leave(conversation, scope);
       this.closeBridge(conversation, bridging, bridge);
       throw conversation.kills > 0 ? new Error(KILLED) : error;
     } finally {
@@ -1027,7 +1042,7 @@ export class Conversations {
   private detach(conversation: Conversation, running: Running): void {
     if (conversation.bridge === running.bridging) conversation.bridge = null;
     running.work.close();
-    conversation.leftovers.add(running.scope);
+    this.leave(conversation, running.scope);
     conversation.running = null;
     conversation.commands = null;
     conversation.options = null;
@@ -1141,6 +1156,7 @@ export class Conversations {
     this.kit.turnEnded(stamped.catch(logged));
     this.uploaded(conversation);
     this.next(conversation);
+    conversation.running?.scope.heard();
     this.kit.changed();
   }
 
@@ -1193,6 +1209,7 @@ export class Conversations {
     if (stop !== null) return;
     conversation.reader?.closeTurn();
     conversation.turn = null;
+    conversation.running?.scope.heard();
     this.kit.changed();
   }
 

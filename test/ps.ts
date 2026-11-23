@@ -1,4 +1,6 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
+
+if (process.env.KIT_PROCESS_READS !== undefined) appendFileSync(process.env.KIT_PROCESS_READS, 'table\n');
 
 const [options, , format] = process.argv.slice(2);
 const columns = (format ?? 'pid=,ppid=,command=').split(',').map((column) => column.replace('=', ''));
