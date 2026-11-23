@@ -800,21 +800,23 @@ export class LocalCopies {
   }
 
   connected(): Promise<void> {
-    return this.selected();
+    return this.selected(null);
   }
 
   noticed(room: string): Promise<void> {
-    return this.waiting.has(room) ? this.selected() : Promise.resolve();
+    return this.selected(room);
   }
 
   async download(caller: Caller, fetching: Fetching, cwd: string): Promise<Answered> {
     const copy = await this.copyAt(cwd);
-    return copy === null ? this.answered(() => this.fetched(true, caller, fetching)) : this.freshened(copy, caller, fetching);
+    return copy === null ? this.answered(() => this.fetched(true, caller, fetching, null)) : this.freshened(copy, caller, fetching);
   }
 
-  private async selected(): Promise<void> {
-    const copied = await this.answered(() => this.fetched(false, this.owner, HELD));
-    if (copied.refused) logged(copied.text);
+  private async selected(notice: string | null): Promise<void> {
+    const copied = await this.answered(async () =>
+      notice === null || this.waiting.has(notice) ? this.fetched(false, this.owner, HELD, notice) : null,
+    );
+    if (copied?.refused) logged(copied.text);
   }
 
   private answered<T>(work: () => Promise<T>): Promise<T> {
@@ -823,10 +825,11 @@ export class LocalCopies {
     return answered;
   }
 
-  private async fetched(refreshing: boolean, caller: Caller, fetching: Fetching): Promise<Answered> {
+  private async fetched(refreshing: boolean, caller: Caller, fetching: Fetching, notice: string | null): Promise<Answered> {
     const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
     const reached = new Map(answer.rooms.map((room) => [room.room_ref, room.room_handle]));
     const synced = new Map(answer.rooms.filter((room) => room.level === 'keep').map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
+    const asked = notice === null ? synced : new Map([...synced].filter(([key]) => key === `${ROOMS}${notice}`));
     return this.holding([...new Set([...this.roomCopies().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
       const chosen = await this.launched();
       const said: string[] = [];
@@ -840,7 +843,7 @@ export class LocalCopies {
       }
       const current: Held[] = [];
       const wanted = new Map<string, string>();
-      for (const [key, handle] of synced) {
+      for (const [key, handle] of asked) {
         try {
           const held = this.copies.get(key);
           if (held === undefined || !(await exists(held.repository))) {
@@ -902,7 +905,7 @@ export class LocalCopies {
       const unwritten = await this.foldered(reached, new Set(synced.keys()), made, refreshing, caller, chosen);
       if (refreshing) said.push(...unwritten);
       else unwritten.forEach(logged);
-      for (const room of [...this.waiting]) {
+      for (const room of notice === null ? [...this.waiting] : [notice]) {
         if (!unready.includes(room) && !unsettled.includes(room)) this.waiting.delete(room);
       }
       for (const room of unready) this.waiting.add(room);
@@ -920,7 +923,6 @@ export class LocalCopies {
       ...(report.left.size === 0 ? [] : [leftOnHouse([...report.left].sort().map((path) => `${root}/${path}`))]),
     ];
   }
-
 
   upload(cwd: string, caller: Caller): Promise<Answered> {
     return this.keyAt(cwd).then((key) => (key === undefined ? outside(cwd) : this.exclusive(key, () => this.uploaded(key, caller))));

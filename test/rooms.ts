@@ -584,6 +584,7 @@ export interface Rooms {
   maxPrefixes: number;
   carriedDocuments: number;
   notReady: Map<string, number>;
+  answeringNotReady: ((room: Room) => void) | null;
   expiringChunks: number;
   damagesChunks: boolean;
   unparsedChunks: boolean;
@@ -650,6 +651,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     maxPrefixes: 256,
     carriedDocuments: 1_000,
     notReady: new Map(),
+    answeringNotReady: null,
     expiringChunks: 0,
     damagesChunks: false,
     unparsedChunks: false,
@@ -777,6 +779,7 @@ export function serveRooms(hosted: Hosted): Rooms {
           const waits = state.notReady.get(room.ref) ?? 0;
           if (waits === 0) return room.chunkList(hosted.store, expires, state);
           state.notReady.set(room.ref, waits - 1);
+          state.answeringNotReady?.(room);
           return { room_ref: room.ref, ready: false };
         }),
       },

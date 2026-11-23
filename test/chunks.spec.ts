@@ -238,6 +238,52 @@ it("asks a Room answered not ready again only when House's notice that its chunk
   expect(tracked(room)).toEqual(['a.md']);
 });
 
+it('copies a Room once at a notice that arrives before the download that answered it not ready ends', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('a.md', 'a\n');
+  rooms.carriedDocuments = 0;
+  rooms.notReady.set(room.ref, 1);
+  rooms.answeringNotReady = (answered) => noticed(hosted, answered);
+
+  expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: `${room.root}: ${NOT_READY}\n` });
+
+  await until(() => existsSync(record(hosted, room)));
+  await unasked();
+  expect(listed(hosted)).toHaveLength(2);
+  expect(tracked(room)).toEqual(['a.md']);
+});
+
+it('asks at a notice only about the Room it names, while another Room it waits for waits for its own notice', async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const first = rooms.room('first');
+  first.put('a.md', 'a\n');
+  const second = rooms.room('second');
+  second.put('b.md', 'b\n');
+  rooms.carriedDocuments = 0;
+  rooms.notReady.set(first.ref, 1);
+  rooms.notReady.set(second.ref, 1);
+
+  expect(await rooms.download([first, second])).toMatchObject({ status: 0 });
+  expect(listed(hosted)).toHaveLength(2);
+
+  noticed(hosted, first);
+
+  await until(() => existsSync(record(hosted, first)));
+  await unasked();
+  expect(listed(hosted).slice(2)).toEqual([{ prefixes: [first.root] }]);
+  expect(existsSync(second.repository)).toBe(false);
+
+  noticed(hosted, second);
+
+  await until(() => existsSync(record(hosted, second)));
+  await unasked();
+  expect(listed(hosted).slice(3)).toEqual([{ prefixes: [second.root] }]);
+  expect(tracked(second)).toEqual(['b.md']);
+});
+
 it('keeps what a held Room shows while House answers it not ready, and takes it from chunks keeping what changed here once it is built', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
