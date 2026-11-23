@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { readFileSync, watch, type FSWatcher } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
@@ -15,6 +15,8 @@ const QUEUE_LIST = 'house-kit-queue-';
 const SYNC = 'house-kit-sync-';
 const WAKEUP = /Next wakeup scheduled for (\d\d):(\d\d):(\d\d) \(in (\d+)s\)/;
 const HALF_DAY = 12 * 60 * 60 * 1000;
+const SETTINGS = '.claude';
+const SCHEDULE = 'scheduled_tasks.json';
 
 export function codexLauncher(): string {
   return join(kitHome(), 'launchers', 'codex');
@@ -68,10 +70,26 @@ class ClaudeWork extends Work {
   private readonly crons = new Map<string, string>();
   private wakeups: number[] = [];
   private goal = false;
+  private folder: FSWatcher | null = null;
+  private settings: FSWatcher | null = null;
+  private unwatched = false;
 
   constructor(cwd: string, changed: () => void) {
     super(changed);
     this.cwd = cwd;
+    try {
+      this.folder = watch(cwd, (_, name) => {
+        if (name === null || name === SETTINGS) this.watchSettings();
+      }).on('error', (error) => this.unwatch(error));
+    } catch (error) {
+      this.unwatch(error);
+    }
+    this.settings = this.settingsWatcher();
+  }
+
+  override close(): void {
+    this.folder?.close();
+    this.settings?.close();
   }
 
   protected override take(message: Message): void {
@@ -164,10 +182,35 @@ class ClaudeWork extends Work {
     this.wakeups.push(due.getTime());
   }
 
+  private watchSettings(): void {
+    this.settings?.close();
+    this.settings = this.settingsWatcher();
+    this.changed();
+  }
+
+  private settingsWatcher(): FSWatcher | null {
+    try {
+      return watch(join(this.cwd, SETTINGS), (_, name) => {
+        if (name === null || name === SCHEDULE) this.changed();
+      }).on('error', () => this.watchSettings());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.unwatch(error);
+      return null;
+    }
+  }
+
+  private unwatch(error: unknown): void {
+    if (this.unwatched) return;
+    this.unwatched = true;
+    process.stderr.write(`kit: Kit does not watch the durable schedule in ${this.cwd}: ${(error as Error).message}\n`);
+    this.changed();
+  }
+
   private durable(): boolean {
+    if (this.unwatched) return true;
     let text: string;
     try {
-      text = readFileSync(join(this.cwd, '.claude', 'scheduled_tasks.json'), 'utf8');
+      text = readFileSync(join(this.cwd, SETTINGS, SCHEDULE), 'utf8');
     } catch (error) {
       return (error as NodeJS.ErrnoException).code !== 'ENOENT';
     }

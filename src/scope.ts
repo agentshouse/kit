@@ -1,5 +1,5 @@
 import { execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 
 interface Running {
@@ -10,8 +10,11 @@ interface Running {
 
 const LISTING_BYTES = 1 << 28;
 const CGROUPS = '/sys/fs/cgroup';
+const LEFT = 'left';
 const GONE = new Set(['ENOENT', 'ESRCH']);
 const EXITED = new Set(['Z', 'X']);
+// A process a turn left ends without a report where no control group's event tells of it, so the Kit looks every two seconds while one runs and goes idle within two seconds of its end.
+const LOOK_MS = 2_000;
 
 function failure(error: unknown): string {
   return (error as NodeJS.ErrnoException).code ?? '';
@@ -121,12 +124,21 @@ function ownGroup(): string | null {
   }
 }
 
-function members(group: string): number[] {
+function members(group: string, skipped: string | null = null): number[] {
   const pids = readFileSync(join(group, 'cgroup.procs'), 'utf8').split('\n').filter(Boolean).map(Number);
   for (const entry of readdirSync(group, { withFileTypes: true })) {
-    if (entry.isDirectory()) pids.push(...members(join(group, entry.name)));
+    if (entry.isDirectory() && join(group, entry.name) !== skipped) pids.push(...members(join(group, entry.name)));
   }
   return pids;
+}
+
+function populated(group: string): boolean {
+  try {
+    return readFileSync(join(group, 'cgroup.events'), 'utf8').split('\n').includes('populated 1');
+  } catch (error) {
+    if (failure(error) === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function besideCli(cli: string): string | null {
@@ -137,16 +149,32 @@ function besideCli(cli: string): string | null {
   }
 }
 
+interface Reading {
+  busy: boolean;
+  empty: boolean;
+  events: string | null;
+}
+
+const UNREAD: Reading = { busy: true, empty: false, events: null };
+
 export class Scope {
   private readonly marker: string;
   private readonly helpers: string | null;
+  private readonly changed: () => void;
   private group: string | null;
   private session: string | null = null;
   private recorded: Set<number> | null = null;
+  private exited = false;
+  private stale = true;
+  private reading: Reading = UNREAD;
+  private watcher: FSWatcher | null = null;
+  private watched: string | null = null;
+  private looking: ReturnType<typeof setInterval> | null = null;
 
-  constructor(marker: string, name: string, cli: string) {
+  constructor(marker: string, name: string, cli: string, changed: () => void) {
     this.marker = marker;
     this.helpers = besideCli(cli);
+    this.changed = changed;
     const own = ownGroup();
     this.group = own === null ? null : join(own, name);
     try {
@@ -172,26 +200,30 @@ export class Scope {
 
   record(): void {
     const found = this.found();
-    if (found === null) return;
-    this.recorded = new Set([...found].filter(([, { session }]) => session === this.session).map(([pid]) => pid));
+    if (found !== null) this.recorded = new Set([...found].filter(([, { session }]) => session === this.session).map(([pid]) => pid));
+    this.heard();
+  }
+
+  heard(): void {
+    this.stale = true;
+  }
+
+  ended(): void {
+    this.exited = true;
+    this.heard();
   }
 
   working(): boolean {
-    const found = this.found();
-    if (found === null) return true;
-    if (this.recorded === null) return found.size > 0;
-    return [...found].some(
-      ([pid, { session, command }]) =>
-        session !== this.session || !(this.recorded!.has(pid) || (this.helpers !== null && command.startsWith(this.helpers))),
-    );
+    return this.read().busy;
   }
 
   empty(): boolean {
-    return this.found()?.size === 0;
+    return this.read().empty;
   }
 
   kill(): void {
     killMarked(this.marker);
+    this.heard();
     if (this.group === null) return;
     try {
       writeFileSync(join(this.group, 'cgroup.kill'), '1');
@@ -201,18 +233,122 @@ export class Scope {
   }
 
   close(): void {
+    this.unfollow();
     if (this.group === null) return;
+    for (const group of [join(this.group, LEFT), this.group]) {
+      try {
+        rmdirSync(group);
+      } catch {}
+    }
+  }
+
+  private read(): Reading {
+    if (!this.stale) return this.reading;
+    this.stale = false;
+    this.reading = this.group === null ? this.looked() : this.swept(this.group);
+    const { busy, empty, events } = this.reading;
+    if (empty || (!busy && !(this.exited && events !== null))) this.unfollow();
+    else if (events === null) this.look();
+    return this.reading;
+  }
+
+  private looked(): Reading {
+    const found = this.found();
+    if (found === null) return UNREAD;
+    return { busy: [...found].some(([pid, running]) => this.beyond(pid, running)), empty: found.size === 0, events: null };
+  }
+
+  private swept(group: string): Reading {
+    const left = join(group, LEFT);
     try {
-      rmdirSync(this.group);
-    } catch {}
+      if (this.recorded !== null) this.sweep(group, left);
+      const told = this.exited ? group : this.recorded !== null && existsSync(left) ? left : null;
+      const events = told !== null && this.watch(told) ? told : null;
+      const empty = !populated(group);
+      return { busy: this.recorded === null ? !empty : populated(left), empty, events };
+    } catch {
+      return UNREAD;
+    }
+  }
+
+  private sweep(group: string, left: string): void {
+    for (let moved = true; moved; ) {
+      moved = false;
+      for (const pid of members(group, left)) {
+        const running = read(String(pid));
+        if (running === null || !this.beyond(pid, running)) continue;
+        if (!existsSync(left)) mkdirSync(left);
+        moved = this.moved(left, pid) || moved;
+      }
+    }
+  }
+
+  private moved(left: string, pid: number): boolean {
+    try {
+      writeFileSync(join(left, 'cgroup.procs'), String(pid));
+      return true;
+    } catch (error) {
+      if (failure(error) === 'ESRCH') return false;
+      throw error;
+    }
+  }
+
+  private beyond(pid: number, { session, command }: Running): boolean {
+    if (this.recorded === null) return true;
+    return session !== this.session || !(this.recorded.has(pid) || (this.helpers !== null && command.startsWith(this.helpers)));
+  }
+
+  private watch(group: string): boolean {
+    if (this.watched === group && this.watcher !== null) return true;
+    this.unfollow();
+    try {
+      this.watcher = watch(join(group, 'cgroup.events'), () => this.heardEvent()).on('error', () => {
+        this.unfollow();
+        this.heardEvent();
+      });
+      this.watched = group;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private look(): void {
+    if (this.looking !== null) return;
+    this.watcher?.close();
+    this.watcher = null;
+    this.watched = null;
+    this.looking = setInterval(() => this.heardEvent(), LOOK_MS);
+  }
+
+  private heardEvent(): void {
+    this.heard();
+    this.changed();
+  }
+
+  private unfollow(): void {
+    this.watcher?.close();
+    this.watcher = null;
+    this.watched = null;
+    if (this.looking !== null) clearInterval(this.looking);
+    this.looking = null;
   }
 
   private found(): Map<number, Running> | null {
     try {
+      if (this.group !== null) {
+        return new Map(
+          members(this.group).flatMap((pid): [number, Running][] => {
+            const running = read(String(pid));
+            return running === null ? [] : [[pid, running]];
+          }),
+        );
+      }
       const table = processes();
-      const roots = this.group === null ? marked(this.marker, true) : members(this.group);
-      const pids = this.group === null ? [...roots, ...descendants(roots, table)] : roots;
-      return new Map(pids.flatMap((pid): [number, Running][] => (table.has(pid) ? [[pid, table.get(pid)!]] : [])));
+      const roots = marked(this.marker, true);
+      return new Map(
+        [...roots, ...descendants(roots, table)].flatMap((pid): [number, Running][] => (table.has(pid) ? [[pid, table.get(pid)!]] : [])),
+      );
     } catch {
       return null;
     }
