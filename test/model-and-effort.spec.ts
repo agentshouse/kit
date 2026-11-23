@@ -108,6 +108,26 @@ it.each(KINDS)("runs a session $kind opens for an `open` that names neither with
   expect(beforePrompt(await hosted.adapterLog(), 0)).toEqual(expected(case_, 'session/new', case_.agent.model, case_.agent.effort));
 });
 
+it.each(KINDS)('runs a session $kind opens for an Agent that holds no effort with its model alone, sending the CLI no effort', async (case_) => {
+  const hosted = await hostKit([{ kind: case_.kind, model: case_.agent.model, effort: null }]);
+
+  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'message', text: '@say first', first: true });
+
+  await turnsEnded(hosted, 1);
+  expect(beforePrompt(await hosted.adapterLog(), 0)).toEqual(['session/new', ...case_.mode, `model=${case_.agent.model}`]);
+});
+
+it.each(KINDS)("runs a session $kind opens for an Agent that holds no effort with the effort the conversation names, in the Agent's place", async (case_) => {
+  const hosted = await hostKit([{ kind: case_.kind, model: case_.agent.model, effort: null }]);
+
+  hosted.call({ kind: 'open', effort: case_.chosen.effort });
+  hosted.call({ kind: 'message', text: '@say first', first: true });
+
+  await turnsEnded(hosted, 1);
+  expect(beforePrompt(await hosted.adapterLog(), 0)).toEqual(expected(case_, 'session/new', case_.agent.model, case_.chosen.effort));
+});
+
 it.each(KINDS)("takes the Agent's model and effort for each one an `open` to $kind leaves out", async (case_) => {
   const hosted = await host(case_);
 
@@ -282,7 +302,8 @@ it.each([
   ['codex-acp', { model: 'codex-instant', effort: 'high' }, {}, ['mode=agent-full-access', 'model=codex-instant']],
   ['codex-acp', { model: 'gpt-5.5', effort: 'high' }, { model: 'codex-instant', effort: 'low' }, ['mode=agent-full-access', 'model=codex-instant']],
   ['claude-agent-acp', { model: 'opus', effort: 'high' }, { model: 'haiku' }, ['mode=bypassPermissions', 'model=haiku']],
-] as const)('opens a %s session on a model that offers no effort with none, whatever effort the Agent or the call names', async (kind, agent, chosen, set) => {
+  ['codex-acp', { model: 'codex-instant', effort: null }, {}, ['mode=agent-full-access', 'model=codex-instant']],
+] as const)('opens a %s session on a model that offers no effort with none, whatever effort the Agent or the call names or none', async (kind, agent, chosen, set) => {
   const hosted = await hostKit([{ kind, ...agent }]);
 
   hosted.call({ kind: 'open', ...chosen });
