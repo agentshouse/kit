@@ -170,7 +170,7 @@ export async function resident(): Promise<void> {
     then();
   };
   const working = () => !calls.idle() || !conversations.idle() || !agents.idle();
-  const idle = () => !working() && idleCopies.idle() && agents.linksRead();
+  const idle = () => !working() && idleCopies.idle();
   let worked = false;
   const changed = () => {
     if (working()) worked = true;
@@ -184,7 +184,7 @@ export async function resident(): Promise<void> {
     } else if (update.placedRelease() !== null && conversations.quiet() && process.env.HOUSE_KIT_SANDBOX !== '1') {
       const placed = update.placedRelease()!;
       void stop(() => restartPlaced(placed));
-    } else if (!reported) {
+    } else if (!reported && agents.linksRead()) {
       reported = true;
       logged(house.deliver('kits/report-idle', {}, idle));
     }

@@ -22,8 +22,8 @@ type Reading = Offer & Pick<ReportedAgentKind, 'release' | 'failure' | 'installi
 
 interface Link {
   cli: string;
-  target: string;
-  release: string;
+  target: string | null;
+  release: string | null;
   watcher: FSWatcher | null;
 }
 
@@ -430,13 +430,13 @@ export class Agents {
       return { release: null, failure, ...SIGNED_OUT };
     }
     const release = await versionOf(kind, cli, signal);
-    if (release === null) return { release: null, failure: `${cli} --version names no version`, ...SIGNED_OUT };
     await this.linked(kind, cli, release);
+    if (release === null) return { release: null, failure: `${cli} --version names no version`, ...SIGNED_OUT };
     return { cli, release };
   }
 
-  private async linked(kind: string, cli: string, release: string): Promise<void> {
-    const target = await realpath(cli);
+  private async linked(kind: string, cli: string, release: string | null): Promise<void> {
+    const target = await realpath(cli).catch(() => null);
     const known = this.links.get(kind);
     const watcher =
       known !== undefined && known.watcher !== null && dirname(known.cli) === dirname(cli) ? known.watcher : this.watchFolder(kind, cli, known?.watcher ?? null);
@@ -473,17 +473,16 @@ export class Agents {
       });
   }
 
-  private async readLink(kind: string): Promise<Link | null> {
+  private async readLink(kind: string): Promise<{ cli: string; release: string } | null> {
     const link = this.links.get(kind);
     if (link === undefined) return null;
     const [target, release] = await Promise.all([realpath(link.cli).catch(() => null), versionOf(kind, link.cli)]);
-    if (target === null || release === null) return null;
-    const read = { ...link, target, release };
-    this.links.set(kind, read);
-    return target === link.target && release === link.release ? null : read;
+    if (target === null) return null;
+    this.links.set(kind, { ...link, target, release });
+    return release === null || (target === link.target && release === link.release) ? null : { cli: link.cli, release };
   }
 
-  private async readModels(kind: string, { cli, release }: Link): Promise<void> {
+  private async readModels(kind: string, { cli, release }: { cli: string; release: string }): Promise<void> {
     const read = this.nextRead(kind);
     const offered = await this.quietOffer(kind, cli, this.readings.get(kind) ?? SIGNED_OUT);
     if (this.reads.get(kind) === read) this.update(kind, { release, failure: null, ...offered });

@@ -20,10 +20,10 @@ Kit is built for macOS 27 on Apple silicon, Ubuntu 26.04 LTS on amd64 and Window
 Kit runs each agent CLI through the link your login shell finds and installs a missing one through that CLI's own
 installer. When it starts, and when it goes idle after a chat an hour or more since its last run, Kit runs each CLI's
 own update command, such as `claude update`, beside your conversations; a Sandbox runs them only when it starts. A
-running conversation keeps its version and the next one runs the new release. Whenever a CLI changes on this computer,
-by that update, its own updater or a reinstall, Kit tells House its new version and models. A CLI older than the
-oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version, that
-oldest release and its update command. Kit also gives every Agent on the Environment the agent skills of
+running conversation keeps its version and the next one runs the new release. Whenever a CLI changes where your login
+shell finds it, by that update, its own updater or a reinstall, Kit tells House its new version and models. A CLI older
+than the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version,
+that oldest release and its update command. Kit also gives every Agent on the Environment the agent skills of
 `@agentshouse/skills`, at the version each Kit release installs, unless its `skills` setting is off.
 An API key you give a CLI on House's page, with an endpoint for another provider, goes into that CLI's own settings on
 this computer, where you use the CLI too: Claude Code's `settings.json`, or Codex's login and `config.toml`. Grok Build

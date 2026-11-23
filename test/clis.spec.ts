@@ -415,21 +415,39 @@ it.each([
     placeUserCli(userBin(hosted.home), 'grok-build');
   }],
   ['another file in its folder changes', (hosted: Hosted) => writeFile(join(userBin(hosted.home), 'other-tool'), '')],
-])("reads only a CLI's version when %s", async (_case, change) => {
+])("reads only a CLI's version when %s, as the one models read once its link is repointed shows, and sends no second idle report", async (_case, change) => {
   const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => signIn(home, 'grok-build') });
-  const [known] = await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
+  await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
+  await until(() => hosted.idles[0]);
   await settle();
   const reads = await versionReads(hosted);
   const probed = await probes(hosted);
-  const reports = reported(hosted).length;
+  const idles = hosted.idles.length;
 
   await change(hosted);
-
   await until(async () => (await versionReads(hosted)) > reads);
   await settle();
-  expect(await probes(hosted)).toBe(probed);
-  expect(reported(hosted)).toHaveLength(reports);
-  expect(reported(hosted).at(-1)!.agents).toEqual([known]);
+  linkUserCli(hosted.home, userBin(hosted.home), 'grok-build', NEXT['grok-build']);
+  await report(hosted, (agents) => agents.some((agent) => agent.release === NEXT['grok-build']));
+  await settle();
+
+  expect(await probes(hosted)).toBe(probed + 1);
+  expect(hosted.idles).toHaveLength(idles);
+});
+
+it("reads a CLI whose --version named no version again once a reinstall changes its folder, and reports its version with its models", async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], {
+    prepare: async (home) => {
+      await writeFile(join(userBin(home), BINS['grok-build']!), '#!/bin/sh\necho unreadable\n');
+      await signIn(home, 'grok-build');
+    },
+  });
+  const cli = join(userBin(hosted.home), BINS['grok-build']!);
+  await report(hosted, (agents) => agents.some((agent) => agent.failure === `${cli} --version names no version`));
+
+  placeUserCli(userBin(hosted.home), 'grok-build');
+
+  await report(hosted, (agents) => agents.some((agent) => agent.release === RELEASES['grok-build'] && agent.failure === null && agent.signed_in === true));
 });
 
 it("reads no CLI's version or models while its link's folder stays unchanged and no conversation opens, however long the Kit waits", async () => {
