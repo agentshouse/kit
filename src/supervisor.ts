@@ -1,9 +1,10 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { restart } from './end.ts';
 import { oneFolder } from './home.ts';
 
 const SERVICE = 'house-kit';
@@ -14,6 +15,8 @@ const MANAGER_MS = 10_000;
 const MANAGER_CHECK_MS = 100;
 // A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
 const RESTART_SECONDS = 5;
+// A Mac's LaunchAgent is reloaded by a process of its own, which ends this one within moments; a minute bounds a reload that never comes.
+const RELOAD_MS = 60_000;
 
 export function userUnit(): string {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'systemd', 'user', UNIT);
@@ -24,7 +27,7 @@ export function launchAgent(): string {
 }
 
 export function launcher(): string {
-  return join(oneFolder(), 'bin', 'kit');
+  return join(oneFolder(), 'bin', 'house');
 }
 
 export function systemd(): boolean {
@@ -121,6 +124,16 @@ export async function linger(): Promise<void> {
     }
     await delay(MANAGER_CHECK_MS);
   }
+}
+
+export async function reloadLaunchAgent(unreloaded: string): Promise<never> {
+  const target = `gui/${process.getuid!()}`;
+  spawn('/bin/sh', ['-c', `launchctl bootout ${target}/${SERVICE}; launchctl bootstrap ${target} "$0"`, launchAgent()], {
+    detached: true,
+    stdio: 'ignore',
+  }).unref();
+  await delay(RELOAD_MS);
+  restart(unreloaded);
 }
 
 function macos(): { target: string; service: string } {

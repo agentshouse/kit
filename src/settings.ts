@@ -49,8 +49,8 @@ const FOLLOWED = [RECORDS, join('local-copies', 'conversations'), join('local-co
 const MOVE = 'workspace-move.json';
 const WORKING = 'an Agent is working; change the workspace once its turn ends';
 const UNCHOSEN = "Kit is logged out, so it cannot tell which Agents' folders their owners chose";
-const LOGGED_OUT = `${UNCHOSEN}; run kit login, then change its workspace`;
-export const SETTINGS_USAGE = 'usage: kit settings [skills on|off | workspace <absolute path>]';
+const LOGGED_OUT = `${UNCHOSEN}; run house login, then change its workspace`;
+export const SETTINGS_USAGE = 'usage: house settings [skills on|off | workspace <absolute path>]';
 export async function enrolledRoutes(): Promise<readonly DesiredAgentRoute[] | null> {
   if (enrolled()) return (await house.act('agents/desired/list', {})).routes;
   return (await readDisconnected()) === null ? [] : null;
@@ -193,7 +193,7 @@ export async function moveIntoHouse(copies: LocalCopies): Promise<string | null>
   });
   if (routes === undefined) return null;
   if (routes === null) {
-    process.stderr.write(`kit: the workspace stays at ${from} and moves at the next start: ${UNCHOSEN}; run kit login\n`);
+    process.stderr.write(`kit: the workspace stays at ${from} and moves at the next start: ${UNCHOSEN}; run house login\n`);
     return null;
   }
   const chosen = chosenFolders(routes, from);

@@ -266,7 +266,7 @@ it('removes every recorded skill and the record and installs nothing when the Sk
   expect(await recorded(hosted.home)).toBeNull();
 });
 
-it('places every skill at kit login in the home of whoever runs it, with no resident, under the same record', async () => {
+it('places every skill at house login in the home of whoever runs it, with no resident, under the same record', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');
@@ -282,7 +282,7 @@ it('places every skill at kit login in the home of whoever runs it, with no resi
   expect(await recorded(home)).toEqual({ version: KIT_RELEASE, origin: house.origin, names: NAMES });
 });
 
-it('places no skill at kit login when the Skill set is declined', async () => {
+it('places no skill at house login when the Skill set is declined', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   serveLogin(house, 'environment-one', 'ahk_first');

@@ -1,13 +1,13 @@
 import { run, type Ran } from './git.ts';
 import { kitHome, readEnrolment } from './home.ts';
 
-const HELPER = '!kit git-credential';
+export const HELPER = '!house git-credential';
 
 function section(house: string): string {
   return `credential.${new URL('/app/', house).href}`;
 }
 
-async function configured(args: string[]): Promise<Ran | null> {
+export async function configured(args: string[]): Promise<Ran | null> {
   try {
     return await run(kitHome(), ['config', '--global', ...args]);
   } catch (error) {
@@ -37,7 +37,7 @@ export async function answerGitCredential(operation: string | undefined): Promis
   );
   const enrolment = await readEnrolment();
   if (enrolment === null) {
-    process.stderr.write(`kit: Kit home ${kitHome()} is not signed in; run kit login\n`);
+    process.stderr.write(`kit: Kit home ${kitHome()} is not signed in; run house login\n`);
     return;
   }
   const house = new URL(enrolment.house);

@@ -21,7 +21,7 @@ async function run(bin: string, version: string) {
   }
 }
 
-for (const bin of ['kit', 'house']) {
+for (const bin of ['house']) {
   it.each(['22.23.3', '24.21.9', '24.22.0'])(`${bin} refuses Node %s in one line before loading anything`, async (version) => {
     const ran = await run(bin, version);
     expect(ran.status).toBe(1);

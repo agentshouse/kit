@@ -1,6 +1,7 @@
 import { request } from 'node:http';
 import { resolve } from 'node:path';
 import { text as textOf } from 'node:stream/consumers';
+import { parseArgs } from 'node:util';
 import {
   downloaded,
   fileInfo,
@@ -18,6 +19,7 @@ import { ownerSocket } from './home.ts';
 import { fileDigest } from './manifest.ts';
 import { DISCONNECTED, environmentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
+import { proxyUnlessRelayed } from './relay.ts';
 import { parse } from 'yaml';
 
 interface Tool {
@@ -46,6 +48,12 @@ interface Description {
 
 type Finishing = { upload: UploadParts } | { text: string };
 
+interface KitVerb {
+  about: string;
+  connection: boolean;
+  run(args: string[]): Promise<void>;
+}
+
 const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
 const HELP = 'help [tool]';
 const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
@@ -61,6 +69,7 @@ const SANDBOXED = "your CLI's sandbox kept house from House; run house directly,
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
 const NOT_LIVE = 'conversation_not_live';
 const socketPath = process.env.HOUSE_BRIDGE;
+const INSIDE = 'does not run inside an Agent conversation or a function run; run it in your own terminal';
 const WAY: Way = {
   ...(socketPath === undefined ? {} : { socketPath }),
   unreached: (error) =>
@@ -286,7 +295,7 @@ async function toolHelp(name: string): Promise<string> {
   return [listed(tool), ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', true)].join('\n');
 }
 
-async function house(args: string[]): Promise<string> {
+async function house(args: string[]): Promise<string | undefined> {
   const { flags, positionals: [verb, argument] } = accepted(args, ['--help'], 2, USAGE);
   if (flags.has('--help') && argument !== undefined) throw unexpected('--help', USAGE);
   // house help <name> runs as house <name> --help, so both forms answer alike.
@@ -295,7 +304,7 @@ async function house(args: string[]): Promise<string> {
     const listing = (await tools()).flatMap((tool) =>
       tool.description === undefined ? [tool.name, ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', false)] : [listed(tool)],
     );
-    return [USAGE, HELP, UPLOAD, DOWNLOAD, ...listing].join('\n');
+    return [USAGE, HELP, ...[...KIT_VERBS].map(([name, { about }]) => `${name}: ${about}`), UPLOAD, DOWNLOAD, ...listing].join('\n');
   }
   if (flags.has('--help')) return toolHelp(verb);
   return called(verb, await argumentsOf(argument));
@@ -308,9 +317,87 @@ async function called(name: string, args: Record<string, unknown>, operation?: s
   return text;
 }
 
-function run(argv: string[]): Promise<string> {
+function counted(usage: string, about: string, operands: number, args: string[], verb: (operands: string[]) => Promise<void>): Promise<void> {
+  const { values, positionals } = parseArgs({ args, options: { help: { type: 'boolean', default: false } }, allowPositionals: true });
+  if (positionals.length > operands) throw unexpected(positionals[operands]!, usage);
+  if (!values.help) return verb(positionals);
+  process.stdout.write(`${usage}\n  ${about}\n`);
+  return Promise.resolve();
+}
+
+const LOGOUT = 'disconnects this computer and stops the Kit process';
+const RESIDENT = "keeps this Environment connected; Kit's service runs it";
+const SETTINGS = "prints Kit's settings, or changes whether Kit places House's Skills or where its workspace is";
+const GIT_CREDENTIAL = "answers git with this computer's House credential; git runs it";
+const KIT_VERBS = new Map<string, KitVerb>([
+  [
+    'login',
+    {
+      about: 'connects this computer to House as an Environment, by a link you confirm or a login code',
+      connection: true,
+      run: async (args) => (await import('./login.ts')).login(args),
+    },
+  ],
+  [
+    'logout',
+    {
+      about: LOGOUT,
+      connection: true,
+      run: async (args) => counted('usage: house logout', LOGOUT, 0, args, (await import('./logout.ts')).logout),
+    },
+  ],
+  [
+    'connect',
+    {
+      about: "connects this computer, keeping the Environment it has, and starts Kit's service; the install runs it",
+      connection: true,
+      run: async (args) => (await import('./connect.ts')).connect(args),
+    },
+  ],
+  [
+    'resident',
+    {
+      about: RESIDENT,
+      connection: true,
+      run: async (args) => counted('usage: house resident', RESIDENT, 0, args, (await import('./resident.ts')).resident),
+    },
+  ],
+  [
+    'settings',
+    {
+      about: SETTINGS,
+      connection: true,
+      run: async (args) => {
+        const { kitSettings, SETTINGS_USAGE } = await import('./settings.ts');
+        return counted(SETTINGS_USAGE, SETTINGS, 2, args, kitSettings);
+      },
+    },
+  ],
+  [
+    'git-credential',
+    {
+      about: GIT_CREDENTIAL,
+      connection: false,
+      run: async (args) => {
+        const { answerGitCredential } = await import('./app-git.ts');
+        return counted('usage: house git-credential <get|store|erase>', GIT_CREDENTIAL, 1, args, ([operation]) => answerGitCredential(operation));
+      },
+    },
+  ],
+]);
+
+async function kitVerb(name: string, verb: KitVerb, args: string[]): Promise<undefined> {
+  if (verb.connection && socketPath !== undefined && !args.includes('--help')) throw new Error(`house ${name} ${INSIDE}`);
+  proxyUnlessRelayed();
+  await verb.run(args);
+  return undefined;
+}
+
+function run(argv: string[]): Promise<string | undefined> {
   const named = argv.findIndex((arg) => !arg.startsWith('-'));
   const rest = argv.filter((_arg, index) => index !== named);
+  const verb = KIT_VERBS.get(argv[named] ?? '');
+  if (verb !== undefined) return kitVerb(argv[named]!, verb, rest);
   if (argv[named] === 'upload') return uploadVerb(rest);
   if (argv[named] === 'download') return download(rest);
   return house(argv);
@@ -319,6 +406,7 @@ function run(argv: string[]): Promise<string> {
 const argv = process.argv.slice(2);
 run(argv).then(
   (text) => {
+    if (text === undefined) return;
     process.stdout.write(`${text}\n`);
     if (argv[0] === 'shell') process.exitCode = Number(/^exit: (\d+)(?:\n|$)/.exec(text)?.[1] ?? 0);
   },

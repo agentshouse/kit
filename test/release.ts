@@ -42,7 +42,7 @@ export async function releasedOnNode(version: string, nodeBuild: string): Promis
     await mkdir(join(work, 'node-v24.22.1-linux-x64', 'bin'), { recursive: true });
     await writeFile(
       join(work, 'node-v24.22.1-linux-x64', 'bin', 'node'),
-      `#!/bin/sh\n# Node.js ${nodeBuild} build\nkit=$(sed -n 2p "$1")\nshift\nprintf '%s|%s|%s|%s|%s\\n' "$0" "$kit" "$*" "$NODE_USE_SYSTEM_CA" "$HOUSE_KIT_PREFIX"\n`,
+      `#!/bin/sh\n# Node.js ${nodeBuild} build\nkit=$(sed -n 2p "$1")\nshift\nprintf '%s|%s|%s|%s|%s%s\\n' "$0" "$kit" "$*" "$NODE_USE_SYSTEM_CA" "$HOUSE_KIT_PREFIX" "\${HOUSE_KIT_COMMAND:+|$HOUSE_KIT_COMMAND}"\n`,
       { mode: 0o755 },
     );
     return packed(work, 'node-v24.22.1-linux-x64');
@@ -51,10 +51,8 @@ export async function releasedOnNode(version: string, nodeBuild: string): Promis
   const dist = join(tree, 'lib', 'node_modules', '@agentshouse', 'kit', 'dist');
   await mkdir(dist, { recursive: true });
   await mkdir(join(tree, 'bin'));
-  for (const command of ['kit', 'house']) {
-    await writeFile(join(dist, `${command}-main.js`), `#!/usr/bin/env node\n// ${command} ${version}\n`, { mode: 0o755 });
-    await symlink(`../lib/node_modules/@agentshouse/kit/dist/${command}-main.js`, join(tree, 'bin', command));
-  }
+  await writeFile(join(dist, 'house-main.js'), `#!/usr/bin/env node\n// house ${version}\n`, { mode: 0o755 });
+  await symlink('../lib/node_modules/@agentshouse/kit/dist/house-main.js', join(tree, 'bin', 'house'));
   const adapters: Record<string, Buffer> = {};
   for (const kind of ADAPTED) {
     adapters[kind] = await archive(`adapter ${kind}`, async (work) => {

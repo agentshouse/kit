@@ -296,6 +296,23 @@ it("gives a run its own house bridge under the Kit credential for the script and
   expect(output).not.toContain('ahk_held');
 });
 
+it('refuses house login, logout, connect, resident and settings in one line each inside a run, ending no connection', async () => {
+  const hosted = await hostKit([]);
+  hosted.house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
+  const before = await readFile(join(hosted.home, 'credential.json'), 'utf8');
+  const id = run(hosted, 'for verb in login logout connect resident settings; do house $verb 2>&1; echo "exit $?"; done');
+
+  expect(await ended(hosted, id)).toEqual({
+    exit_code: 0,
+    output: ['login', 'logout', 'connect', 'resident', 'settings']
+      .map((verb) => `house: house ${verb} does not run inside an Agent conversation or a function run; run it in your own terminal\nexit 1\n`)
+      .join(''),
+    cut: false,
+  });
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/kits/log-out')).toEqual([]);
+  expect(await readFile(join(hosted.home, 'credential.json'), 'utf8')).toBe(before);
+});
+
 it("closes a run's bridge as the run ends, so a house call its process makes after the run reaches nothing", async () => {
   const hosted = await hostKit([]);
   const directory = await scratch();
@@ -322,7 +339,7 @@ it("answers a run's house call House refuses for its Kit credential at once by s
 
   expect(await ended(hosted, id)).toEqual({
     exit_code: 0,
-    output: 'house: House no longer accepts this computer; run kit login\nexit 1\n',
+    output: 'house: House no longer accepts this computer; run house login\nexit 1\n',
     cut: false,
   });
   expect(hosted.house.requests.filter((received) => received.path === '/' && (received.body as McpCall).params.name === 'search')).toHaveLength(1);

@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
@@ -37,7 +37,7 @@ function place(script: string, house: string, prefix: string, added: Record<stri
   );
 }
 
-function started(prefix: string, command = 'kit') {
+function started(prefix: string, command = 'house') {
   return spawnSync(join(prefix, 'bin', command), ['status'], { encoding: 'utf8', env: { PATH: process.env.PATH! } }).stdout;
 }
 
@@ -61,8 +61,8 @@ it('places a release in a directory of its own beside the launchers that start i
   expect(ran).toEqual({ status: 0, stdout: `Downloading Node.js 24.22.1 and Kit ${one.version} from ${house.origin}.\n`, stderr: '' });
   expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${one.version}\n`);
   expect((await readdir(prefix)).sort()).toEqual(['bin', 'current', 'releases']);
-  expect(started(prefix)).toBe(`${prefix}/releases/${one.version}/bin/node|// kit ${one.version}|status|1|${prefix}\n`);
-  expect(started(prefix, 'house')).toBe(`${prefix}/releases/${one.version}/bin/node|// house ${one.version}|status|1|${prefix}\n`);
+  expect(await readdir(join(prefix, 'bin'))).toEqual(['house']);
+  expect(started(prefix)).toBe(`${prefix}/releases/${one.version}/bin/node|// house ${one.version}|status|1|${prefix}\n`);
   for (const kind of ADAPTED) {
     const adapter = join(prefix, 'releases', one.version, 'adapters', kind, 'node_modules', '.bin', CLIS[kind]!.adapter!.bin);
     expect(spawnSync(adapter, { encoding: 'utf8' }).stdout).toBe(`${adapterArchive(kind)}\n`);
@@ -86,11 +86,31 @@ it('places a newer release beside the one that runs without writing into its dir
   expect(await place(await placing(two!), house.origin, prefix)).toMatchObject({ status: 0, stderr: '' });
 
   expect(await snapshot(running)).toEqual(before);
-  expect(started(prefix)).toBe(`${prefix}/releases/${two!.version}/bin/node|// kit ${two!.version}|status|1|${prefix}\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${two!.version}/bin/node|// house ${two!.version}|status|1|${prefix}\n`);
   spawnSync('chmod', ['-R', 'u+w', running]);
   expect(await place(await placing(three!), house.origin, prefix)).toMatchObject({ status: 0, stderr: '' });
   expect((await readdir(join(prefix, 'releases'))).sort()).toEqual([two!.version, three!.version]);
-  expect(started(prefix)).toBe(`${prefix}/releases/${three!.version}/bin/node|// kit ${three!.version}|status|1|${prefix}\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${three!.version}/bin/node|// house ${three!.version}|status|1|${prefix}\n`);
+});
+
+it("starts house from an earlier release's kit launcher, saying it was started as kit, once a release with no kit command is placed beside it", async () => {
+  const [one, two] = await Promise.all(['0.2.1-c000000000001', '0.2.1-c000000000002'].map(released));
+  const house = await building(served(one!, two!));
+  const prefix = join(await temporaryHome(), 'house-kit');
+  expect(await place(await placing(one!), house.origin, prefix)).toMatchObject({ status: 0 });
+  await writeFile(
+    join(prefix, 'bin', 'kit'),
+    `#!/bin/sh\nprefix='${prefix}'\nread -r release < "$prefix/current"\nexport NODE_USE_SYSTEM_CA=1 HOUSE_KIT_PREFIX="$prefix"\nPATH="$prefix/releases/$release/bin:$PATH" exec "$prefix/releases/$release/bin/kit" "$@"\n`,
+    { mode: 0o755 },
+  );
+
+  expect(await place(await placing(two!), house.origin, prefix)).toMatchObject({ status: 0, stderr: '' });
+
+  expect(started(prefix, 'kit')).toBe(`${prefix}/releases/${two!.version}/bin/node|// house ${two!.version}|status|1|${prefix}|kit\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${two!.version}/bin/node|// house ${two!.version}|status|1|${prefix}\n`);
+  const launcher = await stat(join(prefix, 'bin', 'kit'));
+  expect(await place(await placing(two!), house.origin, prefix)).toEqual({ status: 0, stdout: '', stderr: '' });
+  expect((await stat(join(prefix, 'bin', 'kit'))).mtimeMs).toBe(launcher.mtimeMs);
 });
 
 it('places a newer release on the Node.js the running release holds while the release pins the same Node.js, downloading only the Kit and its adapters', async () => {
@@ -105,8 +125,7 @@ it('places a newer release on the Node.js the running release holds while the re
 
   expect(ran).toEqual({ status: 0, stdout: `Downloading Kit ${two.version} from ${house.origin}.\n`, stderr: '' });
   expect(house.requests).toEqual([`/kit-installer/kit-${two.version}.tar.gz`, ...ADAPTED.map((kind) => `/kit-installer/${adapterArchive(kind)}`)]);
-  expect(started(prefix)).toBe(`${prefix}/releases/${two.version}/bin/node|// kit ${two.version}|status|1|${prefix}\n`);
-  expect(started(prefix, 'house')).toBe(`${prefix}/releases/${two.version}/bin/node|// house ${two.version}|status|1|${prefix}\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${two.version}/bin/node|// house ${two.version}|status|1|${prefix}\n`);
 });
 
 it('downloads Node.js again for a newer release that pins another Node.js than the running release holds', async () => {
@@ -138,7 +157,7 @@ it.each([
   expect(ran.stderr).toContain(refusal.replace('%s', house.origin));
   expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${one!.version}\n`);
   expect(await readdir(join(prefix, 'releases'))).toEqual([one!.version]);
-  expect(started(prefix)).toBe(`${prefix}/releases/${one!.version}/bin/node|// kit ${one!.version}|status|1|${prefix}\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${one!.version}/bin/node|// house ${one!.version}|status|1|${prefix}\n`);
 });
 
 it('leaves the running release and its launchers as they were after an adapter archive that does not match its digest', async () => {
@@ -158,7 +177,7 @@ it('leaves the running release and its launchers as they were after an adapter a
   expect(ran.stderr).toContain(`kit_bootstrap_refused: the ${adapterArchive(mismatched!)} download does not match its pinned checksum\n`);
   expect(await readFile(join(prefix, 'current'), 'utf8')).toBe(`${one!.version}\n`);
   expect(await readdir(join(prefix, 'releases'))).toEqual([one!.version]);
-  expect(started(prefix)).toBe(`${prefix}/releases/${one!.version}/bin/node|// kit ${one!.version}|status|1|${prefix}\n`);
+  expect(started(prefix)).toBe(`${prefix}/releases/${one!.version}/bin/node|// house ${one!.version}|status|1|${prefix}\n`);
 });
 
 it("downloads through the authorities NODE_EXTRA_CA_CERTS names beside the computer's own, as a container's Kit trusts them", async () => {

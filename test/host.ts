@@ -116,7 +116,6 @@ export async function fakeHost(platform: Platform): Promise<Host> {
   const packaged = join(fake, 'kit-tree');
   await mkdir(join(packaged, 'lib', 'node_modules', '@agentshouse', 'kit', 'dist'), { recursive: true });
   await mkdir(join(packaged, 'bin'));
-  await script(join(packaged, 'bin', 'kit'), KIT);
   await script(join(packaged, 'bin', 'house'), KIT);
   spawnSync('tar', ['-czf', join(fake, 'kit.tar.gz'), '-C', packaged, 'lib', 'bin']);
   const adapter = join(fake, 'adapter-tree');

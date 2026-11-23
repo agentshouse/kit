@@ -110,9 +110,9 @@ it('refuses a workspace that is no absolute path, or one the account cannot writ
   const home = await enrolled(false);
   const settings = await readFile(join(home, 'kit.json'), 'utf8');
 
-  expect(await kitSettings(home, 'workspace', 'agents')).toEqual({ status: 1, stdout: '', stderr: 'kit: agents is not an absolute path\n' });
-  expect(await kitSettings(home, 'workspace', '/proc/kit')).toEqual({ status: 1, stdout: '', stderr: 'kit: this account cannot write /proc/kit\n' });
-  expect(await kitSettings(home, 'skills', 'maybe')).toMatchObject({ status: 1, stderr: 'kit: usage: kit settings [skills on|off | workspace <absolute path>]\n' });
+  expect(await kitSettings(home, 'workspace', 'agents')).toEqual({ status: 1, stdout: '', stderr: 'house: agents is not an absolute path\n' });
+  expect(await kitSettings(home, 'workspace', '/proc/kit')).toEqual({ status: 1, stdout: '', stderr: 'house: this account cannot write /proc/kit\n' });
+  expect(await kitSettings(home, 'skills', 'maybe')).toMatchObject({ status: 1, stderr: 'house: usage: house settings [skills on|off | workspace <absolute path>]\n' });
   expect(await readFile(join(home, 'kit.json'), 'utf8')).toBe(settings);
 });
 
@@ -131,7 +131,7 @@ it('refuses to move the workspace of a Kit that still runs where an earlier inst
   expect(await settings('workspace', join(account, 'elsewhere'))).toEqual({
     status: 1,
     stdout: '',
-    stderr: `kit: Kit runs where an earlier install placed it; its workspace changes once Kit moves into ${join(account, '.agents', 'house')}\n`,
+    stderr: `house: Kit runs where an earlier install placed it; its workspace changes once Kit moves into ${join(account, '.agents', 'house')}\n`,
   });
   expect(await settings()).toEqual({ status: 0, stdout: `skills on\nworkspace ${workspace}\n`, stderr: '' });
   expect(await readFile(join(workspace, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
@@ -142,7 +142,7 @@ it('changes a setting through a Kit process that waits for a login', async () =>
   const home = await temporaryHome();
   await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: true, workspace: home }));
   const waiting = runKit(['resident'], { HOME: accountOf(home) });
-  await until(() => waiting.stderr().includes('this Environment is not connected; run kit login'));
+  await until(() => waiting.stderr().includes('this Environment is not connected; run house login'));
 
   const changed = await kitSettings(home, 'skills', 'off');
 
@@ -160,14 +160,14 @@ it('refuses to move the workspace of a Kit logged out of its Environment, which 
   expect(await kitSettings(home, 'workspace', workspace)).toEqual({
     status: 1,
     stdout: '',
-    stderr: "kit: Kit is logged out, so it cannot tell which Agents' folders their owners chose; run kit login, then change its workspace\n",
+    stderr: "house: Kit is logged out, so it cannot tell which Agents' folders their owners chose; run house login, then change its workspace\n",
   });
   expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: false, workspace: houseOf(home) });
   expect(await readFile(join(houseOf(home), 'agents', 'reader', 'chosen.md'), 'utf8')).toBe('chosen\n');
   await absent(workspace);
 });
 
-it('declares its settings and changes placing the Skill set for a settings Kit call and for kit settings, declaring them again', async () => {
+it('declares its settings and changes placing the Skill set for a settings Kit call and for house settings, declaring them again', async () => {
   const hosted = await hostKit();
   expect(hosted.reports[0]).toMatchObject({ settings: { skills: false, workspace: hosted.workspace } });
 
@@ -183,7 +183,7 @@ it('declares its settings and changes placing the Skill set for a settings Kit c
   expect(alive(hosted.kit.pid)).toBe(true);
 });
 
-it('moves the workspace for kit settings within one filesystem, keeping a Local copy’s history and uncommitted files, and ends so its supervisor starts it on the new root', async () => {
+it('moves the workspace for house settings within one filesystem, keeping a Local copy’s history and uncommitted files, and ends so its supervisor starts it on the new root', async () => {
   const workspace = join(await temporaryDirectory(), 'workspace');
   const hosted = await hostKit([{}], { prepare: (home) => filled(home) });
   expect((await stat(hosted.home)).dev).toBe((await stat(dirname(workspace))).dev);

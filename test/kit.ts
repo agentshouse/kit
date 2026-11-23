@@ -6,7 +6,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 
-const KIT = fileURLToPath(new URL('../src/kit-main.ts', import.meta.url));
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 
 export interface KitRun {
@@ -34,7 +33,7 @@ export function accountOf(home: string): string {
 }
 
 export function runKit(argv: string[], environment: Record<string, string>, node: string[] = []): KitRun {
-  const child = spawn(process.execPath, [...node, KIT, ...argv], {
+  const child = spawn(process.execPath, [...node, HOUSE, ...argv], {
     env: { ...process.env, ...environment },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -61,19 +60,13 @@ export async function fakeBin(home: string): Promise<string> {
     await writeFile(join(bin, tool), `#!/bin/sh\nexec ${process.execPath} ${fileURLToPath(new URL(`./${tool}.ts`, import.meta.url))} "$@"\n`);
     await chmod(join(bin, tool), 0o755);
   }
-  await placeKitHouse(bin);
-  return `${bin}:${process.env.PATH}`;
-}
-
-async function placeKitHouse(bin: string): Promise<void> {
-  await writeFile(join(bin, 'house'), `#!/bin/sh\nexec ${process.execPath} ${HOUSE} "$@"\n`);
-  await chmod(join(bin, 'house'), 0o755);
+  return placeKit(bin);
 }
 
 export async function placeKit(bin: string): Promise<string> {
   await mkdir(bin, { recursive: true });
-  await writeFile(join(bin, 'kit'), `#!/bin/sh\nexec ${process.execPath} ${KIT} "$@"\n`);
-  await chmod(join(bin, 'kit'), 0o755);
+  await writeFile(join(bin, 'house'), `#!/bin/sh\nexec ${process.execPath} ${HOUSE} "$@"\n`);
+  await chmod(join(bin, 'house'), 0o755);
   return `${bin}:${process.env.PATH}`;
 }
 

@@ -529,7 +529,7 @@ it.each([
   ['SIGTERM stops it', null, (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGTERM')],
   ['SIGINT stops it', null, (hosted: Hosted) => process.kill(hosted.kit.pid, 'SIGINT')],
   [
-    'kit logout disconnects its computer',
+    'house logout disconnects its computer',
     1,
     async (hosted: Hosted) => {
       hosted.house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));

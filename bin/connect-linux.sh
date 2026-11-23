@@ -120,8 +120,18 @@ trust_extra_authorities() {
   done
 }
 
+place_launcher() {
+  local quoted=${1//\'/\'\\\'\'}
+  printf '#!/bin/sh\nprefix='"'"'%s'"'"'\nread -r release < "$prefix/current"\nexport NODE_USE_SYSTEM_CA=1 HOUSE_KIT_PREFIX="$prefix"%s\nPATH="$prefix/releases/$release/bin:$PATH" exec "$prefix/releases/$release/bin/house" "$@"\n' "$quoted" "$3" > "$2.new" || refuse "$2 could not be written"
+  if cmp -s "$2.new" "$2"; then
+    rm -f "$2.new"
+  else
+    chmod 0755 "$2.new" && mv -f "$2.new" "$2" || refuse "$2 could not be written"
+  fi
+}
+
 place_release() {
-  local prefix=$1 bin=$2 current='' mask command placed adapter entry quoted
+  local prefix=$1 bin=$2 current='' mask placed adapter entry
   [[ ! -f "$prefix/current" ]] || current=$(cat "$prefix/current")
   mask=$(umask)
   umask 022
@@ -153,18 +163,11 @@ place_release() {
     done
     mv "$prefix/placing/release" "$prefix/releases/$VERSION" && rm -rf "$prefix/placing" || refuse "Kit could not be placed in $prefix"
   fi
-  quoted=${prefix//\'/\'\\\'\'}
-  for command in kit house; do
-    printf '#!/bin/sh\nprefix='"'"'%s'"'"'\nread -r release < "$prefix/current"\nexport NODE_USE_SYSTEM_CA=1 HOUSE_KIT_PREFIX="$prefix"\nPATH="$prefix/releases/$release/bin:$PATH" exec "$prefix/releases/$release/bin/%s" "$@"\n' "$quoted" "$command" > "$bin/$command.new" || refuse "$bin/$command could not be written"
-    if cmp -s "$bin/$command.new" "$bin/$command"; then
-      rm -f "$bin/$command.new"
-    else
-      chmod 0755 "$bin/$command.new" && mv -f "$bin/$command.new" "$bin/$command" || refuse "$bin/$command could not be written"
-    fi
-  done
+  place_launcher "$prefix" "$bin/house" ''
   if [[ "$current" != "$VERSION" ]]; then
     printf '%s\n' "$VERSION" > "$prefix/current.new" && mv -f "$prefix/current.new" "$prefix/current" || refuse "Kit could not be placed in $prefix"
   fi
+  [[ ! -e "$bin/kit" ]] || place_launcher "$prefix" "$bin/kit" ' HOUSE_KIT_COMMAND=kit'
   for placed in "$prefix/releases"/*; do
     [[ "${placed##*/}" == "$VERSION" || "${placed##*/}" == "$current" ]] || rm -rf "$placed"
   done
@@ -188,7 +191,7 @@ add_path_line() {
   grep -Fqx "$line" "$profile" 2>/dev/null && return
   if [[ -s "$profile" && -n "$(tail -c 1 "$profile")" ]]; then printf '\n' >> "$profile"; fi
   mkdir -p "${profile%/*}" && printf '%s\n' "$line" >> "$profile" || refuse "$profile could not be written"
-  printf 'Added %s to the path in %s; new terminals find kit and house.\n' "$1" "$profile"
+  printf 'Added %s to the path in %s; new terminals find house.\n' "$1" "$profile"
 }
 
 prepare_home() {
@@ -321,4 +324,4 @@ notice_host
 prepare_home
 place_release "$KIT_HOME/kit" "$KIT_HOME/bin"
 add_path_line "$KIT_HOME/bin"
-exec "$KIT_HOME/bin/kit" connect --house "$HOUSE" ${CODE[@]+"${CODE[@]}"}
+exec "$KIT_HOME/bin/house" connect --house "$HOUSE" ${CODE[@]+"${CODE[@]}"}

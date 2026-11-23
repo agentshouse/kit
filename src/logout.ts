@@ -14,6 +14,6 @@ export async function logout(): Promise<void> {
   process.stdout.write(
     enrolled === null
       ? 'This computer is not connected to House.\n'
-      : `Environment ${enrolled.environment} is disconnected; kit login reconnects it.\n`,
+      : `Environment ${enrolled.environment} is disconnected; house login reconnects it.\n`,
   );
 }

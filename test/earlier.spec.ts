@@ -102,13 +102,13 @@ it("moves a Linux desktop's Kit home and its default workspace into ~/.agents/ho
   expect(kit.stderr().split('\n').at(-2)).toBe(`kit: Kit 0.2.1 moved into ${earlier.folder}; its supervisor starts it there`);
   await moved(earlier);
   expect(await readFile(join(earlier.folder, 'kit', 'current'), 'utf8')).toBe(`${SERVED}\n`);
-  await lstat(join(earlier.folder, 'bin', 'kit'));
+  await lstat(join(earlier.folder, 'bin', 'house'));
   expect(await readFile(join(earlier.workspace, 'mine.txt'), 'utf8')).toBe('mine\n');
   await absent(join(earlier.workspace, 'agents'));
   await absent(earlier.prefix);
   await absent(join(earlier.account, '.local', 'bin', 'kit'));
   const unit = await readFile(join(earlier.account, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8');
-  expect(unit).toContain(`ExecStart="${join(earlier.folder, 'bin', 'kit')}" resident\n`);
+  expect(unit).toContain(`ExecStart="${join(earlier.folder, 'bin', 'house')}" resident\n`);
   expect(unit).toContain('WantedBy=default.target\n');
   expect(unit).not.toContain('HOUSE_KIT');
   expect(tools.calls('loginctl')).toEqual([`enable-linger ${process.getuid!()}`]);
@@ -290,7 +290,7 @@ it.each([
 
   expect(await kit.exited).toBe(1);
   expect(kit.stdout()).toBe('');
-  expect(kit.stderr()).toBe("kit: this computer's Kit runs as service; run this command as service to update it\n");
+  expect(kit.stderr()).toBe("house: this computer's Kit runs as service; run this command as service to update it\n");
   expect(house.requests).toEqual([]);
   await absent(join(account, '.agents', 'house', 'credential.json'));
   expect(JSON.parse(await readFile(join(earlier.home, 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one' });
