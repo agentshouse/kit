@@ -69,7 +69,7 @@ function conversationRoute(route: DesiredAgentRoute, chosen: Chosen): DesiredAge
   return { ...route, model: chosen.model ?? route.model, effort: chosen.effort ?? route.effort };
 }
 
-type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error' | 'silent';
+type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error';
 
 interface Failed {
   failure: Failure;
@@ -199,8 +199,7 @@ function answeredWith(error: unknown): Failed {
 }
 
 function exitedWith(running: Running, cause: string): Failed {
-  if (running.killed) return { failure: 'killed', cause: KILLED };
-  return { failure: running.adapter.silent() ? 'silent' : 'exited', cause };
+  return running.killed ? { failure: 'killed', cause: KILLED } : { failure: 'exited', cause };
 }
 
 function answerMessage(request: unknown, response: unknown): string {
@@ -981,7 +980,6 @@ export class Conversations {
         this.kit.changed();
       });
       conversation.running = running;
-      adapter.turn(conversation.turns.size > 0);
       conversation.session = running.sessionId;
       conversation.options = options;
       this.facts(conversation);
@@ -1120,7 +1118,6 @@ export class Conversations {
   private begin(conversation: Conversation): Turn {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
     conversation.turns.add(turn);
-    conversation.running?.adapter.turn(true);
     void this.deliver(conversation, 'turns/start', turnOf(conversation, turn))
       .then((answer) => {
         if (answer.run === true) turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
@@ -1140,7 +1137,6 @@ export class Conversations {
     if (notice !== null) turn.content.add({ type: 'notice', kind: 'error', text: notice });
     turn.ended = true;
     conversation.turns.delete(turn);
-    conversation.running?.adapter.turn(conversation.turns.size > 0);
     if (conversation.turn === turn) conversation.turn = null;
     const tokens = conversation.tokens;
     conversation.tokens = null;
