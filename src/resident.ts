@@ -179,7 +179,6 @@ export async function resident(): Promise<void> {
     else if (worked) {
       worked = false;
       idleCopies.look();
-      if (process.env.HOUSE_KIT_SANDBOX !== '1') agents.wentIdle();
     }
     if (!idle()) {
       reported = false;

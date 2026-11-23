@@ -269,33 +269,27 @@ it("reports the read of a CLI's latest link change when an earlier read of the s
   expect(reported(hosted).at(-1)!.agents).toMatchObject([{ release: '1.0.49', models: [{ model: 'grok-newer', name: 'grok-newer', efforts: ['high'] }] }]);
 });
 
-it.each(KINDS)("runs a %s whose link its update command moved at the new version in the next conversation, while the running one keeps its own and Kit runs on", async (kind) => {
-  const clock = await clocked();
+it.each(KINDS)("runs a %s whose link the update command at Kit start moved at the new version in the next conversation, while the running one keeps its own and Kit runs on", async (kind) => {
   const hosted = await hostKit([{ kind }], {
-    ...clock.hosting,
+    untilIdle: false,
     prepare: async (home) => {
       linkUserCli(home, userBin(home), kind);
+      await writeFile(join(home, `update-${kind}`), NEXT[kind]!);
+      await writeFile(join(home, 'update-hold'), '');
     },
   });
   const cli = join(userBin(hosted.home), BINS[kind]!);
-  await open(hosted, 'conversation-1');
-  expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
-  await writeFile(join(hosted.home, `update-${kind}`), NEXT[kind]!);
-  await writeFile(join(hosted.home, 'update-hold'), '');
-  await clock.shift(HOUR + MINUTE);
-  hosted.call({ kind: 'kill', conversation_id: 'conversation-1' });
-  await hosted.result(lastCall());
   await until(() => updatesRun(hosted.home).findLast((update) => update.held));
 
-  await open(hosted, 'conversation-2');
-  expect(await answer(hosted, 'conversation-2', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
+  await open(hosted, 'conversation-1');
+  expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
   await rm(join(hosted.home, 'update-hold'));
   await report(hosted, (agents) => agents.some((agent) => agent.release === NEXT[kind]));
-  await open(hosted, 'conversation-3');
+  await open(hosted, 'conversation-2');
 
   expect(await readlink(cli)).toBe(join(hosted.home, 'versions', NEXT[kind]!, BINS[kind]!));
-  expect(await answer(hosted, 'conversation-3', '@version')).toBe(`${cli} ${NEXT[kind]}`);
-  expect(await answer(hosted, 'conversation-2', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
+  expect(await answer(hosted, 'conversation-2', '@version')).toBe(`${cli} ${NEXT[kind]}`);
+  expect(await answer(hosted, 'conversation-1', '@version')).toBe(`${cli} ${RELEASES[kind]}`);
   expect(alive(hosted.kit.pid)).toBe(true);
   expect(hosted.house.requests.filter((request) => request.path === '/kit/kits/report-restart')).toHaveLength(1);
 });
@@ -314,7 +308,7 @@ it("runs each chosen CLI's own update command once when Kit starts, through the 
   expect(updatesRun(hosted.home)).toEqual(expect.arrayContaining(ran));
 });
 
-it("runs each chosen CLI's update command again when the Kit goes idle after a turn once an hour has passed since its last run, never sooner and never while the Kit stays idle", async () => {
+it("runs no CLI's update command when the Kit goes idle after a turn, however long after its start", async () => {
   const clock = await clocked();
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }], clock.hosting);
   const path = join(userBin(hosted.home), 'claude');
@@ -322,51 +316,21 @@ it("runs each chosen CLI's update command again when the Kit goes idle after a t
   expect(updatesRun(hosted.home)).toEqual(run);
   await open(hosted, 'conversation-1');
 
-  await clock.shift(HOUR - MINUTE);
-  const early = hosted.idles.length;
-  await answer(hosted, 'conversation-1', '@say early');
-  await idled(hosted, early);
-  expect(updatesRun(hosted.home)).toEqual(run);
-
-  await clock.shift(4 * HOUR);
-  // Two seconds of a Kit that stays idle four hours after its last run show no timer starts the update command.
-  await new Promise((resolve) => setTimeout(resolve, 2000));
-  expect(updatesRun(hosted.home)).toEqual(run);
-
+  await clock.shift(25 * HOUR);
   const later = hosted.idles.length;
   await answer(hosted, 'conversation-1', '@say later');
-  await until(() => updatesRun(hosted.home)[3]?.ended);
   await idled(hosted, later);
-  expect(updatesRun(hosted.home)).toEqual([...run, ...run]);
 
-  const again = hosted.idles.length;
-  await answer(hosted, 'conversation-1', '@say again');
-  await idled(hosted, again);
-  expect(updatesRun(hosted.home)).toEqual([...run, ...run]);
+  expect(updatesRun(hosted.home)).toEqual(run);
 });
 
-it("runs a Sandbox's CLI update commands only at its Kit's start, never when the Kit goes idle", async () => {
-  const clock = await clocked();
-  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], { ...clock.hosting, environment: { ...clock.hosting.environment, HOUSE_KIT_SANDBOX: '1' } });
-  expect(updatesRun(hosted.home)).toHaveLength(2);
-  await open(hosted, 'conversation-1');
-
-  await clock.shift(2 * HOUR);
-  const idles = hosted.idles.length;
-  await answer(hosted, 'conversation-1', '@say later');
-  await idled(hosted, idles);
-
-  expect(updatesRun(hosted.home)).toHaveLength(2);
-});
-
-it("runs a CLI's update command beside a conversation, and no message waits for one", async () => {
-  const clock = await clocked();
-  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], clock.hosting);
-  await open(hosted, 'conversation-1');
-  await writeFile(join(hosted.home, 'update-hold'), '');
-  await clock.shift(HOUR + MINUTE);
-  await answer(hosted, 'conversation-1', '@say first');
+it("runs a CLI's update command at Kit start beside a conversation, and no message waits for one", async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
+    untilIdle: false,
+    prepare: (home) => writeFile(join(home, 'update-hold'), ''),
+  });
   const held = await until(() => updatesRun(hosted.home).findLast((update) => update.held));
+  await open(hosted, 'conversation-1');
 
   expect(await answer(hosted, 'conversation-1', '@say answered')).toBe('answered');
   expect(updatesRun(hosted.home).at(-1)).toEqual(held);

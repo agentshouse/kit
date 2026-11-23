@@ -26,9 +26,6 @@ interface Link {
   watcher: FSWatcher | null;
 }
 
-// A CLI's maker can publish several releases a day, so running each chosen CLI's update command when the Kit goes idle once an hour has passed since its last run brings a new one within the hour of its use for one small run.
-const CLI_UPDATE_MS = 60 * 60_000;
-
 // A model read opens one session and reads each model's settings within seconds, so one unfinished after ten minutes has hung, and ending it frees the idle report every update and restart waits for.
 export const MODEL_READ_MS = 10 * 60_000;
 
@@ -231,7 +228,6 @@ export class Agents {
   private refreshing = 0;
   private loaded: Promise<unknown> = Promise.resolve();
   private updating: Promise<void> | null = null;
-  private updated = 0;
   private readonly links = new Map<string, Link>();
   private readonly relinks = new Set<string>();
   private relinking = 0;
@@ -290,11 +286,20 @@ export class Agents {
   }
 
   updateClis(): void {
-    this.updateAll(this.loaded);
-  }
-
-  wentIdle(): void {
-    if (Date.now() - this.updated >= CLI_UPDATE_MS) this.updateAll(Promise.resolve());
+    this.updating = this.loaded
+      .then(async () => {
+        for (const kind of this.desired.agents) {
+          if (this.installs.has(kind) || !this.readings.get(kind)?.release) continue;
+          const failure = await updateCli(kind);
+          if (failure !== null) process.stderr.write(`kit: ${kind} did not update: ${failure}\n`);
+        }
+      })
+      .catch(logged)
+      .finally(() => {
+        this.updating = null;
+        this.changed();
+      });
+    this.changed();
   }
 
   cli(kind: string): Promise<string> {
@@ -472,25 +477,6 @@ export class Agents {
     const reading =
       'cli' in resolved ? { release: resolved.release, failure: null, ...(await read(kind, resolved.cli, known)) } : resolved;
     if (this.reads.get(kind) === current && !signal?.aborted) this.hold(kind, reading);
-  }
-
-  private updateAll(after: Promise<unknown>): void {
-    if (this.updating !== null) return;
-    this.updating = after
-      .then(async () => {
-        this.updated = Date.now();
-        for (const kind of this.desired.agents) {
-          if (this.installs.has(kind) || !this.readings.get(kind)?.release) continue;
-          const failure = await updateCli(kind);
-          if (failure !== null) process.stderr.write(`kit: ${kind} did not update: ${failure}\n`);
-        }
-      })
-      .catch(logged)
-      .finally(() => {
-        this.updating = null;
-        this.changed();
-      });
-    this.changed();
   }
 
   private async load(kind: string): Promise<void> {

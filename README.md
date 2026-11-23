@@ -18,9 +18,8 @@ On Windows the command, run in PowerShell, installs WSL where it is absent, aski
 Kit is built for macOS 27 on Apple silicon, Ubuntu 26.04 LTS on amd64 and Windows 11 on amd64. On another release, distribution or architecture the command prints one warning line, such as `Warning: macOS 26.7.1 is outdated; update to macOS 27.`, and installs anyway. It refuses only an architecture other than amd64 and arm64, a macOS older than 13.5 and a Linux without glibc 2.28 or newer.
 
 Kit runs each agent CLI through the link your login shell finds and installs a missing one through that CLI's own
-installer. When it starts, and when it goes idle after a chat an hour or more since its last run, Kit runs each CLI's
-own update command, such as `claude update`, beside your conversations; a Sandbox runs them only when it starts. A
-running conversation keeps its version and the next one runs the new release. Whenever a CLI changes where your login
+installer. When it starts, Kit runs each CLI's own update command, such as `claude update`, beside your conversations.
+A running conversation keeps its version and the next one runs the new release. Whenever a CLI changes where your login
 shell finds it, by that update, its own updater or a reinstall, Kit tells House its new version and models. A CLI older
 than the oldest release Kit is built for still runs, though its conversations may fail: Kit tells House its version,
 that oldest release and its update command. Kit also gives every Agent on the Environment the agent skills of

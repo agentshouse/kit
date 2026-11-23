@@ -202,6 +202,7 @@ export interface Hosting {
   skills?: boolean;
   workspace?: string;
   prepare?: (home: string) => Promise<void>;
+  untilIdle?: boolean;
 }
 
 export interface Hosted {
@@ -445,7 +446,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
       }
     },
   };
-  await until(() => idles[0]);
+  if (hosting.untilIdle !== false) await until(() => idles[0]);
   return hosted;
 }
 
