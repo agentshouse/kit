@@ -15,12 +15,12 @@ function kitLauncher(): string {
 }
 
 async function renameHelpers(): Promise<void> {
-  const listed = await configured(['--get-regexp', '^credential\\..*\\.helper$']);
+  const listed = await configured(['--null', '--get-regexp', '^credential\\..*\\.helper$']);
   if (listed === null || listed.status !== 0) return;
-  for (const line of listed.stdout.toString('utf8').split('\n')) {
-    const space = line.indexOf(' ');
-    if (space < 0 || line.slice(space + 1) !== KIT_HELPER) continue;
-    const ran = await configured(['--replace-all', line.slice(0, space), HELPER, `^${KIT_HELPER}$`]);
+  for (const entry of listed.stdout.toString('utf8').split('\0')) {
+    const end = entry.indexOf('\n');
+    if (end < 0 || entry.slice(end + 1) !== KIT_HELPER) continue;
+    const ran = await configured(['--replace-all', entry.slice(0, end), HELPER, `^${KIT_HELPER}$`]);
     if (ran?.status !== 0) throw new Error(`git config failed: ${ran?.stderr.trim()}`);
   }
 }
