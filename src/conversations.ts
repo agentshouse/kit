@@ -1007,13 +1007,10 @@ export class Conversations {
     offered: SessionConfigOption[],
   ): Promise<SessionConfigOption[]> {
     let options = offered;
-    const settings: [string, string | null][] = [
-      ['mode', route.mode ?? CLIS[route.kind]!.fullAccess],
-      ['model', route.model],
-      [EFFORT, route.effort],
-    ];
-    for (const [category, value] of settings) {
-      if (value !== null) options = (await this.setOption(running, options, category, value)) ?? options;
+    const mode = route.mode ?? CLIS[route.kind]!.fullAccess;
+    if (mode !== null) options = (await this.setOption(running, options, 'mode', mode)) ?? options;
+    for (const [category, value] of [['model', route.model], [EFFORT, route.effort]] as const) {
+      options = (await this.setOption(running, options, category, value)) ?? options;
     }
     return options;
   }

@@ -546,7 +546,7 @@ it.each(['claude-compact', 'codex-compact', 'grok-compact'])('marks the compacti
 });
 
 it.each([
-  ['claude-plan', { questions: 1, route: { mode: 'plan', model: 'haiku', effort: null } }, ['default'], 1],
+  ['claude-plan', { questions: 1, route: { mode: 'plan', model: 'haiku', effort: 'high' } }, ['default'], 1],
   ['codex-plan', { questions: 1, collaboration: 'plan' }, ['Implement this plan?', 'default'], 2],
   ['grok-plan', { questions: 1, responses: ['approved'] }, ['plan', 'default'], 1],
 ] as const)("marks the plan approval recorded in %s and the mode it left plan mode for, and sends no plan, reasoning or plan update", async (fixture, recording, modes, count) => {

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { DesiredAgentRoute } from '@agentshouse/kit-wire';
 import { isState, isTurn, type Operation, type Part, type SessionState, type Turn } from '@agentshouse/session-content';
 import { agentInstructions } from '@agentshouse/skills';
 import { expect, it, onTestFinished, vi } from 'vitest';
@@ -15,17 +16,6 @@ import { accountOf, alive, placeHostKey, runKit, temporaryHome } from './kit.ts'
 const FAST_REPORTS = fileURLToPath(new URL('./fast-reports.ts', import.meta.url));
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-it.each(['codex-acp', 'claude-agent-acp', 'grok-build'])("leaves %s on its own default model and effort when the Profile names neither", async (kind) => {
-  const hosted = await hostKit([{ kind, model: null, effort: null }]);
-  hosted.call({ kind: 'open' });
-  await hosted.result(lastCall());
-  const log = await hosted.adapterLog();
-  expect(log.some((entry) => entry.method === 'session/new')).toBe(true);
-  expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => (entry.params as { configId: string }).configId)).toEqual(
-    kind === 'grok-build' ? [] : ['mode'],
-  );
-});
 
 it('opens the provider session in the launch directory with the route settings and full access and reports its id', async () => {
   const hosted = await hostKit([{ model: 'gpt-route', effort: 'high' }]);
@@ -47,7 +37,7 @@ it('opens the provider session in the launch directory with the route settings a
 });
 
 it("opens the session in the mode the route names, and Codex runs each `house` on the conversation's PATH outside its sandbox whenever its shell starts it", async () => {
-  const hosted = await hostKit([{ mode: 'read-only', effort: null }], {
+  const hosted = await hostKit([{ mode: 'read-only' }], {
     prepare: async (home) => {
       await writeFile(join(userBin(home), 'house'), '#!/bin/sh\n', { mode: 0o755 });
       await writeFile(join(accountOf(home), '.profile'), `PATH="${userBin(home)}:/usr/bin:/bin"\n`);
@@ -61,6 +51,7 @@ it("opens the session in the mode the route names, and Codex runs each `house` o
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'read-only' }),
     expect.objectContaining({ configId: 'model', value: 'route-model' }),
+    expect.objectContaining({ configId: 'reasoning_effort', value: 'route-effort' }),
   ]);
   expect(log.find((entry) => entry.method === 'initialize')!.env).toMatchObject({
     CODEX_CONFIG: '{"features":{"shell_zsh_fork":true}}',
@@ -71,7 +62,7 @@ it("opens the session in the mode the route names, and Codex runs each `house` o
 });
 
 it('opens a Claude Code session in bypass permissions with `house` allowed in every mode and its sandbox open to unix sockets', async () => {
-  const hosted = await hostKit([{ kind: 'claude-agent-acp', model: 'default', effort: null }]);
+  const hosted = await hostKit([{ kind: 'claude-agent-acp', model: 'default', effort: 'high' }]);
 
   hosted.call({ kind: 'open' });
 
@@ -91,6 +82,7 @@ it('opens a Claude Code session in bypass permissions with `house` allowed in ev
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'bypassPermissions' }),
     expect.objectContaining({ configId: 'model', value: 'default' }),
+    expect.objectContaining({ configId: 'effort', value: 'high' }),
   ]);
 });
 
@@ -115,7 +107,7 @@ it.each([
 });
 
 it('starts Grok approving every tool, since it offers no mode', async () => {
-  const hosted = await hostKit([{ kind: 'grok-build', model: 'grok-4.6', effort: null }]);
+  const hosted = await hostKit([{ kind: 'grok-build', model: 'grok-4.6', effort: 'high' }]);
 
   hosted.call({ kind: 'open' });
 
@@ -126,19 +118,21 @@ it('starts Grok approving every tool, since it offers no mode', async () => {
   );
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'model', value: 'grok-4.6' }),
+    expect.objectContaining({ configId: 'reasoning_effort', value: 'high' }),
   ]);
 });
 
 it('opens a conversation of an Agent House added after the Kit read its Agents', async () => {
   const hosted = await hostKit();
   await until(() => hosted.house.requests.find((request) => request.path === '/kit/agents/report'));
-  const added = {
+  const added: DesiredAgentRoute = {
     agent_id: 'agent-2',
     kind: 'codex-acp',
     base_instructions: 'Be useful.',
     working_directory: hosted.workingDirectory,
     model: 'route-model',
-    effort: null,
+    effort: 'route-effort',
+    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: ['codex-acp'], routes: [added] } }));
 
@@ -166,13 +160,14 @@ it('opens a conversation with the CLI its route named after House moved that Age
   const hold = await installHeld(hosted);
   const agentId = `agent-${randomUUID()}`;
   const directory = join(hosted.workspace, 'agents', agentId);
-  const route = {
+  const route: DesiredAgentRoute = {
     agent_id: agentId,
     kind: 'grok-build',
     base_instructions: 'Be useful.',
     working_directory: directory,
     model: 'route-model',
-    effort: null,
+    effort: 'route-effort',
+    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({
     body: { agents: ['codex-acp', 'grok-build'], routes: [route] },
@@ -198,13 +193,14 @@ it('opens a conversation with the CLI its route named after House moved that Age
 it('opens a conversation with the launch settings House changed while the Kit was still reading them', async () => {
   const hosted = await hostKit();
   await until(() => hosted.house.requests.find((request) => request.path === '/kit/agents/report'));
-  const changed = {
+  const changed: DesiredAgentRoute = {
     agent_id: 'agent-1',
     kind: 'codex-acp',
     base_instructions: 'Be useful.',
     working_directory: hosted.workingDirectory,
     model: 'changed-model',
-    effort: null,
+    effort: 'changed-effort',
+    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', async () => {
     // House answers the read half a second late, so the open arrives while the Kit is still reading.
@@ -220,6 +216,7 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   expect(settings.map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'agent-full-access' }),
     expect.objectContaining({ configId: 'model', value: 'changed-model' }),
+    expect.objectContaining({ configId: 'reasoning_effort', value: 'changed-effort' }),
   ]);
 });
 
@@ -256,13 +253,14 @@ it('writes a message to a running process while the Kit is still reporting its C
 it('opens a conversation with the launch settings House changed while the Kit was still reporting its CLIs', async () => {
   const hosted = await hostKit();
   await reportHeld(hosted);
-  const changed = {
+  const changed: DesiredAgentRoute = {
     agent_id: 'agent-1',
     kind: 'codex-acp',
     base_instructions: 'Be useful.',
     working_directory: hosted.workingDirectory,
     model: 'changed-model',
-    effort: null,
+    effort: 'changed-effort',
+    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: ['codex-acp'], routes: [changed] } }));
 
@@ -274,6 +272,7 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   expect(settings.map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'mode', value: 'agent-full-access' }),
     expect.objectContaining({ configId: 'model', value: 'changed-model' }),
+    expect.objectContaining({ configId: 'reasoning_effort', value: 'changed-effort' }),
   ]);
 });
 
@@ -1807,7 +1806,7 @@ it('calls restarted before it opens its Kit connection', async () => {
 });
 
 it('reads the CLI again only after the conversation it opens has had two quiet seconds', async () => {
-  const hosted = await hostKit([{ kind: 'codex-acp', model: null, effort: null }], {
+  const hosted = await hostKit([{ kind: 'codex-acp' }], {
     prepare: async (home) => {
       await mkdir(join(home, 'signed-in'), { recursive: true });
       await writeFile(join(home, 'signed-in', 'codex-acp'), '');
