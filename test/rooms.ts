@@ -242,7 +242,7 @@ export class Room {
   models: Record<string, unknown>[] = [];
   instructions = '';
   bound = ANSWER_BYTES;
-  cutWith: 'notice' | 'cut' = 'notice';
+  conflictText: 'omit' | 'cut' = 'cut';
   private built: { position: number; entries: object[] } | null = null;
 
   readonly workspace: string;
@@ -322,13 +322,13 @@ export class Room {
   merged(content: string): Record<string, unknown> {
     const part = cutOf(content, this.bound, 'content');
     if (part === null) return { content };
-    return this.cutWith === 'cut' ? { content: part.text, cut: part.cut } : { content: `${part.text}\noutput_cut ${part.cut.shown} of ${part.cut.total} bytes` };
+    return { content: part.text, cut: part.cut };
   }
 
   conflicted(content: string): Partial<Conflict> {
     const part = cutOf(content, this.bound, 'content');
     if (part === null) return { content };
-    return this.cutWith === 'cut' ? { content: part.text, cut: part.cut } : {};
+    return this.conflictText === 'cut' ? { content: part.text, cut: part.cut } : {};
   }
 
   instructionsFrom(start: number): Record<string, unknown> {
@@ -838,11 +838,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     const path = String(args.path);
     const room = roomOf(path);
     if (!path.slice('/rooms/'.length).includes('/')) {
-      if (room.cutWith === 'cut') return { content: [{ type: 'text', text: stringify({ ref: room.ref, path, ...room.instructionsFrom(Number(args.cursor ?? 0)) }) }] };
-      const instructions = room.instructions === '' ? {} : { instructions: { version: 1, approved_version: 1, text: room.instructions } };
-      const answer = Buffer.from(stringify({ ref: room.ref, path, ...instructions }));
-      const text = answer.length <= room.bound ? answer.toString() : `${answer.subarray(0, room.bound).toString()}\ninfo: output_cut at ${room.bound} bytes`;
-      return { content: [{ type: 'text', text }] };
+      return { content: [{ type: 'text', text: stringify({ ref: room.ref, path, ...room.instructionsFrom(Number(args.cursor ?? 0)) }) }] };
     }
     const local = path.slice(room.root.length + 1);
     const ref = args.ref as string | undefined;

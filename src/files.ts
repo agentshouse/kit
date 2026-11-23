@@ -55,8 +55,6 @@ const STALLED_ROUNDS = 8;
 
 const PART_CHECKSUM = 'x-amz-checksum-sha256';
 
-const ANSWER_CUT = /^output_cut at (\d+) bytes$/u;
-
 const LINK = /\]\((\/rooms\/[^/)\s]+\/[^)\s]+)\)/gu;
 
 const MEDIA_TYPES = new Map([
@@ -110,7 +108,6 @@ export function fileInfo(answer: string): FileInfo | null {
 }
 
 interface InstructionsPart {
-  info?: unknown;
   instructions?: { text?: unknown; cut?: unknown };
   next_cursor?: string;
 }
@@ -118,10 +115,7 @@ interface InstructionsPart {
 function instructionsPart(answer: string): InstructionsPart {
   const document = parseDocument(answer);
   if (document.errors.length > 0) throw new Error("House's answer could not be read");
-  const details = (document.toJS() ?? {}) as InstructionsPart;
-  const cut = typeof details.info === 'string' ? ANSWER_CUT.exec(details.info) : null;
-  if (cut !== null) throw new Error(`House cut its answer at ${cut[1]} bytes`);
-  return details;
+  return (document.toJS() ?? {}) as InstructionsPart;
 }
 
 export async function instructionsText(info: (args: Record<string, unknown>) => Promise<string>, path: string): Promise<string> {

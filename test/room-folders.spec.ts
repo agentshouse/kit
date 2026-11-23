@@ -200,7 +200,6 @@ it("writes AGENTS.md whole from a Room's instructions House cuts in two parts, r
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
   notes.put('a.md', 'a\n');
-  notes.cutWith = 'cut';
   notes.instructions = LONG;
 
   expect(await rooms.download([notes])).toMatchObject({ status: 0, stdout: `${notes.root}: copied to ${notes.repository}\n` });
@@ -209,7 +208,7 @@ it("writes AGENTS.md whole from a Room's instructions House cuts in two parts, r
   expect(roomRootReads(hosted)).toEqual([notes.root, notes.root]);
 });
 
-it("deletes the two files once House answers a Room's instructions empty, and keeps the last text where it cannot read them or House cuts its answer, saying so", async () => {
+it("deletes the two files once House answers a Room's instructions empty, and keeps the last text where it cannot read them, saying so", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -219,13 +218,6 @@ it("deletes the two files once House answers a Room's instructions empty, and ke
   garden.instructions = FIRST;
   rooms.open = [garden];
   await rooms.download([notes]);
-
-  notes.instructions = LONG;
-  expect(await rooms.download([notes])).toMatchObject({
-    status: 0,
-    stdout: `${notes.root}: AGENTS.md kept as it was: House cut its answer at 32000 bytes\n`,
-  });
-  expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(FIRST);
 
   const info = hosted.tools.info!;
   hosted.tools.info = () => {

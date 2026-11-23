@@ -38,7 +38,6 @@ const PROVENANCE = '_provenance';
 const BATCH_FILES = 1000;
 const BATCH_BYTES = 15_000_000;
 const MEGABYTE = 1_000_000;
-const CUT = /\noutput_cut \d+ of \d+ bytes$/;
 const KIT_IGNORES = ['.gitignore', '.ignore'];
 const KIT_GIT = ['.git/refs/house/received', '.git/house-chunks', '.git/house-uploads', '.git/house-downloads'];
 const KIT_FILES = ['AGENTS.md', 'CLAUDE.md'];
@@ -2156,7 +2155,7 @@ export class LocalCopies {
   }
 
   private async textOf(written: Written, sent: string | undefined): Promise<string> {
-    if (typeof written.content === 'string' && written.cut === undefined && !CUT.test(written.content)) return written.content;
+    if (typeof written.content === 'string' && written.cut === undefined) return written.content;
     if (written.content === undefined && sent !== undefined) return sent;
     return this.revisionText(written.path, written.revision!);
   }

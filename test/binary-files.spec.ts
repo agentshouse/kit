@@ -201,13 +201,12 @@ it("refuses a download whose bytes do not match House's SHA-256 and one of a tex
   expect(fileCalls(hosted).map((received) => received.headers.authorization)).toEqual(['Bearer ahk_held', 'Bearer ahk_held']);
 });
 
-it('refuses a download of a document whose info answer House cut as one of a text file, and writes nothing', async () => {
+it('refuses a download of a document whose info answer pages its revisions as one of a text file, and writes nothing', async () => {
   const { hosted } = await copied();
   const read = hosted.tools.info!;
   hosted.tools.info = async (args, request) => {
     const result = (await read(args, request))!;
-    const cut = `info: output_cut 1 newest revisions; continue with: info ref=rev-1 path=${String(args.path)} view=history`;
-    return { content: [{ type: 'text', text: `${result.content[0]!.text}${cut}` }] };
+    return { content: [{ type: 'text', text: `${result.content[0]!.text}next_cursor: v_1.1.x\n` }] };
   };
   const target = join(hosted.workingDirectory, 'plan.copy');
 
