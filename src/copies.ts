@@ -484,9 +484,9 @@ function changeSet(manifest: Manifest, present: Map<string, Present>): { added: 
     const entry = manifest.files[path];
     if (kitsOwn(path)) continue;
     if (entry === undefined) added.push(path);
+    else if (entry.skipped && entry.sha256 === file.sha256) adopted.push(path);
     else if (entry.read_only) continue;
     else if (entry.sha256 !== file.sha256) changed.push(path);
-    else if (entry.skipped) adopted.push(path);
   }
   const gone = Object.entries(manifest.files).flatMap(([path, entry]) => (!kitsOwn(path) && !entry.read_only && !entry.skipped && !present.has(path) ? [path] : []));
   return { added, changed, gone, adopted };
@@ -692,6 +692,10 @@ class Applying {
       this.present.delete(from);
       delete this.manifest.files[from];
       this.manifest.files[path] = held;
+      return;
+    }
+    if (holds && !entry.read_only && local !== undefined && !(await holding(this.repository, local.name, entry.sha256))) {
+      this.report.kept.add(path);
       return;
     }
     const target = join(this.repository, this.nameOf(path));
@@ -1042,7 +1046,7 @@ export class LocalCopies {
     let selection: Promise<LocalCopyRoom[]> | undefined;
     return async (key) => {
       const copy = this.copies.get(key) as Copy | undefined;
-      if (copy === undefined || !(await exists(copy.repository))) return;
+      if (copy === undefined || copy.pending !== undefined || !(await exists(copy.repository))) return;
       try {
         selection ??= this.house.act('local-copies/selection/read', {}).then(({ local_copy: answer }) => answer.rooms);
         const reached = (await selection).find((room) => room.room_ref === copy.room_ref);

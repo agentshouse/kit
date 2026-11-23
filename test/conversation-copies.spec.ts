@@ -874,7 +874,7 @@ it("links a held attachment another writer changed at its new revision from a fo
   expect(files['photo.jpg']).toEqual({ revision: notes.revision('photo.jpg'), sha256: digest('photo, drawn here'), bytes: 17 });
 });
 
-it("with --with-attachments links what a folder holds unchanged and downloads the rest up to --max-size, brings a held attachment's new revision within it and leaves one over it an entry though a folder holds it, and a one-file download at a skipped attachment's own path is held after the next download", async () => {
+it("with --with-attachments links what a folder holds unchanged and downloads the rest up to --max-size, brings a held attachment's new revision within it and leaves one over it an entry though a folder holds it, and a one-file download at a skipped attachment's own path, a read-only one's too, is held after the next download", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -912,4 +912,18 @@ it("with --with-attachments links what a folder holds unchanged and downloads th
   const sent = notes.batches.length;
   expect(await house(hosted, copy, 'upload')).toMatchObject({ status: 0, stdout: `Nothing to upload: ${notes.root} matches House.\n` });
   expect(notes.batches).toHaveLength(sent);
+
+  notes.upload('capture/shot.jpg', bytes('shot bytes'));
+  expect(await house(hosted, copy, 'download')).toMatchObject({ status: 0 });
+  expect((await entriesOf(copy))['capture/shot.jpg']).toMatchObject({ read_only: true, skipped: true });
+  const shot = { path: '/rooms/notes/capture/shot.jpg', file: join(copy, 'capture/shot.jpg') };
+  expect(await house(hosted, copy, 'download', JSON.stringify(shot))).toMatchObject({ status: 0 });
+  expect(await house(hosted, copy, 'download')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+  expect((await entriesOf(copy))['capture/shot.jpg']).not.toHaveProperty('skipped');
+  notes.upload('capture/shot.jpg', bytes('shot, from House'));
+
+  expect(await house(hosted, copy, 'download')).toEqual({ status: 0, stdout: `${leftOnHouse(`${notes.root}/capture/shot.jpg`)}\n`, stderr: '' });
+
+  expect(existsSync(join(copy, 'capture/shot.jpg'))).toBe(false);
+  expect((await entriesOf(copy))['capture/shot.jpg']).toEqual({ revision: notes.revision('capture/shot.jpg'), sha256: digest('shot, from House'), bytes: 16, read_only: true, skipped: true });
 });
