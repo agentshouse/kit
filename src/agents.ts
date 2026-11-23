@@ -299,27 +299,15 @@ export class Agents {
 
   cli(kind: string): Promise<string> {
     return this.queue(kind, async () => {
-      const resolved = await this.resolve(kind);
+      const owner = {};
+      const missing = this.readings.get(kind)?.release === null;
+      const resolved = await this.resolve(kind, undefined, owner);
       if (!('cli' in resolved)) {
         this.update(kind, resolved);
         throw new Error(NOT_READY);
       }
-      const { cli, release } = resolved;
-      const known = this.readings.get(kind);
-      const kept = known?.release === null ? SIGNED_OUT : (known ?? SIGNED_OUT);
-      if (known?.release !== release || this.installs.has(kind)) {
-        this.update(kind, {
-          release,
-          failure: null,
-          signed_in: kept.signed_in,
-          ...keyedOf(kept),
-          models: kept.models,
-          default_model: kept.default_model,
-          default_effort: kept.default_effort,
-          modes: kept.modes,
-        });
-      }
-      return cli;
+      if (missing || this.installs.get(kind) === owner) this.readModels(kind, resolved).catch(logged);
+      return resolved.cli;
     });
   }
 

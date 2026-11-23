@@ -203,6 +203,26 @@ it("runs a conversation on a CLI below its minimum, reported with the minimum an
   expect(await open(hosted, 'conversation-2', 'agent-2')).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
 });
 
+it('reads a CLI once, its sign-in and models, when a conversation installs it after its install failed at Kit start', async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
+    prepare: async (home) => {
+      await rm(join(userBin(home), 'claude'));
+      await writeFile(join(home, 'install-fail'), 'claude-agent-acp\n');
+      await signIn(home, 'claude-agent-acp');
+    },
+  });
+  await report(hosted, (agents) => agents.some((agent) => typeof agent.failure === 'string'));
+  await rm(join(hosted.home, 'install-fail'));
+
+  expect(await open(hosted, 'conversation-1')).toEqual({ provider_session_id: expect.any(String) });
+
+  await report(hosted, (agents) =>
+    agents.some((agent) => agent.release === RELEASES['claude-agent-acp'] && agent.signed_in === true && (agent.models as unknown[]).length > 0),
+  );
+  await settle();
+  expect(await probes(hosted)).toBe(1);
+});
+
 it('starts no second CLI and reads nothing when a conversation opens on a CLI the Kit read, though its sign-in and models changed since', async () => {
   const hosted = await hostKit([{ kind: 'codex-acp' }]);
   await report(hosted, (agents) => agents.length === 1);
