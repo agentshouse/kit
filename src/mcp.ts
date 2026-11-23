@@ -27,8 +27,8 @@ export interface ToolResult {
 const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 export const UNREACHABLE = 'House is unreachable; call again in a minute';
-const UNCONNECTED = 'this computer has no House connection; run kit login';
-export const DISCONNECTED = 'House no longer accepts this computer; run kit login';
+const UNCONNECTED = 'this computer has no House connection; run house login';
+export const DISCONNECTED = 'House no longer accepts this computer; run house login';
 const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 
 export class Unsettled extends Error {

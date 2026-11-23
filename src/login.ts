@@ -41,8 +41,8 @@ function open(link: string): void {
     .unref();
 }
 
-const USAGE = `usage: kit login [--house <origin>] [--environment <id>] [--rooms <ref>[,<ref>...] | --no-private]
-       kit login [--house <origin>] --code <code>
+const USAGE = `usage: house login [--house <origin>] [--environment <id>] [--rooms <ref>[,<ref>...] | --no-private]
+       house login [--house <origin>] --code <code>
   --house <origin>          the House to connect to, ${DEFAULT_HOUSE} unless one is stored
   --environment <id>        reconnect this Environment
   --rooms <ref>[,<ref>...]  give this Environment only these Rooms
@@ -112,7 +112,7 @@ export async function enrol(values: Chosen): Promise<string> {
   const rooms = chosenRooms(values.rooms, values['no-private']);
   const enrolled = (await readEnrolment()) ?? (await readDisconnected());
   if (values.code !== undefined && enrolled !== null) {
-    throw new Error(`--code connects a new machine; this Kit home records Environment ${enrolled.environment}, so run kit login to reconnect it`);
+    throw new Error(`--code connects a new machine; this Kit home records Environment ${enrolled.environment}, so run house login to reconnect it`);
   }
   const house = values.house ?? enrolled?.house ?? DEFAULT_HOUSE;
   const remembered = values.environment === undefined && enrolled?.house === house ? enrolled.environment : undefined;

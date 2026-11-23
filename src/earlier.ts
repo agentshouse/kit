@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { KIT_RELEASE } from './clis.ts';
 import { restart } from './end.ts';
 import { awaitsTakeover, desktopPrefix, earlierHome, earlierPrefix, oneFolder } from './home.ts';
-import { defineSupervisor, launchAgent, linger, manage, required, systemd, userUnit } from './supervisor.ts';
+import { defineSupervisor, launchAgent, linger, manage, reloadLaunchAgent, required, systemd, userUnit } from './supervisor.ts';
 import { placeServedRelease } from './update.ts';
 import { followRoot, merged, removeFolder } from './workspace.ts';
 
@@ -36,8 +36,8 @@ const WORKSPACE_FOLDERS = ['agents', 'local-copies', 'rooms'];
 const RECORDS = join('local-copies', 'rooms');
 const COMMANDS = ['kit', 'house'];
 const DROPPED_FLAGS = / --(?:linux|container)$/u;
-// A Mac's LaunchAgent is reloaded by a process of its own, which ends this one within moments; a minute bounds a reload that never comes.
-const RELOAD_MS = 60_000;
+// A server's earlier system unit is stopped without waiting, which ends this Kit within moments; a minute bounds a stop that never comes.
+const STOP_MS = 60_000;
 
 function root(): boolean {
   return process.getuid!() === 0;
@@ -230,16 +230,6 @@ async function ready(): Promise<boolean> {
   return false;
 }
 
-async function reloadLaunchAgent(): Promise<never> {
-  const target = `gui/${process.getuid!()}`;
-  spawn('/bin/sh', ['-c', `launchctl bootout ${target}/house-kit; launchctl bootstrap ${target} "$0"`, launchAgent()], {
-    detached: true,
-    stdio: 'ignore',
-  }).unref();
-  await delay(RELOAD_MS);
-  restart('the LaunchAgent was not reloaded; its next start runs Kit from its one folder');
-}
-
 export async function moveEarlier(): Promise<void> {
   const earlier = movable();
   if (earlier === null) return;
@@ -260,10 +250,10 @@ export async function moveEarlier(): Promise<void> {
     await removeDesktop();
   }
   if (!within) return;
-  if (process.platform === 'darwin') await reloadLaunchAgent();
+  if (process.platform === 'darwin') await reloadLaunchAgent('the LaunchAgent was not reloaded; its next start runs Kit from its one folder');
   if (earlier.kind === 'server' && earlier.unit) {
     manage('systemctl', ['--no-block', 'stop', 'house-kit.service']);
-    await delay(RELOAD_MS);
+    await delay(STOP_MS);
   }
   restart(`Kit ${KIT_RELEASE} moved into ${oneFolder()}; its supervisor starts it there`);
 }

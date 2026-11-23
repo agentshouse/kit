@@ -47,7 +47,7 @@ it('connects a fresh Linux account with a login code, writes the absent settings
     'Description=Kit',
     '',
     '[Service]',
-    `ExecStart="${join(home, 'bin', 'kit')}" resident`,
+    `ExecStart="${join(home, 'bin', 'house')}" resident`,
     'Restart=on-failure',
     'RestartSec=5',
     'Delegate=yes',
@@ -88,7 +88,7 @@ it('keeps the credential House accepts on a rerun, leaves its login code unused 
   expect(managed(tools)).toEqual(['--user --quiet enable house-kit.service']);
 });
 
-it("confirms through kit login's link when it carries no login code", async () => {
+it("confirms through house login's link when it carries no login code", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   const tools = await supervision();
@@ -115,7 +115,7 @@ it("stops in one line, writing nothing, where ~/house holds what is not Kit's", 
   expect(await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one'])).toEqual({
     status: 1,
     stdout: '',
-    stderr: `kit: ${folder} holds what is not Kit's; move it elsewhere, then run this command again\n`,
+    stderr: `house: ${folder} holds what is not Kit's; move it elsewhere, then run this command again\n`,
   });
   expect(await readdir(home)).toEqual([]);
   expect(await readdir(folder)).toEqual(['mine.txt']);
@@ -138,7 +138,7 @@ it('keeps the settings kit.json holds and places no Skill set its person decline
   await expect(readFile(join(home, 'skill-set.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it("refuses an install naming another Building on an account whose Kit serves one, changing nothing, and connects there after kit logout", async () => {
+it("refuses an install naming another Building on an account whose Kit serves one, changing nothing, and connects there after house logout", async () => {
   const first = await startHouse();
   const second = await startHouse();
   const home = await temporaryHome();
@@ -154,7 +154,7 @@ it("refuses an install naming another Building on an account whose Kit serves on
   expect(refused).toEqual({
     status: 1,
     stdout: '',
-    stderr: `kit: this account's Kit serves ${first.origin}; kit logout disconnects it from there, then this command connects it to ${second.origin}\n`,
+    stderr: `house: this account's Kit serves ${first.origin}; house logout disconnects it from there, then this command connects it to ${second.origin}\n`,
   });
   expect(second.requests).toEqual([]);
   expect(await readFile(join(home, 'credential.json'), 'utf8')).toBe(credential);
@@ -215,13 +215,13 @@ it('stops with the refusal, changing nothing and leaving the login code unused, 
   const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one'], ROOTED, { HOUSE_KIT_INSTALL_COMMAND: 'curl -fsSL agents.house/kit | sh' });
 
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toMatch(/^kit: House refused \/kit\/agents\/desired\/list with 403: /);
+  expect(ran.stderr).toMatch(/^house: House refused \/kit\/agents\/desired\/list with 403: /);
   expect(house.requests.map((request) => request.path)).not.toContain('/kit/token');
   expect(await readFile(join(home, 'credential.json'), 'utf8')).toBe(stored);
   await expect(readFile(join(home, 'install-command'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('starts nothing on a Linux without systemd and names the kit resident command to supervise', async () => {
+it('starts nothing on a Linux without systemd and names the house resident command to supervise', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   const tools = await supervision();
@@ -231,7 +231,7 @@ it('starts nothing on a Linux without systemd and names the kit resident command
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout.split('\n').at(-2)).toBe(
-    `Kit 0.2.1 is installed for Environment environment-one, but no systemd runs on this host to start it; run '${join(home, 'bin', 'kit')}' resident under your own service manager, restarting it whenever it ends with a failure.`,
+    `Kit 0.2.1 is installed for Environment environment-one, but no systemd runs on this host to start it; run '${join(home, 'bin', 'house')}' resident under your own service manager, restarting it whenever it ends with a failure.`,
   );
   expect(tools.calls('systemctl')).toEqual([]);
   expect(tools.calls('loginctl')).toEqual([]);
@@ -263,7 +263,7 @@ it('stops with the error when lingering cannot be turned on, starting nothing fo
   const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one']);
 
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toBe('kit: lingering could not be turned on for this account: Could not enable linger: Access denied\n');
+  expect(ran.stderr).toBe('house: lingering could not be turned on for this account: Could not enable linger: Access denied\n');
   expect(managed(tools)).toEqual([]);
 });
 
@@ -293,7 +293,7 @@ it("refuses naming the repair when the account's service manager never starts, s
   const ran = await connect(home, tools, ['--house', house.origin, '--code', 'ahk_code_one']);
 
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toBe("kit: this account's service manager did not start within 10 seconds; restart this computer, then run this command again\n");
+  expect(ran.stderr).toBe("house: this account's service manager did not start within 10 seconds; restart this computer, then run this command again\n");
   expect(managed(tools)).toEqual([]);
 });
 
@@ -307,7 +307,7 @@ it("runs a Mac's Kit as one LaunchAgent naming the one folder's launcher and no 
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   const agent = await readFile(join(accountOf(home), 'Library', 'LaunchAgents', 'house-kit.plist'), 'utf8');
-  expect(agent).toContain(`<string>${join(home, 'bin', 'kit')}</string>\n\t\t<string>resident</string>`);
+  expect(agent).toContain(`<string>${join(home, 'bin', 'house')}</string>\n\t\t<string>resident</string>`);
   expect(agent).toMatch(/<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/);
   expect(agent).not.toContain('HOUSE_KIT');
   expect(tools.calls('launchctl')).toEqual([

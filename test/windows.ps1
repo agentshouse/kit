@@ -42,7 +42,7 @@ foreach ($case in @(
   @(@('--rooms', 'r_k2v.4'), 'unknown argument --rooms'),
   @(@('--no-private'), 'unknown argument --no-private'),
   @(@('--no-skills'), 'unknown argument --no-skills'),
-  @(@('kit', 'login'), 'unknown argument kit'),
+  @(@('house', 'login'), 'unknown argument house'),
   @(@('--code'), '--code requires one value'),
   @(@('--house', 'https://a.example', '--house', 'https://b.example'), 'supply exactly one House origin'),
   @(@('--code', 'one', '--code', 'two'), 'supply exactly one login code')
@@ -240,11 +240,11 @@ if ($refused -cne 'kit_bootstrap_refused: Kit runs in Docker Desktop on this com
 Remove-Item -LiteralPath (Join-Path $profileFolder 'AgentsHouse')
 
 foreach ($case in @(
-  @{ Name = 'an install with a code'; Given = @{ '--house' = 'https://agents.house'; '--code' = 'ahk_code_one' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house --code ahk_code_one'; Environment = "irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'|1" },
-  @{ Name = 'an install with no code'; Given = @{ '--house' = 'https://agents.house' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house'; Environment = "irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'|1" }
+  @{ Name = 'an install with a code'; Given = @{ '--house' = 'https://agents.house'; '--code' = 'ahk_code_one' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house --code ahk_code_one'; Environment = "irm agents.house/kit.ps1 | iex; house login --code 'ahk_code_one'|1" },
+  @{ Name = 'an install with no code'; Given = @{ '--house' = 'https://agents.house' }; Url = '-fsSL -o * https://agents.house/kit-installer/connect-linux.sh'; Arguments = '--house https://agents.house'; Environment = "irm agents.house/kit.ps1 | iex; house login --code 'ahk_code_one'|1" }
 )) {
   Reset-Fake
-  $env:HOUSE_KIT_INSTALL_COMMAND = "irm agents.house/kit.ps1 | iex; kit login --code 'ahk_code_one'"
+  $env:HOUSE_KIT_INSTALL_COMMAND = "irm agents.house/kit.ps1 | iex; house login --code 'ahk_code_one'"
   $env:WSLENV = 'USERPROFILE/p'
   $refused = Refusal { Connect-Ubuntu $distribution $case.Given }
   if ($refused -cne 'no refusal') { $findings += "$($case.Name) refused with: $refused" }

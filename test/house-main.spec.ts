@@ -25,6 +25,14 @@ const UPLOAD =
 const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
 const DOWNLOAD =
   "download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload; a copy holds the Room's documents and only the attachments asked for there, a conversation's copy linking each one already on this computer, and a download brings no attachment nobody asked for: one another writer changed it links where this computer holds it, or else removes its unchanged file and names it as left on House; --with-attachments brings each attachment the copy lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file";
+const KIT_VERBS = [
+  'login: connects this computer to House as an Environment, by a link you confirm or a login code',
+  'logout: disconnects this computer and stops the Kit process',
+  "connect: connects this computer, keeping the Environment it has, and starts Kit's service; the install runs it",
+  "resident: keeps this Environment connected; Kit's service runs it",
+  "settings: prints Kit's settings, or changes whether Kit places House's Skills or where its workspace is",
+  "git-credential: answers git with this computer's House credential; git runs it",
+];
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 
 function runHouse(
@@ -423,7 +431,7 @@ it.each([
   expect(ran).toEqual({ status: 1, stdout: '', stderr: `house: ${said}\n` });
 });
 
-it('refuses a Tool call in one line naming kit login while Kit home holds no Kit credential', async () => {
+it('refuses a Tool call in one line naming house login while Kit home holds no Kit credential', async () => {
   const house = await startHouse();
   const home = await connected(house, false);
   await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_own' }));
@@ -432,11 +440,11 @@ it('refuses a Tool call in one line naming kit login while Kit home holds no Kit
 
   expect(ran.status).toBe(1);
   expect(ran.stdout).toBe('');
-  expect(ran.stderr).toBe('house: this computer has no House connection; run kit login\n');
+  expect(ran.stderr).toBe('house: this computer has no House connection; run house login\n');
   expect(house.requests).toEqual([]);
 });
 
-it("refuses a Tool call naming kit login once kit logout has ended the Kit's connection", async () => {
+it("refuses a Tool call naming house login once house logout has ended the Kit's connection", async () => {
   const house = await startHouse();
   const home = await connected(house);
   house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
@@ -448,10 +456,10 @@ it("refuses a Tool call naming kit login once kit logout has ended the Kit's con
     { path: '/kit/kits/log-out', authorization: 'Bearer ahk_kit', body: {} },
   ]);
   expect(ran.status).toBe(1);
-  expect(ran.stderr).toMatch(/^house: [^\n]*; run kit login\n$/);
+  expect(ran.stderr).toMatch(/^house: [^\n]*; run house login\n$/);
 });
 
-it('refuses a Tool call in one line naming kit login once House no longer accepts the Kit credential', async () => {
+it('refuses a Tool call in one line naming house login once House no longer accepts the Kit credential', async () => {
   const house = await startHouse();
   const home = await connected(house);
   house.route('POST', '/', () => ({ status: 401, body: { error: 'invalid_token', error_description: 'A valid access token is required' } }));
@@ -460,7 +468,7 @@ it('refuses a Tool call in one line naming kit login once House no longer accept
 
   expect(ran.status).toBe(1);
   expect(ran.stdout).toBe('');
-  expect(ran.stderr).toBe('house: House no longer accepts this computer; run kit login\n');
+  expect(ran.stderr).toBe('house: House no longer accepts this computer; run house login\n');
   expect(house.requests.map(({ path, headers }) => [path, headers.authorization])).toEqual([['/', 'Bearer ahk_kit']]);
 });
 
@@ -472,8 +480,8 @@ it("stops acting as the User when House had already disconnected the computer", 
   const logout = runKit(['logout'], { HOME: accountOf(home) });
 
   expect(await logout.exited).toBe(0);
-  expect(logout.stdout()).toBe('Environment environment-one is disconnected; kit login reconnects it.\n');
-  expect((await runHouse(home, ['search', '{"query":"invoice"}'])).stderr).toMatch(/kit login/);
+  expect(logout.stdout()).toBe('Environment environment-one is disconnected; house login reconnects it.\n');
+  expect((await runHouse(home, ['search', '{"query":"invoice"}'])).stderr).toMatch(/house login/);
 });
 
 it("never sends a call unlabelled when the conversation's bridge it names is gone", async () => {
@@ -533,7 +541,7 @@ function listing(house: House, tools: unknown[]): void {
   });
 }
 
-it('prints the same help for house help as for house --help, naming house help <tool>, listing help and both forms of upload and download, and no Git verb', async () => {
+it("prints the same help for house help as for house --help, naming house help <tool>, listing help, the Kit's own verbs and both forms of upload and download, and no Git sync verb", async () => {
   const house = await startHouse();
   const home = await connected(house);
 
@@ -542,8 +550,24 @@ it('prints the same help for house help as for house --help, naming house help <
 
   expect(help).toEqual(dashed);
   expect(help.status).toBe(0);
-  expect(help.stdout.split('\n').slice(0, 4)).toEqual([USAGE, 'help [tool]', UPLOAD, DOWNLOAD]);
-  expect(help.stdout).not.toMatch(/\bgit\b|\bcommit\b|\brebase\b|house push|house fetch/);
+  expect(help.stdout.split('\n').slice(0, 10)).toEqual([USAGE, 'help [tool]', ...KIT_VERBS, UPLOAD, DOWNLOAD]);
+  expect(help.stdout).not.toMatch(/\bcommit\b|\brebase\b|house push|house fetch|git (?:push|fetch|pull)/);
+});
+
+it("runs a Kit verb where House lists a Tool of its name", async () => {
+  const house = await startHouse();
+  const home = await temporaryHome();
+  house.route('POST', '/', ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    return { body: { jsonrpc: '2.0', id: message.id, result: message.method === 'tools/list' ? { tools: [{ name: 'settings', inputSchema: {} }] } : shelled('a Tool answered') } };
+  });
+  await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_kit' }));
+  await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false, workspace: '/srv/house' }));
+
+  const ran = await runHouse(home, ['settings']);
+
+  expect(ran).toEqual({ status: 0, stdout: 'skills off\nworkspace /srv/house\n', stderr: '' });
+  expect(house.requests).toEqual([]);
 });
 
 it('lists a Tool without a description in house --help with its top-level arguments, and a described Tool by its line alone', async () => {

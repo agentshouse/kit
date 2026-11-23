@@ -96,7 +96,7 @@ it("registers git's helper for House's App sources naming no Kit home, so git si
   expect(plain.status).toBe(0);
   expect(testing.status).toBe(0);
   expect(credentials).toEqual(presented('', 'ahk_first', '', 'ahk_second'));
-  expect((await gitOf(user, 'config', '--global', '--get-all', `credential.${house.origin}/app/.helper`)).stdout).toBe('\n!kit git-credential\n');
+  expect((await gitOf(user, 'config', '--global', '--get-all', `credential.${house.origin}/app/.helper`)).stdout).toBe('\n!house git-credential\n');
 });
 
 it("leaves one HOME's git signing in when the Kit home another HOME holds logs out", async () => {
@@ -110,7 +110,7 @@ it("leaves one HOME's git signing in when the Kit home another HOME holds logs o
   expect(credentials).toEqual(presented('', 'ahk_first'));
 });
 
-it("stops answering for git once kit logout disconnects the computer, says this Kit home is not signed in, and leaves the User's other helpers", async () => {
+it("stops answering for git once house logout disconnects the computer, says this Kit home is not signed in, and leaves the User's other helpers", async () => {
   const { house, home, credentials } = await loggedIn();
   house.route('POST', '/kit/kits/log-out', () => ({ body: {} }));
 
@@ -118,7 +118,7 @@ it("stops answering for git once kit logout disconnects the computer, says this 
   const listed = await gitOf(home, 'ls-remote', `${house.origin}/app/a_app.git`);
 
   expect(listed.status).not.toBe(0);
-  expect(listed.stderr).toContain(`kit: Kit home ${home} is not signed in; run kit login\n`);
+  expect(listed.stderr).toContain(`kit: Kit home ${home} is not signed in; run house login\n`);
   expect(listed.stderr).toContain('could not read Username');
   expect(credentials).toEqual(presented(''));
   expect((await gitOf(home, 'config', '--global', '--get-all', 'credential.helper')).stdout).toBe(`store --file=${join(accountOf(home), 'global-store')}\n`);

@@ -12,7 +12,7 @@ import { HOUSE_NOT_KITS, houseRoot } from './settings.ts';
 import { quoted } from './shell.ts';
 import { defineSupervisor, launcher, supervise, systemd } from './supervisor.ts';
 
-const USAGE = `usage: kit connect [--house <origin>] [--code <code>]
+const USAGE = `usage: house connect [--house <origin>] [--code <code>]
   --house <origin>  the Building this account's Kit serves, ${DEFAULT_HOUSE} unless one is stored
   --code <code>     connect this computer with a login code when Kit holds no credential House accepts
 `;
@@ -82,12 +82,12 @@ export async function connect(argv: string[]): Promise<void> {
   if (other !== null) throw new Error(`this computer's Kit runs as ${other}; run this command as ${other} to update it`);
   const house = values.house ?? stored?.house ?? DEFAULT_HOUSE;
   if (stored !== null && stored.house !== house) {
-    throw new Error(`this account's Kit serves ${stored.house}; kit logout disconnects it from there, then this command connects it to ${house}`);
+    throw new Error(`this account's Kit serves ${stored.house}; house logout disconnects it from there, then this command connects it to ${house}`);
   }
   if (stored === null || !(await standing(stored.house, stored.credential))) {
     if (values.code === undefined) await enrol({ house, 'no-private': false });
     else await heldWhile(() => enrol({ house, code: values.code, 'no-private': false }));
-    if ((await readEnrolment()) === null) throw new Error('kit login connected no Environment');
+    if ((await readEnrolment()) === null) throw new Error('house login connected no Environment');
   } else if (values.code !== undefined) {
     process.stdout.write(`This computer is already connected as Environment ${stored.environment}; the login code was not used.\n`);
   }

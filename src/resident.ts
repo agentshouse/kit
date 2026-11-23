@@ -16,6 +16,7 @@ import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
 import { IdleCopies } from './idle-copies.ts';
+import { foldKitIntoHouse } from './one-command.ts';
 import { holdOwner } from './owner.ts';
 import { killDescendants } from './scope.ts';
 import { removeInputs, Scripts } from './scripts.ts';
@@ -89,7 +90,7 @@ function connected(): Promise<void> {
       resolve();
     });
     if (!enrolled()) {
-      process.stderr.write('kit: this Environment is not connected; run kit login\n');
+      process.stderr.write('kit: this Environment is not connected; run house login\n');
       return;
     }
     watcher.close();
@@ -110,6 +111,7 @@ export async function resident(): Promise<void> {
   await moveEarlier();
   await mkdir(kitHome(), { recursive: true, mode: 0o700 });
   const lock = await holdOwner();
+  await foldKitIntoHouse();
   const forgotten = await forgetRecordedRelay();
   if (forgotten !== null) process.stderr.write(`kit: Kit forgot the relay ${forgotten} an earlier install recorded; it takes a relay only from HOUSE_KIT_RELAY\n`);
   await resumeWorkspaceMove();

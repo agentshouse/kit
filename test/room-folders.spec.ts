@@ -234,7 +234,7 @@ it("deletes the two files once House answers a Room's instructions empty, and ke
   notes.instructions = SECOND;
   expect(await rooms.download([notes])).toMatchObject({
     status: 0,
-    stdout: `${garden.root}, ${notes.root}: AGENTS.md kept as it was: House no longer accepts this computer; run kit login\n`,
+    stdout: `${garden.root}, ${notes.root}: AGENTS.md kept as it was: House no longer accepts this computer; run house login\n`,
   });
   expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(FIRST);
 

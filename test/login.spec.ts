@@ -223,7 +223,7 @@ it('calls House directly from a Kit home an earlier Kit recorded a relay in, and
   expect(relay.requests.map((request) => request.path)).toContain(`${prefix}/kit/stream`);
 });
 
-it("forgets the relay an earlier Kit recorded in its Kit credential's record once, as its resident starts, keeping every other value and leaving the own agent's file unread", async () => {
+it("forgets the relay an earlier Kit recorded in its Kit credential's record once, as its resident starts, keeping every other value", async () => {
   const house = await startHouse();
   const home = await temporaryHome();
   const recorded = 'https://kit.relay.example';
@@ -231,7 +231,6 @@ it("forgets the relay an earlier Kit recorded in its Kit credential's record onc
     join(home, 'credential.json'),
     JSON.stringify({ house: house.origin, relay: recorded, environment: 'environment-one', credential: 'ahk_held' }),
   );
-  await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, relay: recorded, user: 'user-one', credential: 'ahp_own' }));
 
   const first = runKit(['resident'], { HOME: accountOf(home) });
   await until(() => house.connections[0]);
@@ -247,7 +246,6 @@ it("forgets the relay an earlier Kit recorded in its Kit credential's record onc
     environment: 'environment-one',
     credential: 'ahk_held',
   });
-  expect(JSON.parse(await readFile(join(home, 'own-agent.json'), 'utf8'))).toEqual({ house: house.origin, relay: recorded, user: 'user-one', credential: 'ahp_own' });
   expect((await stat(join(home, 'credential.json'))).mode & 0o777).toBe(0o600);
   expect(first.stderr().split('\n').filter((line) => line.includes(recorded))).toEqual([
     `kit: Kit forgot the relay ${recorded} an earlier install recorded; it takes a relay only from HOUSE_KIT_RELAY`,
@@ -266,7 +264,7 @@ it.each([
   const login = runKit(['login', '--house', house.origin, ...argv], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(1);
-  expect(login.stderr()).toBe(`kit: ${reason}\n`);
+  expect(login.stderr()).toBe(`house: ${reason}\n`);
   expect(house.requests).toEqual([]);
 });
 
@@ -287,7 +285,7 @@ it.each(['credential.json', 'disconnected.json'])('refuses a login code when Kit
   });
 
   expect(await login.exited).toBe(1);
-  expect(login.stderr()).toBe('kit: --code connects a new machine; this Kit home records Environment environment-one, so run kit login to reconnect it\n');
+  expect(login.stderr()).toBe('house: --code connects a new machine; this Kit home records Environment environment-one, so run house login to reconnect it\n');
   expect(house.requests).toEqual([]);
 });
 
@@ -385,7 +383,7 @@ it('refuses --rooms beside --no-private before starting a login', async () => {
   const login = runKit(['login', '--house', house.origin, '--rooms', 'r_k2v.4', '--no-private'], { HOME: accountOf(home) });
 
   expect(await login.exited).toBe(1);
-  expect(login.stderr()).toBe('kit: --rooms and --no-private are two choices of Rooms; pass one\n');
+  expect(login.stderr()).toBe('house: --rooms and --no-private are two choices of Rooms; pass one\n');
   expect(house.requests).toEqual([]);
 });
 
@@ -406,7 +404,7 @@ it('ends with the cause and no credential when House refuses a Room the login na
   await expect(access(join(home, 'credential.json'))).rejects.toThrow();
 });
 
-it('names --code, --rooms and --no-private in kit login --help, --code in a form apart from the other choices, and starts no login', async () => {
+it('names --code, --rooms and --no-private in house login --help, --code in a form apart from the other choices, and starts no login', async () => {
   const house = await startHouse();
   const home = await temporaryHome();
 
@@ -416,8 +414,8 @@ it('names --code, --rooms and --no-private in kit login --help, --code in a form
   expect(login.stdout()).toMatch(/^ +--code <code> +\S/m);
   expect(login.stdout()).toMatch(/^ +--rooms <ref>\[,<ref>\.\.\.\] +\S/m);
   expect(login.stdout()).toMatch(/^ +--no-private +\S/m);
-  const forms = login.stdout().split('\n').filter((line) => line.includes('kit login'));
-  expect(forms).toContainEqual(expect.stringMatching(/kit login \[--house <origin>\] --code <code>$/));
+  const forms = login.stdout().split('\n').filter((line) => line.includes('house login'));
+  expect(forms).toContainEqual(expect.stringMatching(/house login \[--house <origin>\] --code <code>$/));
   expect(forms.filter((form) => form.includes('--code') && /--environment|--rooms|--no-private/.test(form))).toEqual([]);
   expect(house.requests).toEqual([]);
 });
@@ -455,9 +453,9 @@ it.each([[['--rooms', 'r_k2v.4']], [['--no-private']]])(
     const named = runKit(['login', '--house', house.origin, '--environment', 'environment-two', ...rooms], { HOME: accountOf(await temporaryHome()) });
 
     expect(await login.exited).toBe(1);
-    expect(login.stderr()).toBe('kit: Environment environment-one keeps its Rooms; change them on its page in House\n');
+    expect(login.stderr()).toBe('house: Environment environment-one keeps its Rooms; change them on its page in House\n');
     expect(await named.exited).toBe(1);
-    expect(named.stderr()).toBe('kit: Environment environment-two keeps its Rooms; change them on its page in House\n');
+    expect(named.stderr()).toBe('house: Environment environment-two keeps its Rooms; change them on its page in House\n');
     expect(house.requests).toEqual([]);
   },
 );
@@ -540,14 +538,14 @@ it('logs out by revoking and deleting the credential and stopping the resident, 
   const logout = runKit(['logout'], { HOME: accountOf(home) });
 
   expect(await logout.exited).toBe(0);
-  expect(logout.stdout()).toBe('Environment environment-one is disconnected; kit login reconnects it.\n');
+  expect(logout.stdout()).toBe('Environment environment-one is disconnected; house login reconnects it.\n');
   expect(house.requests.filter((request) => request.path === '/kit/kits/log-out').map((request) => request.headers.authorization)).toEqual([
     'Bearer ahk_first',
   ]);
   await expect(access(join(home, 'credential.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await resident.exited).toBe(1);
   const restarted = runKit(['resident'], { HOME: accountOf(home) });
-  await until(() => restarted.stderr().includes('run kit login'));
+  await until(() => restarted.stderr().includes('run house login'));
   expect(house.connections).toHaveLength(1);
 
   serveLogin(house, 'environment-one', 'ahk_second');

@@ -60,7 +60,7 @@ it.each([
   [['--no-private']],
   [['--no-skills']],
   [['--enroll', 'environment-one']],
-  [['kit', 'login']],
+  [['house', 'login']],
   [['house', 'upload']],
 ])('refuses %j as an unknown argument before it reads the host', async (argv) => {
   expect(bootstrap(await published(), ['--house', 'https://agents.house', ...argv])).toMatchObject({
@@ -87,7 +87,7 @@ it.each([
 ] as const)('downloads its packages, Node.js and the Kit %s', async (_case, relay, proxy, served) => {
   const home = await temporaryDirectory();
   const linux = await readFile(LINUX, 'utf8');
-  const steps = ['host_of', 'served_from', 'download', 'named', 'establish_native_packages', 'trust_extra_authorities', 'place_release'].map(
+  const steps = ['host_of', 'served_from', 'download', 'named', 'establish_native_packages', 'trust_extra_authorities', 'place_launcher', 'place_release'].map(
     (step) => new RegExp(`^${step}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0],
   );
   const bin = join(home, 'bin');
@@ -139,7 +139,7 @@ place_release "$TMPDIR/prefix" "$TMPDIR/prefix/bin"`,
 });
 
 function staging(linux: string, house: string, bytes: number): string {
-  const defined = ['host_of', 'served_from', 'download', 'trust_extra_authorities', 'place_release'].map(
+  const defined = ['host_of', 'served_from', 'download', 'trust_extra_authorities', 'place_launcher', 'place_release'].map(
     (step) => new RegExp(`^${step}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(linux)![0],
   );
   return `set -u

@@ -37,11 +37,10 @@ beforeAll(async () => {
 // Ten minutes cover building, packing and installing the Kit's and both adapters' dependencies from npm on a cold cache.
 }, 600_000);
 
-it('builds one Kit archive with the Kit package, its dependencies, its bin links and the pty prebuilds of every native platform', () => {
+it('builds one Kit archive with the Kit package, its dependencies, its one command and the pty prebuilds of every native platform', () => {
   const listed = entries(join(release, `kit-${KIT_PACKAGE.version}.tar.gz`));
 
-  expect(listed).toContainEqual(expect.stringMatching(/ bin\/kit -> \.\.\/lib\/node_modules\/@agentshouse\/kit\/dist\/kit-main\.js$/));
-  expect(listed).toContainEqual(expect.stringMatching(/ bin\/house -> \.\.\/lib\/node_modules\/@agentshouse\/kit\/dist\/house-main\.js$/));
+  expect(listed.filter((line) => / bin\/./.test(line))).toEqual([expect.stringMatching(/ bin\/house -> \.\.\/lib\/node_modules\/@agentshouse\/kit\/dist\/house-main\.js$/)]);
   expect(listed).toContainEqual(expect.stringMatching(/ lib\/node_modules\/@agentshouse\/kit\/node_modules\/@agentshouse\/skills\/package\.json$/));
   for (const platform of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']) {
     expect(listed).toContainEqual(expect.stringMatching(new RegExp(` lib/node_modules/@agentshouse/kit/node_modules/@lydell/node-pty-${platform}/package\\.json$`)));
