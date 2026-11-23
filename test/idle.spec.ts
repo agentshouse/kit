@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { RELEASES, updatesRun } from './cli.ts';
 import { settle, until } from './double.ts';
-import { clocked, hostKit, installHeld, lastCall, type Hosted } from './environment.ts';
+import { hostKit, installHeld, lastCall, type Hosted } from './environment.ts';
 import { MODELS } from './fixtures/clis/session-options.ts';
 import { alive, stop } from './kit.ts';
 import { callUpdate, released, serveRelease } from './release.ts';
@@ -15,8 +15,6 @@ import { callUpdate, released, serveRelease } from './release.ts';
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
 const FAST_MODEL_READ = fileURLToPath(new URL('./fast-model-read.ts', import.meta.url));
-
-const MINUTE = 60_000;
 
 // A model read ends five seconds after it starts under fast-model-read, so twenty seconds see the idle report on a loaded runner.
 const HUNG_READ_ENDED_MS = 20_000;
@@ -108,23 +106,18 @@ it('reports idle again once it has loaded the agents House asked it to refresh a
   expect(paths.lastIndexOf('/kit/kits/report-idle')).toBeGreaterThan(paths.lastIndexOf('/kit/agents/desired/list'));
 });
 
-it('does not report idle while the update command its going idle started runs, and reports idle once that command ends', async () => {
-  const clock = await clocked();
-  const hosted = await hostKit([{}], clock.hosting);
-  await opened(hosted);
-  await until(() => hosted.idles[1]);
-
-  await writeFile(join(hosted.home, 'update-hold'), '');
-  await clock.shift(61 * MINUTE);
-  hosted.call({ kind: 'message', text: '@say done', first: true });
+it('does not report idle while the update command its start began runs, and reports idle once that command ends', async () => {
+  const hosted = await hostKit([{}], { untilIdle: false, prepare: (home) => writeFile(join(home, 'update-hold'), '') });
   await until(() => updatesRun(hosted.home).find((update) => update.held));
+  await opened(hosted);
+  hosted.call({ kind: 'message', text: '@say done', first: true });
+  await until(() => ended(hosted)[0]);
   await settle();
-  expect(ended(hosted)).toHaveLength(1);
-  expect(hosted.idles).toHaveLength(2);
+  expect(hosted.idles).toHaveLength(0);
 
   await rm(join(hosted.home, 'update-hold'));
 
-  await until(() => hosted.idles[2]);
+  await until(() => hosted.idles[0]);
 });
 
 it('reports idle only after it returns the result of the Kit call it carried out', async () => {
