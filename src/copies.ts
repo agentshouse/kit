@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
-import { fileInfo, instructionsText, paused, type FileInfo, type Finished } from './files.ts';
+import { fileInfo, instructionsText, type FileInfo, type Finished } from './files.ts';
 import { conversationsFolder, kitHome, roomsFolder } from './home.ts';
 import {
   digest,
@@ -73,9 +73,6 @@ export interface Opening {
 }
 
 export const DEFAULT_MAX_SIZE = 10;
-
-// A Room answered not ready is asked again on this schedule: its chunk build usually catches up within seconds, so the first asks come soon and the last repeats until it does.
-const ASKED_AGAIN_MS = [1000, 2000, 3000, 5000, 8000, 11_000, 15_000];
 
 export type Change =
   | { op: 'write'; path: string; content: string; base?: string }
@@ -803,17 +800,23 @@ export class LocalCopies {
   }
 
   connected(): Promise<void> {
-    return this.selected();
+    return this.selected(null);
+  }
+
+  noticed(room: string): Promise<void> {
+    return this.selected(room);
   }
 
   async download(caller: Caller, fetching: Fetching, cwd: string): Promise<Answered> {
     const copy = await this.copyAt(cwd);
-    return copy === null ? this.answered(() => this.fetched(true, caller, fetching)) : this.freshened(copy, caller, fetching);
+    return copy === null ? this.answered(() => this.fetched(true, caller, fetching, null)) : this.freshened(copy, caller, fetching);
   }
 
-  private async selected(): Promise<void> {
-    const copied = await this.answered(() => this.fetched(false, this.owner, HELD));
-    if (copied.refused) logged(copied.text);
+  private async selected(notice: string | null): Promise<void> {
+    const copied = await this.answered(async () =>
+      notice === null || this.waiting.has(notice) ? this.fetched(false, this.owner, HELD, notice) : null,
+    );
+    if (copied?.refused) logged(copied.text);
   }
 
   private answered<T>(work: () => Promise<T>): Promise<T> {
@@ -822,10 +825,11 @@ export class LocalCopies {
     return answered;
   }
 
-  private async fetched(refreshing: boolean, caller: Caller, fetching: Fetching): Promise<Answered> {
+  private async fetched(refreshing: boolean, caller: Caller, fetching: Fetching, notice: string | null): Promise<Answered> {
     const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
     const reached = new Map(answer.rooms.map((room) => [room.room_ref, room.room_handle]));
     const synced = new Map(answer.rooms.filter((room) => room.level === 'keep').map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
+    const asked = notice === null ? synced : new Map([...synced].filter(([key]) => key === `${ROOMS}${notice}`));
     return this.holding([...new Set([...this.roomCopies().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
       const chosen = await this.launched();
       const said: string[] = [];
@@ -839,7 +843,7 @@ export class LocalCopies {
       }
       const current: Held[] = [];
       const wanted = new Map<string, string>();
-      for (const [key, handle] of synced) {
+      for (const [key, handle] of asked) {
         try {
           const held = this.copies.get(key);
           if (held === undefined || !(await exists(held.repository))) {
@@ -901,12 +905,10 @@ export class LocalCopies {
       const unwritten = await this.foldered(reached, new Set(synced.keys()), made, refreshing, caller, chosen);
       if (refreshing) said.push(...unwritten);
       else unwritten.forEach(logged);
-      for (const room of [...this.waiting]) {
+      for (const room of notice === null ? [...this.waiting] : [notice]) {
         if (!unready.includes(room) && !unsettled.includes(room)) this.waiting.delete(room);
       }
-      const due = unready.filter((room) => !this.waiting.has(room));
-      for (const room of due) this.waiting.add(room);
-      if (due.length > 0) void this.askedAgain(due);
+      for (const room of unready) this.waiting.add(room);
       return { refused, text: said.length === 0 ? 'Nothing new from House.' : said.join('\n') };
     });
   }
@@ -920,15 +922,6 @@ export class LocalCopies {
       ...[...report.kept].sort().map((path) => `${root}/${path}: changed here, so House's change was not brought; the next house upload merges it`),
       ...(report.left.size === 0 ? [] : [leftOnHouse([...report.left].sort().map((path) => `${root}/${path}`))]),
     ];
-  }
-
-  private async askedAgain(rooms: readonly string[]): Promise<void> {
-    let asking = rooms;
-    for (let step = 0; asking.length > 0; step++) {
-      await paused(ASKED_AGAIN_MS[Math.min(step, ASKED_AGAIN_MS.length - 1)]!);
-      await this.selected().catch(logged);
-      asking = asking.filter((room) => this.waiting.has(room));
-    }
   }
 
   upload(cwd: string, caller: Caller): Promise<Answered> {
