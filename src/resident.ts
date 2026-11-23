@@ -231,7 +231,7 @@ export async function resident(): Promise<void> {
       conversations.opened();
       scripts.connected();
       changed();
-      logged(copies.connected());
+      logged(copies.connected((directory) => conversations.turnsIn(directory)));
     },
     closed: () => scripts.disconnected(),
     call: (call) => {
