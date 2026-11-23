@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { rmSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import type { HouseOneWayCall, KitCallOf, KitCallResult, KitOneWayCall } from '@agentshouse/kit-wire';
 import type { IPty } from '@lydell/node-pty';
@@ -15,6 +15,7 @@ import type { LocalCopies } from './copies.ts';
 import { kitHome } from './home.ts';
 import { childEnvironment } from './relay.ts';
 import { killTree } from './scope.ts';
+import { launcher } from './supervisor.ts';
 
 export type ScriptCall = KitCallOf<'run_wizard' | 'run_function'>;
 
@@ -271,7 +272,7 @@ export class Scripts {
       const environment = {
         ...childEnvironment(),
         ...run.bridge?.env,
-        PATH: path,
+        PATH: [dirname(launcher()), path].join(delimiter),
         ...(run.input === null ? {} : { HOUSE_INPUT: run.input }),
       };
       if (plan.terminal === null) {

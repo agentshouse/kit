@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmod, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { KIT_RELEASE } from '../src/clis.ts';
@@ -75,6 +75,36 @@ it("names house in a Linux home's unit and Git helper that named kit and deletes
   expect(tools.calls('systemctl')).toEqual(['--user daemon-reload']);
   expect((await stat(unit)).mtimeMs).toBe(written.mtimeMs);
   expect(helpers(home)).toBe('\n!house git-credential\n');
+});
+
+it('removes the kit links its installer placed in /usr/local/bin and ~/.local/bin as it drops kit, and no other link or file', async () => {
+  const tools = await supervision();
+  const home = await temporaryHome();
+  const account = accountOf(home);
+  const systemBin = join(tools.root, 'usr', 'local', 'bin');
+
+  const hosted = await hostKit([], {
+    home,
+    skills: false,
+    node: ROOTED,
+    environment: { ...tools.environment, PATH: `${join(tools.fake, 'bin')}:${join(home, 'bin')}:${process.env.PATH}` },
+    prepare: async () => {
+      await namingKit(home);
+      await mkdir(systemBin, { recursive: true });
+      await mkdir(join(account, '.local', 'bin'), { recursive: true });
+      await symlink(join(home, 'bin', 'kit'), join(systemBin, 'kit'));
+      await symlink(join(home, 'bin', 'kit'), join(account, '.local', 'bin', 'kit'));
+      await symlink(join(home, 'bin', 'house'), join(account, '.local', 'bin', 'house'));
+      await put(join(systemBin, 'house'), 'mine\n');
+    },
+  });
+
+  expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
+  await absent(join(home, 'bin', 'kit'));
+  await absent(join(systemBin, 'kit'));
+  await absent(join(account, '.local', 'bin', 'kit'));
+  expect(await readlink(join(account, '.local', 'bin', 'house'))).toBe(join(home, 'bin', 'house'));
+  expect(await readFile(join(systemBin, 'house'), 'utf8')).toBe('mine\n');
 });
 
 it("names house in a Mac's LaunchAgent and Git helper that named kit at its first start through kit, reloads the LaunchAgent, and drops kit at the start that follows", async () => {

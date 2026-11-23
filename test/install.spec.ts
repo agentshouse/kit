@@ -1,7 +1,7 @@
-import { lstat, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, readdir, readFile, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
-import { ADAPTER_ARCHIVES, fakeHost, PUBLISHED_VERSION, type Platform } from './host.ts';
+import { ADAPTER_ARCHIVES, fakeHost, PUBLISHED_VERSION, type Host, type Platform } from './host.ts';
 
 const NEWER = '0.2.1-alpha.2';
 const LINUX: Platform = { system: 'Linux', machine: 'x86_64' };
@@ -15,10 +15,27 @@ function downloads(node: string, version = PUBLISHED_VERSION): unknown[] {
   ];
 }
 
+async function put(path: string, text: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, text);
+}
+
+async function absent(path: string): Promise<void> {
+  await expect(lstat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+}
+
+function userBin(host: Host): string {
+  return join(host.home, '.local', 'bin');
+}
+
+function notOnPath(host: Host, names = 'house'): string {
+  return `Placed ${names} in ${userBin(host)}, which is not on your PATH; add ${userBin(host)} to your PATH to run ${names} by name.\n`;
+}
+
 it.each([
-  ['Linux', LINUX, 'linux-x64', '.bash_profile'],
-  ['macOS', { ...MAC, shell: 'zsh' } as Platform, 'darwin-arm64', '.zprofile'],
-] as const)('places Node.js and the Kit release in ~/.agents/house on %s, puts its one command, house, on the login path and hands over to house connect with its two arguments', async (_name, platform, node, profile) => {
+  ['Linux', LINUX, 'linux-x64'],
+  ['macOS', { ...MAC, shell: 'zsh' } as Platform, 'darwin-arm64'],
+] as const)('places Node.js and the Kit release in ~/.agents/house on %s, links its one command, house, into ~/.local/bin, writes no shell file and hands over to house connect with its two arguments', async (_name, platform, node) => {
   const host = await fakeHost(platform);
   await writeFile(join(host.home, '.bash_profile'), '');
 
@@ -30,8 +47,11 @@ it.each([
   await lstat(join(host.kitHome, 'kit', 'releases', PUBLISHED_VERSION, 'bin', 'node'));
   for (const name of ADAPTER_ARCHIVES) await lstat(join(host.kitHome, 'kit', 'releases', PUBLISHED_VERSION, 'adapters', name.replace(/-[0-9].*$/, '')));
   expect(host.calls('curl')).toEqual(downloads(node));
-  expect(await readFile(join(host.home, profile), 'utf8')).toContain(`export PATH="${join(host.kitHome, 'bin')}:$PATH"\n`);
-  expect(ran.stdout).toContain(`Added ${join(host.kitHome, 'bin')} to the path in ${join(host.home, profile)}; new terminals find house.\n`);
+  expect(await readlink(join(userBin(host), 'house'))).toBe(join(host.kitHome, 'bin', 'house'));
+  expect(await readdir(userBin(host))).toEqual(['house']);
+  expect(ran.stdout).toContain(notOnPath(host));
+  expect((await readdir(host.home)).sort()).toEqual(['.agents', '.bash_profile', '.local']);
+  expect(await readFile(join(host.home, '.bash_profile'), 'utf8')).toBe('');
   expect(await readdir(join(host.kitHome, 'bin'))).toEqual(['house']);
   expect(host.calls('house')).toEqual(['connect --house https://agents.house --code ahk_code_one']);
   expect(host.calls('release')).toEqual([join(host.kitHome, 'kit', 'releases', PUBLISHED_VERSION)]);
@@ -39,6 +59,77 @@ it.each([
   expect(host.calls('install')).toEqual(['curl -fsSL agents.house/kit | sh']);
   expect(host.calls('sudo')).toEqual([]);
   expect(host.calls('apt-get')).toEqual([]);
+  await host.forget();
+  expect(host.shell(`env PATH="${userBin(host)}:$PATH" house resident`)).toMatchObject({ status: 0, stderr: '' });
+  expect(host.calls('house')).toEqual(['resident']);
+});
+
+it('links house into /usr/local/bin where this account can write it, saying so in one line, and places nothing in ~/.local/bin', async () => {
+  const host = await fakeHost(LINUX);
+  await mkdir(host.systemBin);
+
+  const ran = host.run(['--house', 'https://agents.house'], { PATH: `${host.systemBin}:${host.path}` });
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').filter((line) => line.startsWith('Placed '))).toEqual([`Placed house in ${host.systemBin}.`]);
+  expect(await readlink(join(host.systemBin, 'house'))).toBe(join(host.kitHome, 'bin', 'house'));
+  await absent(userBin(host));
+});
+
+it('says the link in ~/.local/bin in one line when that folder is already on the PATH', async () => {
+  const host = await fakeHost(LINUX);
+
+  const ran = host.run(['--house', 'https://agents.house'], { PATH: `${userBin(host)}:${host.path}` });
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(ran.stdout.split('\n').filter((line) => line.startsWith('Placed '))).toEqual([`Placed house in ${userBin(host)}.`]);
+});
+
+it('moves its link into /usr/local/bin once this account can write it, removing its own link from ~/.local/bin and nothing it did not place', async () => {
+  const host = await fakeHost(LINUX);
+  expect(host.run(['--house', 'https://agents.house'])).toMatchObject({ status: 0, stderr: '' });
+  await mkdir(host.systemBin);
+  await put(join(host.systemBin, 'kit'), 'mine\n');
+  await symlink(join(host.home, 'elsewhere', 'kit'), join(userBin(host), 'kit'));
+
+  const ran = host.run(['--house', 'https://agents.house']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(await readlink(join(host.systemBin, 'house'))).toBe(join(host.kitHome, 'bin', 'house'));
+  await absent(join(userBin(host), 'house'));
+  expect(await readFile(join(host.systemBin, 'kit'), 'utf8')).toBe('mine\n');
+  expect(await readlink(join(userBin(host), 'kit'))).toBe(join(host.home, 'elsewhere', 'kit'));
+});
+
+const LINE = (host: Host) => `export PATH="${join(host.kitHome, 'bin')}:$PATH"`;
+
+it.each([
+  ['bash', '.profile', '/bin/bash'],
+  ['bash', '.bash_profile', '/bin/bash'],
+  ['zsh', join('zdot', '.zprofile'), 'zsh'],
+  ['fish', join('.config', 'fish', 'config.fish'), '/usr/bin/fish'],
+] as const)('removes only the PATH line an earlier Kit added to the %s login file %s, keeping its other lines', async (_shell, file, shell) => {
+  const host = await fakeHost({ ...LINUX, shell });
+  await put(join(host.home, '.zshenv'), `ZDOTDIR="${join(host.home, 'zdot')}"\n`);
+  const line = shell.endsWith('fish') ? `set -gx PATH "${join(host.kitHome, 'bin')}" $PATH` : LINE(host);
+  await put(join(host.home, file), `# mine\n${line}\nexport EDITOR=vi\n`);
+
+  const ran = host.run(['--house', 'https://agents.house']);
+
+  expect(ran).toMatchObject({ status: 0, stderr: '' });
+  expect(await readFile(join(host.home, file), 'utf8')).toBe('# mine\nexport EDITOR=vi\n');
+  expect(ran.stdout).toContain(`Removed the PATH line Kit added to ${join(host.home, file)}.\n`);
+});
+
+it('removes the earlier PATH line through a login file that links into a dotfiles folder, keeping the link', async () => {
+  const host = await fakeHost(LINUX);
+  await put(join(host.home, 'dotfiles', 'profile'), `${LINE(host)}\nexport EDITOR=vi\n`);
+  await symlink(join(host.home, 'dotfiles', 'profile'), join(host.home, '.profile'));
+
+  expect(host.run(['--house', 'https://agents.house'])).toMatchObject({ status: 0, stderr: '' });
+
+  expect((await lstat(join(host.home, '.profile'))).isSymbolicLink()).toBe(true);
+  expect(await readFile(join(host.home, 'dotfiles', 'profile'), 'utf8')).toBe('export EDITOR=vi\n');
 });
 
 it('changes nothing it placed when it runs again with the same release, and hands over to house connect again', async () => {
@@ -46,7 +137,7 @@ it('changes nothing it placed when it runs again with the same release, and hand
   expect(host.run(['--house', 'https://agents.house'])).toMatchObject({ status: 0, stderr: '' });
   const placed = await stat(join(host.kitHome, 'kit', 'releases', PUBLISHED_VERSION));
   const launcher = await stat(join(host.kitHome, 'bin', 'house'));
-  const profile = await readFile(join(host.home, '.profile'), 'utf8');
+  const link = await lstat(join(userBin(host), 'house'));
   await host.forget();
 
   const ran = host.run(['--house', 'https://agents.house']);
@@ -55,7 +146,8 @@ it('changes nothing it placed when it runs again with the same release, and hand
   expect(host.calls('curl')).toEqual([]);
   expect((await stat(join(host.kitHome, 'kit', 'releases', PUBLISHED_VERSION))).mtimeMs).toBe(placed.mtimeMs);
   expect((await stat(join(host.kitHome, 'bin', 'house'))).mtimeMs).toBe(launcher.mtimeMs);
-  expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe(profile);
+  expect((await lstat(join(userBin(host), 'house'))).mtimeMs).toBe(link.mtimeMs);
+  await absent(join(host.home, '.profile'));
   expect(host.calls('house')).toEqual(['connect --house https://agents.house']);
 });
 
@@ -199,14 +291,17 @@ it('passes the Kit relay through to house connect and downloads through it', asy
   expect(host.calls('relay')).toEqual([relay]);
 });
 
-it('places a release in Kit home for the update of a Kit that moved, with its launchers in bin and the path line, and connects nothing', async () => {
+it("places a release in Kit home for the Kit's own update, with its launcher in bin linked into ~/.local/bin and the earlier PATH line removed, and connects nothing", async () => {
   const host = await fakeHost(LINUX);
+  await put(join(host.home, '.profile'), `${LINE(host)}\n`);
 
   const ran = host.run(['--house', 'https://agents.house', '--place', join(host.kitHome, 'kit')]);
 
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(await readFile(join(host.kitHome, 'kit', 'current'), 'utf8')).toBe(`${PUBLISHED_VERSION}\n`);
-  expect(await readFile(join(host.home, '.profile'), 'utf8')).toContain(join(host.kitHome, 'bin'));
+  expect(await readlink(join(userBin(host), 'house'))).toBe(join(host.kitHome, 'bin', 'house'));
+  expect(await readFile(join(host.home, '.profile'), 'utf8')).toBe('');
+  expect(ran.stdout).toContain(notOnPath(host));
   expect(host.calls('house')).toEqual([]);
   await host.forget();
   expect(host.shell(`${join(host.kitHome, 'bin', 'house')} resident`)).toMatchObject({ status: 0, stderr: '' });
@@ -226,4 +321,23 @@ it("places a release in the folder an earlier Kit's update names, beside launche
   await host.forget();
   expect(host.shell(`${join(prefix, 'bin', 'house')} resident`)).toMatchObject({ status: 0, stderr: '' });
   expect(host.calls('prefix')).toEqual([prefix]);
+});
+
+it('links kit beside house while a Kit that ran as kit keeps its kit launcher, and removes that link once the launcher is gone', async () => {
+  const host = await fakeHost(LINUX);
+  expect(host.run(['--house', 'https://agents.house'])).toMatchObject({ status: 0, stderr: '' });
+  await put(join(host.kitHome, 'bin', 'kit'), '#!/bin/sh\n');
+
+  const kept = host.run(['--house', 'https://agents.house', '--place', join(host.kitHome, 'kit')]);
+
+  expect(kept).toMatchObject({ status: 0, stderr: '' });
+  expect(kept.stdout).toContain(notOnPath(host, 'kit'));
+  expect(await readlink(join(userBin(host), 'kit'))).toBe(join(host.kitHome, 'bin', 'kit'));
+  expect(await readlink(join(userBin(host), 'house'))).toBe(join(host.kitHome, 'bin', 'house'));
+  await rm(join(host.kitHome, 'bin', 'kit'));
+
+  expect(host.run(['--house', 'https://agents.house', '--place', join(host.kitHome, 'kit')])).toEqual({ status: 0, stdout: '', stderr: '' });
+
+  await absent(join(userBin(host), 'kit'));
+  expect(await readlink(join(userBin(host), 'house'))).toBe(join(host.kitHome, 'bin', 'house'));
 });

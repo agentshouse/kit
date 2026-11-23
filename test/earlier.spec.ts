@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startHouse, until, type House } from './double.ts';
@@ -107,6 +107,7 @@ it("moves a Linux desktop's Kit home and its default workspace into ~/.agents/ho
   await absent(join(earlier.workspace, 'agents'));
   await absent(earlier.prefix);
   await absent(join(earlier.account, '.local', 'bin', 'kit'));
+  expect(await readlink(join(earlier.account, '.local', 'bin', 'house'))).toBe(join(earlier.folder, 'bin', 'house'));
   const unit = await readFile(join(earlier.account, '.config', 'systemd', 'user', 'house-kit.service'), 'utf8');
   expect(unit).toContain(`ExecStart="${join(earlier.folder, 'bin', 'house')}" resident\n`);
   expect(unit).toContain('WantedBy=default.target\n');
@@ -255,6 +256,22 @@ it("takes over a system unit's Kit run by another account than root through sudo
     'rm -rf /opt/house-kit /usr/local/bin/kit /usr/local/bin/house',
     'rmdir --ignore-fail-on-non-empty /agents/house /agents',
   ]);
+});
+
+it("keeps the link to its own house its installer placed in /usr/local/bin over an earlier system Kit's launcher as it removes that Kit", async () => {
+  const house = await startHouse();
+  const tools = await supervision();
+  const earlier = await rootKit(house, tools, true);
+  const link = join(tools.root, 'usr', 'local', 'bin', 'house');
+  await rm(link);
+  await symlink(join(earlier.folder, 'bin', 'house'), link);
+
+  const kit = connecting(house, earlier, tools);
+
+  expect(await kit.exited).toBe(0);
+  expect(tools.calls('sudo')).toContain('rm -rf /opt/house-kit /usr/local/bin/kit');
+  expect(await readlink(link)).toBe(join(earlier.folder, 'bin', 'house'));
+  await absent(join(tools.root, 'usr', 'local', 'bin', 'kit'));
 });
 
 it("keeps the Environment of a system unit's Kit it takes over when the install carries a login code, leaving the code unused and saying so", async () => {
