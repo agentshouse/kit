@@ -1,6 +1,8 @@
 import { client, type SessionConfigOption, type SessionConfigSelectOptions } from '@agentclientprotocol/sdk';
 import { KIT_WIRE, type DesiredAgentRoute, type KitActAnswer, type KitActRequest, type ReportedAgentKind } from '@agentshouse/kit-wire';
-import { readFile } from 'node:fs/promises';
+import { watch, type FSWatcher } from 'node:fs';
+import { readFile, realpath } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
 import type { House } from './api.ts';
@@ -18,11 +20,18 @@ type Offer = Pick<ReportedAgentKind, 'signed_in' | 'api_key' | 'provider' | 'mod
 
 type Reading = Offer & Pick<ReportedAgentKind, 'release' | 'failure' | 'installing'>;
 
+interface Link {
+  cli: string;
+  target: string | null;
+  release: string | null;
+  watcher: FSWatcher | null;
+}
+
 // Two quiet seconds let a fresh conversation start before background model discovery competes for its CPU.
 const MODEL_PROBE_QUIET_MS = 2_000;
 
-// A CLI's maker can publish several releases a day, so running each chosen CLI's update command hourly brings a new one to the next conversation within the hour for one small check.
-export const CLI_UPDATE_MS = 60 * 60_000;
+// A CLI's maker can publish several releases a day, so running each chosen CLI's update command when the Kit goes idle once an hour has passed since its last run brings a new one within the hour of its use for one small run.
+const CLI_UPDATE_MS = 60 * 60_000;
 
 // A sign-in's model read that has not answered in ten seconds leaves its sign-in to the status check, so a hung CLI never holds the sign-in's result.
 const SIGNED_IN_READ_MS = 10_000;
@@ -227,6 +236,10 @@ export class Agents {
   private refreshing = 0;
   private loaded: Promise<unknown> = Promise.resolve();
   private updating: Promise<void> | null = null;
+  private updated = 0;
+  private readonly links = new Map<string, Link>();
+  private readonly relinks = new Set<string>();
+  private relinking = 0;
   private readonly changed: () => void;
 
   constructor(house: House, changed: () => void = () => undefined) {
@@ -236,6 +249,10 @@ export class Agents {
 
   idle(): boolean {
     return this.refreshing === 0 && this.updating === null;
+  }
+
+  linksRead(): boolean {
+    return this.relinking === 0;
   }
 
   read(): Promise<void> {
@@ -276,11 +293,12 @@ export class Agents {
     return reading.then(() => undefined);
   }
 
-  keepCurrent(stopping: () => boolean): void {
+  updateClis(): void {
     this.updateAll(this.loaded);
-    setInterval(() => {
-      if (!stopping()) this.updateAll(Promise.resolve());
-    }, CLI_UPDATE_MS);
+  }
+
+  wentIdle(): void {
+    if (Date.now() - this.updated >= CLI_UPDATE_MS) this.updateAll(Promise.resolve());
   }
 
   cli(kind: string): Promise<string> {
@@ -412,8 +430,62 @@ export class Agents {
       return { release: null, failure, ...SIGNED_OUT };
     }
     const release = await versionOf(kind, cli, signal);
+    await this.linked(kind, cli, release);
     if (release === null) return { release: null, failure: `${cli} --version names no version`, ...SIGNED_OUT };
     return { cli, release };
+  }
+
+  private async linked(kind: string, cli: string, release: string | null): Promise<void> {
+    const target = await realpath(cli).catch(() => null);
+    const known = this.links.get(kind);
+    const watcher =
+      known !== undefined && known.watcher !== null && dirname(known.cli) === dirname(cli) ? known.watcher : this.watchFolder(kind, cli, known?.watcher ?? null);
+    this.links.set(kind, { cli, target, release, watcher });
+  }
+
+  private watchFolder(kind: string, cli: string, replaced: FSWatcher | null): FSWatcher | null {
+    replaced?.close();
+    try {
+      return watch(dirname(cli), () => this.folderChanged(kind)).on('error', (error) => {
+        logged(error);
+        this.links.delete(kind);
+      });
+    } catch (error) {
+      process.stderr.write(`kit: Kit does not watch ${dirname(cli)} for ${kind}: ${causeOf(error)}\n`);
+      return null;
+    }
+  }
+
+  private folderChanged(kind: string): void {
+    if (this.relinks.has(kind) || !this.desired.agents.includes(kind)) return;
+    this.relinks.add(kind);
+    this.relinking++;
+    this.changed();
+    this.queue(kind, () => {
+      this.relinks.delete(kind);
+      return this.readLink(kind);
+    })
+      .then((moved) => (moved === null ? undefined : this.readModels(kind, moved)))
+      .catch(logged)
+      .finally(() => {
+        this.relinking--;
+        this.changed();
+      });
+  }
+
+  private async readLink(kind: string): Promise<{ cli: string; release: string } | null> {
+    const link = this.links.get(kind);
+    if (link === undefined) return null;
+    const [target, release] = await Promise.all([realpath(link.cli).catch(() => null), versionOf(kind, link.cli)]);
+    if (target === null) return null;
+    this.links.set(kind, { ...link, target, release });
+    return release === null || (target === link.target && release === link.release) ? null : { cli: link.cli, release };
+  }
+
+  private async readModels(kind: string, { cli, release }: { cli: string; release: string }): Promise<void> {
+    const read = this.nextRead(kind);
+    const offered = await this.quietOffer(kind, cli, this.readings.get(kind) ?? SIGNED_OUT);
+    if (this.reads.get(kind) === read) this.update(kind, { release, failure: null, ...offered });
   }
 
   private async examine(
@@ -434,11 +506,11 @@ export class Agents {
     if (this.updating !== null) return;
     this.updating = after
       .then(async () => {
+        this.updated = Date.now();
         for (const kind of this.desired.agents) {
           if (this.installs.has(kind) || !this.readings.get(kind)?.release) continue;
           const failure = await updateCli(kind);
           if (failure !== null) process.stderr.write(`kit: ${kind} did not update: ${failure}\n`);
-          await this.readVersion(kind);
         }
       })
       .catch(logged)
@@ -447,14 +519,6 @@ export class Agents {
         this.changed();
       });
     this.changed();
-  }
-
-  private async readVersion(kind: string): Promise<void> {
-    const cli = await locate(kind);
-    const release = cli === null ? null : await versionOf(kind, cli);
-    const current = this.readings.get(kind);
-    if (release === null || !current?.release || current.release === release) return;
-    this.update(kind, { ...current, release });
   }
 
   private async quietOffer(kind: string, cli: string, known: Offer): Promise<Offer> {

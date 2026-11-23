@@ -317,7 +317,7 @@ it("reports a CLI below its minimum with the version found, the minimum and the 
   ]);
 });
 
-it("reports the version a CLI's update command leaves, with the sign-in and models it read, and without the minimum that version reaches", async () => {
+it("reports the version a CLI's update command leaves, with the sign-in and models it reads again, and without the minimum that version reaches", async () => {
   desired = ['codex-acp'];
   await signIn('codex-acp');
   await start(async () => {
@@ -333,7 +333,7 @@ it("reports the version a CLI's update command leaves, with the sign-in and mode
   const { minimum, update, ...read } = outdated;
   expect({ minimum, update }).toEqual({ minimum: '0.165.0', update: 'codex update' });
   expect(updated.agents).toEqual([{ ...read, release: RELEASES['codex-acp'] }]);
-  expect(await probes()).toBe(1);
+  expect(await probes()).toBe(2);
 });
 
 it('reports a model its CLI refuses to select with no efforts before the Kit read any for it', async () => {
