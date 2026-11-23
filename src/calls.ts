@@ -6,7 +6,6 @@ import { kitHome } from './home.ts';
 
 export interface Carried {
   result: KitCallResult;
-  returned?(): Promise<void>;
   release?: boolean;
 }
 
@@ -66,19 +65,17 @@ export class Calls {
     this.carrying.set(callId, (this.carrying.get(callId) ?? 0) + 1);
     this.changed();
     return carried
-      .then(async ({ result, returned, release }) => {
+      .then(async ({ result, release }) => {
         try {
           await this.house.deliver('kit-calls/results/return', { call: callId, ...result });
         } finally {
           this.returned.add(callId);
           if (this.results.delete(callId)) this.save();
         }
-        if (known !== undefined) return;
-        if (release) {
+        if (known === undefined && release) {
           this.carried.delete(callId);
           this.released.add(callId);
         }
-        await returned?.();
       })
       .catch(logged)
       .finally(() => {

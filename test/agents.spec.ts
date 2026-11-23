@@ -74,6 +74,10 @@ async function signIn(...kinds: string[]): Promise<void> {
   for (const kind of kinds) await writeFile(join(home, 'signed-in', kind), '');
 }
 
+function reached(path: string): number {
+  return house.requests.filter((request) => request.path === path).length;
+}
+
 async function probes(): Promise<number> {
   return (await logged('adapter.log')).filter((line) => line.includes('"method":"session/new"')).length;
 }
@@ -228,7 +232,7 @@ it('installs a chosen CLI the login shell does not find though its profile print
   expect(await logged('curl.log')).toEqual(['https://claude.ai/install.sh']);
 });
 
-it("reports a CLI whose official install failed with no release and the installer's cause, and installs it at a later work_available One-way call", async () => {
+it("reports a CLI whose official install failed with no release and the installer's cause, and runs no install again at a later work_available One-way call", async () => {
   desired = ['codex-acp', 'claude-agent-acp'];
   await start(async () => {
     await rm(join(userBin(home), 'claude'));
@@ -245,13 +249,12 @@ it("reports a CLI whose official install failed with no release and the installe
   expect(kit!.stderr()).toContain('claude-agent-acp did not install: Checksum verification failed');
 
   await rm(join(home, 'install-fail'));
+  const idles = await until(() => reached('/kit/kits/report-idle'));
   house.connections[0]!.send({ type: 'work_available', subject: 'agents' });
 
-  const recovered = await until(() => completeReports()[1]);
-  expect(recovered.agents).toEqual([
-    expect.objectContaining({ kind: 'codex-acp', release: RELEASES['codex-acp'] }),
-    { kind: 'claude-agent-acp', release: RELEASES['claude-agent-acp'], failure: null, signed_in: false, models: [], modes: [], full_access: 'bypassPermissions' },
-  ]);
+  await until(() => reached('/kit/kits/report-idle') > idles);
+  expect(await logged('curl.log')).toEqual(['https://claude.ai/install.sh']);
+  expect(completeReports()).toEqual([failed]);
 });
 
 it("keeps the end of a long installer output as the cause, so it stays within what House takes", async () => {

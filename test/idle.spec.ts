@@ -18,7 +18,7 @@ const FAST_MODEL_READ = fileURLToPath(new URL('./fast-model-read.ts', import.met
 
 const MINUTE = 60_000;
 
-// A model read waits two quiet seconds and ends five seconds later under fast-model-read, so twenty seconds see the idle report on a loaded runner.
+// A model read ends five seconds after it starts under fast-model-read, so twenty seconds see the idle report on a loaded runner.
 const HUNG_READ_ENDED_MS = 20_000;
 
 async function opened(hosted: Hosted): Promise<void> {

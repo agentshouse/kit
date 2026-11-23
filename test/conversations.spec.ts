@@ -1743,27 +1743,6 @@ it('calls restarted before it opens its Kit connection', async () => {
   expect(order.indexOf('/kit/kits/report-restart')).toBeLessThan(order.indexOf('/kit/stream'));
 });
 
-it('reads the CLI again only after the conversation it opens has had two quiet seconds', async () => {
-  const hosted = await hostKit([{ kind: 'codex-acp' }], {
-    prepare: async (home) => {
-      await mkdir(join(home, 'signed-in'), { recursive: true });
-      await writeFile(join(home, 'signed-in', 'codex-acp'), '');
-    },
-  });
-  await until(() => hosted.reports.find((report) =>
-    (report.agents as { kind: string; signed_in: boolean; models: unknown[] }[])
-      .some((agent) => agent.kind === 'codex-acp' && agent.signed_in && agent.models.length > 0),
-  ));
-  const sessions = async () => (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new').length;
-  const before = await sessions();
-  const opening = Date.now();
-  hosted.call({ kind: 'open' });
-  await hosted.result(lastCall());
-  await until(async () => (await sessions()) === before + 1);
-  await until(async () => (await sessions()) === before + 2);
-  expect(Date.now() - opening).toBeGreaterThanOrEqual(2_000);
-});
-
 function reported(hosted: Hosted): string[] {
   return hosted.turns.map((turn) => turn.path.split('/').at(-1)!);
 }
