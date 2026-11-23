@@ -70,7 +70,7 @@ export class SignIns {
     const ended = await Promise.race([this.signedIn(call, ending.signal), endOf(ending.signal)]);
     clearTimeout(timer);
     if (ended) process.stderr.write(`kit: the ${call.cli} sign-in reached the end House set for it\n`);
-    return ended ? { result: {} } : { result: {}, returned: () => this.agents.reread(call.cli) };
+    return { result: {} };
   }
 
   private async signedIn(call: SignInCall, signal: AbortSignal): Promise<false> {

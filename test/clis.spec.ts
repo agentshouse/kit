@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +51,11 @@ async function signIn(home: string, kind: string): Promise<void> {
 
 async function probes(hosted: Hosted): Promise<number> {
   return (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new' && entry.params !== undefined && (entry.params as { cwd: string }).cwd === hosted.home).length;
+}
+
+async function starts(hosted: Hosted, name: string): Promise<number> {
+  const log = await readFile(join(hosted.home, 'started.log'), 'utf8').catch(() => '');
+  return log.split('\n').filter((line) => line !== '' && (JSON.parse(line) as { name: string }).name === name).length;
 }
 
 async function versionReads(hosted: Hosted): Promise<number> {
@@ -197,82 +203,70 @@ it("runs a conversation on a CLI below its minimum, reported with the minimum an
   expect(await open(hosted, 'conversation-2', 'agent-2')).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
 });
 
-it('reads the CLI again at every Conversation process start, its sign-in and every model with its efforts, and reports it only when it changed', async () => {
-  const hosted = await hostKit([{ kind: 'codex-acp' }]);
-  const [signedOut] = await report(hosted, (agents) => agents.length === 1);
-  await signIn(hosted.home, 'codex-acp');
-  await mkdir(join(hosted.home, 'models'));
-  await writeFile(
-    join(hosted.home, 'models', 'codex-acp'),
-    JSON.stringify([
-      { id: 'gpt-6', name: '6', efforts: ['high', 'max'] },
-      { id: 'gpt-5.5', name: '5.5', efforts: ['medium'] },
-    ]),
-  );
-
-  await open(hosted, 'conversation-1');
-
-  await reportOf(hosted, [
-    {
-      ...signedOut,
-      signed_in: true,
-      models: [
-        { model: 'gpt-6', name: '6', efforts: ['high', 'max'] },
-        { model: 'gpt-5.5', name: '5.5', efforts: ['medium'] },
-      ],
-      modes: [
-        { mode: 'read-only', name: 'Read-only' },
-        { mode: 'workspace-write', name: 'Workspace access' },
-        { mode: 'agent', name: 'Auto review' },
-        { mode: 'agent-full-access', name: 'Full access' },
-      ],
-      default_model: 'gpt-6',
-      default_effort: 'medium',
-    },
-  ]);
-  const count = reported(hosted).length;
-  await open(hosted, 'conversation-2');
-  await until(async () => (await probes(hosted)) === 2);
-  await settle();
-  expect(reported(hosted)).toHaveLength(count);
-});
-
-it("reports a CLI's API key and provider no more once a person removed them from its settings, from its next Conversation process start", async () => {
-  const settings = (home: string) => join(accountOf(home), '.claude', 'settings.json');
+it('reads a CLI once, its sign-in and models, when a conversation installs it after its install failed at Kit start', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }], {
     prepare: async (home) => {
-      await mkdir(dirname(settings(home)), { recursive: true });
-      await writeFile(settings(home), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'stand-in-key', ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic' } }));
+      await rm(join(userBin(home), 'claude'));
+      await writeFile(join(home, 'install-fail'), 'claude-agent-acp\n');
+      await signIn(home, 'claude-agent-acp');
     },
   });
-  await report(hosted, ([claude]) => claude?.api_key === true && claude.provider === 'api.z.ai');
-  await signIn(hosted.home, 'claude-agent-acp');
-  await writeFile(settings(hosted.home), JSON.stringify({ env: {} }));
+  await report(hosted, (agents) => agents.some((agent) => typeof agent.failure === 'string'));
+  await rm(join(hosted.home, 'install-fail'));
 
-  await open(hosted, 'conversation-1');
+  expect(await open(hosted, 'conversation-1')).toEqual({ provider_session_id: expect.any(String) });
 
-  await report(hosted, ([claude]) => claude?.signed_in === true && !('api_key' in claude) && !('provider' in claude));
+  await report(hosted, (agents) =>
+    agents.some((agent) => agent.release === RELEASES['claude-agent-acp'] && agent.signed_in === true && (agent.models as unknown[]).length > 0),
+  );
+  await settle();
+  expect(await probes(hosted)).toBe(1);
 });
 
-it('reports the read of the latest Conversation process start when an earlier read of the same CLI ends after it', async () => {
-  const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => signIn(home, 'grok-build') });
+it('starts no second CLI and reads nothing when a conversation opens on a CLI the Kit read, though its sign-in and models changed since', async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }]);
+  await report(hosted, (agents) => agents.length === 1);
+  await idled(hosted, 0);
+  const reports = reported(hosted).length;
+  const adapters = await starts(hosted, 'adapter');
+  await signIn(hosted.home, 'codex-acp');
+  await mkdir(join(hosted.home, 'models'));
+  await writeFile(join(hosted.home, 'models', 'codex-acp'), JSON.stringify([{ id: 'gpt-6', name: '6', efforts: ['high'] }]));
+
+  await open(hosted, 'conversation-1');
+  expect(await answer(hosted, 'conversation-1', '@say answered')).toBe('answered');
+  // Three seconds give a read the conversation started time to reach the logs on a loaded runner.
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+
+  expect(await starts(hosted, 'adapter')).toBe(adapters + 1);
+  expect(await probes(hosted)).toBe(0);
+  expect(reported(hosted)).toHaveLength(reports);
+});
+
+it("reports the read of a CLI's latest link change when an earlier read of the same CLI ends after it", async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], {
+    prepare: async (home) => {
+      linkUserCli(home, userBin(home), 'grok-build');
+      await signIn(home, 'grok-build');
+    },
+  });
   await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
   const offer = async (model: string) =>
     writeFile(join(hosted.home, 'models', 'grok-build'), JSON.stringify([{ id: model, name: model, efforts: ['high'] }]));
   await mkdir(join(hosted.home, 'models'));
   await offer('grok-older');
   await writeFile(join(hosted.home, 'probe-hold'), 'grok-older');
-  await open(hosted, 'conversation-1');
+  linkUserCli(hosted.home, userBin(hosted.home), 'grok-build', NEXT['grok-build']);
   await until(async () => (await hosted.adapterLog()).some((entry) => entry.heldProbe === 'grok-older'));
 
   await offer('grok-newer');
-  await open(hosted, 'conversation-2');
+  linkUserCli(hosted.home, userBin(hosted.home), 'grok-build', '1.0.49');
   await report(hosted, (agents) => (agents[0]!.models as { model: string }[])[0]!.model === 'grok-newer');
   await rm(join(hosted.home, 'probe-hold'));
   await until(async () => (await hosted.adapterLog()).some((entry) => entry.releasedProbe === 'grok-older'));
   await settle();
 
-  expect((reported(hosted).at(-1)!.agents as { models: unknown[] }[])[0]!.models).toEqual([{ model: 'grok-newer', name: 'grok-newer', efforts: ['high'] }]);
+  expect(reported(hosted).at(-1)!.agents).toMatchObject([{ release: '1.0.49', models: [{ model: 'grok-newer', name: 'grok-newer', efforts: ['high'] }] }]);
 });
 
 it.each(KINDS)("runs a %s whose link its update command moved at the new version in the next conversation, while the running one keeps its own and Kit runs on", async (kind) => {
@@ -410,6 +404,35 @@ it("reads a CLI whose link is repointed to another version, and reports that ver
   ]);
 });
 
+it('reads the sign-in and models of a CLI whose link is repointed while a conversation opening on it looks the CLI up', async () => {
+  const hosted = await hostKit([{ kind: 'grok-build' }], {
+    prepare: async (home) => {
+      linkUserCli(home, userBin(home), 'grok-build');
+      await signIn(home, 'grok-build');
+    },
+  });
+  await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
+  await idled(hosted, 0);
+  const looking = join(hosted.home, 'profile-looking');
+  const gate = join(hosted.home, 'profile-gate');
+  const profile = join(accountOf(hosted.home), '.profile');
+  // The login profile looks for its gate every twentieth of a second, so the conversation's lookup of its CLI waits only as long as the spec holds it.
+  await writeFile(profile, `${await readFile(profile, 'utf8')}: > "${looking}"\nwhile [ ! -e "${gate}" ]; do sleep 0.05; done\n`);
+  await mkdir(join(hosted.home, 'models'));
+  await writeFile(join(hosted.home, 'models', 'grok-build'), JSON.stringify([{ id: 'grok-5', name: 'Grok 5', efforts: ['high'] }]));
+  hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
+  const opening = lastCall();
+  await until(() => existsSync(looking));
+
+  linkUserCli(hosted.home, userBin(hosted.home), 'grok-build', NEXT['grok-build']);
+  await settle();
+  await writeFile(gate, '');
+
+  expect(await hosted.result(opening)).toEqual({ provider_session_id: expect.any(String) });
+  await report(hosted, (agents) => agents.some((agent) => agent.release === NEXT['grok-build'] && (agent.models as { model: string }[])[0]?.model === 'grok-5'));
+  expect(await probes(hosted)).toBe(2);
+});
+
 it.each([
   ['its file is replaced at the same version', async (hosted: Hosted) => {
     placeUserCli(userBin(hosted.home), 'grok-build');
@@ -518,41 +541,6 @@ it.each([
   expect((await initialized(hosted)).find((entry) => (entry.env as Record<string, string>).HOUSE_BRIDGE !== undefined)!.cli).toMatchObject({ release: '1.0.50' });
 });
 
-it('reads a CLI a conversation finds at a new version again, its sign-in and every model with its efforts', async () => {
-  const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => signIn(home, 'grok-build') });
-  await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
-  await mkdir(join(hosted.home, 'models'));
-  await writeFile(
-    join(hosted.home, 'models', 'grok-build'),
-    JSON.stringify([
-      { id: 'grok-5', name: 'Grok 5', efforts: ['high'] },
-      { id: 'grok-4.6', name: 'Grok 4.6', efforts: ['low'] },
-    ]),
-  );
-  placeUserCli(join(hosted.home, 'newer-bin'), 'grok-build', '1.0.48');
-  await writeFile(join(accountOf(hosted.home), '.profile'), `PATH="${join(hosted.home, 'newer-bin')}:${userBin(hosted.home)}:$PATH"\n`);
-
-  await open(hosted, 'conversation-1');
-
-  await reportOf(hosted, [
-    {
-      kind: 'grok-build',
-      release: '1.0.48',
-      failure: null,
-      signed_in: true,
-      models: [
-        { model: 'grok-5', name: 'Grok 5', efforts: ['high'] },
-        { model: 'grok-4.6', name: 'Grok 4.6', efforts: ['low'] },
-      ],
-      modes: [],
-      full_access: null,
-      default_model: 'grok-5',
-      default_effort: 'medium',
-    },
-  ]);
-  expect(await probes(hosted)).toBe(2);
-});
-
 it.each([
   ['its CLI session does not open', 'refuse-new', 'the session did not open'],
   ['its CLI does not initialize', 'refuse-initialize', 'the CLI did not initialize'],
@@ -560,9 +548,8 @@ it.each([
   const hosted = await hostKit([{ kind: 'grok-build' }], { prepare: (home) => signIn(home, 'grok-build') });
   const [known] = await report(hosted, (agents) => agents.some((agent) => agent.signed_in === true));
   await writeFile(join(hosted.home, refusal), '');
-  placeUserCli(userBin(hosted.home), 'grok-build', '1.0.48');
 
-  await open(hosted, 'conversation-1');
+  placeUserCli(userBin(hosted.home), 'grok-build', '1.0.48');
 
   await until(() => hosted.kit.stderr().includes(`grok-build did not offer its models: ${cause}`));
   await settle();
@@ -610,9 +597,8 @@ it('reports a model its CLI refuses to select, when it reads that CLI again, wit
       { id: 'sonnet', name: 'Sonnet', efforts: ['low'] },
     ]),
   );
-  placeUserCli(userBin(hosted.home), 'claude-agent-acp', '2.1.318');
 
-  await open(hosted, 'conversation-1');
+  placeUserCli(userBin(hosted.home), 'claude-agent-acp', '2.1.318');
 
   await reportOf(hosted, [
     {

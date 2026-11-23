@@ -19,9 +19,6 @@ const HELD = { outcome: 'released', release: 'held' };
 
 const FAST_MODEL_READ = fileURLToPath(new URL('./fast-model-read.ts', import.meta.url));
 
-// The model read after a sign-in's result ends five seconds after it starts under fast-model-read, so twenty seconds see the idle report on a loaded runner.
-const HUNG_READ_ENDED_MS = 20_000;
-
 async function signingIn(
   kind: string,
   answer: (hold: number) => unknown = () => HELD,
@@ -54,6 +51,10 @@ function reportBeforeResult(hosted: Hosted, call: string): unknown {
     .slice(0, returned(hosted, call))
     .filter((request) => request.path === '/kit/agents/report')
     .at(-1)?.body;
+}
+
+async function probes(hosted: Hosted): Promise<number> {
+  return (await hosted.adapterLog()).filter((entry) => entry.method === 'session/new' && (entry.params as { cwd: string }).cwd === hosted.home).length;
 }
 
 async function logins(hosted: Hosted): Promise<Record<string, unknown>[]> {
@@ -203,19 +204,20 @@ it('ends the hold at once when House answers it with a 500 refusal it does not m
   expect(holds).toHaveLength(1);
 });
 
-it('holds the page and returns the result of a finished sign-in while a model read of its CLI never ends', async () => {
-  const home = await temporaryHome();
-  await writeFile(join(home, 'hold-open'), '');
-  const { hosted, holds, call } = await signingIn('codex-acp', () => HELD, 200, { home });
+it('reads a CLI once after its sign-in, reporting what that read found before it returns the result', async () => {
+  const { hosted, holds, call } = await signingIn('codex-acp');
   await until(() => holds[0]);
 
   await finish(hosted, 'codex-acp');
 
   expect(await hosted.result(call)).toEqual({});
-  expect(reportBeforeResult(hosted, call)).toMatchObject({ agents: [{ kind: 'codex-acp', signed_in: true }] });
+  expect(reportBeforeResult(hosted, call)).toMatchObject({ agents: [{ kind: 'codex-acp', signed_in: true, models: expect.arrayContaining([expect.objectContaining({ model: 'gpt-5.5' })]) }] });
+  await until(() => hosted.idles.some((idle) => hosted.house.requests.lastIndexOf(idle) > returned(hosted, call)));
+  await settle();
+  expect(await probes(hosted)).toBe(1);
 });
 
-it('reports idle once its deadline ends the model read after a finished sign-in whose CLI never answers', async () => {
+it('returns the result of a finished sign-in, with its CLI reported signed in, once the deadline ends a model read that CLI never answers, and then reports idle', async () => {
   const home = await temporaryHome();
   await writeFile(join(home, 'hold-open'), '');
   const { hosted, holds, call } = await signingIn('codex-acp', () => HELD, 200, {
@@ -223,12 +225,13 @@ it('reports idle once its deadline ends the model read after a finished sign-in 
     environment: { NODE_OPTIONS: `--import=${FAST_MODEL_READ}` },
   });
   await until(() => holds[0]);
-  await finish(hosted, 'codex-acp');
-  await hosted.result(call);
 
-  await until(() => hosted.idles.some((idle) => hosted.house.requests.lastIndexOf(idle) > returned(hosted, call)), HUNG_READ_ENDED_MS);
-  // The sign-in's own model read waits out its ten seconds before the result and the idle report gets twenty more, so a minute covers the case on a loaded runner.
-}, 60_000);
+  await finish(hosted, 'codex-acp');
+
+  expect(await hosted.result(call)).toEqual({});
+  expect(reportBeforeResult(hosted, call)).toMatchObject({ agents: [{ kind: 'codex-acp', signed_in: true }] });
+  await until(() => hosted.idles.some((idle) => hosted.house.requests.lastIndexOf(idle) > returned(hosted, call)));
+});
 
 it('starts no second login for a sign-in call sent again while it runs, and returns its one result for each arrival', async () => {
   const { hosted, holds, call } = await signingIn('codex-acp');
