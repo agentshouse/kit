@@ -262,13 +262,18 @@ export class Scope {
     const left = join(group, LEFT);
     try {
       if (this.recorded !== null) this.sweep(group, left);
-      const told = this.exited ? group : this.recorded !== null && existsSync(left) ? left : null;
-      const events = told !== null && this.watch(told) ? told : null;
-      const empty = !populated(group);
-      return { busy: this.recorded === null ? !empty : populated(left), empty, events };
+      const judged = this.recorded === null ? group : left;
+      const told = existsSync(judged) ? this.follow(judged) : null;
+      const busy = populated(judged);
+      const events = busy || !this.exited ? told : this.follow(group);
+      return { busy, empty: !populated(group), events };
     } catch {
       return UNREAD;
     }
+  }
+
+  private follow(group: string): string | null {
+    return this.watch(group) ? group : null;
   }
 
   private sweep(group: string, left: string): void {

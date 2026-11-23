@@ -118,6 +118,26 @@ it('stays busy while a process its crashed Conversation process left behind runs
   await until(() => hosted.idles[1]);
 });
 
+it('reports idle once the process its crashed Conversation process left behind ends, while a helper the CLI ships outlives it', async () => {
+  const hosted = await serving((home) => {
+    linkUserCli(home, userBin(home), 'codex-acp');
+  });
+  hosted.call({ kind: 'message', text: '@host\n@spawn\n@say started', first: true });
+  await until(() => ended(hosted)[0]);
+  const job = await spawned(hosted);
+  const host = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.host !== undefined))).host as number;
+  hosted.call({ kind: 'message', text: '@exit 1', first: false });
+  await until(() => ended(hosted)[1]);
+  await settle();
+  expect(hosted.idles).toHaveLength(2);
+
+  stop(job.clean);
+  stop(job.spawned);
+
+  await until(() => hosted.idles[2]);
+  expect(alive(host)).toBe(true);
+});
+
 it('kill stops what a crashed Conversation process left behind', async () => {
   const hosted = await hostKit();
   await until(() => hosted.idles[0]);
