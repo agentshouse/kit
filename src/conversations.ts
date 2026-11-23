@@ -1024,9 +1024,8 @@ export class Conversations {
     let options = offered;
     const mode = route.mode ?? CLIS[route.kind]!.fullAccess;
     if (mode !== null) options = (await this.setOption(running, options, 'mode', mode)) ?? options;
-    for (const [category, value] of [['model', route.model], [EFFORT, route.effort]] as const) {
-      options = (await this.setOption(running, options, category, value)) ?? options;
-    }
+    options = (await this.setOption(running, options, 'model', route.model)) ?? options;
+    if (route.effort !== null) options = (await this.setOption(running, options, EFFORT, route.effort)) ?? options;
     return options;
   }
 
