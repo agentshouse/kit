@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { updatesRun } from './cli.ts';
 import { DEVICE_LOGINS } from './device-login.ts';
 import { idOf, settle, until, without } from './double.ts';
-import { hostKit, lastCall, userBin, type Hosted } from './environment.ts';
+import { hostKit, lastCall, userBin, type Hosted, type Hosting } from './environment.ts';
 import { accountOf, alive, filesUnder, temporaryHome } from './kit.ts';
 import type { Started } from './started.ts';
 
@@ -16,13 +17,18 @@ interface Hold {
 
 const HELD = { outcome: 'released', release: 'held' };
 
+const FAST_MODEL_READ = fileURLToPath(new URL('./fast-model-read.ts', import.meta.url));
+
+// The model read after a sign-in's result ends five seconds after it starts under fast-model-read, so twenty seconds see the idle report on a loaded runner.
+const HUNG_READ_ENDED_MS = 20_000;
+
 async function signingIn(
   kind: string,
   answer: (hold: number) => unknown = () => HELD,
   status = 200,
-  home?: string,
+  hosting: Hosting = {},
 ) {
-  const hosted = await hostKit([{ kind }], home === undefined ? {} : { home });
+  const hosted = await hostKit([{ kind }], hosting);
   const holds: Hold[] = [];
   hosted.house.route('POST', '/kit/secret-inputs/await', async (request) => {
     holds.push({ subject: idOf(request, 'subject'), body: without(request, 'subject') });
@@ -86,7 +92,7 @@ it.each(['codex-acp', 'grok-build'])(
 it('reports a CLI signed out after a sign-in whose status check passes while its adapter still refuses a session as not signed in', async () => {
   const home = await temporaryHome();
   await writeFile(join(home, 'signed-out'), '');
-  const { hosted, holds, call } = await signingIn('codex-acp', undefined, 200, home);
+  const { hosted, holds, call } = await signingIn('codex-acp', undefined, 200, { home });
   await until(() => holds[1]);
 
   await finish(hosted, 'codex-acp');
@@ -200,7 +206,7 @@ it('ends the hold at once when House answers it with a 500 refusal it does not m
 it('holds the page and returns the result of a finished sign-in while a model read of its CLI never ends', async () => {
   const home = await temporaryHome();
   await writeFile(join(home, 'hold-open'), '');
-  const { hosted, holds, call } = await signingIn('codex-acp', () => HELD, 200, home);
+  const { hosted, holds, call } = await signingIn('codex-acp', () => HELD, 200, { home });
   await until(() => holds[0]);
 
   await finish(hosted, 'codex-acp');
@@ -208,6 +214,21 @@ it('holds the page and returns the result of a finished sign-in while a model re
   expect(await hosted.result(call)).toEqual({});
   expect(reportBeforeResult(hosted, call)).toMatchObject({ agents: [{ kind: 'codex-acp', signed_in: true }] });
 });
+
+it('reports idle once its deadline ends the model read after a finished sign-in whose CLI never answers', async () => {
+  const home = await temporaryHome();
+  await writeFile(join(home, 'hold-open'), '');
+  const { hosted, holds, call } = await signingIn('codex-acp', () => HELD, 200, {
+    home,
+    environment: { NODE_OPTIONS: `--import=${FAST_MODEL_READ}` },
+  });
+  await until(() => holds[0]);
+  await finish(hosted, 'codex-acp');
+  await hosted.result(call);
+
+  await until(() => hosted.idles.some((idle) => hosted.house.requests.lastIndexOf(idle) > returned(hosted, call)), HUNG_READ_ENDED_MS);
+  // The sign-in's own model read waits out its ten seconds before the result and the idle report gets twenty more, so a minute covers the case on a loaded runner.
+}, 60_000);
 
 it('starts no second login for a sign-in call sent again while it runs, and returns its one result for each arrival', async () => {
   const { hosted, holds, call } = await signingIn('codex-acp');

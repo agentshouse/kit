@@ -142,7 +142,7 @@ function keyedOf({ api_key, provider }: Pick<Offer, 'api_key' | 'provider'>): Pi
   return { ...(api_key === undefined ? {} : { api_key }), ...(provider === undefined ? {} : { provider }) };
 }
 
-async function offer(kind: string, cli: string, known: Offer, signal?: AbortSignal): Promise<Offer> {
+async function offer(kind: string, cli: string, known: Offer, signal = AbortSignal.timeout(MODEL_READ_MS)): Promise<Offer> {
   const { signedIn: probe, key } = CLIS[kind]!;
   const keyed = await key.read();
   // A sign-in check that has not answered in half a minute counts as signed out rather than stalling the report.
@@ -152,7 +152,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
   let adapter: Adapter | undefined;
   try {
     adapter = await startAdapter(kind, cli, kitHome(), client({ name: '@agentshouse/kit' }), () => null, {}, signal);
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
     if ('initializeMeta' in probe) {
       const method = adapter.initialized._meta?.[probe.initializeMeta];
       if (typeof method !== 'string' || method.length === 0) return { ...SIGNED_OUT, ...keyed };
@@ -160,7 +160,7 @@ async function offer(kind: string, cli: string, known: Offer, signal?: AbortSign
     }
     return { signed_in: true, ...keyed, ...(await models(kind, adapter, known.models)) };
   } catch (error) {
-    if (!signal?.aborted) process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
+    if (!signal.aborted) process.stderr.write(`kit: ${kind} did not offer its models: ${causeOf(error)}\n`);
     if (signedOut(error)) return { ...SIGNED_OUT, ...keyed };
     const unread = adapter === undefined && 'initializeMeta' in probe;
     return {
@@ -529,7 +529,7 @@ export class Agents {
       seen = this.starts;
       await delay(MODEL_PROBE_QUIET_MS);
     }
-    return offer(kind, cli, known, AbortSignal.timeout(MODEL_READ_MS));
+    return offer(kind, cli, known);
   }
 
   private async load(kind: string): Promise<void> {

@@ -1506,6 +1506,18 @@ it.each(KINDS)('keeps a turn whose %s sends nothing past every long wait the Kit
   expect(await ends(hosted, 1)).toEqual([{ text: 'done' }]);
 });
 
+it('opens a session its CLI answers only after saying nothing past every long wait the Kit holds', async () => {
+  const hosted = await hostKit([{}], { environment: { NODE_OPTIONS: `--import=${FAST_HOLDS}` } });
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  hosted.call({ kind: 'open' });
+  await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/new'));
+
+  await new Promise((resolve) => setTimeout(resolve, QUIET_MS));
+  await rm(join(hosted.home, 'hold-new'));
+
+  expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
+});
+
 it.each(['codex-acp', 'claude-agent-acp'])(
   'ends the %s process when a prompt fails with no turn left running, so the next message resumes the session in a fresh one',
   async (kind) => {
