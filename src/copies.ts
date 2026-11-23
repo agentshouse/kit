@@ -1,7 +1,7 @@
 import type { KitBinaryChange, LocalCopyRoom } from '@agentshouse/kit-wire';
 import { isUtf8 } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
@@ -192,6 +192,14 @@ interface Scope {
 interface Report {
   touched: Map<string, string | null>;
   kept: Set<string>;
+  left: Set<string>;
+}
+
+type Linking = (path: string, held: { revision: string; sha256: string }, target: string) => Promise<boolean>;
+
+interface Folder {
+  repository: string;
+  manifest: Manifest;
 }
 
 export interface Fetching {
@@ -287,6 +295,14 @@ function counted(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+function blankReport(): Report {
+  return { touched: new Map<string, string | null>(), kept: new Set<string>(), left: new Set<string>() };
+}
+
+function leftOnHouse(paths: readonly string[]): string {
+  return `Left on House, changed since this copy took them: ${paths.join(', ')}. house download --with-attachments brings them, adding --max-size <MB> for one over ${DEFAULT_MAX_SIZE} MB.`;
+}
+
 function expiredAuthority(error: unknown): string | undefined {
   if (!(error instanceof HouseRefusal)) return undefined;
   try {
@@ -329,6 +345,22 @@ async function staging(): Promise<string> {
   const folder = join(roomsFolder(), `${stagingPrefix()}work`);
   await mkdir(folder, { recursive: true });
   return `${folder}/`;
+}
+
+async function linked(source: string, target: string, sha256: string): Promise<boolean> {
+  const temporary = `${await staging()}${randomUUID()}`;
+  try {
+    await link(source, temporary);
+  } catch {
+    return false;
+  }
+  if ((await hashed(temporary))?.sha256 !== sha256) {
+    await rm(temporary, { force: true });
+    return false;
+  }
+  await mkdir(dirname(target), { recursive: true });
+  await rename(temporary, target);
+  return true;
 }
 
 function leftForAgents(path: string, chosen: readonly string[]): void {
@@ -460,6 +492,13 @@ function changeSet(manifest: Manifest, present: Map<string, Present>): { added: 
   return { added, changed, gone, adopted };
 }
 
+function adopt(manifest: Manifest, paths: readonly string[]): void {
+  for (const path of paths) {
+    const { skipped: _skipped, ...held } = manifest.files[path]!;
+    manifest.files[path] = held;
+  }
+}
+
 export function changedPaths(changes: readonly Change[]): string[] {
   return [...new Set(changes.flatMap((change) => (change.op === 'move' ? [change.path, change.to] : [change.path])))].sort();
 }
@@ -516,6 +555,7 @@ class Applying {
   private readonly report: Report;
   private readonly fetching: Fetching;
   private readonly bytesOf: (change: KitBinaryChange) => Promise<string>;
+  private readonly link: Linking;
 
   constructor(
     repository: string,
@@ -525,6 +565,7 @@ class Applying {
     report: Report,
     fetching: Fetching,
     bytesOf: (change: KitBinaryChange) => Promise<string>,
+    link: Linking,
   ) {
     this.repository = repository;
     this.manifest = manifest;
@@ -533,10 +574,12 @@ class Applying {
     this.report = report;
     this.fetching = fetching;
     this.bytesOf = bytesOf;
+    this.link = link;
   }
 
   async start(): Promise<void> {
     this.present = await scanned(this.repository);
+    adopt(this.manifest, changeSet(this.manifest, this.present).adopted);
   }
 
   private nameOf(path: string): string {
@@ -651,15 +694,24 @@ class Applying {
       this.manifest.files[path] = held;
       return;
     }
-    if (!holds && !(this.fetching.attachments && bytes <= this.fetching.maxSize * MEGABYTE)) {
+    const target = join(this.repository, this.nameOf(path));
+    const asked = this.fetching.attachments && bytes <= this.fetching.maxSize * MEGABYTE;
+    const fromFolder = (asked || (holds && !this.fetching.attachments)) && (await this.link(path, change, target));
+    if (!fromFolder && !asked) {
+      if (holds) {
+        if (local !== undefined) await removed(this.repository, local.name);
+        this.present.delete(path);
+        this.report.left.add(path);
+      }
       this.manifest.files[path] = { ...held, skipped: true };
       return;
     }
-    const file = await this.bytesOf(change);
-    const target = join(this.repository, this.nameOf(path));
     this.touch(path);
-    await mkdir(dirname(target), { recursive: true });
-    await rename(file, target);
+    if (!fromFolder) {
+      const file = await this.bytesOf(change);
+      await mkdir(dirname(target), { recursive: true });
+      await rename(file, target);
+    }
     this.present.set(path, { name: this.nameOf(path), sha256, bytes });
     this.manifest.files[path] = held;
   }
@@ -824,7 +876,7 @@ export class LocalCopies {
       }
       const reading = refreshing ? current : current.filter((copy) => this.waiting.has(copy.room_ref));
       if (reading.length > 0) {
-        const reports = new Map<string, Report>(reading.map((copy) => [copy.key, { touched: new Map<string, string | null>(), kept: new Set<string>() }]));
+        const reports = new Map<string, Report>(reading.map((copy) => [copy.key, blankReport()]));
         const unconverted = new Map<string, string>();
         const failed = await this.refreshed(reading, unready, unconverted, caller, fetching, reports).then(() => null, houseCause);
         for (const copy of reading) {
@@ -862,6 +914,7 @@ export class LocalCopies {
     return [
       ...(updated === 0 ? [] : [`${root}: ${counted(updated, 'file')} updated from House`]),
       ...[...report.kept].sort().map((path) => `${root}/${path}: changed here, so House's change was not brought; the next house upload merges it`),
+      ...(report.left.size === 0 ? [] : [leftOnHouse([...report.left].sort().map((path) => `${root}/${path}`))]),
     ];
   }
 
@@ -919,10 +972,14 @@ export class LocalCopies {
 
   async deleted(conversation: string): Promise<KeptCopy[]> {
     const kept: KeptCopy[] = [];
+    const reckon = this.reckoning();
     for (const [room, path] of Object.entries(this.places.get(conversation)?.copies ?? {})) {
       const key = copyKey(conversation, room);
       const removed = await this.exclusive(key, async () => {
-        if (!this.places.get(conversation)?.removed?.includes(room) && (await this.holdsWork(key, path))) return false;
+        if (!this.places.get(conversation)?.removed?.includes(room)) {
+          await reckon(key);
+          if (await this.holdsWork(key, path)) return false;
+        }
         await this.removedHeld(conversation, room, path);
         return true;
       });
@@ -936,6 +993,7 @@ export class LocalCopies {
   }
 
   async removedIdle(before: number, runsIn: (directory: string) => boolean): Promise<void> {
+    const reckon = this.reckoning();
     for (const [conversation, place] of [...this.places]) {
       for (const [room, path] of Object.entries(place.copies)) {
         const key = copyKey(conversation, room);
@@ -946,7 +1004,9 @@ export class LocalCopies {
             await rm(path, { recursive: true, force: true });
             return;
           }
-          if ((current.ended?.[room] ?? 0) > before || !(await exists(path)) || (await this.holdsWork(key, path))) return;
+          if ((current.ended?.[room] ?? 0) > before || !(await exists(path))) return;
+          await reckon(key);
+          if (await this.holdsWork(key, path)) return;
           await this.removedHeld(conversation, room, path);
         });
       }
@@ -976,6 +1036,23 @@ export class LocalCopies {
     const { removed = [], ...held } = place;
     const still = removed.filter((one) => one !== room);
     await this.savePlace(conversation, { ...held, ended: { ...held.ended, [room]: Date.now() }, ...(still.length === 0 ? {} : { removed: still }) });
+  }
+
+  private reckoning(): (key: string) => Promise<void> {
+    let selection: Promise<LocalCopyRoom[]> | undefined;
+    return async (key) => {
+      const copy = this.copies.get(key) as Copy | undefined;
+      if (copy === undefined || !(await exists(copy.repository))) return;
+      try {
+        selection ??= this.house.act('local-copies/selection/read', {}).then(({ local_copy: answer }) => answer.rooms);
+        const reached = (await selection).find((room) => room.room_ref === copy.room_ref);
+        if (reached?.level !== 'keep') return;
+        const named = copy.room_handle === reached.room_handle ? copy : await this.save({ ...copy, room_handle: reached.room_handle });
+        await this.refreshed([named], [], new Map<string, string>(), this.owner, HELD, new Map([[key, blankReport()]]));
+      } catch (error) {
+        logged(error);
+      }
+    };
   }
 
   private async holdsWork(key: string, directory: string): Promise<boolean> {
@@ -1023,7 +1100,7 @@ export class LocalCopies {
             lines.push(`${root}: copied to ${directory}`);
           } else {
             const named = copy.room_handle === reached.room_handle ? copy : await this.save({ ...copy, room_handle: reached.room_handle });
-            const report: Report = { touched: new Map<string, string | null>(), kept: new Set<string>() };
+            const report = blankReport();
             const unready: string[] = [];
             const unconverted = new Map<string, string>();
             await this.refreshed([named], unready, unconverted, caller, fetching, new Map([[key, report]]));
@@ -1118,27 +1195,29 @@ export class LocalCopies {
     const authority = authorities.find((entry) => entry.room_ref === room.room_ref);
     if (authority === undefined) throw new Error('House serves nothing of it to copy');
     const wanted = { key, handle: room.room_handle, authority };
-    const taken = await this.takenFrom(room.room_ref);
-    await this.copied(wanted, HELD, caller, (whole) => this.madeIn(wanted, directory, whole, placing, taken));
+    await this.copied(wanted, HELD, caller, (whole) => this.madeIn(wanted, directory, whole, placing, this.linking(room.room_ref, key)));
   }
 
-  private async takenFrom(room: string): Promise<(entry: KitBinaryChange, folder: string) => Promise<boolean>> {
-    const copy = this.copies.get(`${ROOMS}${room}`);
-    const manifest = copy === undefined || earlier(copy) ? null : await readManifest(copy.repository).catch(() => null);
-    return async ({ path, revision, sha256 }, folder) => {
-      const entry = manifest?.files[path];
-      if (copy === undefined || entry === undefined || entry.skipped || entry.revision !== revision || entry.sha256 !== sha256) return false;
-      const target = join(folder, path);
-      await mkdir(dirname(target), { recursive: true });
-      try {
-        await copyFile(join(copy.repository, path), target);
-      } catch {
-        return false;
+  private linking(room: string, except: string): Linking {
+    let folders: Promise<Folder[]> | undefined;
+    return async (path, { revision, sha256 }, target) => {
+      folders ??= this.foldersOf(room, except);
+      for (const { repository, manifest } of await folders) {
+        const entry = manifest.files[path];
+        if (entry?.revision === revision && entry.sha256 === sha256 && (await linked(join(repository, path), target, sha256))) return true;
       }
-      if (await holding(folder, path, sha256)) return true;
-      await rm(target, { force: true });
       return false;
     };
+  }
+
+  private async foldersOf(room: string, except: string): Promise<Folder[]> {
+    const folders: Folder[] = [];
+    for (const copy of [...this.copies.values()]) {
+      if (copy.room_ref !== room || copy.key === except || earlier(copy)) continue;
+      const manifest = await readManifest(copy.repository).catch(() => null);
+      if (manifest !== null) folders.push({ repository: copy.repository, manifest });
+    }
+    return folders;
   }
 
   private async instructed(directory: string, root: string, caller: Caller, kept: boolean): Promise<string | null> {
@@ -1398,7 +1477,7 @@ export class LocalCopies {
     repository: string,
     whole: (directory: string) => Promise<Whole>,
     placing: (folder: string) => Promise<void>,
-    taken: (entry: KitBinaryChange, folder: string) => Promise<boolean>,
+    link: Linking,
   ): Promise<Copy> {
     const folder = join(roomsFolder(), `${stagingPrefix()}${randomUUID()}`);
     const chunks = this.chunksFolder();
@@ -1412,7 +1491,7 @@ export class LocalCopies {
       for await (const entry of read.entries) {
         const writable = declaredWritable(entry.path, scope) ? {} : { read_only: true as const };
         if (!('content' in entry)) {
-          const held = await taken(entry, folder);
+          const held = await link(entry.path, entry, join(folder, entry.path));
           manifest.files[entry.path] = { revision: entry.revision, sha256: entry.sha256, bytes: entry.bytes, ...(held ? {} : { skipped: true as const }), ...writable };
           continue;
         }
@@ -1462,11 +1541,11 @@ export class LocalCopies {
     if (view !== undefined && view.next === undefined) {
       const entries = view.changes.filter((change): change is Entered => !('removed' in change));
       const copy = await made(async () => ({ position: view.position, log_epoch: view.log_epoch, entries }));
-      await this.attached(copy, caller, fetching, { touched: new Map<string, string | null>(), kept: new Set<string>() });
+      await this.attached(copy, caller, fetching, blankReport());
       return copy;
     }
     const copy = await made((directory) => this.chunked(root, authority.room_ref, directory));
-    const report = { touched: new Map<string, string | null>(), kept: new Set<string>() };
+    const report = blankReport();
     const [caught] = await this.caughtUp([copy], true, caller, fetching, new Map([[copy.key, report]]));
     await this.attached(caught!, caller, fetching, report);
     return caught!;
@@ -1474,12 +1553,20 @@ export class LocalCopies {
 
   private applying(copy: Copy, manifest: Manifest, scope: Scope, work: string, report: Report, fetching: Fetching, caller: Caller): Applying {
     const root = rootOf(copy.room_handle);
-    return new Applying(copy.repository, manifest, scope, work, report, fetching, (change) =>
-      receivedBinary(work, `${root}/${change.path}`, async () => {
-        const file = await caller.info(`${root}/${change.path}`, change.revision);
-        if (file === null) throw new Error(`House holds no attachment at ${root}/${change.path}`);
-        return file;
-      }),
+    return new Applying(
+      copy.repository,
+      manifest,
+      scope,
+      work,
+      report,
+      fetching,
+      (change) =>
+        receivedBinary(work, `${root}/${change.path}`, async () => {
+          const file = await caller.info(`${root}/${change.path}`, change.revision);
+          if (file === null) throw new Error(`House holds no attachment at ${root}/${change.path}`);
+          return file;
+        }),
+      this.linking(copy.room_ref, copy.key),
     );
   }
 
@@ -1567,23 +1654,32 @@ export class LocalCopies {
   }
 
   private async attached(copy: Copy, caller: Caller, fetching: Fetching, report: Report): Promise<void> {
-    if (!fetching.attachments) return;
     const manifest = await readManifest(copy.repository);
-    const wanted = Object.entries(manifest.files).filter(([, entry]) => entry.skipped && entry.bytes <= fetching.maxSize * MEGABYTE);
-    if (wanted.length === 0) return;
+    const skipped = Object.entries(manifest.files).filter(([, entry]) => entry.skipped);
+    const present = new Map<string, Present>();
+    for (const [path] of skipped) {
+      const file = await hashed(join(copy.repository, path));
+      if (file !== null) present.set(path, { name: path, ...file });
+    }
+    const { adopted } = changeSet(manifest, present);
+    adopt(manifest, adopted);
+    const wanted = fetching.attachments ? skipped.filter(([path, entry]) => !present.has(path) && entry.bytes <= fetching.maxSize * MEGABYTE) : [];
+    if (adopted.length + wanted.length === 0) return;
     const root = rootOf(copy.room_handle);
     const work = await staging();
-    const present = await scanned(copy.repository);
+    const link = this.linking(copy.room_ref, copy.key);
     for (const [path, { skipped: _skipped, ...entry }] of wanted) {
-      if (present.has(path)) continue;
-      const file = await receivedBinary(work, `${root}/${path}`, async () => {
-        const held = await caller.info(`${root}/${path}`, entry.revision);
-        if (held === null) throw new Error(`House holds no attachment at ${root}/${path}`);
-        return held;
-      });
+      const target = join(copy.repository, path);
+      if (!(await link(path, entry, target))) {
+        const file = await receivedBinary(work, `${root}/${path}`, async () => {
+          const held = await caller.info(`${root}/${path}`, entry.revision);
+          if (held === null) throw new Error(`House holds no attachment at ${root}/${path}`);
+          return held;
+        });
+        await mkdir(dirname(target), { recursive: true });
+        await rename(file, target);
+      }
       if (!report.touched.has(path)) report.touched.set(path, null);
-      await mkdir(dirname(join(copy.repository, path)), { recursive: true });
-      await rename(file, join(copy.repository, path));
       manifest.files[path] = entry;
     }
     await writeManifest(copy.repository, work, manifest);
@@ -1819,10 +1915,7 @@ export class LocalCopies {
   private async built(copy: Copy, manifest: Manifest, present: Map<string, Present>): Promise<Built> {
     const root = rootOf(copy.room_handle);
     const { added, changed, gone, adopted } = changeSet(manifest, present);
-    for (const path of adopted) {
-      const { revision, sha256, bytes } = manifest.files[path]!;
-      manifest.files[path] = { revision, sha256, bytes };
-    }
+    adopt(manifest, adopted);
     if (adopted.length > 0) await writeManifest(copy.repository, await staging(), manifest);
     const listed = (paths: string[], file: (path: string) => { sha256: string; bytes: number }) => {
       const found = new Map<string, string[]>();

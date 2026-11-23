@@ -1,11 +1,11 @@
 import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
-import { writeFileSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { existsSync, writeFileSync } from 'node:fs';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
-import { hostKit, opened, type Hosted, type McpCall } from './environment.ts';
+import { hostKit, lastCall, opened, type Hosted, type McpCall } from './environment.ts';
 import { digest, fileCalls, house, manifestOf, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
@@ -63,6 +63,12 @@ async function ran(hosted: Hosted, line: string): Promise<Shelled> {
   return until(async () => (await hosted.adapterLog()).filter((entry) => 'sh' in entry)[before] as unknown as Shelled | undefined);
 }
 
+async function openedIn(hosted: Hosted, room: Room, name: string): Promise<string> {
+  hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1', room_ref: room.ref, name });
+  await hosted.result(lastCall());
+  return join(hosted.workspace, 'conversations', room.handle, name);
+}
+
 async function copied(setup: (room: Room) => void = () => {}, node?: string[]): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
   const hosted = await hostKit([{}], node === undefined ? {} : { node });
   const rooms = serveRooms(hosted);
@@ -106,7 +112,7 @@ it('uploads documents and attachments once as the owner, each attachment staged 
   expect(fileCalls(hosted)).toEqual([]);
 });
 
-it("uploads a document and an attachment under the Kit credential naming the conversation, finishing each staged upload through upload by its path, and a download there brings the attachment's new bytes", async () => {
+it("uploads a document and an attachment under the Kit credential naming the conversation, finishing each staged upload through upload by its path, and a download there leaves the attachment's new revision on House", async () => {
   const { hosted, room } = await copied();
   await opened(hosted);
   await placed(room, { 'photo.jpg': JPEG, 'plan.md': 'one\ntwo\n' });
@@ -116,17 +122,19 @@ it("uploads a document and an attachment under the Kit credential naming the con
   const downloaded = await ran(hosted, '@sh house download');
 
   expect(uploaded).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n' });
-  expect(downloaded).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n' });
+  expect(downloaded).toMatchObject({
+    status: 0,
+    stdout: 'Left on House, changed since this copy took them: /rooms/notes/photo.jpg. house download --with-attachments brings them, adding --max-size <MB> for one over 10 MB.\n',
+  });
   const credential = 'Bearer ahk_held';
   const labelOf = (received: Received) => (received.body as McpCall).params._meta[CONVERSATION_META_KEY];
   const finishing = { upload: expect.any(String), path: '/rooms/notes/photo.jpg', part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };
-  expect(fileCalls(hosted).map(labelOf)).toEqual(Array(5).fill('conversation-1'));
+  expect(fileCalls(hosted).map(labelOf)).toEqual(Array(4).fill('conversation-1'));
   expect(fileCalls(hosted).map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
     [credential, 'update', { changes: expect.any(Array) }],
     [credential, 'upload', finishing],
     [credential, 'upload', finishing],
     [credential, 'update', { changes: expect.any(Array) }],
-    [credential, 'info', { path: '/rooms/notes/photo.jpg', ref: room.binaries.get('photo.jpg')!.revision }],
   ]);
   expect(new Set(hosted.mcp.filter((received) => called(received).name === 'update').map(operationOf)).size).toBe(1);
   expect(
@@ -137,7 +145,33 @@ it("uploads a document and an attachment under the Kit credential naming the con
     [credential, undefined],
     [credential, 'conversation-1'],
   ]);
-  expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(REDRAWN);
+  expect(existsSync(join(room.repository, 'photo.jpg'))).toBe(false);
+  expect((await manifestOf(room)).files['photo.jpg']).toEqual({ revision: room.binaries.get('photo.jpg')!.revision, sha256: digest(REDRAWN), bytes: REDRAWN.length, skipped: true });
+});
+
+it("uploads nothing, no delete and no bytes, from a conversation's copy holding one attachment as its manifest entry alone and one linked from the Room's folder, holds a file written at an entry's path with exactly its bytes, sending nothing, and uploads one with other bytes as a change on the entry's revision", async () => {
+  const { hosted, room } = await copied((held) => held.upload('linked.jpg', JPEG));
+  expect((await house(hosted, '/', 'download', '--with-attachments')).status).toBe(0);
+  room.upload('entry.pdf', PDF);
+  room.upload('other.bin', RECORDING);
+  const copy = await openedIn(hosted, room, 'Plan');
+  expect((await stat(join(copy, 'linked.jpg'))).ino).toBe((await stat(join(room.repository, 'linked.jpg'))).ino);
+  const kept = Object.fromEntries(['linked.jpg', 'entry.pdf', 'other.bin'].map((path) => [path, { ...room.binaries.get(path)! }]));
+  const sent = batches(hosted).length;
+
+  expect(await house(hosted, copy, 'upload')).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
+  expect(batches(hosted)).toHaveLength(sent);
+  expect(Object.fromEntries([...room.binaries].filter(([path]) => path in kept))).toEqual(kept);
+
+  await writeFile(join(copy, 'entry.pdf'), PDF);
+  await writeFile(join(copy, 'other.bin'), REDRAWN);
+  expect(await house(hosted, copy, 'upload')).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+
+  expect(batches(hosted).at(-1)!.changes).toEqual([part('other.bin', REDRAWN, 'application/octet-stream', kept['other.bin']!.revision)]);
+  expect(room.binaries.get('entry.pdf')).toEqual(kept['entry.pdf']);
+  const { files } = JSON.parse(await readFile(join(copy, '.house'), 'utf8')) as { files: Record<string, unknown> };
+  expect(files['entry.pdf']).toEqual({ revision: kept['entry.pdf']!.revision, sha256: digest(PDF), bytes: PDF.length });
+  expect(await house(hosted, copy, 'upload')).toMatchObject({ stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
 });
 
 it('sends a changed attachment against its revision whatever its new bytes and deletes a removed one, in one upload', async () => {
