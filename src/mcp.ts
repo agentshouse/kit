@@ -1,10 +1,11 @@
 import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { randomUUID } from 'node:crypto';
 import { KIT_RELEASE } from './clis.ts';
+import { carried } from './hold.ts';
 import { readEnrolment } from './home.ts';
 import { operationId } from './operation.ts';
-import { refusalOf, retryable, type Refusal } from './refusals.ts';
-import { proxyUnlessRelayed, relayed } from './relay.ts';
+import { namedWait, refusalOf, retryable, type Refusal } from './refusals.ts';
+import { proxyUnlessRelayed } from './relay.ts';
 
 export interface Message {
   jsonrpc: '2.0';
@@ -30,7 +31,14 @@ const UNCONNECTED = 'this computer has no House connection; run kit login';
 export const DISCONNECTED = 'House no longer accepts this computer; run kit login';
 const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
 
-export class Unsettled extends Error {}
+export class Unsettled extends Error {
+  readonly after: number | null;
+
+  constructor(message: string, after: number | null = null) {
+    super(message);
+    this.after = after;
+  }
+}
 
 export function rpc(method: string, params: Record<string, unknown>): Message {
   return { jsonrpc: '2.0', id: randomUUID(), method, params };
@@ -60,7 +68,7 @@ export function mcpBody(message: Message, { operation = null, named = {} }: Send
 
 export async function callHouse(origin: string, credential: string, message: Message, sending: Sending = {}): Promise<Forwarded> {
   const tool = message.method === 'tools/call' ? String(message.params.name) : null;
-  const answer = await fetch(relayed(new URL('/', origin)), {
+  const answer = await carried(new URL('/', origin), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -91,7 +99,7 @@ export async function environmentCall(message: Message, operation = message.meth
   if (answer.status === 200) return answer.text;
   if (answer.status === 401) throw new Error(DISCONNECTED);
   const refusal = refusalOf(answer.text)?.text ?? unconfirmed(answer.status);
-  throw retryable(answer.text) === false ? new Error(refusal) : new Unsettled(refusal);
+  throw retryable(answer.text) === false ? new Error(refusal) : new Unsettled(refusal, namedWait(answer.text));
 }
 
 export function refusalIn(text: string, status: number): Refusal {

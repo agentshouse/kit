@@ -3,8 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { chmod, open, readFile, writeFile } from 'node:fs/promises';
-import { createServer as createHttpServer, request as httpRequest } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +12,8 @@ import { ownerSocket } from '../src/home.ts';
 import { startHouse, type House } from './double.ts';
 import { helpLine, LISTING, shelled, type McpCall } from './environment.ts';
 import { accountOf, runKit, temporaryHome } from './kit.ts';
-import { RELAYED, startStore, uploadTool, type Store } from './store.ts';
+import { startRelay, type Relay } from './relay-double.ts';
+import { startStore, uploadTool, type Store } from './store.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const MEMORY = fileURLToPath(new URL('./memory.ts', import.meta.url));
@@ -127,24 +127,8 @@ function servedUploads(house: House, store: Store, partBytes: number) {
   return uploads;
 }
 
-async function relay(): Promise<{ origin: string; forwarded: string[] }> {
-  const forwarded: string[] = [];
-  const server = createHttpServer((request, response) => {
-    const [, host, path] = /^\/([^/]+)(\/.*)$/.exec(request.url ?? '')!;
-    forwarded.push(`${request.method} ${host}`);
-    const outbound = httpRequest(`http://${host}${path}`, { method: request.method, headers: { ...request.headers, host, [RELAYED]: 'true' } }, (answer) => {
-      response.writeHead(answer.statusCode!, answer.headers);
-      answer.pipe(response);
-    });
-    outbound.on('error', () => response.destroy());
-    request.pipe(outbound);
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  onTestFinished(() => {
-    server.closeAllConnections();
-    server.close();
-  });
-  return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, forwarded };
+function forwarded(relay: Relay): string[] {
+  return relay.requests.map((request) => `${request.method} ${request.host}`);
 }
 
 it("uploads a file larger than the house CLI's memory budget from disk in parts outside a conversation, its peak memory under half the file's size, and prints House's answer once House accepts it", async () => {
@@ -290,6 +274,32 @@ it('finishes an upload outside a conversation again while House answers it with 
   expect(next).not.toBe(resent);
 });
 
+it('finishes an upload outside a conversation again only once the wait House names in its own refusal of the finishing call has passed', async () => {
+  const house = await startHouse();
+  const home = await connected(house);
+  const store = await startStore();
+  const uploads = uploadTool(store, 3);
+  const finished: number[] = [];
+  house.route('POST', '/', async ({ body }) => {
+    const message = body as { id: string } & McpCall;
+    if (message.params.arguments!.upload !== undefined && finished.push(Date.now()) === 1) {
+      return {
+        status: 429,
+        headers: { 'Retry-After': '2' },
+        body: { error: { code: 'rate_limited', retry_after: 2, retry_at: '2026-10-09T00:00:02.000Z', retryable: true } },
+      };
+    }
+    return { body: { jsonrpc: '2.0', id: message.id, result: await uploads.answer(message.params.arguments!) } };
+  });
+  const file = join(home, 'cover.bin');
+  await writeFile(file, Buffer.from([0, 1, 2, 255]));
+
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/covers/cover.bin' })]);
+
+  expect(ran).toEqual({ status: 0, stdout: 'path: /rooms/room/covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
+  expect(finished[1]! - finished[0]!).toBeGreaterThanOrEqual(2_000);
+});
+
 it('sends each part and reads each download at its store address through the Kit relay its User named, as it sends House its calls', async () => {
   const house = await startHouse();
   const home = await connected(house);
@@ -298,8 +308,8 @@ it('sends each part and reads each download at its store address through the Kit
   const content = Buffer.from([0, 1, 2, 255]);
   const file = join(home, 'cover.bin');
   await writeFile(file, content);
-  const { origin, forwarded } = await relay();
-  const relayed = { HOUSE_KIT_RELAY: origin };
+  const relay = await startRelay();
+  const relayed = { HOUSE_KIT_RELAY: relay.origin };
 
   const sent = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/covers/cover.bin' })], undefined, [], relayed);
   store.objects.set('binary/cover', content);
@@ -314,7 +324,7 @@ it('sends each part and reads each download at its store address through the Kit
   expect(await readFile(join(home, 'back.bin'))).toEqual(content);
   expect(uploads.calls.finished).toHaveLength(2);
   const [houseHost, storeHost] = [new URL(house.origin).host, new URL(store.origin).host];
-  expect(forwarded).toEqual([
+  expect(forwarded(relay)).toEqual([
     `POST ${houseHost}`,
     `POST ${houseHost}`,
     `PUT ${storeHost}`,
@@ -333,8 +343,8 @@ it('sends each part and reads each download at its store address through the Kit
 it("calls House directly whatever relay the Kit credential's record holds, and through the relay HOUSE_KIT_RELAY names", async () => {
   const house = await startHouse();
   const home = await connected(house);
-  const recorded = await relay();
-  const named = await relay();
+  const recorded = await startRelay();
+  const named = await startRelay();
   await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, relay: recorded.origin, environment: 'environment-one', credential: 'ahk_kit' }));
   const direct = await runHouse(home, ['search', '{"query":"invoice"}']);
   const first = house.requests.length;
@@ -347,8 +357,8 @@ it("calls House directly whatever relay the Kit credential's record holds, and t
   ]);
   const posted = `POST ${new URL(house.origin).host}`;
   expect(first).toBeGreaterThan(0);
-  expect(recorded.forwarded).toEqual([]);
-  expect(named.forwarded).toEqual(Array(house.requests.length - first).fill(posted));
+  expect(forwarded(recorded)).toEqual([]);
+  expect(forwarded(named)).toEqual(Array(house.requests.length - first).fill(posted));
 });
 
 it('prints the revision House answers and posts no bytes when the path already holds the same file', async () => {

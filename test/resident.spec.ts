@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { settle, startHouse, until, type House } from './double.ts';
-import { hostKit, releasePrefix } from './environment.ts';
+import { hostKit, lastCall, releasePrefix } from './environment.ts';
 import { accountOf, runKit, stop, temporaryDirectory, temporaryHome, type KitRun } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
 import { released, serveRelease } from './release.ts';
@@ -317,6 +317,33 @@ it('delivers again a delivery House refuses with a refusal it marks retryable, w
   expect(delivered(house, '/kit/kits/report-restart')).toBe(3);
 });
 
+function limitedByHouse(seconds: number) {
+  return {
+    status: 429,
+    headers: { 'Retry-After': String(seconds) },
+    body: { error: { code: 'rate_limited', retry_after: seconds, retryable: true } },
+  };
+}
+
+it('delivers again a delivery House refuses with its own refusal naming a wait only once that wait has passed, and holds no other call meanwhile', async () => {
+  const hosted = await hostKit();
+  const returned: number[] = [];
+  hosted.house.route('POST', '/kit/kit-calls/results/return', (request) => {
+    if (returned.push(Date.now()) === 1) return limitedByHouse(5);
+    hosted.results.push(request);
+    return { body: {} };
+  });
+
+  hosted.call({ kind: 'kill' });
+  await until(() => returned.length === 1);
+  hosted.connection.close(1012, 'deploy');
+
+  await until(() => hosted.house.connections[1]);
+  expect(returned).toHaveLength(1);
+  await hosted.result(lastCall());
+  expect(returned[1]! - returned[0]!).toBeGreaterThanOrEqual(5_000);
+});
+
 it('returns a delivery House refuses with a 500 it does not mark retryable at once to the work that sent it', async () => {
   const house = await startHouse();
   house.route('POST', '/kit/kits/report-restart', () => ({ status: 500, body: { error: { code: 'sync_failed', retryable: false } } }));
@@ -364,17 +391,25 @@ it.each([
   expect(kit.stderr()).toContain(`kit: House refused /kit/stream with ${status}: {"error":{"code":"${code}","retryable":false}}\n`);
 });
 
-it('opens its Kit connection again after House refuses its opening with a refusal it marks retryable, whatever its status', async () => {
-  const house = await startHouse();
-  house.route('UPGRADE', '/kit/stream', () =>
-    openings(house) === 1
-      ? { status: 429, body: { error: { code: 'rate_limited', retry_after: 1, retry_at: '2026-10-09T00:00:01.000Z', retryable: true } } }
-      : {},
-  );
-  await resident(house);
+it('opens its Kit connection again only once the wait House names in its own refusal of the opening has passed, and holds no other call meanwhile', async () => {
+  const hosted = await hostKit();
+  const returned: number[] = [];
+  const opened: number[] = [];
+  hosted.house.route('POST', '/kit/kit-calls/results/return', (request) => {
+    if (returned.push(Date.now()) === 1) return limitedByHouse(4);
+    hosted.results.push(request);
+    return { body: {} };
+  });
+  hosted.house.route('UPGRADE', '/kit/stream', () => (opened.push(Date.now()) === 1 ? limitedByHouse(6) : {}));
 
-  await until(() => house.connections[0]);
-  expect(openings(house)).toBe(2);
+  hosted.call({ kind: 'kill' });
+  await until(() => returned.length === 1);
+  hosted.connection.close(1012, 'deploy');
+
+  await until(() => hosted.house.connections[1]);
+  expect(returned[1]! - opened[0]!).toBeGreaterThan(0);
+  expect(returned[1]! - opened[0]!).toBeLessThan(6_000);
+  expect(opened[1]! - opened[0]!).toBeGreaterThanOrEqual(6_000);
 });
 
 it('opens its Kit connection again after an answer to its opening that carries no House refusal', async () => {

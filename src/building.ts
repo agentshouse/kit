@@ -3,15 +3,15 @@ import { createWriteStream } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { carried } from './hold.ts';
 import { readEnrolment } from './home.ts';
-import { relayed } from './relay.ts';
 
 const MANIFEST = 'bootstrap.json';
 
 async function served(name: string, signal?: AbortSignal): Promise<Response> {
   const enrolment = await readEnrolment();
   if (enrolment === null) throw new Error('this Kit is connected to no House');
-  const answer = await fetch(relayed(new URL(`/kit-installer/${encodeURIComponent(name)}`, enrolment.house)), { signal });
+  const answer = await carried(new URL(`/kit-installer/${encodeURIComponent(name)}`, enrolment.house), { signal });
   if (answer.status === 200 && answer.body !== null) return answer;
   await answer.body?.cancel();
   throw new Error(`House answered ${answer.status} for ${name}`);

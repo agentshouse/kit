@@ -319,6 +319,22 @@ it('carries the Kit credential and names the conversation on a Git call to a Hou
   expect(credentials).toEqual([{ credential: 'ahk_held', conversation: 'conversation-1' }]);
 });
 
+it('holds no other call after a refusal House writes to a Git call, though it names a Retry-After', async () => {
+  const hosted = await hostKit();
+  hosted.house.route('GET', '/app/:app/info/refs', () => ({
+    status: 503,
+    headers: { 'Retry-After': '60', 'X-House-Refusal': JSON.stringify({ error: { code: 'house_overloaded', retryable: true } }) },
+    bytes: { type: 'text/plain; charset=utf-8', content: 'house_overloaded: House is busy and changed nothing; call again in 60 s\n' },
+  }));
+  await opened(hosted);
+
+  directed(hosted, `@git ls-remote ${hosted.house.origin}/app/a_app.git\n@house search {"query":"one"}`);
+
+  const ran = await runs(hosted, 2);
+  expect(ran.find((entry) => entry.git !== undefined)?.status).not.toBe(0);
+  expect(ran.find((entry) => entry.house !== undefined)).toMatchObject({ status: 0 });
+});
+
 it("closes the process's socket and Git proxy when the process exits", async () => {
   const hosted = await hostKit();
   await opened(hosted);

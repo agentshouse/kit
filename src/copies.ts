@@ -25,7 +25,7 @@ import {
 } from './manifest.ts';
 import { environmentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
-import { firstLine, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
+import { firstLine, namedWait, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
 
 const ROOMS = 'rooms/';
@@ -715,7 +715,7 @@ export class LocalCopies {
           return (await house.act('uploads/finish', { upload, part_sha256: partSha256 })) as Finished<Staged>;
         } catch (error) {
           if (!(error instanceof HouseRefusal)) throw new Unsettled(causeOf(error));
-          throw retryable(error.text) === false ? new Error(houseCause(error)) : new Unsettled(houseCause(error));
+          throw retryable(error.text) === false ? new Error(houseCause(error)) : new Unsettled(houseCause(error), namedWait(error.text));
         }
       },
       info: async (path, revision) => fileInfo(await ownInfo({ path, ...(revision === undefined ? {} : { ref: revision }) })),

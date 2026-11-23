@@ -19,7 +19,8 @@ interface Answered {
   code?: unknown;
   message?: unknown;
   retryable?: unknown;
-  data?: { code?: unknown; retryable?: unknown } | null;
+  retry_after?: unknown;
+  data?: { code?: unknown; retryable?: unknown; retry_after?: unknown } | null;
 }
 
 const HEAD = /^([a-z][a-z0-9_]*): \S/;
@@ -69,6 +70,8 @@ export function firstLine(refusal: Refusal): string {
   return refusal.text.split('\n')[0]!;
 }
 
+export const REFUSAL_HEADER = 'x-house-refusal';
+
 function parsed(text: string): { body: unknown } | null {
   try {
     return { body: JSON.parse(text) };
@@ -90,6 +93,14 @@ function verdictOf(error: Answered | null): boolean | null {
 export function retryable(text: string): boolean | null {
   const answer = parsed(text);
   return answer === null ? null : verdictOf(errorIn(answer.body));
+}
+
+export function namedWait(text: string): number | null {
+  const answer = parsed(text);
+  const error = answer === null ? null : errorIn(answer.body);
+  if (verdictOf(error) === null) return null;
+  const seconds = error?.retry_after ?? error?.data?.retry_after;
+  return typeof seconds === 'number' && seconds > 0 ? seconds * 1000 : null;
 }
 
 export function refusalOf(text: string): Refusal | null {

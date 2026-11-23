@@ -9,9 +9,9 @@ import {
 } from '@agentshouse/kit-wire';
 import { setTimeout as delay } from 'node:timers/promises';
 import { signInAgain } from './end.ts';
+import { carried, holding, Superseded } from './hold.ts';
 import { readEnrolment } from './home.ts';
-import { retryable } from './refusals.ts';
-import { relayed } from './relay.ts';
+import { namedWait, retryable } from './refusals.ts';
 import { endUnserved } from './wire.ts';
 
 export class HouseRefusal extends Error {
@@ -34,15 +34,25 @@ export function retryDelay(attempt: number): number {
   return Math.random() * Math.min(30_000, 1000 * 2 ** attempt);
 }
 
-export async function retrying<T>(sent: () => Promise<T>, signal?: AbortSignal, pause = retryDelay): Promise<T> {
+export function resendDelay(error: unknown, attempt: number): number {
+  return (error instanceof HouseRefusal ? namedWait(error.text) : null) ?? (holding() ? 0 : retryDelay(attempt));
+}
+
+export async function retrying<T>(
+  sent: () => Promise<T>,
+  signal?: AbortSignal,
+  pause: (attempt: number, refusal: HouseRefusal) => number = (attempt, refusal) => resendDelay(refusal, attempt),
+): Promise<T> {
   for (let attempt = 0; ; attempt++) {
+    let refusal: HouseRefusal;
     try {
       return await sent();
     } catch (error) {
       if (!(error instanceof HouseRefusal) || retryable(error.text) !== true) throw error;
+      refusal = error;
     }
-    // A request House refused as retryable is sent again after the caller's pause, the jittered curve unless it names its own.
-    await delay(pause(attempt), undefined, { signal });
+    // A request House refused as retryable is sent again after the caller's pause: the wait House names, else the jittered curve, unless the caller names its own.
+    await delay(pause(attempt, refusal), undefined, { signal });
   }
 }
 
@@ -52,17 +62,22 @@ export async function post<T>(
   body: unknown,
   credential?: string,
   signal?: AbortSignal,
+  current?: () => boolean,
 ): Promise<T> {
-  const answer = await fetch(relayed(new URL(path, house)), {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      [KIT_WIRE_HEADER]: KIT_WIRE,
-      ...(credential === undefined ? {} : { authorization: `Bearer ${credential}` }),
+  const answer = await carried(
+    new URL(path, house),
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [KIT_WIRE_HEADER]: KIT_WIRE,
+        ...(credential === undefined ? {} : { authorization: `Bearer ${credential}` }),
+      },
+      body: JSON.stringify(body),
+      signal,
     },
-    body: JSON.stringify(body),
-    signal,
-  });
+    current,
+  );
   const text = await answer.text();
   if (!answer.ok) endUnserved(text);
   if (!answer.ok) throw new HouseRefusal(path, answer.status, text);
@@ -91,10 +106,10 @@ export interface House {
   deliver<Name extends KitActName>(act: Name, request: KitActRequest<Name>, current?: () => boolean): Promise<KitActAnswer<Name>>;
 }
 
-async function enrolledPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+async function enrolledPost<T>(path: string, body: unknown, signal?: AbortSignal, current?: () => boolean): Promise<T> {
   const { house, credential } = (await readEnrolment())!;
   try {
-    return await post<T>(house, path, body, credential, signal);
+    return await post<T>(house, path, body, credential, signal, current);
   } catch (error) {
     if (error instanceof HouseRefusal && error.status === 401) await signInAgain(credential);
     throw error;
@@ -111,12 +126,12 @@ export const house: House = {
     const { path, body } = routed(act, request);
     for (let attempt = 0; ; attempt++) {
       try {
-        return await enrolledPost(path, body);
+        return await enrolledPost(path, body, undefined, current);
       } catch (error) {
-        if (finalRefusal(error)) throw error;
+        if (finalRefusal(error) || error instanceof Superseded) throw error;
         process.stderr.write(`kit: ${path} did not reach House: ${(error as Error).message}\n`);
-        // A delivery House did not take is sent again on the jittered curve for as long as it is still current.
-        await new Promise((resolve) => setTimeout(resolve, retryDelay(attempt)));
+        // A delivery House did not take is sent again after the wait House names, else on the jittered curve, for as long as it is still current.
+        await new Promise((resolve) => setTimeout(resolve, resendDelay(error, attempt)));
         if (!current()) throw error;
       }
     }
