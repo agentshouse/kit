@@ -98,6 +98,16 @@ it.each(KINDS)('runs a session $kind opens for `open` with the model and the eff
   expect(beforePrompt(await hosted.adapterLog(), 0)).toEqual(expected(case_, 'session/new', case_.chosen.model, case_.chosen.effort));
 });
 
+it.each(KINDS)("runs a session $kind opens for an `open` that names neither with the Agent's model and effort", async (case_) => {
+  const hosted = await host(case_);
+
+  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'message', text: '@say first', first: true });
+
+  await turnsEnded(hosted, 1);
+  expect(beforePrompt(await hosted.adapterLog(), 0)).toEqual(expected(case_, 'session/new', case_.agent.model, case_.agent.effort));
+});
+
 it.each(KINDS)("takes the Agent's model and effort for each one an `open` to $kind leaves out", async (case_) => {
   const hosted = await host(case_);
 

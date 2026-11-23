@@ -1,4 +1,4 @@
-import { CONVERSATION_GIT_HEADER, type KitCall } from '@agentshouse/kit-wire';
+import { CONVERSATION_GIT_HEADER, type DesiredAgentRoute, type KitCall } from '@agentshouse/kit-wire';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -191,15 +191,7 @@ export interface McpCall {
   params: { name?: string; arguments?: Record<string, unknown>; _meta: Record<string, unknown> };
 }
 
-export interface RouteOverrides {
-  agent_id?: string;
-  kind?: string;
-  base_instructions?: string;
-  working_directory?: string;
-  model?: string | null;
-  effort?: string | null;
-  mode?: string | null;
-}
+export type RouteOverrides = Partial<DesiredAgentRoute>;
 
 export interface Hosting {
   tls?: boolean;
@@ -282,7 +274,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
       JSON.stringify({ ...held, skills: hosting.skills ?? false, ...(hosting.workspace === undefined ? {} : { workspace: hosting.workspace }) }),
     );
   }
-  const resolved = routes.map((route, index) => ({
+  const resolved = routes.map((route, index): DesiredAgentRoute => ({
     agent_id: `agent-${index + 1}`,
     kind: 'codex-acp',
     base_instructions: 'Be useful.',
@@ -501,13 +493,14 @@ export async function installHeld(hosted: Hosted): Promise<string> {
   await writeFile(hold, '');
   onTestFinished(() => rm(hold, { force: true }));
   await rm(join(userBin(hosted.home), BINS['claude-agent-acp']!), { force: true });
-  const added = {
+  const added: DesiredAgentRoute = {
     agent_id: 'agent-2',
     kind: 'claude-agent-acp',
     base_instructions: 'Be useful.',
     working_directory: hosted.workingDirectory,
     model: 'route-model',
-    effort: null,
+    effort: 'route-effort',
+    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({
     body: { agents: ['codex-acp', 'claude-agent-acp'], routes: [added] },

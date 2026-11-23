@@ -191,10 +191,10 @@ it('sets an option on the running process and relays the commands and options th
 });
 
 it.each([
-  ['codex-acp', 'agent-full-access', ['collaboration_mode', 'model', 'reasoning_effort']],
-  ['claude-agent-acp', 'bypassPermissions', ['model', 'effort']],
-])("relays every option %s offers but its permission mode, which stays as the session launched", async (kind, launched, relayed) => {
-  const hosted = await hostKit([{ kind, model: null, effort: null }]);
+  ['codex-acp', 'agent-full-access', 'gpt-5.5', 'reasoning_effort', ['collaboration_mode', 'model', 'reasoning_effort']],
+  ['claude-agent-acp', 'bypassPermissions', 'opus', 'effort', ['model', 'effort']],
+])("relays every option %s offers but its permission mode, which stays as the session launched", async (kind, launched, model, effort, relayed) => {
+  const hosted = await hostKit([{ kind, model, effort: 'high' }]);
   await opened(hosted);
   const options = (oneWayCall: Record<string, unknown>) => oneWayCall.type === 'options';
   await until(() => hosted.connection.oneWayCalls.find(options));
@@ -203,7 +203,11 @@ it.each([
   await until(() => ended(hosted)[0]);
 
   const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
-  expect(settings.map((entry) => entry.params)).toEqual([expect.objectContaining({ configId: 'mode', value: launched })]);
+  expect(settings.map((entry) => entry.params)).toEqual([
+    expect.objectContaining({ configId: 'mode', value: launched }),
+    expect.objectContaining({ configId: 'model', value: model }),
+    expect.objectContaining({ configId: effort, value: 'high' }),
+  ]);
   const ids = (oneWayCall: Record<string, unknown>) => (oneWayCall.options as { id: string }[]).map((option) => option.id);
   expect(hosted.connection.oneWayCalls.filter(options).map(ids)).toEqual([relayed, relayed]);
   const modes = hosted.connection.oneWayCalls

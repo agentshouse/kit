@@ -27,7 +27,7 @@ it('kills the process and every process it started on a Mac', async () => {
 });
 
 it("opens a Claude Code session whose sandbox lets through its conversation's bridge socket alone on a Mac", async () => {
-  const hosted = await hostMac({}, [{ kind: 'claude-agent-acp', model: 'default', effort: null }]);
+  const hosted = await hostMac({}, [{ kind: 'claude-agent-acp', model: 'default', effort: 'high' }]);
 
   hosted.call({ kind: 'open' });
 
