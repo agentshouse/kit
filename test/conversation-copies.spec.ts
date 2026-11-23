@@ -146,6 +146,18 @@ function fetchedBytes(hosted: Hosted): number {
   return hosted.store.requests.filter((request) => request.method === 'GET' && request.key.startsWith('binary/')).length;
 }
 
+function noticed(hosted: Hosted, room: Room): void {
+  hosted.house.connections.at(-1)!.send({ type: 'work_available', subject: 'rooms', room_ref: room.ref });
+}
+
+function roomAsks(hosted: Hosted): number {
+  return hosted.house.requests.filter((request) => /^\/kit\/(?:door|local-copies)\//.test(request.path)).length + hosted.mcp.length;
+}
+
+async function shows(path: string, text: string): Promise<void> {
+  await until(async () => ((await readFile(path, 'utf8').catch(() => null)) === text ? true : undefined));
+}
+
 function leftOnHouse(...paths: string[]): string {
   return `Left on House, changed since this copy took them: ${paths.join(', ')}. house download --with-attachments brings them, adding --max-size <MB> for one over 10 MB.`;
 }
@@ -212,7 +224,7 @@ it("makes a conversation's copy from House's state linking each attachment the R
   expect(await held(join(hosted.workspace, 'conversations'))).toEqual(['notes']);
 });
 
-it("downloads into the copy before each turn, reading the instructions of the copy's Room alone, keeps what the conversation changed and still runs a turn whose download failed", async () => {
+it("asks House nothing before a turn while no notice came, the first turn after the copy's making included, and downloads into a copy no turn runs in at once at a notice that its Room changed, reading the instructions of the copy's Room alone and keeping what the conversation changed", async () => {
   const { hosted, rooms, notes } = await staged();
   const garden = rooms.room('garden');
   garden.put('beds.md', 'Two beds\n');
@@ -220,7 +232,14 @@ it("downloads into the copy before each turn, reading the instructions of the co
   await rooms.download([notes, garden]);
   const copy = copyOf(hosted, 'notes', 'Plan');
   await opened(hosted, notes, 'Plan');
-  said(hosted, '@say first');
+  await settle();
+  let asked = roomAsks(hosted);
+
+  said(hosted, '@gate first-ends');
+
+  expect(await prompt(hosted, 0)).toBe('@gate first-ends');
+  expect(roomAsks(hosted)).toBe(asked);
+  await writeFile(join(hosted.home, 'first-ends'), '');
   await turned(hosted, 1);
   await settle();
   const read = roomRootReads(hosted).length;
@@ -228,21 +247,86 @@ it("downloads into the copy before each turn, reading the instructions of the co
   notes.put('a.md', 'one\ntwo\nthree, from House\n');
   notes.instructions = `${INSTRUCTIONS}Put new tasks on the map.\n`;
   await writeFile(join(copy, 'plan.md'), 'Plant beans and peas\n');
-  said(hosted, '@say second');
+  noticed(hosted, garden);
+  await settle();
+  expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
+  noticed(hosted, notes);
 
-  expect(await prompt(hosted, 1)).toBe('@say second');
+  await shows(join(copy, 'AGENTS.md'), `${INSTRUCTIONS}Put new tasks on the map.\n`);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree, from House\n');
   expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans and peas\n');
-  expect(await readFile(join(copy, 'AGENTS.md'), 'utf8')).toBe(`${INSTRUCTIONS}Put new tasks on the map.\n`);
   expect(roomRootReads(hosted).slice(read)).toEqual(['/rooms/notes']);
-  await turned(hosted, 2);
+  await settle();
+  asked = roomAsks(hosted);
 
+  said(hosted, '@gate second-ends');
+
+  expect(await prompt(hosted, 1)).toBe('@gate second-ends');
+  expect(roomAsks(hosted)).toBe(asked);
+  await writeFile(join(hosted.home, 'second-ends'), '');
+});
+
+it("downloads a notice that arrives during a turn into the copy once that turn ends, and runs a turn whose download failed on the copy as it stands, downloading again once that turn ends", async () => {
+  const { hosted, rooms, notes } = await staged();
+  const copy = copyOf(hosted, 'notes', 'Plan');
+  await opened(hosted, notes, 'Plan');
+  said(hosted, '@gate first-ends');
+  await prompt(hosted, 0);
+
+  notes.put('a.md', 'one\ntwo\nthree, from House\n');
+  noticed(hosted, notes);
+  await settle();
+
+  expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
+  await writeFile(join(hosted.home, 'first-ends'), '');
+  await shows(join(copy, 'a.md'), 'one\ntwo\nthree, from House\n');
+  await turned(hosted, 1);
+
+  said(hosted, '@gate second-ends');
+  await prompt(hosted, 1);
   notes.put('a.md', 'one\n');
+  noticed(hosted, notes);
+  await settle();
   rooms.reads.push(false);
-  said(hosted, '@say third');
+  said(hosted, '@gate third-ends');
+  await writeFile(join(hosted.home, 'second-ends'), '');
 
-  expect(await prompt(hosted, 2)).toBe('@say third');
+  expect(await prompt(hosted, 2)).toBe('@gate third-ends');
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree, from House\n');
+  await writeFile(join(hosted.home, 'third-ends'), '');
+  await shows(join(copy, 'a.md'), 'one\n');
+});
+
+it("takes a change of the Environment's rights in the copy's Room at House's notice, and at a notice for the Private Room rewrites the instructions of every copy", async () => {
+  const { hosted, rooms, notes } = await staged();
+  const own = rooms.room('private');
+  rooms.answered = [notes, own];
+  await rooms.download([notes, own]);
+  const copy = copyOf(hosted, 'notes', 'Plan');
+  await opened(hosted, notes, 'Plan');
+  await settle();
+  expect((await entriesOf(copy))['a.md']!.read_only).toBeUndefined();
+
+  notes.write = [];
+  noticed(hosted, notes);
+
+  await until(async () => ((await entriesOf(copy))['a.md']!.read_only === true ? true : undefined));
+  notes.instructions = `${INSTRUCTIONS}Your owner rules changed.\n`;
+  noticed(hosted, own);
+  await shows(join(copy, 'AGENTS.md'), `${INSTRUCTIONS}Your owner rules changed.\n`);
+});
+
+it('downloads into each copy once at a reconnection, which a notice lost to the disconnection leaves owed', async () => {
+  const { hosted, notes } = await staged();
+  const copy = copyOf(hosted, 'notes', 'Plan');
+  await opened(hosted, notes, 'Plan');
+  await settle();
+
+  notes.put('a.md', 'one\ntwo\nthree, from House\n');
+  hosted.connection.close(1012, 'deploy');
+  await until(() => hosted.house.connections[1]);
+
+  await shows(join(copy, 'a.md'), 'one\ntwo\nthree, from House\n');
 });
 
 it("sends a batch left pending in a conversation's copy only by the next upload in that copy, never by another conversation's or the Room folder's", async () => {
@@ -467,6 +551,7 @@ it("runs a conversation in a Room held at the Open level in a copy holding the t
   expect(await manifestAt(copy)).toMatchObject({ kit: ['AGENTS.md', 'CLAUDE.md'] });
   rooms.answered = [];
   rooms.open = [];
+  noticed(hosted, notes);
   said(hosted, '@say unreached');
   await turned(hosted, 2);
 

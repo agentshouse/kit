@@ -411,6 +411,12 @@ export class Conversations {
     return this.uploads > 0 || [...this.conversations.values()].some((conversation) => conversation.turns.size > 0);
   }
 
+  turnsIn(directory: string): boolean {
+    return [...this.conversations.values()].some(
+      (conversation) => conversation.place?.directory === directory && (conversation.sending !== null || conversation.turns.size > 0),
+    );
+  }
+
   private scopeChanged(conversation: Conversation, scope: Scope): void {
     if (conversation.leftovers.has(scope)) this.drop(conversation, scope);
     this.kit.changed();
@@ -699,7 +705,7 @@ export class Conversations {
 
   private async freshened(conversation: Conversation, place: Place): Promise<void> {
     const answer = await this.kit.copies
-      .freshened(place.directory, conversation.running!.bridge.caller)
+      .beforeTurn(place.directory, conversation.running!.bridge.caller)
       .catch((error: unknown) => ({ refused: true, text: causeOf(error) }));
     if (answer.refused) logged(new Error(`conversation ${conversation.id} runs its turn on its copy as it stands: ${answer.text}`));
   }

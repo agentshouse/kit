@@ -43,6 +43,8 @@ const KIT_GIT = ['.git/refs/house/received', '.git/house-chunks', '.git/house-up
 const KIT_FILES = ['AGENTS.md', 'CLAUDE.md'];
 const IMPORTED = '@AGENTS.md\n';
 const FOLDERS = 'folders.json';
+const PRIVATE = 'private';
+const NOTHING_NEW = 'Nothing new from House.';
 
 interface RoomFolder {
   name: string;
@@ -742,6 +744,12 @@ export class LocalCopies {
   private readonly places = new Map<string, Placed>();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly waiting = new Set<string>();
+  private readonly asking = new Set<string>();
+  private readonly owed = new Set<string>();
+  private marks = 0;
+  private sweeping = false;
+  private turning: ((directory: string) => boolean) | null = null;
+  private privateRoom: string | null = null;
   private answering: Promise<unknown> = Promise.resolve();
 
   constructor(house: House, launched: () => Promise<readonly string[]>) {
@@ -798,11 +806,14 @@ export class LocalCopies {
     await sweptIn(roomsFolder());
   }
 
-  connected(): Promise<void> {
+  connected(turning: (directory: string) => boolean): Promise<void> {
+    this.turning = turning;
+    this.owe(null);
     return this.selected(null);
   }
 
   noticed(room: string): Promise<void> {
+    this.owe(room);
     return this.selected(room);
   }
 
@@ -812,10 +823,53 @@ export class LocalCopies {
   }
 
   private async selected(notice: string | null): Promise<void> {
-    const copied = await this.answered(async () =>
-      notice === null || this.waiting.has(notice) ? this.fetched(false, this.owner, HELD, notice) : null,
-    );
+    if (notice !== null && this.asking.has(notice)) return;
+    if (notice !== null) this.asking.add(notice);
+    const copied = await this.answered(async () => {
+      if (notice !== null) this.asking.delete(notice);
+      return notice === null || this.waiting.has(notice) ? this.fetched(false, this.owner, HELD, notice) : null;
+    });
     if (copied?.refused) logged(copied.text);
+  }
+
+  private owe(room: string | null): void {
+    for (const [conversation, place] of this.places) {
+      for (const copied of Object.keys(place.copies)) {
+        if (place.removed?.includes(copied) || (room !== null && room !== copied && room !== this.privateRoom)) continue;
+        this.owed.add(copyKey(conversation, copied));
+      }
+    }
+    this.freshenOwed();
+  }
+
+  private freshenOwed(): void {
+    this.marks++;
+    if (this.turning !== null && !this.sweeping) void this.freshening(this.turning);
+  }
+
+  private async freshening(turning: (directory: string) => boolean): Promise<void> {
+    this.sweeping = true;
+    try {
+      for (let marks = -1; marks !== this.marks; ) {
+        marks = this.marks;
+        const owed = [...this.places].flatMap(([conversation, place]) =>
+          Object.entries(place.copies).flatMap(([room, directory]) => (this.owed.has(copyKey(conversation, room)) ? [directory] : [])),
+        );
+        for (const directory of owed) {
+          if (turning(directory) || !(await exists(directory))) continue;
+          const answer = await this.freshened(directory, this.owner, HELD, true).catch((error: unknown) => ({ refused: true, text: houseCause(error) }));
+          if (answer.refused) logged(`${directory}: ${answer.text}`);
+        }
+      }
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  private async selection(): Promise<LocalCopyRoom[]> {
+    const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
+    this.privateRoom = answer.rooms.find((room) => room.room_handle === PRIVATE)?.room_ref ?? null;
+    return answer.rooms;
   }
 
   private answered<T>(work: () => Promise<T>): Promise<T> {
@@ -825,9 +879,9 @@ export class LocalCopies {
   }
 
   private async fetched(refreshing: boolean, caller: Caller, fetching: Fetching, notice: string | null): Promise<Answered> {
-    const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
-    const reached = new Map(answer.rooms.map((room) => [room.room_ref, room.room_handle]));
-    const synced = new Map(answer.rooms.filter((room) => room.level === 'keep').map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
+    const rooms = await this.selection();
+    const reached = new Map(rooms.map((room) => [room.room_ref, room.room_handle]));
+    const synced = new Map(rooms.filter((room) => room.level === 'keep').map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
     const asked = notice === null ? synced : new Map([...synced].filter(([key]) => key === `${ROOMS}${notice}`));
     return this.holding([...new Set([...this.roomCopies().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
       const chosen = await this.launched();
@@ -908,7 +962,7 @@ export class LocalCopies {
         if (!unready.includes(room) && !unsettled.includes(room)) this.waiting.delete(room);
       }
       for (const room of unready) this.waiting.add(room);
-      return { refused, text: said.length === 0 ? 'Nothing new from House.' : said.join('\n') };
+      return { refused, text: said.length === 0 ? NOTHING_NEW : said.join('\n') };
     });
   }
 
@@ -963,7 +1017,9 @@ export class LocalCopies {
 
   async turnEnded(directory: string): Promise<void> {
     const held = this.conversationCopyAt(directory);
-    if (held !== null) await this.exclusive(PLACES, () => this.used(held.conversation, held.room));
+    if (held === null) return;
+    await this.exclusive(PLACES, () => this.used(held.conversation, held.room));
+    if (this.owed.has(held.key)) this.freshenOwed();
   }
 
   async deleted(conversation: string): Promise<KeptCopy[]> {
@@ -1040,7 +1096,7 @@ export class LocalCopies {
       const copy = this.copies.get(key) as Copy | undefined;
       if (copy === undefined || copy.pending !== undefined || !(await exists(copy.repository))) return;
       try {
-        selection ??= this.house.act('local-copies/selection/read', {}).then(({ local_copy: answer }) => answer.rooms);
+        selection ??= this.selection();
         const reached = (await selection).find((room) => room.room_ref === copy.room_ref);
         if (reached?.level !== 'keep') return;
         const named = copy.room_handle === reached.room_handle ? copy : await this.save({ ...copy, room_handle: reached.room_handle });
@@ -1074,42 +1130,53 @@ export class LocalCopies {
     await rm(directory, { recursive: true, force: true });
   }
 
-  async freshened(directory: string, caller: Caller, fetching: Fetching = HELD): Promise<Answered> {
+  beforeTurn(directory: string, caller: Caller): Promise<Answered> {
+    return this.freshened(directory, caller, HELD, true);
+  }
+
+  async freshened(directory: string, caller: Caller, fetching: Fetching = HELD, owed = false): Promise<Answered> {
     const held = this.conversationCopyAt(directory);
-    if (held === null) return { refused: false, text: 'Nothing new from House.' };
+    if (held === null) return { refused: false, text: NOTHING_NEW };
     const { key, room } = held;
-    const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
-    const reached = answer.rooms.find((one) => one.room_ref === room);
     return this.exclusive(key, async () => {
-      const copy = this.copies.get(key) as Copy | undefined;
-      if (reached === undefined) {
-        await this.unreachedHeld(key, directory);
-        return { refused: false, text: `${directory}: no longer followed; kept as it is` };
-      }
-      const root = rootOf(reached.room_handle);
-      const lines: string[] = [];
-      let refused = false;
-      if (reached.level === 'keep') {
-        try {
-          if (copy === undefined) {
-            await this.madeKept(held.conversation, reached, directory, caller, (folder) => this.placedIn(folder, directory, []));
-            lines.push(`${root}: copied to ${directory}`);
-          } else {
-            const named = copy.room_handle === reached.room_handle ? copy : await this.save({ ...copy, room_handle: reached.room_handle });
-            const report = blankReport();
-            const unready: string[] = [];
-            const unconverted = new Map<string, string>();
-            await this.refreshed([named], unready, unconverted, caller, fetching, new Map([[key, report]]));
-            lines.push(...(unready.length > 0 ? [`${root}: ${NOT_READY}`] : await this.reported(this.copies.get(key)!, report)));
-          }
-        } catch (error) {
-          refused = true;
-          lines.push(`${root}: ${houseCause(error)}`);
+      if (owed && !this.owed.has(key)) return { refused: false, text: NOTHING_NEW };
+      this.owed.delete(key);
+      try {
+        const reached = (await this.selection()).find((one) => one.room_ref === room);
+        const copy = this.copies.get(key) as Copy | undefined;
+        if (reached === undefined) {
+          await this.unreachedHeld(key, directory);
+          return { refused: false, text: `${directory}: no longer followed; kept as it is` };
         }
+        const root = rootOf(reached.room_handle);
+        const lines: string[] = [];
+        let refused = false;
+        if (reached.level === 'keep') {
+          try {
+            if (copy === undefined) {
+              await this.madeKept(held.conversation, reached, directory, caller, (folder) => this.placedIn(folder, directory, []));
+              lines.push(`${root}: copied to ${directory}`);
+            } else {
+              const named = copy.room_handle === reached.room_handle ? copy : await this.save({ ...copy, room_handle: reached.room_handle });
+              const report = blankReport();
+              const unready: string[] = [];
+              const unconverted = new Map<string, string>();
+              await this.refreshed([named], unready, unconverted, caller, fetching, new Map([[key, report]]));
+              lines.push(...(unready.length > 0 ? [`${root}: ${NOT_READY}`] : await this.reported(this.copies.get(key)!, report)));
+            }
+          } catch (error) {
+            refused = true;
+            lines.push(`${root}: ${houseCause(error)}`);
+          }
+        }
+        const unwritten = await this.instructed(directory, root, caller, this.copies.has(key));
+        if (unwritten !== null) lines.push(unwritten);
+        if (refused || unwritten !== null) this.owed.add(key);
+        return { refused, text: lines.length === 0 ? NOTHING_NEW : lines.join('\n') };
+      } catch (error) {
+        this.owed.add(key);
+        throw error;
       }
-      const unwritten = await this.instructed(directory, root, caller, this.copies.has(key));
-      if (unwritten !== null) lines.push(unwritten);
-      return { refused, text: lines.length === 0 ? 'Nothing new from House.' : lines.join('\n') };
     });
   }
 
@@ -1152,8 +1219,7 @@ export class LocalCopies {
   }
 
   private async reachedRoom(room: string): Promise<LocalCopyRoom | null> {
-    const { local_copy: answer } = await this.house.act('local-copies/selection/read', {});
-    return answer.rooms.find((one) => one.room_ref === room) ?? null;
+    return (await this.selection()).find((one) => one.room_ref === room) ?? null;
   }
 
   private async freePath(handle: string, name: string): Promise<string> {
