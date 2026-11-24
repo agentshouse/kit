@@ -92,7 +92,6 @@ const NOTICES: Record<string, NoticeKind> = { info: 'info', warning: 'warning', 
 const WINDOW_MINUTES: Record<string, number> = { five_hour: 300, seven_day: 10_080 };
 const WAKEUP = /Next wakeup scheduled for \d\d:\d\d:\d\d \(in (\d+)s\)/;
 const CHILD_UPDATES = new Set(['tool_call', 'tool_call_update']);
-const NO_WRITES: Lifetimes = { cache_write_5m: 0, cache_write_1h: 0 };
 
 function isWhole(report: Reported): report is Whole {
   const { model, ...figures } = report;
@@ -121,21 +120,10 @@ function lifetimesOf(used: Fields | undefined): Lifetimes | null {
   return five === null || hour === null ? null : { cache_write_5m: five, cache_write_1h: hour };
 }
 
-function since(reading: ReadonlyMap<string, Lifetimes | null> | null, model: string): Lifetimes | null {
-  if (reading === null) return null;
-  return reading.has(model) ? reading.get(model)! : NO_WRITES;
-}
-
-function grown(now: Lifetimes | null, before: Lifetimes | null): Lifetimes | null {
-  if (now === null || before === null) return null;
-  if (now.cache_write_5m < before.cache_write_5m || now.cache_write_1h < before.cache_write_1h) return now;
-  return { cache_write_5m: now.cache_write_5m - before.cache_write_5m, cache_write_1h: now.cache_write_1h - before.cache_write_1h };
-}
-
-function joined(held: Lifetimes | null | undefined, grew: Lifetimes | null): Lifetimes | null {
-  if (held === undefined) return grew;
-  if (held === null || grew === null) return null;
-  return { cache_write_5m: held.cache_write_5m + grew.cache_write_5m, cache_write_1h: held.cache_write_1h + grew.cache_write_1h };
+function joined(held: Lifetimes | null | undefined, more: Lifetimes | null): Lifetimes | null {
+  if (held === undefined) return more;
+  if (held === null || more === null) return null;
+  return { cache_write_5m: held.cache_write_5m + more.cache_write_5m, cache_write_1h: held.cache_write_1h + more.cache_write_1h };
 }
 
 function contentText(content: Fields[] | undefined): string {
@@ -490,12 +478,10 @@ class ClaudeReader extends Reader {
   private readonly crons = new Map<string, string>();
   private readonly wakeups = new Map<string, number>();
   private readonly lived = new Map<string, Lifetimes | null>();
-  private reading: ReadonlyMap<string, Lifetimes | null> | null = null;
   private breakdown: readonly { readonly name: string; readonly tokens: number }[] = [];
   private stop: Stop | null = null;
 
   protected override answered(result: Fields | undefined): Event[] {
-    if (typeof result?.sessionId === 'string' && this.session === null) this.reading = new Map();
     if (result?._meta?.quota === undefined) return super.answered(result);
     const spent = counted(quotaReports(result, 'cachedWriteTokens'), (model, total) => {
       const parts = this.lived.get(model);
@@ -505,15 +491,8 @@ class ClaudeReader extends Reader {
     return [...spent, ...super.answered(result)];
   }
 
-  private measured(usage: Record<string, Fields> | undefined, autonomous: boolean): void {
-    const before = this.reading;
-    const reading = new Map<string, Lifetimes | null>();
-    for (const [model, used] of Object.entries(usage ?? {})) {
-      const now = lifetimesOf(used);
-      reading.set(model, now);
-      if (!autonomous) this.lived.set(model, joined(this.lived.get(model), grown(now, since(before, model))));
-    }
-    this.reading = reading;
+  private measured(usage: Record<string, Fields> | undefined): void {
+    for (const [model, used] of Object.entries(usage ?? {})) this.lived.set(model, joined(this.lived.get(model), lifetimesOf(used)));
   }
 
   override began(): Event[] {
@@ -553,13 +532,14 @@ class ClaudeReader extends Reader {
     if (message.method !== '_claude/sdkMessage') return [];
     const sdk = message.params!.message as Fields;
     switch (sdk.type) {
-      case 'result': {
-        const autonomous = AUTONOMOUS_ORIGINS.has(sdk.origin?.kind);
-        this.measured(sdk.modelUsage, autonomous);
-        if (autonomous) this.stop = null;
-        else this.stop = sdk.stop_reason === 'refusal' ? 'refusal' : sdk.is_error === true ? null : 'end_turn';
+      case 'result':
+        if (AUTONOMOUS_ORIGINS.has(sdk.origin?.kind)) {
+          this.stop = null;
+        } else {
+          this.measured(sdk.model_usage_since_last_result);
+          this.stop = sdk.stop_reason === 'refusal' ? 'refusal' : sdk.is_error === true ? null : 'end_turn';
+        }
         return count(sdk.duration_ms) === null ? [] : [{ kind: 'state', state: { duration: sdk.duration_ms } }];
-      }
       case 'assistant':
         return this.assistant(sdk);
       case 'user':

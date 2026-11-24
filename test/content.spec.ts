@@ -762,20 +762,20 @@ function claudeAnswer(...rows: Record<string, unknown>[]): Record<string, unknow
   return { _meta: { quota: { model_usage: rows } } };
 }
 
-function claudeResult(origin: string, lifetimes: Record<string, [number, number]>): string {
-  const modelUsage = Object.fromEntries(
-    Object.entries(lifetimes).map(([model, [five, hour]]) => [
+function claudeResult(origin: string, lifetimes: Record<string, [number, number] | null>): string {
+  const counted = Object.fromEntries(
+    Object.entries(lifetimes).map(([model, split]) => [
       model,
-      { cacheCreationInputTokens: five + hour, cacheCreationEphemeral5mInputTokens: five, cacheCreationEphemeral1hInputTokens: hour },
+      split === null ? {} : { cacheCreationInputTokens: split[0] + split[1], cacheCreationEphemeral5mInputTokens: split[0], cacheCreationEphemeral1hInputTokens: split[1] },
     ]),
   );
-  return emit('_claude/sdkMessage', { message: { type: 'result', subtype: 'success', origin: { kind: origin }, modelUsage } });
+  return emit('_claude/sdkMessage', { message: { type: 'result', subtype: 'success', origin: { kind: origin }, model_usage_since_last_result: counted } });
 }
 
-it("carries each model Claude Code reports for the turn in its own row, a sub-agent's model among them, its cache writes by the lifetimes Claude Code's running counts grew by, and adds them to the session's tokens", async () => {
+it("carries each model Claude Code reports for the turn in its own row, a sub-agent's model among them, its cache writes by the lifetimes Claude Code counted on the turn's results, and adds them to the session's tokens", async () => {
   const body = await spent('claude-agent-acp', claudeAnswer(claudeRow('claude-main', 5, 11, 13, 7), claudeRow('claude-subagent', 100, 200, 300, 400)), [
-    claudeResult('human', { 'claude-main': [1, 4], 'claude-subagent': [0, 0] }),
-    claudeResult('human', { 'claude-main': [3, 10], 'claude-subagent': [300, 0] }),
+    claudeResult('human', { 'claude-main': [1, 4] }),
+    claudeResult('human', { 'claude-main': [2, 6], 'claude-subagent': [300, 0] }),
   ]);
   expect(body.content.tokens).toEqual([
     { model: 'claude-main', input: 5, cache_write_5m: 3, cache_write_1h: 10, cache_read: 11, output: 7 },
@@ -792,18 +792,19 @@ it('carries a recorded Claude Code turn with each model in its own row and its c
   ]);
 });
 
-it("splits each later Claude Code turn's cache writes by what its lifetimes grew since the turn before, and the session's tokens add every turn's", async () => {
+it("splits each Claude Code turn's cache writes by the lifetimes its own results counted, a resumed session's first turn among them, and adds every turn's to the session's tokens", async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   const turn = async (lifetimes: [number, number], write: number): Promise<Ended> => {
     const said = [claudeResult('human', { 'claude-main': lifetimes }), `@spent ${JSON.stringify(claudeAnswer(claudeRow('claude-main', 1, 2, write, 3)))}`, '@say ok'];
     const before = hosted.turns.filter((ended) => ended.path === '/kit/turns/end').length;
-    hosted.call({ kind: 'message', text: said.join('\n'), first: before === 0 });
+    hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: said.join('\n'), first: false });
     return endedOf(await until(() => hosted.turns.filter((ended) => ended.path === '/kit/turns/end')[before]));
   };
 
-  await turn([3, 10], 13);
-  const second = await turn([8, 30], 25);
+  const first = await turn([3, 10], 13);
+  const second = await turn([5, 20], 25);
 
+  expect(first.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write_5m: 3, cache_write_1h: 10, cache_read: 2, output: 3 }]);
   expect(second.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write_5m: 5, cache_write_1h: 20, cache_read: 2, output: 3 }]);
   expect(second.content.state.tokens).toEqual({ input: 2, output: 6, cache_read: 4, cache_write: 38 });
 });
@@ -811,24 +812,11 @@ it("splits each later Claude Code turn's cache writes by what its lifetimes grew
 it.each([
   ['Claude Code counted no lifetimes', []],
   ['its lifetimes do not add up to it', [claudeResult('human', { 'claude-main': [3, 9] })]],
+  ['one of its results does not tell them apart', [claudeResult('human', { 'claude-main': [3, 10] }), claudeResult('human', { 'claude-main': null })]],
   ['a model cycle Claude Code started on its own wrote them', [claudeResult('task-notification', { 'claude-main': [3, 10] })]],
 ])("keeps a Claude Code turn's cache writes whole where %s", async (_case, before) => {
   const body = await spent('claude-agent-acp', claudeAnswer(claudeRow('claude-main', 5, 11, 13, 7)), before);
   expect(body.content.tokens).toEqual([{ model: 'claude-main', input: 5, cache_write: 13, cache_read: 11, output: 7 }]);
-});
-
-it("keeps a resumed Claude Code session's first cache writes whole, since its running counts may hold the session before it, and splits the next turn's", async () => {
-  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  const turn = (lifetimes: [number, number], write: number): string =>
-    [claudeResult('human', { 'claude-main': lifetimes }), `@spent ${JSON.stringify(claudeAnswer(claudeRow('claude-main', 1, 2, write, 3)))}`, '@say ok'].join('\n');
-
-  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: turn([40, 60], 100), first: false });
-  const first = endedOf(await until(() => hosted.turns.find((ended) => ended.path === '/kit/turns/end')));
-  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: turn([45, 80], 25), first: false });
-  const second = endedOf(await until(() => hosted.turns.filter((ended) => ended.path === '/kit/turns/end')[1]));
-
-  expect(first.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write: 100, cache_read: 2, output: 3 }]);
-  expect(second.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write_5m: 5, cache_write_1h: 20, cache_read: 2, output: 3 }]);
 });
 
 it("carries a recorded Codex turn under its model: its input less its cached input, its cached input as cache reads and its output with its reasoning inside, Codex's running total counted once", async () => {
