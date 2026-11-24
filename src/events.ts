@@ -1,5 +1,5 @@
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk';
-import type { PartOf, SessionState, Tokens } from '@agentshouse/session-content';
+import type { ModelTokens, PartOf, SessionState } from '@agentshouse/session-content';
 import type { Called, FileLines, Kind } from './content.ts';
 
 type Fields = Record<string, any>;
@@ -23,6 +23,28 @@ type Files = SessionState['files'];
 
 type Limit = SessionState['limits'][number];
 
+type Lifetimes = Required<Pick<ModelTokens, 'cache_write_5m' | 'cache_write_1h'>>;
+
+type Written = Required<Pick<ModelTokens, 'cache_write'>> | Lifetimes;
+
+export type Spent = { readonly model: string } & Required<Pick<ModelTokens, 'input' | 'cache_read' | 'output'>> & Written;
+
+interface Reported {
+  model: unknown;
+  input: unknown;
+  cache_write: unknown;
+  cache_read: unknown;
+  output: unknown;
+}
+
+interface Whole {
+  model: string;
+  input: number;
+  cache_write: number;
+  cache_read: number;
+  output: number;
+}
+
 export interface CallEvent {
   kind: 'call';
   key: string;
@@ -40,7 +62,7 @@ export type Event =
   | { kind: 'notice'; notice: NoticeKind; text: string }
   | { kind: 'image'; data: string; mediaType: string }
   | { kind: 'state'; state: Partial<SessionState> }
-  | { kind: 'tokens'; tokens: Tokens }
+  | { kind: 'tokens'; tokens: Spent[] }
   | { kind: 'commands'; commands: AvailableCommand[] }
   | { kind: 'options'; options: SessionConfigOption[] };
 
@@ -71,9 +93,41 @@ const WINDOW_MINUTES: Record<string, number> = { five_hour: 300, seven_day: 10_0
 const WAKEUP = /Next wakeup scheduled for \d\d:\d\d:\d\d \(in (\d+)s\)/;
 const CHILD_UPDATES = new Set(['tool_call', 'tool_call_update']);
 
-function counted(reports: Tokens[]): Event[] {
-  const whole = reports.every((tokens) => Object.values(tokens).every((count) => Number.isSafeInteger(count) && count >= 0));
-  return whole ? reports.map((tokens) => ({ kind: 'tokens', tokens })) : [];
+function startedItself(result: Fields): boolean {
+  return AUTONOMOUS_ORIGINS.has(result.origin?.kind) && (result.user_message_uuids ?? []).length === 0;
+}
+
+function isWhole(report: Reported): report is Whole {
+  const { model, ...figures } = report;
+  return typeof model === 'string' && model !== '' && Object.values(figures).every((figure) => count(figure) !== null);
+}
+
+function counted(reports: Reported[], written: (model: string, total: number) => Written = (_model, total) => ({ cache_write: total })): Event[] {
+  if (reports.length === 0 || !reports.every(isWhole)) return [];
+  const tokens = reports.map(({ model, input, cache_write, cache_read, output }) => ({ model, input, ...written(model, cache_write), cache_read, output }));
+  return [{ kind: 'tokens', tokens }];
+}
+
+function quotaReports(result: Fields | undefined, written: string): Reported[] {
+  return ((result?._meta?.quota?.model_usage ?? []) as Fields[]).map(({ model, token_count: count }) => ({
+    model,
+    input: count?.inputTokens,
+    cache_write: count?.[written],
+    cache_read: count?.cachedInputTokens,
+    output: count?.outputTokens,
+  }));
+}
+
+function lifetimesOf(used: Fields | undefined): Lifetimes | null {
+  const five = count(used?.cacheCreationEphemeral5mInputTokens);
+  const hour = count(used?.cacheCreationEphemeral1hInputTokens);
+  return five === null || hour === null ? null : { cache_write_5m: five, cache_write_1h: hour };
+}
+
+function joined(held: Lifetimes | null | undefined, more: Lifetimes | null): Lifetimes | null {
+  if (held === undefined) return more;
+  if (held === null || more === null) return null;
+  return { cache_write_5m: held.cache_write_5m + more.cache_write_5m, cache_write_1h: held.cache_write_1h + more.cache_write_1h };
 }
 
 function contentText(content: Fields[] | undefined): string {
@@ -427,20 +481,22 @@ class ClaudeReader extends Reader {
   private readonly windows = new Map<string, Limit>();
   private readonly crons = new Map<string, string>();
   private readonly wakeups = new Map<string, number>();
+  private readonly lived = new Map<string, Lifetimes | null>();
   private breakdown: readonly { readonly name: string; readonly tokens: number }[] = [];
   private stop: Stop | null = null;
 
   protected override answered(result: Fields | undefined): Event[] {
-    const models = (result?._meta?.quota?.model_usage ?? []) as Fields[];
-    const spent = counted(
-      models.map(({ token_count: count }) => ({
-        input: count?.inputTokens,
-        output: count?.outputTokens,
-        cache_read: count?.cachedInputTokens,
-        cache_write: count?.cachedWriteTokens,
-      })),
-    );
+    if (result?._meta?.quota === undefined) return super.answered(result);
+    const spent = counted(quotaReports(result, 'cachedWriteTokens'), (model, total) => {
+      const parts = this.lived.get(model);
+      return parts !== undefined && parts !== null && parts.cache_write_5m + parts.cache_write_1h === total ? parts : { cache_write: total };
+    });
+    this.lived.clear();
     return [...spent, ...super.answered(result)];
+  }
+
+  private measured(usage: Record<string, Fields> | undefined): void {
+    for (const [model, used] of Object.entries(usage ?? {})) this.lived.set(model, joined(this.lived.get(model), lifetimesOf(used)));
   }
 
   override began(): Event[] {
@@ -481,8 +537,12 @@ class ClaudeReader extends Reader {
     const sdk = message.params!.message as Fields;
     switch (sdk.type) {
       case 'result':
-        if (AUTONOMOUS_ORIGINS.has(sdk.origin?.kind)) this.stop = null;
-        else this.stop = sdk.stop_reason === 'refusal' ? 'refusal' : sdk.is_error === true ? null : 'end_turn';
+        if (startedItself(sdk)) {
+          this.stop = null;
+        } else {
+          this.measured(sdk.model_usage_since_last_result);
+          this.stop = sdk.stop_reason === 'refusal' ? 'refusal' : sdk.is_error === true ? null : 'end_turn';
+        }
         return count(sdk.duration_ms) === null ? [] : [{ kind: 'state', state: { duration: sdk.duration_ms } }];
       case 'assistant':
         return this.assistant(sdk);
@@ -599,19 +659,7 @@ class CodexReader extends Reader {
   private readonly items = new Map<string, Fields>();
 
   protected override answered(result: Fields | undefined): Event[] {
-    const usage = result?.usage as Fields | null | undefined;
-    const spent =
-      usage === null || usage === undefined
-        ? []
-        : counted([
-            {
-              input: usage.inputTokens,
-              output: usage.outputTokens,
-              cache_read: usage.cachedReadTokens,
-              cache_write: usage.cachedWriteTokens,
-            },
-          ]);
-    return [...spent, ...super.answered(result)];
+    return [...counted(quotaReports(result, 'cacheWriteInputTokens')), ...super.answered(result)];
   }
 
   protected override filesFromEdits(): boolean {
@@ -751,10 +799,16 @@ class GrokReader extends Reader {
   }
 
   private spent(usage: Fields | null | undefined): Event[] {
-    if (usage === null || usage === undefined) return [];
-    const { inputTokens, outputTokens, cachedReadTokens, cacheCreationTokens } = usage;
-    const input = inputTokens - cachedReadTokens - cacheCreationTokens;
-    return counted([{ input, output: outputTokens, cache_read: cachedReadTokens, cache_write: cacheCreationTokens }]);
+    const models = Object.entries((usage?.modelUsage ?? {}) as Record<string, Fields | null>);
+    return counted(
+      models.map(([model, used]) => ({
+        model,
+        input: used?.inputTokens - used?.cachedReadTokens - used?.cacheCreationTokens,
+        cache_write: used?.cacheCreationTokens,
+        cache_read: used?.cachedReadTokens,
+        output: used?.outputTokens,
+      })),
+    );
   }
 
   private offered(models: Fields): void {

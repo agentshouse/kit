@@ -738,14 +738,14 @@ it('marks a model switch Claude Code makes to a model the Kit asked for and the 
   expect(ended.content.parts).toEqual([{ type: 'notice', kind: 'model', text: 'opus' }]);
 });
 
-async function spent(kind: string, usage: Record<string, unknown>): Promise<Ended> {
+async function spent(kind: string, usage: Record<string, unknown>, before: string[] = []): Promise<Ended> {
   const hosted = await hostKit([{ kind }]);
-  hosted.call({ kind: 'message', text: `@spent ${JSON.stringify(usage)}\n@say ok`, first: true });
+  hosted.call({ kind: 'message', text: [...before, `@spent ${JSON.stringify(usage)}`, '@say ok'].join('\n'), first: true });
   return endedOf(await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end')));
 }
 
-it("carries Claude Code's tokens by kind from every model of the turn, so a sub-agent's tokens count, and adds them to the session's", async () => {
-  const row = (model: string, input: number, read: number, write: number, output: number) => ({
+function claudeRow(model: string, input: number, read: number, write: number, output: number): Record<string, unknown> {
+  return {
     model,
     token_count: {
       totalTokens: input + read + write + output,
@@ -755,69 +755,117 @@ it("carries Claude Code's tokens by kind from every model of the turn, so a sub-
       outputTokens: output,
       reasoningOutputTokens: 0,
     },
-  });
-  const body = await spent('claude-agent-acp', {
-    usage: { inputTokens: 5, outputTokens: 7, cachedReadTokens: 11, cachedWriteTokens: 13, totalTokens: 36 },
-    _meta: { quota: { model_usage: [row('claude-main', 5, 11, 13, 7), row('claude-subagent', 100, 200, 300, 400)] } },
-  });
-  expect(body.content.tokens).toEqual({ input: 105, output: 407, cache_read: 211, cache_write: 313 });
+  };
+}
+
+function claudeAnswer(...rows: Record<string, unknown>[]): Record<string, unknown> {
+  return { _meta: { quota: { model_usage: rows } } };
+}
+
+function claudeResult(origin: string, lifetimes: Record<string, [number, number] | null>, prompts: string[] = []): string {
+  const counted = Object.fromEntries(
+    Object.entries(lifetimes).map(([model, split]) => [
+      model,
+      split === null ? {} : { cacheCreationInputTokens: split[0] + split[1], cacheCreationEphemeral5mInputTokens: split[0], cacheCreationEphemeral1hInputTokens: split[1] },
+    ]),
+  );
+  const answered = prompts.length === 0 ? {} : { user_message_uuid: prompts.at(-1), user_message_uuids: prompts };
+  return emit('_claude/sdkMessage', { message: { type: 'result', subtype: 'success', origin: { kind: origin }, ...answered, model_usage_since_last_result: counted } });
+}
+
+it("carries each model Claude Code reports for the turn in its own row, a sub-agent's model among them, its cache writes by the lifetimes Claude Code counted on the turn's results, and adds them to the session's tokens", async () => {
+  const body = await spent('claude-agent-acp', claudeAnswer(claudeRow('claude-main', 5, 11, 13, 7), claudeRow('claude-subagent', 100, 200, 300, 400)), [
+    claudeResult('human', { 'claude-main': [1, 4] }),
+    claudeResult('human', { 'claude-main': [2, 6], 'claude-subagent': [300, 0] }),
+  ]);
+  expect(body.content.tokens).toEqual([
+    { model: 'claude-main', input: 5, cache_write_5m: 3, cache_write_1h: 10, cache_read: 11, output: 7 },
+    { model: 'claude-subagent', input: 100, cache_write_5m: 300, cache_write_1h: 0, cache_read: 200, output: 400 },
+  ]);
   expect(body.content.state.tokens).toEqual({ input: 105, output: 407, cache_read: 211, cache_write: 313 });
 });
 
-it("carries Codex's tokens by kind, its reasoning already inside its output", async () => {
-  const body = await spent('codex-acp', {
-    usage: { inputTokens: 10, outputTokens: 20, cachedReadTokens: 30, cachedWriteTokens: 40, thoughtTokens: 15, totalTokens: 100 },
-  });
-  expect(body.content.tokens).toEqual({ input: 10, output: 20, cache_read: 30, cache_write: 40 });
+it('carries a recorded Claude Code turn with each model in its own row and its cache writes by the lifetimes Claude Code counted for it', async () => {
+  const { turns } = await replayed('claude-web');
+  expect(turns[0]!.content.tokens).toEqual([
+    { model: 'claude-sonnet-5-5', input: 10, cache_write_5m: 0, cache_write_1h: 9978, cache_read: 135_735, output: 460 },
+    { model: 'claude-haiku-5-5', input: 12_842, cache_write_5m: 0, cache_write_1h: 0, cache_read: 0, output: 1417 },
+  ]);
 });
 
-it("carries Grok's tokens by kind: its input holds its cache reads, its reasoning sits inside its output, and a sub-agent that finished within the turn is already in its parent's", async () => {
+it("splits the cache writes of a Claude Code turn whose prompt a model cycle Claude Code started on its own took in by that cycle's lifetimes", async () => {
+  const body = await spent('claude-agent-acp', claudeAnswer(claudeRow('claude-main', 5, 11, 13, 7)), [claudeResult('task-notification', { 'claude-main': [3, 10] }, ['prompt-folded'])]);
+  expect(body.content.tokens).toEqual([{ model: 'claude-main', input: 5, cache_write_5m: 3, cache_write_1h: 10, cache_read: 11, output: 7 }]);
+});
+
+it("splits each Claude Code turn's cache writes by the lifetimes its own results counted, a resumed session's first turn among them, and adds every turn's to the session's tokens", async () => {
+  const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
+  const turn = async (lifetimes: [number, number], write: number): Promise<Ended> => {
+    const said = [claudeResult('human', { 'claude-main': lifetimes }), `@spent ${JSON.stringify(claudeAnswer(claudeRow('claude-main', 1, 2, write, 3)))}`, '@say ok'];
+    const before = hosted.turns.filter((ended) => ended.path === '/kit/turns/end').length;
+    hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: said.join('\n'), first: false });
+    return endedOf(await until(() => hosted.turns.filter((ended) => ended.path === '/kit/turns/end')[before]));
+  };
+
+  const first = await turn([3, 10], 13);
+  const second = await turn([5, 20], 25);
+
+  expect(first.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write_5m: 3, cache_write_1h: 10, cache_read: 2, output: 3 }]);
+  expect(second.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write_5m: 5, cache_write_1h: 20, cache_read: 2, output: 3 }]);
+  expect(second.content.state.tokens).toEqual({ input: 2, output: 6, cache_read: 4, cache_write: 38 });
+});
+
+it.each([
+  ['Claude Code counted no lifetimes', []],
+  ['its lifetimes do not add up to it', [claudeResult('human', { 'claude-main': [3, 9] })]],
+  ['one of its results does not tell them apart', [claudeResult('human', { 'claude-main': [3, 10] }), claudeResult('human', { 'claude-main': null })]],
+  ['a model cycle Claude Code started on its own and took no prompt into wrote them', [claudeResult('task-notification', { 'claude-main': [3, 10] })]],
+])("keeps a Claude Code turn's cache writes whole where %s", async (_case, before) => {
+  const body = await spent('claude-agent-acp', claudeAnswer(claudeRow('claude-main', 5, 11, 13, 7)), before);
+  expect(body.content.tokens).toEqual([{ model: 'claude-main', input: 5, cache_write: 13, cache_read: 11, output: 7 }]);
+});
+
+it("carries a recorded Codex turn under its model: its input less its cached input, its cached input as cache reads and its output with its reasoning inside, Codex's running total counted once", async () => {
+  const { turns } = await replayed('codex-terminal');
+  expect(turns[0]!.content.tokens).toEqual([{ model: 'gpt-5.6-terra', input: 37_140 - 18_176, cache_write: 0, cache_read: 18_176, output: 87 }]);
+});
+
+it("carries Grok's tokens under its model: its input holds its cache reads, its reasoning sits inside its output, and a sub-agent that finished within the turn is already in its parent's", async () => {
   const { turns } = await replayed('grok-tools');
-  expect(turns[0]!.content.tokens).toEqual({ input: 147625 - 120448, output: 580, cache_read: 120448, cache_write: 0 });
+  expect(turns[0]!.content.tokens).toEqual([{ model: 'grok-4.7-build', input: 147_625 - 120_448, cache_write: 0, cache_read: 120_448, output: 580 }]);
 });
 
 it("leaves out a Grok sub-agent that outlives its turn, which its parent and the turn after it leave out too, and the session's tokens sum its turns", async () => {
   const { turns } = await replayed('grok-subagent', 2);
-  const total = { input: 34955 - 18944 + (17878 - 17536), output: 89 + 70, cache_read: 18944 + 17536, cache_write: 0 };
+  const total = { input: 34_955 - 18_944 + (17_878 - 17_536), output: 89 + 70, cache_read: 18_944 + 17_536, cache_write: 0 };
   expect(turns[1]!.content.state.tokens).toEqual(total);
 });
 
 it.each([
-  [{ outputTokens: 20 }],
-  [{ inputTokens: 5, outputTokens: 20, cacheCreationTokens: 0 }],
-  [{ inputTokens: 5, outputTokens: 20, cachedReadTokens: 9, cacheCreationTokens: 0 }],
+  [{ inputTokens: 5, outputTokens: 20, cachedReadTokens: 0, cacheCreationTokens: 0 }],
+  [{ modelUsage: {} }],
+  [{ modelUsage: { 'grok-4.7-build': { outputTokens: 20 } } }],
+  [{ modelUsage: { 'grok-4.7-build': { inputTokens: 5, outputTokens: 20, cachedReadTokens: 9, cacheCreationTokens: 0 } } }],
   [null],
 ])('carries no tokens on a Grok turn whose usage is %j, and the turn still ends', async (usage) => {
   const hosted = await hostKit([{ kind: 'grok-build' }]);
   hosted.call({ kind: 'message', text: `@say ok\n@completed ${JSON.stringify(usage)}`, first: true });
   const ended = endedOf(await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end')));
-  expect(ended.content.tokens).toBeNull();
+  expect(ended.content.tokens).toEqual([]);
   expect(types(ended.content.parts)).toContain('text');
 });
 
 it.each([
-  ['claude-agent-acp', { _meta: { quota: { model_usage: [] } } }],
-  ['claude-agent-acp', { _meta: { quota: { model_usage: [{ model: 'renamed', tokens: {} }] } } }],
-  [
-    'claude-agent-acp',
-    {
-      _meta: {
-        quota: {
-          model_usage: [
-            { model: 'whole', token_count: { inputTokens: 1, outputTokens: 2, cachedInputTokens: 3, cachedWriteTokens: 4 } },
-            { model: 'renamed', token_count: { inputTokens: 1, outputTokens: 2, cachedInputTokens: 3 } },
-          ],
-        },
-      },
-    },
-  ],
-  ['codex-acp', { usage: null }],
-  ['codex-acp', {}],
-  ['codex-acp', { usage: { outputTokens: 20 } }],
-  ['codex-acp', { usage: { inputTokens: 10, outputTokens: 20, cachedWriteTokens: 0 } }],
+  ['claude-agent-acp', claudeAnswer()],
+  ['claude-agent-acp', claudeAnswer({ model: 'renamed', tokens: {} })],
+  ['claude-agent-acp', claudeAnswer(claudeRow('whole', 1, 3, 4, 2), { model: 'renamed', token_count: { inputTokens: 1, outputTokens: 2, cachedInputTokens: 3 } })],
+  ['claude-agent-acp', claudeAnswer({ token_count: { inputTokens: 1, outputTokens: 2, cachedInputTokens: 3, cachedWriteTokens: 4 } })],
+  ['codex-acp', { usage: { inputTokens: 10, outputTokens: 20, cachedReadTokens: 30, cachedWriteTokens: 0 } }],
+  ['codex-acp', { _meta: { quota: { model_usage: [] } } }],
+  ['codex-acp', { _meta: { quota: { model_usage: [{ model: 'gpt', token_count: { inputTokens: 10, outputTokens: 20, cacheWriteInputTokens: 0 } }] } } }],
   ['grok-build', {}],
 ])('carries no tokens on a %s turn whose usage is absent or incomplete, and the turn still ends', async (kind, usage) => {
   const body = await spent(kind, usage);
-  expect(body.content.tokens).toBeNull();
+  expect(body.content.tokens).toEqual([]);
   expect(types(body.content.parts)).toContain('text');
 });

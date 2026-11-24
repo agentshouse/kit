@@ -1310,6 +1310,15 @@ it.each([
   expect(await ends(hosted, 1)).toHaveLength(1);
 });
 
+it('ends a Claude Code turn whose sub-agent runs on at the result of a cycle the CLI started itself that took its prompt in', async () => {
+  const hosted = await opened('claude-agent-acp');
+  onTestFinished(gated(hosted, 'held'));
+  const folded = claudeResult({ subtype: 'success', is_error: false, stop_reason: 'end_turn', origin: { kind: 'task-notification' }, user_message_uuids: ['prompt-folded'] });
+  hosted.call({ kind: 'message', text: `@play ${HELD} 0 ${RESULT}\n${folded}\n@play ${HELD} ${ENDED} ${ENDED + 1}\n@gate held`, first: false });
+
+  expect(await ends(hosted, 1)).toEqual([{ text: 'launched' }]);
+});
+
 it.each([
   ['the answer that follows its result when no sub-agent runs on', claudeResult({ subtype: 'success', is_error: false, stop_reason: 'end_turn' }), '@say late', { text: 'late' }],
   ['the failure the adapter answers when its result failed', claudeResult({ subtype: 'error_during_execution', is_error: true, stop_reason: null }), '@sessionfailure Usage limit reached', { failed: 'limit' }],
