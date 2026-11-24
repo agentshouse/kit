@@ -39,7 +39,7 @@ import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, typ
 import { agentBase } from './home.ts';
 import type { Calls } from './calls.ts';
 import { copyInstructions, instructions } from './instructions.ts';
-import { IDLE, idle, judged, stoppable, type Judgment } from './judgment.ts';
+import { activityOf, IDLE, idle, stoppable, type Activity } from './activity.ts';
 import type { ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
@@ -346,7 +346,7 @@ class Conversation {
   place: Place | null = null;
   uploading: Promise<void> = Promise.resolve();
   refused: { directory: string; answer: Answered } | null = null;
-  judgment: Judgment = IDLE;
+  activity: Activity = IDLE;
   reported: string | null = JSON.stringify(IDLE);
 
   constructor(id: string) {
@@ -407,15 +407,15 @@ export class Conversations {
   }
 
   stoppable(): boolean {
-    return this.reporting === 0 && this.uploads === 0 && [...this.conversations.values()].every(({ judgment }) => stoppable(judgment));
+    return this.reporting === 0 && this.uploads === 0 && [...this.conversations.values()].every(({ activity }) => stoppable(activity));
   }
 
   idle(): boolean {
-    return this.stoppable() && [...this.conversations.values()].every(({ judgment }) => idle(judgment));
+    return this.stoppable() && [...this.conversations.values()].every(({ activity }) => idle(activity));
   }
 
   turnRuns(): boolean {
-    return this.uploads > 0 || [...this.conversations.values()].some(({ judgment }) => judgment.turn !== 'ended');
+    return this.uploads > 0 || [...this.conversations.values()].some(({ activity }) => activity.turn !== 'ended');
   }
 
   runsIn(directory: string): boolean {
@@ -461,7 +461,7 @@ export class Conversations {
         this.facts(conversation);
         this.stateChanged(conversation, true);
       } else if (conversation.exitUntold) this.process(conversation, false);
-      if (conversation.running !== null || conversation.leftovers.size > 0 || conversation.reported === null) this.judged(conversation, true);
+      if (conversation.running !== null || conversation.leftovers.size > 0 || conversation.reported === null) this.tellActivity(conversation, true);
       if (conversation.untold || conversation.told !== null) this.retell(conversation);
     }
   }
@@ -1073,21 +1073,21 @@ export class Conversations {
   }
 
   private changed(conversation: Conversation): void {
-    this.judged(conversation, false);
+    this.tellActivity(conversation, false);
     this.kit.changed();
   }
 
-  private judged(conversation: Conversation, again: boolean): void {
+  private tellActivity(conversation: Conversation, again: boolean): void {
     const turn = conversation.turn;
-    conversation.judgment = judged({
+    conversation.activity = activityOf({
       turns: conversation.turns.size,
       asking: turn === null || turn.questions === 0 ? null : { secret: turn.secrets > 0 },
       running: conversation.running,
       leftovers: conversation.leftovers,
     });
-    const judgment = JSON.stringify(conversation.judgment);
-    if (!again && judgment === conversation.reported) return;
-    conversation.reported = this.kit.send({ type: 'judgment', conversation_id: conversation.id, ...conversation.judgment }) ? judgment : null;
+    const activity = JSON.stringify(conversation.activity);
+    if (!again && activity === conversation.reported) return;
+    conversation.reported = this.kit.send({ type: 'activity', conversation_id: conversation.id, ...conversation.activity }) ? activity : null;
   }
 
   private process(conversation: Conversation, running: boolean): void {
