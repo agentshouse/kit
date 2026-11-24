@@ -36,7 +36,7 @@ services:
     command:
       - sh
       - -c
-      - 'if [ ! node_modules/.package-lock.json -nt package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund --loglevel=error || exit 1; fi; exec npx vitest run --project kit test/idle.spec.ts test/scope.spec.ts'
+      - 'if [ ! node_modules/.package-lock.json -nt package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund --loglevel=error || exit 1; fi; exec npx vitest run --project kit test/idle.spec.ts test/judgment.spec.ts test/scope.spec.ts'
   windows:
     image: mcr.microsoft.com/powershell@sha256:62300a213a9293916333df2b014cd3a8f22fb0b0b65f2bb446aaf436bcf8c868
     network_mode: none

@@ -153,9 +153,41 @@ interface Reading {
   busy: boolean;
   empty: boolean;
   events: string | null;
+  beyond: () => Map<number, Running> | null;
 }
 
-const UNREAD: Reading = { busy: true, empty: false, events: null };
+const UNREAD: Reading = { busy: true, empty: false, events: null, beyond: () => null };
+
+function leftBehind(group: string): () => Map<number, Running> | null {
+  let listed: { beyond: Map<number, Running> | null } | null = null;
+  return () => {
+    listed ??= { beyond: membersRunning(join(group, LEFT)) };
+    return listed.beyond;
+  };
+}
+
+function membersRunning(group: string): Map<number, Running> | null {
+  try {
+    return new Map(
+      members(group).flatMap((pid): [number, Running][] => {
+        const running = read(String(pid));
+        return running === null ? [] : [[pid, running]];
+      }),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function onlyWaiting(beyond: Map<number, Running>, waits: (command: string) => boolean): boolean {
+  const parents = new Set([...beyond.values()].map(({ parent }) => parent));
+  let waiting = false;
+  for (const [pid, { command }] of beyond) {
+    if (waits(command)) waiting = true;
+    else if (!parents.has(pid)) return false;
+  }
+  return waiting;
+}
 
 export class Scope {
   private readonly marker: string;
@@ -221,6 +253,13 @@ export class Scope {
     return this.read().empty;
   }
 
+  waiting(waits: (command: string) => boolean): boolean {
+    const reading = this.read();
+    if (!reading.busy || this.recorded === null) return false;
+    const beyond = reading.beyond();
+    return beyond !== null && onlyWaiting(beyond, waits);
+  }
+
   kill(): void {
     killMarked(this.marker);
     this.heard();
@@ -255,7 +294,8 @@ export class Scope {
   private looked(): Reading {
     const found = this.found();
     if (found === null) return UNREAD;
-    return { busy: [...found].some(([pid, running]) => this.beyond(pid, running)), empty: found.size === 0, events: null };
+    const beyond = new Map([...found].filter(([pid, running]) => this.beyond(pid, running)));
+    return { busy: beyond.size > 0, empty: found.size === 0, events: null, beyond: () => beyond };
   }
 
   private swept(group: string): Reading {
@@ -266,7 +306,7 @@ export class Scope {
       const told = existsSync(judged) ? this.follow(judged) : null;
       const busy = populated(judged);
       const events = busy || !this.exited ? told : this.follow(group);
-      return { busy, empty: !populated(group), events };
+      return { busy, empty: !populated(group), events, beyond: leftBehind(group) };
     } catch {
       return UNREAD;
     }
@@ -341,14 +381,7 @@ export class Scope {
 
   private found(): Map<number, Running> | null {
     try {
-      if (this.group !== null) {
-        return new Map(
-          members(this.group).flatMap((pid): [number, Running][] => {
-            const running = read(String(pid));
-            return running === null ? [] : [[pid, running]];
-          }),
-        );
-      }
+      if (this.group !== null) return membersRunning(this.group);
       const table = processes();
       const roots = marked(this.marker, true);
       return new Map(

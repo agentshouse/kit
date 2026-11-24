@@ -39,6 +39,7 @@ import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, typ
 import { agentBase } from './home.ts';
 import type { Calls } from './calls.ts';
 import { copyInstructions, instructions } from './instructions.ts';
+import { IDLE, idle, judged, stoppable, type Judgment } from './judgment.ts';
 import type { ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
@@ -324,6 +325,8 @@ class Conversation {
   place: Place | null = null;
   uploading: Promise<void> = Promise.resolve();
   refused: { directory: string; answer: Answered } | null = null;
+  judgment: Judgment = IDLE;
+  reported = JSON.stringify(IDLE);
 
   constructor(id: string) {
     this.id = id;
@@ -382,33 +385,22 @@ export class Conversations {
     });
   }
 
-  idle(): boolean {
-    if (this.reporting > 0 || this.uploads > 0) return false;
-    for (const conversation of this.conversations.values()) {
-      const turn = conversation.turn;
-      const asking = turn !== null && turn.questions > 0 && turn.secrets === 0;
-      if (conversation.turns.size > (asking ? 1 : 0)) return false;
-    }
-    const conversations = [...this.conversations.values()];
-    if (conversations.some((conversation) => conversation.running?.work.busy())) return false;
-    return !conversations.some(
-      (conversation) =>
-        conversation.running?.scope.working() || [...conversation.leftovers].some((scope) => scope.working()),
-    );
+  stoppable(): boolean {
+    return this.reporting === 0 && this.uploads === 0 && [...this.conversations.values()].every(({ judgment }) => stoppable(judgment));
   }
 
-  quiet(): boolean {
-    return this.idle() && !this.turnOpen();
+  idle(): boolean {
+    return this.stoppable() && [...this.conversations.values()].every(({ judgment }) => idle(judgment));
+  }
+
+  turnRuns(): boolean {
+    return this.uploads > 0 || [...this.conversations.values()].some(({ judgment }) => judgment.turn !== 'ended');
   }
 
   runsIn(directory: string): boolean {
     return [...this.conversations.values()].some(
       (conversation) => (conversation.running !== null || conversation.launch !== null) && conversation.place?.directory === directory,
     );
-  }
-
-  turnOpen(): boolean {
-    return this.uploads > 0 || [...this.conversations.values()].some((conversation) => conversation.turns.size > 0);
   }
 
   turnsIn(directory: string): boolean {
@@ -419,7 +411,7 @@ export class Conversations {
 
   private scopeChanged(conversation: Conversation, scope: Scope): void {
     if (conversation.leftovers.has(scope)) this.drop(conversation, scope);
-    this.kit.changed();
+    this.changed(conversation);
   }
 
   private leave(conversation: Conversation, scope: Scope): void {
@@ -448,6 +440,7 @@ export class Conversations {
         this.facts(conversation);
         this.stateChanged(conversation, true);
       } else if (conversation.exitUntold) this.process(conversation, false);
+      if (conversation.running !== null || conversation.leftovers.size > 0) this.judged(conversation, true);
       if (conversation.untold || conversation.told !== null) this.retell(conversation);
     }
   }
@@ -736,7 +729,7 @@ export class Conversations {
       )
       .finally(() => {
         this.uploads--;
-        this.kit.changed();
+        this.changed(conversation);
       });
   }
 
@@ -944,7 +937,7 @@ export class Conversations {
       place.directory,
       () => {
         scope.heard();
-        this.kit.changed();
+        this.changed(conversation);
       },
       (message) => this.tapped(conversation, reader, message),
     );
@@ -983,12 +976,13 @@ export class Conversations {
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
       void work.settled().then(() => {
         scope.record();
-        this.kit.changed();
+        this.changed(conversation);
       });
       conversation.running = running;
       conversation.session = running.sessionId;
       conversation.options = options;
       this.facts(conversation);
+      this.changed(conversation);
       void adapter.lost.then((cause) => this.exited(conversation, running, cause));
       return running.sessionId;
     } catch (error) {
@@ -1039,7 +1033,7 @@ export class Conversations {
       this.end(conversation, conversation.turn, exitedWith(running, cause));
     }
     this.next(conversation);
-    this.kit.changed();
+    this.changed(conversation);
   }
 
   private detach(conversation: Conversation, running: Running): void {
@@ -1055,6 +1049,24 @@ export class Conversations {
       if (question.conversation === conversation) this.questions.delete(id);
     }
     this.process(conversation, false);
+  }
+
+  private changed(conversation: Conversation): void {
+    this.judged(conversation, false);
+    this.kit.changed();
+  }
+
+  private judged(conversation: Conversation, again: boolean): void {
+    const turn = conversation.turn;
+    conversation.judgment = judged({
+      turns: conversation.turns.size,
+      asking: turn === null || turn.questions === 0 ? null : { secret: turn.secrets > 0 },
+      running: conversation.running,
+      leftovers: conversation.leftovers,
+    });
+    const judgment = JSON.stringify(conversation.judgment);
+    if (!again && judgment === conversation.reported) return;
+    conversation.reported = this.kit.send({ type: 'judgment', conversation_id: conversation.id, ...conversation.judgment }) ? judgment : '';
   }
 
   private process(conversation: Conversation, running: boolean): void {
@@ -1107,7 +1119,7 @@ export class Conversations {
       .catch(() => undefined)
       .finally(() => {
         this.reporting--;
-        this.kit.changed();
+        this.changed(conversation);
       });
     return delivered;
   }
@@ -1132,7 +1144,7 @@ export class Conversations {
     conversation.turn = turn;
     this.stated(conversation, { suggestion: null });
     for (const event of conversation.reader?.began() ?? []) this.event(conversation, event);
-    this.kit.changed();
+    this.changed(conversation);
     return turn;
   }
 
@@ -1158,7 +1170,7 @@ export class Conversations {
     this.uploaded(conversation);
     this.next(conversation);
     conversation.running?.scope.heard();
-    this.kit.changed();
+    this.changed(conversation);
   }
 
   private prompt(conversation: Conversation, prompt: ContentBlock[], taken: () => void): void {
@@ -1211,7 +1223,7 @@ export class Conversations {
     conversation.reader?.closeTurn();
     conversation.turn = null;
     conversation.running?.scope.heard();
-    this.kit.changed();
+    this.changed(conversation);
   }
 
   private askForm(conversation: Conversation, form: CreateElicitationRequest, signal: AbortSignal): Promise<CreateElicitationResponse> {
@@ -1241,7 +1253,7 @@ export class Conversations {
     });
     turn.questions++;
     if (secret) turn.secrets++;
-    this.kit.changed();
+    this.changed(conversation);
     try {
       const response = await answered;
       if (response === null) throw signal.reason;
@@ -1250,7 +1262,7 @@ export class Conversations {
       this.questions.delete(interactionId);
       turn.questions--;
       if (secret) turn.secrets--;
-      this.kit.changed();
+      this.changed(conversation);
     }
   }
 
@@ -1341,7 +1353,7 @@ export class Conversations {
         return;
       case 'image':
         turn.uploads.push(this.image(conversation, turn, event.data, event.mediaType));
-        this.kit.changed();
+        this.changed(conversation);
         return;
     }
   }
