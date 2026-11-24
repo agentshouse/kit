@@ -11,6 +11,7 @@ import { MODELS, SESSION_OPTIONS, type CliModel } from './fixtures/clis/session-
 import { recordStart } from './started.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
+const HELD_COMMAND = fileURLToPath(new URL('./held-command.ts', import.meta.url));
 const EVENTS = fileURLToPath(new URL('./fixtures/events/', import.meta.url));
 const kind = process.env.ADAPTER_KIND ?? 'codex-acp';
 const home = join(process.env.HOME ?? '/tmp', '.agents', 'house');
@@ -78,6 +79,11 @@ let server: ChildProcess | null = null;
 
 function spawnJob(): void {
   log(JSON.parse(spawnSync(process.execPath, ['-e', LAUNCHER], { encoding: 'utf8' }).stdout) as Record<string, unknown>);
+}
+
+function runsCommand(shell: number): boolean {
+  const [child = ''] = readFileSync(`/proc/${shell}/task/${shell}/children`, 'utf8').trim().split(' ');
+  return child !== '' && readFileSync(`/proc/${child}/cmdline`, 'utf8').includes('\0agent\0run\0');
 }
 
 function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): void {
@@ -431,6 +437,16 @@ async function directive(
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }
   if (name === 'spawn') spawnJob();
+  if (name === 'runs') {
+    const command = [process.execPath, HOUSE, 'agent', 'run', '-'];
+    const [file, ...args] = argument === 'sh' ? ['sh', '-c', '"$@"; :', 'sh', ...command] : command;
+    const env = { ...process.env, NODE_OPTIONS: `--import=${HELD_COMMAND}` };
+    const waiting = spawn(file!, args, { detached: true, stdio: 'ignore', env });
+    waiting.unref();
+    // Twenty milliseconds sees the shell's command start at once, so the turn ends only once it runs.
+    while (argument === 'sh' && !runsCommand(waiting.pid!)) await new Promise((resolve) => setTimeout(resolve, 20));
+    log({ waiting: waiting.pid });
+  }
   if (name === 'linger') {
     const update = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: rest.slice(1).join(' ') }, ...messageSignal('final_answer') };
     const line = `${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } })}\n`;

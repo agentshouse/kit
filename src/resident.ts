@@ -125,7 +125,7 @@ export async function resident(): Promise<void> {
   const settle = (change: SettingsChange): Promise<Applied> => {
     const applied = settings.then(() =>
       applySettings(change, {
-        working: () => running !== null && (running.conversations.turnOpen() || running.calls.busy()),
+        working: () => running !== null && (running.conversations.turnRuns() || running.calls.busy()),
         end: () => {
           running?.conversations.stopped();
           killDescendants();
@@ -171,7 +171,7 @@ export async function resident(): Promise<void> {
     await connection?.close();
     then();
   };
-  const working = () => !calls.idle() || !conversations.idle() || !agents.idle();
+  const working = () => !calls.idle() || !conversations.stoppable() || !agents.idle();
   const idle = () => !working() && idleCopies.idle();
   let worked = false;
   const changed = () => {
@@ -182,7 +182,7 @@ export async function resident(): Promise<void> {
     }
     if (!idle()) {
       reported = false;
-    } else if (update.placedRelease() !== null && conversations.quiet() && process.env.HOUSE_KIT_SANDBOX !== '1') {
+    } else if (update.placedRelease() !== null && conversations.idle() && process.env.HOUSE_KIT_SANDBOX !== '1') {
       const placed = update.placedRelease()!;
       void stop(() => restartPlaced(placed));
     } else if (!reported && agents.linksRead()) {
