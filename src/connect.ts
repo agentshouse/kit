@@ -95,7 +95,7 @@ export async function connect(argv: string[]): Promise<void> {
   if (install !== undefined && install !== '') await writeFile(join(kitHome(), 'install-command'), `${install}\n`, { mode: 0o600 });
   const settings = await storedConfiguration();
   if (settings.skills === undefined || settings.workspace === undefined) {
-    await writeConfiguration({ skills: true, workspace, ...settings });
+    await writeConfiguration({ skills: 'all', workspace, ...settings });
   }
   await placeConnection(house);
   const { environment } = (await readEnrolment())!;

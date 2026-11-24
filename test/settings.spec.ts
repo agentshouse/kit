@@ -4,11 +4,16 @@ import { chmod, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from 'nod
 import { dirname, join } from 'node:path';
 import { listSkills } from '@agentshouse/skills';
 import { expect, it, onTestFinished } from 'vitest';
-import { settle, until } from './double.ts';
+import { catalogue, serveCatalogue } from './catalogue.ts';
+import { settle, startHouse, until } from './double.ts';
 import { GIT_IDENTITY, hostKit, lastCall, type Hosted } from './environment.ts';
 import { accountOf, alive, runKit, temporaryDirectory, temporaryHome } from './kit.ts';
 
 const HOUSE = 'https://house.example';
+const NAMES = listSkills()
+  .map(({ name }) => name)
+  .sort();
+const [FIRST, SECOND] = NAMES as [string, string];
 
 async function put(path: string, text: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
@@ -80,30 +85,37 @@ async function lastReport(hosted: Hosted, reported: (report: Record<string, unkn
   return until(() => hosted.reports.findLast(reported));
 }
 
-async function enrolled(skills: boolean): Promise<string> {
+async function enrolled(skills: unknown, house = HOUSE): Promise<string> {
   const home = await temporaryHome();
-  await writeFile(join(home, 'credential.json'), JSON.stringify({ house: HOUSE, environment: 'environment-one', credential: 'ahk_held' }));
+  await writeFile(join(home, 'credential.json'), JSON.stringify({ house, environment: 'environment-one', credential: 'ahk_held' }));
   await writeFile(join(home, 'kit.json'), JSON.stringify({ skills, workspace: home }));
   return home;
 }
 
-it('prints the two settings and turns placing the Skill set off and on again with no Kit process running', async () => {
-  const home = await enrolled(true);
+it("prints the settings and sets the skills to all or a list of names with no Kit process running, an earlier Kit's on reading all and its off an empty list", async () => {
+  const house = await startHouse();
+  serveCatalogue(house, NAMES);
+  const home = await enrolled(true, house.origin);
   const skills = join(accountOf(home), '.agents', 'skills');
-  const names = listSkills().map(({ name }) => name);
+  const settings = () => readFile(join(home, 'kit.json'), 'utf8').then((text) => JSON.parse(text) as unknown);
 
-  expect(await kitSettings(home)).toEqual({ status: 0, stdout: `skills on\nworkspace ${home}\n`, stderr: '' });
+  expect(await kitSettings(home)).toEqual({ status: 0, stdout: `skills all\nworkspace ${home}\n`, stderr: '' });
 
-  expect(await kitSettings(home, 'skills', 'off')).toEqual({ status: 0, stdout: `skills off\nworkspace ${home}\n`, stderr: '' });
-  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: false, workspace: home });
+  expect(await kitSettings(home, 'skills', SECOND, FIRST)).toEqual({ status: 0, stdout: `skills ${SECOND} ${FIRST}\nworkspace ${home}\n`, stderr: '' });
+  expect(await settings()).toEqual({ skills: [SECOND, FIRST], workspace: home });
+  expect((await readdir(skills)).sort()).toEqual([FIRST, SECOND]);
+
+  expect(await kitSettings(home, 'skills', 'all')).toEqual({ status: 0, stdout: `skills all\nworkspace ${home}\n`, stderr: '' });
+  expect(await settings()).toEqual({ skills: 'all', workspace: home });
+  expect((await readdir(skills)).sort()).toEqual(NAMES);
+
+  expect(await kitSettings(home, 'skills')).toEqual({ status: 0, stdout: `skills\nworkspace ${home}\n`, stderr: '' });
+  expect(await settings()).toEqual({ skills: [], workspace: home });
+  expect(await readdir(skills)).toEqual([]);
   await absent(join(home, 'skill-set.json'));
 
-  expect(await kitSettings(home, 'skills', 'on')).toEqual({ status: 0, stdout: `skills on\nworkspace ${home}\n`, stderr: '' });
-  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: true, workspace: home });
-  expect((await readdir(skills)).sort()).toEqual(expect.arrayContaining(names));
-
-  expect(await kitSettings(home, 'skills', 'off')).toMatchObject({ status: 0 });
-  expect(await readdir(skills)).toEqual([]);
+  await writeFile(join(home, 'kit.json'), JSON.stringify({ skills: false, workspace: home }));
+  expect(await kitSettings(home)).toEqual({ status: 0, stdout: `skills\nworkspace ${home}\n`, stderr: '' });
 });
 
 it('refuses a workspace that is no absolute path, or one the account cannot write, changing nothing', async () => {
@@ -112,7 +124,9 @@ it('refuses a workspace that is no absolute path, or one the account cannot writ
 
   expect(await kitSettings(home, 'workspace', 'agents')).toEqual({ status: 1, stdout: '', stderr: 'house: agents is not an absolute path\n' });
   expect(await kitSettings(home, 'workspace', '/proc/kit')).toEqual({ status: 1, stdout: '', stderr: 'house: this account cannot write /proc/kit\n' });
-  expect(await kitSettings(home, 'skills', 'maybe')).toMatchObject({ status: 1, stderr: 'house: usage: house settings [skills on|off | workspace <absolute path>]\n' });
+  for (const operands of [['colour', 'blue'], ['workspace', '/a', '/b']]) {
+    expect(await kitSettings(home, ...operands)).toMatchObject({ status: 1, stderr: 'house: usage: house settings [skills all|<name>... | workspace <absolute path>]\n' });
+  }
   expect(await readFile(join(home, 'kit.json'), 'utf8')).toBe(settings);
 });
 
@@ -133,7 +147,7 @@ it('refuses to move the workspace of a Kit that still runs where an earlier inst
     stdout: '',
     stderr: `house: Kit runs where an earlier install placed it; its workspace changes once Kit moves into ${join(account, '.agents', 'house')}\n`,
   });
-  expect(await settings()).toEqual({ status: 0, stdout: `skills on\nworkspace ${workspace}\n`, stderr: '' });
+  expect(await settings()).toEqual({ status: 0, stdout: `skills all\nworkspace ${workspace}\n`, stderr: '' });
   expect(await readFile(join(workspace, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
   await absent(join(account, 'elsewhere'));
 });
@@ -144,10 +158,10 @@ it('changes a setting through a Kit process that waits for a login', async () =>
   const waiting = runKit(['resident'], { HOME: accountOf(home) });
   await until(() => waiting.stderr().includes('this Environment is not connected; run house login'));
 
-  const changed = await kitSettings(home, 'skills', 'off');
+  const changed = await kitSettings(home, 'skills', FIRST);
 
-  expect(changed).toEqual({ status: 0, stdout: `skills off\nworkspace ${home}\n`, stderr: '' });
-  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: false, workspace: home });
+  expect(changed).toEqual({ status: 0, stdout: `skills ${FIRST}\nworkspace ${home}\n`, stderr: '' });
+  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: [FIRST], workspace: home });
 });
 
 it('refuses to move the workspace of a Kit logged out of its Environment, which cannot tell the folders its Agents’ owners chose, changing nothing', async () => {
@@ -167,18 +181,23 @@ it('refuses to move the workspace of a Kit logged out of its Environment, which 
   await absent(workspace);
 });
 
-it('declares its settings and changes placing the Skill set for a settings Kit call and for house settings, declaring them again', async () => {
-  const hosted = await hostKit();
-  expect(hosted.reports[0]).toMatchObject({ settings: { skills: false, workspace: hosted.workspace } });
+it('declares its skills as all or a list and changes them for a settings Kit call and for house settings, declaring them again', async () => {
+  const hosted = await hostKit([{}], { tools: { guide: catalogue(NAMES) } });
+  expect(hosted.reports[0]).toMatchObject({ settings: { skills: [], workspace: hosted.workspace } });
 
-  const call = callSettings(hosted, { skills: true });
+  const call = callSettings(hosted, { skills: 'all' });
 
-  expect(await hosted.result(call)).toEqual({ settings: { skills: true, workspace: hosted.workspace } });
-  await lastReport(hosted, (report) => (report.settings as { skills: boolean }).skills);
-  expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ origin: hosted.house.origin });
+  expect(await hosted.result(call)).toEqual({ settings: { skills: 'all', workspace: hosted.workspace } });
+  await lastReport(hosted, (report) => (report.settings as { skills: unknown }).skills === 'all');
+  expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ origin: hosted.house.origin, names: NAMES });
 
-  expect(await kitSettings(hosted.home, 'skills', 'off')).toEqual({ status: 0, stdout: `skills off\nworkspace ${hosted.workspace}\n`, stderr: '' });
-  await lastReport(hosted, (report) => !(report.settings as { skills: boolean }).skills);
+  expect(await kitSettings(hosted.home, 'skills', FIRST)).toEqual({ status: 0, stdout: `skills ${FIRST}\nworkspace ${hosted.workspace}\n`, stderr: '' });
+  expect(await lastReport(hosted, (report) => Array.isArray((report.settings as { skills: unknown }).skills))).toMatchObject({ settings: { skills: [FIRST] } });
+  expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ names: [FIRST] });
+
+  const none = callSettings(hosted, { skills: [] });
+
+  expect(await hosted.result(none)).toEqual({ settings: { skills: [], workspace: hosted.workspace } });
   await absent(join(hosted.home, 'skill-set.json'));
   expect(alive(hosted.kit.pid)).toBe(true);
 });
@@ -188,13 +207,13 @@ it('moves the workspace for house settings within one filesystem, keeping a Loca
   const hosted = await hostKit([{}], { prepare: (home) => filled(home) });
   expect((await stat(hosted.home)).dev).toBe((await stat(dirname(workspace))).dev);
 
-  expect(await kitSettings(hosted.home, 'workspace', workspace)).toEqual({ status: 0, stdout: `skills off\nworkspace ${workspace}\n`, stderr: '' });
+  expect(await kitSettings(hosted.home, 'workspace', workspace)).toEqual({ status: 0, stdout: `skills\nworkspace ${workspace}\n`, stderr: '' });
 
   expect(await hosted.kit.exited).toBe(1);
   await followed(hosted.home, workspace);
   const reported = hosted.reports.length;
   await hosted.restart();
-  expect(await until(() => hosted.reports[reported])).toMatchObject({ agent_base: join(workspace, 'agents'), settings: { skills: false, workspace } });
+  expect(await until(() => hosted.reports[reported])).toMatchObject({ agent_base: join(workspace, 'agents'), settings: { skills: [], workspace } });
 });
 
 it('moves the workspace for a settings Kit call across filesystems, copying and checking before the old folders go, and answers the call House sends again once it starts on the new root', async () => {
@@ -209,7 +228,7 @@ it('moves the workspace for a settings Kit call across filesystems, copying and 
   await followed(hosted.home, workspace);
   await hosted.restart();
   callSettings(hosted, { workspace }, call);
-  expect(await hosted.result(call)).toEqual({ settings: { skills: false, workspace } });
+  expect(await hosted.result(call)).toEqual({ settings: { skills: [], workspace } });
   expect(alive(hosted.kit.pid)).toBe(true);
 });
 
@@ -224,7 +243,7 @@ it('keeps where they are the folders inside the workspace its owner chose for an
   ];
   const hosted = await hostKit(routes, {
     home,
-    skills: false,
+    skills: [],
     prepare: async () => {
       await filled(home);
       await put(join(house, 'agents', 'reader', 'chosen.md'), 'chosen\n');
@@ -245,7 +264,7 @@ it('keeps where they are the folders inside the workspace its owner chose for an
   expect(record.repository).toBe(repository);
   await hosted.restart();
   callSettings(hosted, { workspace }, call);
-  expect(await hosted.result(call)).toEqual({ settings: { skills: false, workspace } });
+  expect(await hosted.result(call)).toEqual({ settings: { skills: [], workspace } });
 });
 
 it('moves every folder back and answers why when a move across filesystems fails, ending so it runs on the root it had', async () => {
@@ -288,7 +307,7 @@ it('finishes a move an ended Kit process left unfinished when it starts, from wh
   await followed(hosted.home, workspace);
   await absent(join(workspace, 'agents', 'agent-1.moving'));
   await absent(join(hosted.home, 'workspace-move.json'));
-  expect(hosted.reports[0]).toMatchObject({ agent_base: join(workspace, 'agents'), settings: { skills: false, workspace } });
+  expect(hosted.reports[0]).toMatchObject({ agent_base: join(workspace, 'agents'), settings: { skills: [], workspace } });
 });
 
 it('refuses a workspace that already holds an agents or rooms folder, changing nothing', async () => {
@@ -339,7 +358,7 @@ it('refuses to move the workspace while another Kit call is carried, a function 
 
 it('moves the workspace for a change House sends as a skills and a workspace Kit call, while the skills call still returns its Result', async () => {
   const workspace = join(await temporaryDirectory(), 'workspace');
-  const hosted = await hostKit();
+  const hosted = await hostKit([{}], { tools: { guide: catalogue(NAMES) } });
   const first = hosted.kit;
   const skills = `settings-${randomUUID()}`;
   hosted.house.route('POST', '/kit/kit-calls/results/return', async (request) => {
@@ -348,20 +367,20 @@ it('moves the workspace for a change House sends as a skills and a workspace Kit
     return { body: {} };
   });
 
-  callSettings(hosted, { skills: true }, skills);
+  callSettings(hosted, { skills: 'all' }, skills);
   const move = callSettings(hosted, { workspace });
 
   expect(await hosted.kit.exited).toBe(1);
-  expect(JSON.parse(await readFile(join(hosted.home, 'kit.json'), 'utf8'))).toEqual({ skills: true, workspace });
+  expect(JSON.parse(await readFile(join(hosted.home, 'kit.json'), 'utf8'))).toEqual({ skills: 'all', workspace });
   hosted.house.route('POST', '/kit/kit-calls/results/return', (request) => {
     hosted.results.push(request);
     return { body: {} };
   });
   await hosted.restart();
-  callSettings(hosted, { skills: true }, skills);
+  callSettings(hosted, { skills: 'all' }, skills);
   callSettings(hosted, { workspace }, move);
-  expect(await hosted.result(skills)).toEqual({ settings: { skills: true, workspace } });
-  expect(await hosted.result(move)).toEqual({ settings: { skills: true, workspace } });
+  expect(await hosted.result(skills)).toEqual({ settings: { skills: 'all', workspace } });
+  expect(await hosted.result(move)).toEqual({ settings: { skills: 'all', workspace } });
   expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ origin: hosted.house.origin });
 });
 
@@ -377,7 +396,7 @@ it('refuses to move the workspace while a turn is open, saying an Agent is worki
 
   expect(await hosted.result(call)).toEqual({ refused: 'an Agent is working; change the workspace once its turn ends' });
   await absent(workspace);
-  expect(JSON.parse(await readFile(join(hosted.home, 'kit.json'), 'utf8'))).toEqual({ skills: false, workspace: hosted.workspace });
+  expect(JSON.parse(await readFile(join(hosted.home, 'kit.json'), 'utf8'))).toEqual({ skills: [], workspace: hosted.workspace });
   await writeFile(join(hosted.home, 'go'), '');
   await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   expect(alive(hosted.kit.pid)).toBe(true);

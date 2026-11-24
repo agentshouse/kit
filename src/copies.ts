@@ -23,7 +23,7 @@ import {
   type Manifest,
   type Present,
 } from './manifest.ts';
-import { environmentCall, rpc, toolAnswer, Unsettled } from './mcp.ts';
+import { environmentTool, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { firstLine, namedWait, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
@@ -248,12 +248,6 @@ function causeOf(error: unknown): string {
 
 function houseCause(error: unknown): string {
   return error instanceof HouseRefusal ? (refusalOf(error.text)?.text ?? causeOf(error)) : causeOf(error);
-}
-
-async function ownInfo(args: Record<string, unknown>): Promise<string> {
-  const read = toolAnswer({ status: 200, text: await environmentCall(rpc('tools/call', { name: 'info', arguments: args })) });
-  if ('refused' in read) throw new Error(read.refused.text);
-  return read.text;
 }
 
 function logged(error: unknown): void {
@@ -779,8 +773,8 @@ export class LocalCopies {
           throw retryable(error.text) === false ? new Error(houseCause(error)) : new Unsettled(houseCause(error), namedWait(error.text));
         }
       },
-      info: async (path, revision) => fileInfo(await ownInfo({ path, ...(revision === undefined ? {} : { ref: revision }) })),
-      instructions: (root) => instructionsText(ownInfo, root),
+      info: async (path, revision) => fileInfo(await environmentTool('info', { path, ...(revision === undefined ? {} : { ref: revision }) })),
+      instructions: (root) => instructionsText((args) => environmentTool('info', args), root),
     };
   }
 
@@ -811,6 +805,10 @@ export class LocalCopies {
     this.turning = turning;
     this.owe(null);
     return this.selected(null);
+  }
+
+  isPrivate(room: string): boolean {
+    return room === this.privateRoom;
   }
 
   noticed(room: string): Promise<void> {

@@ -1,20 +1,45 @@
+import { createHash } from 'node:crypto';
 import { cp, lstat, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
+import type { KitSkills } from '@agentshouse/kit-wire';
 import { GUIDE, listSkills } from '@agentshouse/skills';
 import { parse } from 'yaml';
 import { KIT_RELEASE } from './clis.ts';
-import { kitHome, readConfiguration, readHome, writeHome } from './home.ts';
+import { fetched } from './files.ts';
+import { kitHome, readConfiguration, readEnrolment, readHome, writeHome } from './home.ts';
+import { answerDocument, environmentTool } from './mcp.ts';
 
 interface Installed {
   version?: string;
   origin?: string;
+  digest?: string;
   names: string[];
 }
 
+type SkillFile = string | Buffer;
+
 interface Skill {
   name: string;
+  files: Readonly<Record<string, SkillFile>> | null;
   place(destination: string): Promise<void>;
+}
+
+interface Catalogued {
+  name: string;
+  own?: true;
+}
+
+interface Paged {
+  next_cursor?: string;
+}
+
+interface Catalogue extends Paged {
+  catalogue: Catalogued[];
+}
+
+interface Answered extends Paged {
+  skills: { files: Record<string, unknown>; attachments?: Record<string, string> }[];
 }
 
 const RECORD = 'skill-set.json';
@@ -46,9 +71,10 @@ function skillName(text: string): string | undefined {
   return typeof fields?.name === 'string' && typeof fields.description === 'string' ? fields.name : undefined;
 }
 
-function skillSet(origin: string): Skill[] {
+function houseSkills(origin: string): Map<string, Skill> {
   const upstream = listSkills().map(({ name, directory }) => ({
     name,
+    files: null,
     place: (destination: string) => cp(directory, destination, { recursive: true }),
   }));
   const pages = GUIDE.flatMap(({ text }) => {
@@ -58,14 +84,84 @@ function skillSet(origin: string): Skill[] {
       await mkdir(destination);
       await writeFile(join(destination, ENTRY), text.replaceAll(ORIGIN, origin));
     };
-    return [{ name, place }];
+    return [{ name, files: null, place }];
   });
-  return [...upstream, ...pages].sort((left, right) => (left.name < right.name ? -1 : 1));
+  return new Map([...upstream, ...pages].map((skill) => [skill.name, skill]));
 }
 
-async function install(origin: string): Promise<void> {
+function ownSkill(name: string, files: Readonly<Record<string, SkillFile>>): Skill {
+  const place = async (destination: string) => {
+    for (const [path, content] of Object.entries(files)) {
+      await mkdir(dirname(join(destination, path)), { recursive: true });
+      await writeFile(join(destination, path), content);
+    }
+  };
+  return { name, files, place };
+}
+
+async function paged<T extends Paged>(args: Record<string, unknown>): Promise<T[]> {
+  const pages: T[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = answerDocument<T>(await environmentTool('guide', { op: 'skill', ...args, ...(cursor === undefined ? {} : { cursor }) }));
+    pages.push(page);
+    cursor = page.next_cursor;
+  } while (cursor !== undefined);
+  return pages;
+}
+
+async function attached(name: string, path: string, download: string): Promise<Buffer> {
+  const answer = await fetched(download);
+  const chunks: Buffer[] = [];
+  for await (const chunk of answer.body) chunks.push(chunk as Buffer);
+  if (answer.status !== 200) throw new Error(`the download of ${name}/${path} answered ${answer.status}`);
+  return Buffer.concat(chunks);
+}
+
+async function ownFiles(name: string): Promise<Record<string, SkillFile>> {
+  const texts: Record<string, string> = {};
+  const downloads: Record<string, string> = {};
+  for (const page of await paged<Answered>({ names: [name] })) {
+    for (const skill of page.skills) {
+      for (const [path, text] of Object.entries(skill.files)) if (typeof text === 'string') texts[path] = (texts[path] ?? '') + text;
+      Object.assign(downloads, skill.attachments);
+    }
+  }
+  const files: Record<string, SkillFile> = texts;
+  for (const [path, download] of Object.entries(downloads)) files[path] = await attached(name, path, download);
+  return files;
+}
+
+async function wanted(setting: KitSkills, origin: string): Promise<Skill[]> {
+  if (setting !== 'all' && setting.length === 0) return [];
+  const catalogue = (await paged<Catalogue>({})).flatMap((page) => page.catalogue);
+  const chosen = setting === 'all' ? catalogue : catalogue.filter(({ name }) => setting.includes(name));
+  const own = new Map<string, Record<string, SkillFile>>();
+  for (const { name } of chosen.filter((skill) => skill.own === true)) own.set(name, await ownFiles(name));
+  const house = houseSkills(origin);
+  return chosen
+    .flatMap(({ name }) => {
+      const files = own.get(name);
+      const skill = files === undefined ? house.get(name) : ownSkill(name, files);
+      return skill === undefined ? [] : [skill];
+    })
+    .sort((left, right) => (left.name < right.name ? -1 : 1));
+}
+
+function held(files: Readonly<Record<string, SkillFile>>): Record<string, string | { sha256: string }> {
+  return Object.fromEntries(
+    Object.entries(files).map(([path, content]) => [path, typeof content === 'string' ? content : { sha256: createHash('sha256').update(content).digest('hex') }]),
+  );
+}
+
+function digestOf(origin: string, skills: readonly Skill[]): string {
+  const kept = skills.map(({ name, files }) => [name, files === null ? null : held(files)]);
+  return createHash('sha256').update(JSON.stringify([origin, kept])).digest('hex');
+}
+
+async function install(origin: string, skills: readonly Skill[], digest: string): Promise<void> {
   const placed: Skill[] = [];
-  for (const skill of skillSet(origin)) {
+  for (const skill of skills) {
     if (!(await present(join(skillsDirectory(), skill.name))) && !(await present(join(claudeDirectory(), skill.name)))) {
       placed.push(skill);
     }
@@ -74,31 +170,46 @@ async function install(origin: string): Promise<void> {
   await writeHome(RECORD, { names } satisfies Installed);
   await mkdir(skillsDirectory(), { recursive: true });
   await mkdir(claudeDirectory(), { recursive: true });
-  const skills = await realpath(skillsDirectory());
+  const shared = await realpath(skillsDirectory());
   const claude = await realpath(claudeDirectory());
   for (const { name, place } of placed) {
     await place(join(skillsDirectory(), name));
-    if (claude !== skills) await symlink(relative(claude, join(skills, name)), join(claudeDirectory(), name));
+    if (claude !== shared) await symlink(relative(claude, join(shared, name)), join(claudeDirectory(), name));
   }
-  await writeHome(RECORD, { version: KIT_RELEASE, origin, names } satisfies Installed);
+  await writeHome(RECORD, { version: KIT_RELEASE, origin, digest, names } satisfies Installed);
 }
 
-export async function placeSkillSet(origin: string): Promise<void> {
+async function replaced(): Promise<void> {
+  const enrolment = await readEnrolment();
+  if (enrolment === null) return;
+  const skills = await wanted((await readConfiguration()).skills, enrolment.house);
+  const digest = digestOf(enrolment.house, skills);
+  const installed = await readHome<Installed>(RECORD);
+  if (installed?.version === KIT_RELEASE && installed.digest === digest) return;
+  for (const name of installed?.names ?? []) {
+    await rm(join(claudeDirectory(), name), { recursive: true, force: true });
+    await rm(join(skillsDirectory(), name), { recursive: true, force: true });
+  }
+  if (skills.length > 0) await install(enrolment.house, skills, digest);
+  else await rm(join(kitHome(), RECORD), { force: true });
+}
+
+async function reported(): Promise<void> {
   try {
-    await replaceSkillSet(origin);
+    await replaced();
   } catch (error) {
     process.stderr.write(`kit: the skills could not be placed: ${(error as Error).message}\n`);
   }
 }
 
-async function replaceSkillSet(origin: string): Promise<void> {
-  const accepted = (await readConfiguration()).skills;
-  const installed = await readHome<Installed>(RECORD);
-  if (accepted && installed?.version === KIT_RELEASE && installed.origin === origin) return;
-  for (const name of installed?.names ?? []) {
-    await rm(join(claudeDirectory(), name), { recursive: true, force: true });
-    await rm(join(skillsDirectory(), name), { recursive: true, force: true });
-  }
-  if (accepted) await install(origin);
-  else await rm(join(kitHome(), RECORD), { force: true });
+let latest: Promise<void> = Promise.resolve();
+let queued: Promise<void> | null = null;
+
+export function placeSkills(): Promise<void> {
+  queued ??= latest.then(() => {
+    queued = null;
+    return reported();
+  });
+  latest = queued;
+  return queued;
 }

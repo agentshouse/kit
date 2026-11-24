@@ -182,7 +182,7 @@ async function counted(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): 
 
 async function onMac(): Promise<Hosting> {
   const home = await temporaryHome();
-  return { home, skills: false, environment: await macOS(home) };
+  return { home, skills: [], environment: await macOS(home) };
 }
 
 it.runIf(CONTROL_GROUP).each([

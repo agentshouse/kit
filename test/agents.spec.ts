@@ -131,7 +131,7 @@ it("reports the release of each CLI the login shell finds, its sign-in state, th
     kit_release: KIT_PACKAGE.version,
     wire: KIT_WIRE,
     agent_base: join(accountOf(home), 'house', 'agents'),
-    settings: { skills: true, workspace: join(accountOf(home), 'house') },
+    settings: { skills: 'all', workspace: join(accountOf(home), 'house') },
     agents: [
       {
         kind: 'codex-acp',
@@ -450,7 +450,7 @@ it('creates and reports the agents folder of the native workspace root as its Ag
   const report = await until(() => completeReports()[0]);
 
   expect(report.agent_base).toBe(join(workspace, 'agents'));
-  expect(report.settings).toEqual({ skills: false, workspace });
+  expect(report.settings).toEqual({ skills: [], workspace });
   expect((await stat(join(workspace, 'agents'))).isDirectory()).toBe(true);
 });
 

@@ -381,7 +381,7 @@ it.each([
 
   const hosted = await hostKit([{}], {
     home,
-    skills: false,
+    skills: [],
     node: ROOTED,
     environment: { HOME: dirname(home), KIT_TEST_ROOT: tools.root, HOUSE_KIT_PREFIX: '/kit-home/kit', HOUSE_KIT_HOME: home },
   });

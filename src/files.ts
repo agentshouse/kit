@@ -8,7 +8,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { parseDocument } from 'yaml';
 import { resendDelay, retryDelay } from './api.ts';
-import { Unsettled } from './mcp.ts';
+import { answerDocument, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { proxyUnlessRelayed, relayed } from './relay.ts';
 
@@ -113,9 +113,7 @@ interface InstructionsPart {
 }
 
 function instructionsPart(answer: string): InstructionsPart {
-  const document = parseDocument(answer);
-  if (document.errors.length > 0) throw new Error("House's answer could not be read");
-  return (document.toJS() ?? {}) as InstructionsPart;
+  return answerDocument<InstructionsPart | null>(answer) ?? {};
 }
 
 export async function instructionsText(info: (args: Record<string, unknown>) => Promise<string>, path: string): Promise<string> {

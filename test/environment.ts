@@ -1,4 +1,4 @@
-import { CONVERSATION_GIT_HEADER, type DesiredAgentRoute, type KitCall } from '@agentshouse/kit-wire';
+import { CONVERSATION_GIT_HEADER, type DesiredAgentRoute, type KitCall, type KitSkills } from '@agentshouse/kit-wire';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -199,8 +199,9 @@ export interface Hosting {
   environment?: Record<string, string>;
   node?: string[];
   home?: string;
-  skills?: boolean;
+  skills?: KitSkills;
   workspace?: string;
+  tools?: Record<string, ToolAnswer>;
   prepare?: (home: string) => Promise<void>;
   untilIdle?: boolean;
 }
@@ -273,7 +274,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     const held = JSON.parse(await readFile(join(home, 'kit.json'), 'utf8').catch(() => '{}')) as Record<string, unknown>;
     await writeFile(
       join(home, 'kit.json'),
-      JSON.stringify({ ...held, skills: hosting.skills ?? false, ...(hosting.workspace === undefined ? {} : { workspace: hosting.workspace }) }),
+      JSON.stringify({ ...held, skills: hosting.skills ?? [], ...(hosting.workspace === undefined ? {} : { workspace: hosting.workspace }) }),
     );
   }
   const resolved = routes.map((route, index): DesiredAgentRoute => ({
@@ -301,6 +302,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
     shell: () => shelled('', 1, ['cat: path_not_found /rooms/private/owner-rules.md']),
+    ...hosting.tools,
   };
   house.route('POST', '/', async (request) => {
     mcp.push(request);
@@ -469,7 +471,7 @@ export async function hostMac(
   routes: RouteOverrides[] = [{}],
 ): Promise<Hosted> {
   const home = await temporaryHome();
-  return hostKit(routes, { transcribe, home, skills: false, environment: { ...(await macOS(home)), KIT_TEST_ARCH: arch } });
+  return hostKit(routes, { transcribe, home, skills: [], environment: { ...(await macOS(home)), KIT_TEST_ARCH: arch } });
 }
 
 export function outcome(body: unknown): { text: string } | { failed: string } {

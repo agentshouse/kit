@@ -1,11 +1,15 @@
 import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listSkills } from '@agentshouse/skills';
 import { expect, it } from 'vitest';
+import { serveCatalogue } from './catalogue.ts';
 import { certificate, startHouse, until, type House } from './double.ts';
 import { LOGIN_SHELL } from './environment.ts';
 import { accountOf, runKit, stop, temporaryHome } from './kit.ts';
 import { LOGIN, logIn, loginLink, opener, serveLogin } from './login.ts';
+
+const SKILLS = listSkills().map(({ name }) => name);
 
 it('prints the link, opens it with the host opener, waits for the confirmation and stores the credential, reading nothing from standard input', async () => {
   const house = await startHouse();
@@ -87,6 +91,7 @@ it('ends with the cause and no credential when House refuses the exchange', asyn
 
 it('redeems a login code once with nothing but the code, stores the Kit credential alone and prints no link', async () => {
   const house = await startHouse();
+  serveCatalogue(house, SKILLS);
   const home = await temporaryHome();
   house.route('POST', '/kit/token', () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one' } }));
 
@@ -96,7 +101,7 @@ it('redeems a login code once with nothing but the code, stores the Kit credenti
 
   expect(await login.exited).toBe(0);
   expect(login.stdout()).toBe(`Environment environment-one is connected to ${house.origin}.\n`);
-  expect(house.requests.map((request) => [request.path, request.body])).toEqual([['/kit/token', { code: 'ahk_code_one' }]]);
+  expect(house.requests.filter((request) => request.path !== '/').map((request) => [request.path, request.body])).toEqual([['/kit/token', { code: 'ahk_code_one' }]]);
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,
     environment: 'environment-one',
@@ -177,6 +182,7 @@ it('logs in through the relay HOUSE_KIT_RELAY names and records none, so its res
   const relay = await startHouse(tls, `${prefix}/kit/stream`);
   const home = await temporaryHome();
   relay.route('POST', `${prefix}/kit/token`, () => ({ body: { credential: 'ahk_code_credential', environment: 'environment-one' } }));
+  serveCatalogue(relay, SKILLS, undefined, `${prefix}/`);
 
   const login = runKit(['login', '--house', house.origin, '--code', 'ahk_code_one'], {
     HOME: accountOf(home),
@@ -186,7 +192,7 @@ it('logs in through the relay HOUSE_KIT_RELAY names and records none, so its res
 
   expect(await login.exited).toBe(0);
   expect(house.requests).toEqual([]);
-  expect(relay.requests.map((request) => request.path)).toEqual([`${prefix}/kit/token`]);
+  expect([...new Set(relay.requests.map((request) => request.path))]).toEqual([`${prefix}/kit/token`, `${prefix}/`]);
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({
     house: house.origin,
     environment: 'environment-one',
@@ -196,7 +202,7 @@ it('logs in through the relay HOUSE_KIT_RELAY names and records none, so its res
   runKit(['resident'], { HOME: accountOf(home) });
 
   expect((await until(() => house.connections[0])).headers.authorization).toBe('Bearer ahk_code_credential');
-  expect(relay.requests.map((request) => request.path)).toEqual([`${prefix}/kit/token`]);
+  expect([...new Set(relay.requests.map((request) => request.path))]).toEqual([`${prefix}/kit/token`, `${prefix}/`]);
 });
 
 it('calls House directly from a Kit home an earlier Kit recorded a relay in, and through the relay only while HOUSE_KIT_RELAY names it', async () => {
@@ -514,12 +520,13 @@ it("asks for no own agent's credential, makes none, and never reads or sends one
   const home = await temporaryHome();
   await writeFile(join(home, 'own-agent.json'), JSON.stringify({ house: house.origin, user: 'user-one', credential: 'ahp_held' }));
   serveLogin(house, 'environment-one', 'ahk_first');
+  serveCatalogue(house, SKILLS);
 
   const { started, exit } = await logIn(house, home);
 
   expect(exit).toBe(0);
   expect(Object.keys(started).sort()).toEqual(['act', 'code_challenge']);
-  expect(house.requests.map((request) => request.path)).toEqual(['/kit', '/kit/token']);
+  expect([...new Set(house.requests.map((request) => request.path))]).toEqual(['/kit', '/kit/token', '/']);
   expect(JSON.stringify(house.requests.map((request) => [request.headers, request.body]))).not.toContain('ahp_held');
   expect(JSON.parse(await readFile(join(home, 'own-agent.json'), 'utf8'))).toEqual({ house: house.origin, user: 'user-one', credential: 'ahp_held' });
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toMatchObject({ credential: 'ahk_first' });
@@ -660,6 +667,7 @@ it.each([
 
 it('keeps the stored credential and names the cause when the stopped service does not start', async () => {
   const house = await startHouse();
+  serveCatalogue(house, SKILLS);
   const home = await temporaryHome();
   const refusing = SYSTEMD(false).replace('  start) ;;', "  start) echo 'Failed to start house-kit.service: Unit house-kit.service is masked.' >&2; exit 1 ;;");
   const { path } = await serviceManager(home, 'systemctl', refusing);
