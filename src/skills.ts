@@ -6,6 +6,7 @@ import type { KitSkills } from '@agentshouse/kit-wire';
 import { GUIDE, listSkills } from '@agentshouse/skills';
 import { parse } from 'yaml';
 import { KIT_RELEASE } from './clis.ts';
+import { fetched } from './files.ts';
 import { kitHome, readConfiguration, readEnrolment, readHome, writeHome } from './home.ts';
 import { answerDocument, environmentTool } from './mcp.ts';
 
@@ -16,9 +17,11 @@ interface Installed {
   names: string[];
 }
 
+type SkillFile = string | Buffer;
+
 interface Skill {
   name: string;
-  files: Readonly<Record<string, string>> | null;
+  files: Readonly<Record<string, SkillFile>> | null;
   place(destination: string): Promise<void>;
 }
 
@@ -36,7 +39,7 @@ interface Catalogue extends Paged {
 }
 
 interface Answered extends Paged {
-  skills: { files: Record<string, unknown> }[];
+  skills: { files: Record<string, unknown>; attachments?: Record<string, string> }[];
 }
 
 const RECORD = 'skill-set.json';
@@ -86,11 +89,11 @@ function houseSkills(origin: string): Map<string, Skill> {
   return new Map([...upstream, ...pages].map((skill) => [skill.name, skill]));
 }
 
-function ownSkill(name: string, files: Readonly<Record<string, string>>): Skill {
+function ownSkill(name: string, files: Readonly<Record<string, SkillFile>>): Skill {
   const place = async (destination: string) => {
-    for (const [path, text] of Object.entries(files)) {
+    for (const [path, content] of Object.entries(files)) {
       await mkdir(dirname(join(destination, path)), { recursive: true });
-      await writeFile(join(destination, path), text);
+      await writeFile(join(destination, path), content);
     }
   };
   return { name, files, place };
@@ -107,13 +110,25 @@ async function paged<T extends Paged>(args: Record<string, unknown>): Promise<T[
   return pages;
 }
 
-async function ownFiles(name: string): Promise<Record<string, string>> {
-  const files: Record<string, string> = {};
+async function attached(name: string, path: string, download: string): Promise<Buffer> {
+  const answer = await fetched(download);
+  const chunks: Buffer[] = [];
+  for await (const chunk of answer.body) chunks.push(chunk as Buffer);
+  if (answer.status !== 200) throw new Error(`the download of ${name}/${path} answered ${answer.status}`);
+  return Buffer.concat(chunks);
+}
+
+async function ownFiles(name: string): Promise<Record<string, SkillFile>> {
+  const texts: Record<string, string> = {};
+  const downloads: Record<string, string> = {};
   for (const page of await paged<Answered>({ names: [name] })) {
     for (const skill of page.skills) {
-      for (const [path, text] of Object.entries(skill.files)) if (typeof text === 'string') files[path] = (files[path] ?? '') + text;
+      for (const [path, text] of Object.entries(skill.files)) if (typeof text === 'string') texts[path] = (texts[path] ?? '') + text;
+      Object.assign(downloads, skill.attachments);
     }
   }
+  const files: Record<string, SkillFile> = texts;
+  for (const [path, download] of Object.entries(downloads)) files[path] = await attached(name, path, download);
   return files;
 }
 
@@ -121,7 +136,7 @@ async function wanted(setting: KitSkills, origin: string): Promise<Skill[]> {
   if (setting !== 'all' && setting.length === 0) return [];
   const catalogue = (await paged<Catalogue>({})).flatMap((page) => page.catalogue);
   const chosen = setting === 'all' ? catalogue : catalogue.filter(({ name }) => setting.includes(name));
-  const own = new Map<string, Record<string, string>>();
+  const own = new Map<string, Record<string, SkillFile>>();
   for (const { name } of chosen.filter((skill) => skill.own === true)) own.set(name, await ownFiles(name));
   const house = houseSkills(origin);
   return chosen
@@ -133,9 +148,15 @@ async function wanted(setting: KitSkills, origin: string): Promise<Skill[]> {
     .sort((left, right) => (left.name < right.name ? -1 : 1));
 }
 
+function held(files: Readonly<Record<string, SkillFile>>): Record<string, string | { sha256: string }> {
+  return Object.fromEntries(
+    Object.entries(files).map(([path, content]) => [path, typeof content === 'string' ? content : { sha256: createHash('sha256').update(content).digest('hex') }]),
+  );
+}
+
 function digestOf(origin: string, skills: readonly Skill[]): string {
-  const held = skills.map(({ name, files }) => [name, files]);
-  return createHash('sha256').update(JSON.stringify([origin, held])).digest('hex');
+  const kept = skills.map(({ name, files }) => [name, files === null ? null : held(files)]);
+  return createHash('sha256').update(JSON.stringify([origin, kept])).digest('hex');
 }
 
 async function install(origin: string, skills: readonly Skill[], digest: string): Promise<void> {

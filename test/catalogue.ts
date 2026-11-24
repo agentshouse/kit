@@ -2,7 +2,11 @@ import { stringify } from 'yaml';
 import type { House } from './double.ts';
 import type { ToolAnswer, ToolResult } from './environment.ts';
 
-export type OwnSkills = Record<string, Readonly<Record<string, string>>>;
+export interface Attached {
+  readonly download: () => string;
+}
+
+export type OwnSkills = Record<string, Readonly<Record<string, string | Attached>>>;
 
 const CATALOGUE_PAGE = 4;
 const CUT_CHARS = 1_000;
@@ -25,13 +29,23 @@ function continued(cuts: readonly Cut[], value: number, from: number): { next_cu
   return from < cuts[value]!.text.length ? { next_cursor: `${value}@${from}` } : continued(cuts, value + 1, CUT_CHARS);
 }
 
+function texts(files: Readonly<Record<string, string | Attached>>): Record<string, string> {
+  return Object.fromEntries(Object.entries(files).flatMap(([path, file]) => (typeof file === 'string' ? [[path, file]] : [])));
+}
+
+function attachments(files: Readonly<Record<string, string | Attached>>): { attachments?: Record<string, string> } {
+  const links = Object.entries(files).flatMap(([path, file]) => (typeof file === 'string' ? [] : [[path, file.download()]]));
+  return links.length === 0 ? {} : { attachments: Object.fromEntries(links) };
+}
+
 function ownAnswer(names: readonly string[], held: OwnSkills, cursor: string | undefined): ToolResult {
-  const skills = names.filter((name) => name in held).map((name) => ({ name, files: held[name]! }));
+  const skills = names.filter((name) => name in held).map((name) => ({ name, files: texts(held[name]!), folder: held[name]! }));
   const cuts = skills.flatMap(({ files }) => Object.entries(files).flatMap(([field, text]) => (text.length > CUT_CHARS ? [{ field, text }] : [])));
   if (cursor === undefined) {
-    const shown = skills.map(({ name, files }) => ({
+    const shown = skills.map(({ name, files, folder }) => ({
       name,
       files: Object.fromEntries(Object.entries(files).flatMap(([field, text]) => Object.entries({ [field]: text.slice(0, CUT_CHARS), ...cutOf(field, CUT_CHARS, text.length) }))),
+      ...attachments(folder),
     }));
     return answered({ skills: shown, ...continued(cuts, 0, CUT_CHARS) });
   }

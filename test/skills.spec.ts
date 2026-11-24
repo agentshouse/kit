@@ -10,6 +10,7 @@ import { settle, startHouse, until, type House } from './double.ts';
 import { hostKit, opened, type Hosted, type Hosting } from './environment.ts';
 import { accountOf, runKit, temporaryHome } from './kit.ts';
 import { logIn, serveLogin } from './login.ts';
+import { startStore } from './store.ts';
 
 const MANIFEST = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
@@ -221,15 +222,16 @@ it("installs for all exactly the names House's catalogue answers, page by page: 
 
 it("installs a User's own skill whole when House cuts its files across the pages of its answer, beside another one cut too", async () => {
   const long = (line: string) => Array.from({ length: 120 }, (_, index) => `${line} ${index}.\n`).join('');
-  own = {
+  const cut: Record<string, Record<string, string>> = {
     [OWN]: { 'SKILL.md': `${OWN_FILES['SKILL.md']}${long('Read the week')}`, 'steps/first.md': long('First') },
     'long-errand': { 'SKILL.md': `---\nname: long-errand\ndescription: Runs a long errand.\n---\n${long('Run the errand')}` },
   };
+  own = cut;
 
   const hosted = await host();
   await placed(hosted.home);
 
-  for (const [name, files] of Object.entries(own)) {
+  for (const [name, files] of Object.entries(cut)) {
     expect(await tree(skills(hosted.home, name))).toEqual(Object.keys(files).sort());
     for (const [path, text] of Object.entries(files)) {
       expect(text.length, `${name}/${path}`).toBeGreaterThan(1_000);
@@ -238,6 +240,41 @@ it("installs a User's own skill whole when House cuts its files across the pages
   }
   expect(guideCalls(hosted).filter((args) => args.names !== undefined && args.cursor !== undefined).length).toBeGreaterThan(2);
   expect(await recorded(hosted.home)).toEqual(record(hosted.house.origin, [...NAMES, OWN, 'long-errand'].sort()));
+});
+
+it("installs a User's own skill's attachment House answers by its download link byte for byte, and replaces it only once its bytes change, never for a new link alone", async () => {
+  const store = await startStore();
+  const icon = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00]);
+  const redrawn = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+  store.objects.set('attachments/icon', icon);
+  store.objects.set('attachments/icon-redrawn', redrawn);
+  own = { [OWN]: { ...OWN_FILES, 'assets/icon.png': { download: () => store.address('GET', 'attachments/icon') } } };
+  const hosted = await host();
+  const home = hosted.home;
+  await knowingPrivateRoom(hosted);
+  const first = await placed(home);
+  await until(() => catalogueReads(hosted) >= 2);
+  await settle();
+
+  expect(await tree(skills(home, OWN))).toEqual(['SKILL.md', 'assets/icon.png', 'steps/first.md']);
+  expect(await readFile(join(skills(home, OWN), 'assets/icon.png'))).toEqual(icon);
+
+  await writeFile(join(skills(home, OWN), 'steps/first.md'), 'edited\n');
+  const reads = catalogueReads(hosted);
+  notice(hosted);
+  await until(() => catalogueReads(hosted) > reads);
+  await settle();
+
+  expect(await readFile(join(skills(home, OWN), 'steps/first.md'), 'utf8')).toBe('edited\n');
+  expect(await recorded(home)).toEqual(first);
+
+  own = { [OWN]: { ...OWN_FILES, 'assets/icon.png': { download: () => store.address('GET', 'attachments/icon-redrawn') } } };
+  notice(hosted);
+  await placed(home, first.digest);
+
+  expect(await readFile(join(skills(home, OWN), 'assets/icon.png'))).toEqual(redrawn);
+  expect(await readFile(join(skills(home, OWN), 'steps/first.md'), 'utf8')).toBe(OWN_FILES['steps/first.md']);
+  expect(await recorded(home)).toEqual(record(hosted.house.origin, [...NAMES, OWN].sort()));
 });
 
 it("installs for a list only its names, House's from the package and a User's own by name, and none the catalogue does not hold", async () => {
