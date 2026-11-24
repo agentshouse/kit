@@ -326,7 +326,7 @@ class Conversation {
   uploading: Promise<void> = Promise.resolve();
   refused: { directory: string; answer: Answered } | null = null;
   judgment: Judgment = IDLE;
-  reported = JSON.stringify(IDLE);
+  reported: string | null = JSON.stringify(IDLE);
 
   constructor(id: string) {
     this.id = id;
@@ -440,7 +440,7 @@ export class Conversations {
         this.facts(conversation);
         this.stateChanged(conversation, true);
       } else if (conversation.exitUntold) this.process(conversation, false);
-      if (conversation.running !== null || conversation.leftovers.size > 0) this.judged(conversation, true);
+      if (conversation.running !== null || conversation.leftovers.size > 0 || conversation.reported === null) this.judged(conversation, true);
       if (conversation.untold || conversation.told !== null) this.retell(conversation);
     }
   }
@@ -1066,7 +1066,7 @@ export class Conversations {
     });
     const judgment = JSON.stringify(conversation.judgment);
     if (!again && judgment === conversation.reported) return;
-    conversation.reported = this.kit.send({ type: 'judgment', conversation_id: conversation.id, ...conversation.judgment }) ? judgment : '';
+    conversation.reported = this.kit.send({ type: 'judgment', conversation_id: conversation.id, ...conversation.judgment }) ? judgment : null;
   }
 
   private process(conversation: Conversation, running: boolean): void {

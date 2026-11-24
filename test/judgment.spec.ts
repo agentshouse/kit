@@ -143,3 +143,25 @@ it("reports each running process's judgment again on a Kit connection that reope
   await settle();
   expect(judgments(reopened)).toEqual([IDLE]);
 });
+
+it('tells a reopened Kit connection the judgment a closed one did not take, after the process and what it left ended', async () => {
+  const hosted = await opened();
+  await said(hosted, '@spawn\n@exit 1');
+  await judging(hosted, WORKING);
+  const upgrades = () => hosted.house.requests.filter((request) => request.method === 'UPGRADE').length;
+  const before = upgrades();
+  const admit = hosted.house.holdConnections();
+
+  hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
+  await until(() => upgrades() > before);
+  stop(await logged(hosted, 'clean'));
+  stop(await logged(hosted, 'spawned'));
+  await settle();
+  expect(judgments(hosted.connection).at(-1)).toEqual(WORKING);
+  admit();
+
+  const reopened = await until(() => hosted.house.connections[1]);
+  await until(() => judgments(reopened)[0]);
+  await settle();
+  expect(judgments(reopened)).toEqual([IDLE]);
+});
