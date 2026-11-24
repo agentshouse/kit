@@ -11,7 +11,7 @@ import { received } from './bridge.ts';
 import { Conversations } from './conversations.ts';
 import { DEFAULT_MAX_SIZE, LocalCopies, type Answered } from './copies.ts';
 import { restart, restartPlaced } from './end.ts';
-import { agentBase, enrolled, forgetRecordedRelay, kitHome, ownerSocket, readEnrolment, recordPlannedRestart, roomsFolder, takePlannedRestart } from './home.ts';
+import { agentBase, enrolled, forgetRecordedRelay, kitHome, ownerSocket, recordPlannedRestart, roomsFolder, takePlannedRestart } from './home.ts';
 import { Calls } from './calls.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { moveEarlier } from './earlier.ts';
@@ -23,7 +23,7 @@ import { removeInputs, Scripts } from './scripts.ts';
 import { applySettings, enrolledRoutes, launchDirectories, moveIntoHouse, resumeWorkspaceMove, type Applied, type SettingsChange } from './settings.ts';
 import { quoted } from './shell.ts';
 import { SignIns } from './sign-in.ts';
-import { placeSkillSet } from './skills.ts';
+import { placeSkills } from './skills.ts';
 import { holdConnection, type Connection } from './connection.ts';
 import { KitUpdate } from './update.ts';
 import { takeUnservedRelease } from './wire.ts';
@@ -100,7 +100,6 @@ function connected(): Promise<void> {
 
 async function started(): Promise<void> {
   await connected();
-  await placeSkillSet((await readEnrolment())!.house);
   await mkdir(agentBase(), { recursive: true, mode: 0o700 });
   await mkdir(roomsFolder(), { recursive: true, mode: 0o700 });
   await rm(join(kitHome(), 'shim'), { recursive: true, force: true });
@@ -232,6 +231,7 @@ export async function resident(): Promise<void> {
       scripts.connected();
       changed();
       logged(copies.connected((directory) => conversations.turnsIn(directory)));
+      void placeSkills();
     },
     closed: () => scripts.disconnected(),
     call: (call) => {
@@ -252,7 +252,10 @@ export async function resident(): Promise<void> {
     oneWayCall: (oneWayCall) => {
       if (oneWayCall.type === 'watching') conversations.watching(oneWayCall.watching);
       if (oneWayCall.type === 'work_available' && oneWayCall.subject === 'agents') logged(agents.refresh());
-      if (oneWayCall.type === 'work_available' && oneWayCall.subject === 'rooms') logged(copies.noticed(oneWayCall.room_ref));
+      if (oneWayCall.type === 'work_available' && oneWayCall.subject === 'rooms') {
+        if (copies.isPrivate(oneWayCall.room_ref)) void placeSkills();
+        logged(copies.noticed(oneWayCall.room_ref));
+      }
       scripts.notified(oneWayCall);
     },
   });

@@ -3,6 +3,7 @@ import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, re
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { KitSkills } from '@agentshouse/kit-wire';
 
 export interface Enrolment {
   house: string;
@@ -11,9 +12,11 @@ export interface Enrolment {
 }
 
 export interface Configuration {
-  skills: boolean;
+  skills: KitSkills;
   workspace: string;
 }
+
+type Stored = Partial<Omit<Configuration, 'skills'>> & { skills?: KitSkills | boolean } & Record<string, unknown>;
 
 const ENROLMENT = 'credential.json';
 const DISCONNECTED = 'disconnected.json';
@@ -215,18 +218,23 @@ function configuredWorkspace(): string | undefined {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  return parsed<Partial<Configuration>>(CONFIGURATION, text).workspace;
+  return parsed<Stored>(CONFIGURATION, text).workspace;
+}
+
+function skillsOf(stored: KitSkills | boolean | undefined): KitSkills {
+  if (stored === false) return [];
+  return stored === undefined || stored === true ? 'all' : stored;
 }
 
 export async function readConfiguration(): Promise<Configuration> {
-  const stored = await readHome<Partial<Configuration>>(CONFIGURATION);
-  return { skills: stored?.skills !== false, workspace: stored?.workspace ?? houseFolder() };
+  const stored = await readHome<Stored>(CONFIGURATION);
+  return { skills: skillsOf(stored?.skills), workspace: stored?.workspace ?? houseFolder() };
 }
 
-export async function storedConfiguration(): Promise<Partial<Configuration> & Record<string, unknown>> {
-  return (await readHome<Partial<Configuration> & Record<string, unknown>>(CONFIGURATION)) ?? {};
+export async function storedConfiguration(): Promise<Stored> {
+  return (await readHome<Stored>(CONFIGURATION)) ?? {};
 }
 
-export function writeConfiguration(configuration: Partial<Configuration> & Record<string, unknown>): Promise<void> {
+export function writeConfiguration(configuration: Stored): Promise<void> {
   return writeHome(CONFIGURATION, configuration);
 }

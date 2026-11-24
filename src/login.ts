@@ -16,7 +16,7 @@ import { writeCodexRule } from './clis.ts';
 import { forgetDisconnected, readDisconnected, readEnrolment, writeEnrolment } from './home.ts';
 import { refusalOf } from './refusals.ts';
 import { startService } from './supervisor.ts';
-import { placeSkillSet } from './skills.ts';
+import { placeSkills } from './skills.ts';
 
 export const DEFAULT_HOUSE = 'https://agents.house';
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -100,7 +100,7 @@ export async function login(argv: string[]): Promise<void> {
 }
 
 export async function placeConnection(house: string): Promise<void> {
-  await placeSkillSet(house);
+  await placeSkills();
   await writeCodexRule().catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
   await placeAppGit(house).catch((error: Error) => process.stderr.write(`kit: ${error.message}\n`));
 }

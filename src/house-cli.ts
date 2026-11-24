@@ -327,7 +327,7 @@ function counted(usage: string, about: string, operands: number, args: string[],
 
 const LOGOUT = 'disconnects this computer and stops the Kit process';
 const RESIDENT = "keeps this Environment connected; Kit's service runs it";
-const SETTINGS = "prints Kit's settings, or changes whether Kit places House's Skills or where its workspace is";
+const SETTINGS = "prints Kit's settings, or changes which skills Kit installs or where its workspace is";
 const GIT_CREDENTIAL = "answers git with this computer's House credential; git runs it";
 const KIT_VERBS = new Map<string, KitVerb>([
   [
@@ -369,7 +369,7 @@ const KIT_VERBS = new Map<string, KitVerb>([
       connection: true,
       run: async (args) => {
         const { kitSettings, SETTINGS_USAGE } = await import('./settings.ts');
-        return counted(SETTINGS_USAGE, SETTINGS, 2, args, kitSettings);
+        return counted(SETTINGS_USAGE, SETTINGS, Number.POSITIVE_INFINITY, args, kitSettings);
       },
     },
   ],

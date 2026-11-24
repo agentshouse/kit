@@ -50,7 +50,7 @@ it("reaches House under the Kit credential naming each process's own conversatio
 it.each([60, 120])("opens a conversation and answers its house calls under a Kit home %i characters deeper than a temporary directory", async (deeper) => {
   const home = join(await temporaryDirectory(), 'k'.repeat(deeper), '.agents', 'house');
   await mkdir(home, { recursive: true });
-  const hosted = await hostKit([{}], { home, skills: false });
+  const hosted = await hostKit([{}], { home, skills: [] });
 
   hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1' });
 
@@ -74,7 +74,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       'logout: disconnects this computer and stops the Kit process',
       "connect: connects this computer, keeping the Environment it has, and starts Kit's service; the install runs it",
       "resident: keeps this Environment connected; Kit's service runs it",
-      "settings: prints Kit's settings, or changes whether Kit places House's Skills or where its workspace is",
+      "settings: prints Kit's settings, or changes which skills Kit installs or where its workspace is",
       "git-credential: answers git with this computer's House credential; git runs it",
       "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder",
       "download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload; a copy holds the Room's documents and only the attachments asked for there, a conversation's copy linking each one already on this computer, and a download brings no attachment nobody asked for: one another writer changed it links where this computer holds it, or else removes its unchanged file and names it as left on House; --with-attachments brings each attachment the copy lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file",

@@ -1,6 +1,7 @@
 import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
-import { agentInstructions } from '@agentshouse/skills';
+import { agentInstructions, listSkills } from '@agentshouse/skills';
 import { expect, it } from 'vitest';
+import { catalogue } from './catalogue.ts';
 import { until } from './double.ts';
 import { hostKit, lastCall, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
 import { alive } from './kit.ts';
@@ -23,6 +24,8 @@ function refused(code: string): ToolResult {
 
 const LINES = agentInstructions();
 
+const SKILLS = listSkills().map(({ name }) => name);
+
 function blockOf(prompt: Prompt): string[] {
   expect(prompt).toHaveLength(2);
   expect(prompt[1]).toEqual({ type: 'text', text: 'hello' });
@@ -31,7 +34,7 @@ function blockOf(prompt: Prompt): string[] {
 
 it("begins a first message with the package's Agent instructions, the base instructions and the Owner rules read over the conversation's bridge, the same for every CLI, writing no Owner rules with the Skill set installed and naming no `conversation` action", async () => {
   const kinds = ['codex-acp', 'claude-agent-acp', 'grok-build'];
-  const hosted = await hostKit(kinds.map((kind) => ({ kind })), { skills: true });
+  const hosted = await hostKit(kinds.map((kind) => ({ kind })), { skills: 'all', tools: { guide: catalogue(SKILLS) } });
   hosted.tools.shell = () => shelled(DOCUMENT);
 
   for (const [index] of kinds.entries()) {
@@ -51,6 +54,7 @@ it("begins a first message with the package's Agent instructions, the base instr
   for (const prompt of sent) expect(prompt).toEqual(sent[0]);
   expect(
     hosted.mcp
+      .filter((received) => (received.body as McpCall).params.name !== 'guide')
       .map((received) => [received.headers.authorization, (received.body as McpCall).params._meta[CONVERSATION_META_KEY], (received.body as McpCall).params.arguments])
       .sort(),
   ).toEqual(kinds.map((_, index) => ['Bearer ahk_held', `conversation-${index + 1}`, { command: READ }]));

@@ -813,6 +813,10 @@ export class LocalCopies {
     return this.selected(null);
   }
 
+  isPrivate(room: string): boolean {
+    return room === this.privateRoom;
+  }
+
   noticed(room: string): Promise<void> {
     this.owe(room);
     return this.selected(room);

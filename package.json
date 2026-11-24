@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "2.4.0",
-    "@agentshouse/kit-wire": "0.1.0-c4f3103ce7ed7",
+    "@agentshouse/kit-wire": "0.1.0-c6aa6a52762ba",
     "@agentshouse/session-content": "0.1.0-cb1d9675e6ef8",
     "@agentshouse/skills": "0.1.0-c97bb129df787",
     "@lydell/node-pty": "1.2.0-beta.15",

@@ -54,7 +54,7 @@ it("names house in a Linux home's unit and Git helper that named kit and deletes
   const unit = join(accountOf(home), '.config', 'systemd', 'user', 'house-kit.service');
   const hosted = await hostKit([], {
     home,
-    skills: false,
+    skills: [],
     node: ROOTED,
     environment: { ...tools.environment, PATH: `${join(tools.fake, 'bin')}:${join(home, 'bin')}:${process.env.PATH}`, XDG_CONFIG_HOME: join(accountOf(home), '.config'), ...STARTED_AS_KIT },
     prepare: async () => {
@@ -85,7 +85,7 @@ it('removes the kit links its installer placed in /usr/local/bin and ~/.local/bi
 
   const hosted = await hostKit([], {
     home,
-    skills: false,
+    skills: [],
     node: ROOTED,
     environment: { ...tools.environment, PATH: `${join(tools.fake, 'bin')}:${join(home, 'bin')}:${process.env.PATH}` },
     prepare: async () => {
@@ -129,7 +129,7 @@ it("names house in a Mac's LaunchAgent and Git helper that named kit at its firs
   await folded(home);
   await lstat(join(home, 'bin', 'kit'));
 
-  const hosted = await hostKit([], { home, skills: false, environment });
+  const hosted = await hostKit([], { home, skills: [], environment });
 
   expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
   await absent(join(home, 'bin', 'kit'));
@@ -139,7 +139,7 @@ it("names house in a Mac's LaunchAgent and Git helper that named kit at its firs
 it("keeps a Sandbox's resident running through the release when its loop still runs kit resident", async () => {
   const home = await temporaryHome();
 
-  const hosted = await hostKit([], { home, skills: false, environment: { HOUSE_KIT_SANDBOX: '1', ...STARTED_AS_KIT }, prepare: () => namingKit(home) });
+  const hosted = await hostKit([], { home, skills: [], environment: { HOUSE_KIT_SANDBOX: '1', ...STARTED_AS_KIT }, prepare: () => namingKit(home) });
 
   expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
   await folded(home);
@@ -160,7 +160,7 @@ it("says in one line to run house resident where its owner's own service manager
   await folded(home);
   await lstat(join(home, 'bin', 'kit'));
 
-  const hosted = await hostKit([], { home, skills: false });
+  const hosted = await hostKit([], { home, skills: [] });
 
   expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
   await absent(join(home, 'bin', 'kit'));
@@ -185,7 +185,7 @@ it("ends before it connects while the step fails, naming why and keeping kit, an
   await lstat(join(home, 'bin', 'kit'));
 
   await rm(locked);
-  const hosted = await hostKit([], { home, skills: false });
+  const hosted = await hostKit([], { home, skills: [] });
 
   expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
   await folded(home);

@@ -1,10 +1,21 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { listSkills } from '@agentshouse/skills';
 import { expect, it } from 'vitest';
+import { serveCatalogue } from './catalogue.ts';
 import { startHouse, type House } from './double.ts';
 import { accountOf, runKit, temporaryHome } from './kit.ts';
 import { REDEEMED, redeems, serveLogin } from './login.ts';
 import { DARWIN, ROOTED, supervision, type Supervision } from './supervision.ts';
+
+async function servingHouse(): Promise<House> {
+  const house = await startHouse();
+  serveCatalogue(
+    house,
+    listSkills().map(({ name }) => name),
+  );
+  return house;
+}
 
 function accepts(house: House, credential: string): void {
   house.route('POST', '/kit/agents/desired/list', ({ headers }) =>
@@ -28,8 +39,8 @@ function managed(tools: Supervision): string[] {
   return tools.calls('systemctl').filter((call) => !/is-(active|enabled)|show-environment/.test(call));
 }
 
-it('connects a fresh Linux account with a login code, writes the absent settings, places the Skill set and runs Kit under one lingering user unit', async () => {
-  const house = await startHouse();
+it('connects a fresh Linux account with a login code, writes the absent settings, skills at all, installs them and runs Kit under one lingering user unit', async () => {
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -40,7 +51,7 @@ it('connects a fresh Linux account with a login code, writes the absent settings
   expect(ran).toMatchObject({ status: 0, stderr: '' });
   expect(ran.stdout.split('\n').at(-2)).toBe('Kit connected for Environment environment-one.');
   expect(JSON.parse(await readFile(join(home, 'credential.json'), 'utf8'))).toEqual({ house: house.origin, environment: 'environment-one', credential: 'ahk_code_credential' });
-  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: true, workspace: join(accountOf(home), 'house') });
+  expect(JSON.parse(await readFile(join(home, 'kit.json'), 'utf8'))).toEqual({ skills: 'all', workspace: join(accountOf(home), 'house') });
   expect(JSON.parse(await readFile(join(home, 'skill-set.json'), 'utf8'))).toMatchObject({ origin: house.origin });
   expect((await unit(home)).split('\n')).toEqual([
     '[Unit]',
@@ -63,7 +74,7 @@ it('connects a fresh Linux account with a login code, writes the absent settings
 });
 
 it('keeps the credential House accepts on a rerun, leaves its login code unused and changes nothing of a running Kit', async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -89,7 +100,7 @@ it('keeps the credential House accepts on a rerun, leaves its login code unused 
 });
 
 it("confirms through house login's link when it carries no login code", async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -103,7 +114,7 @@ it("confirms through house login's link when it carries no login code", async ()
 });
 
 it("stops in one line, writing nothing, where ~/house holds what is not Kit's", async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -124,7 +135,7 @@ it("stops in one line, writing nothing, where ~/house holds what is not Kit's", 
 });
 
 it('keeps the settings kit.json holds and places no Skill set its person declined', async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -139,8 +150,8 @@ it('keeps the settings kit.json holds and places no Skill set its person decline
 });
 
 it("refuses an install naming another Building on an account whose Kit serves one, changing nothing, and connects there after house logout", async () => {
-  const first = await startHouse();
-  const second = await startHouse();
+  const first = await servingHouse();
+  const second = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -169,7 +180,7 @@ it("refuses an install naming another Building on an account whose Kit serves on
 });
 
 it('redeems the login code a run carries when House refuses the stored credential', async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -185,7 +196,7 @@ it('redeems the login code a run carries when House refuses the stored credentia
 });
 
 it('keeps the stored credential and leaves the login code unused when House does not answer', async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -203,7 +214,7 @@ it('keeps the stored credential and leaves the login code unused when House does
 });
 
 it('stops with the refusal, changing nothing and leaving the login code unused, when its check is refused but not as unauthenticated', async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -222,7 +233,7 @@ it('stops with the refusal, changing nothing and leaving the login code unused, 
 });
 
 it('starts nothing on a Linux without systemd and names the house resident command to supervise', async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   redeems(house);
@@ -238,7 +249,7 @@ it('starts nothing on a Linux without systemd and names the house resident comma
 });
 
 it("runs root's Kit under root's own lingering user unit, starting root's service manager", async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -253,7 +264,7 @@ it("runs root's Kit under root's own lingering user unit, starting root's servic
 });
 
 it('stops with the error when lingering cannot be turned on, starting nothing for the session alone', async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -268,7 +279,7 @@ it('stops with the error when lingering cannot be turned on, starting nothing fo
 });
 
 it("waits for the account's service manager that lingering starts a moment later before it starts Kit, as in a WSL terminal holding no login session", async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -283,7 +294,7 @@ it("waits for the account's service manager that lingering starts a moment later
 });
 
 it("refuses naming the repair when the account's service manager never starts, starting nothing", async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   await tools.systemd();
@@ -298,7 +309,7 @@ it("refuses naming the repair when the account's service manager never starts, s
 });
 
 it("runs a Mac's Kit as one LaunchAgent naming the one folder's launcher and no Kit variable", async () => {
-  const house = await startHouse();
+  const house = await servingHouse();
   const home = await temporaryHome();
   const tools = await supervision();
   redeems(house);

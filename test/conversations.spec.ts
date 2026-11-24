@@ -280,7 +280,7 @@ it("creates an absent default launch directory beneath the workspace's agents be
   const agentId = `agent-${randomUUID()}`;
   const home = await temporaryHome();
   const directory = join(accountOf(home), 'house', 'agents', agentId);
-  const hosted = await hostKit([{ agent_id: agentId, working_directory: directory }], { home, skills: false });
+  const hosted = await hostKit([{ agent_id: agentId, working_directory: directory }], { home, skills: [] });
 
   hosted.call({ kind: 'open', agent_id: agentId });
 

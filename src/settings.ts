@@ -1,4 +1,4 @@
-import type { DesiredAgentRoute, KitSettings } from '@agentshouse/kit-wire';
+import type { DesiredAgentRoute, KitSettings, KitSkills } from '@agentshouse/kit-wire';
 import { constants } from 'node:fs';
 import { access, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -13,7 +13,6 @@ import {
   readDisconnected,
   oneFolder,
   readConfiguration,
-  readEnrolment,
   readHome,
   storedConfiguration,
   workspaceRoot,
@@ -21,11 +20,11 @@ import {
   writeHome,
 } from './home.ts';
 import { askOwner, holdOwner } from './owner.ts';
-import { placeSkillSet } from './skills.ts';
+import { placeSkills } from './skills.ts';
 import { followRoot, merged, present, within, type Placement } from './workspace.ts';
 
 export interface SettingsChange {
-  skills?: boolean;
+  skills?: KitSkills;
   workspace?: string;
 }
 
@@ -50,7 +49,7 @@ const MOVE = 'workspace-move.json';
 const WORKING = 'an Agent is working; change the workspace once its turn ends';
 const UNCHOSEN = "Kit is logged out, so it cannot tell which Agents' folders their owners chose";
 const LOGGED_OUT = `${UNCHOSEN}; run house login, then change its workspace`;
-export const SETTINGS_USAGE = 'usage: house settings [skills on|off | workspace <absolute path>]';
+export const SETTINGS_USAGE = 'usage: house settings [skills all|<name>... | workspace <absolute path>]';
 export async function enrolledRoutes(): Promise<readonly DesiredAgentRoute[] | null> {
   if (enrolled()) return (await house.act('agents/desired/list', {})).routes;
   return (await readDisconnected()) === null ? [] : null;
@@ -207,11 +206,9 @@ export async function moveIntoHouse(copies: LocalCopies): Promise<string | null>
   return `the workspace could not be moved to ${to}: ${failure}; it stays at ${from} and its supervisor starts Kit again`;
 }
 
-async function changeSkills(on: boolean): Promise<void> {
-  const stored = await storedConfiguration();
-  await writeConfiguration({ ...stored, skills: on });
-  const enrolment = await readEnrolment();
-  if (enrolment !== null) await placeSkillSet(enrolment.house);
+async function changeSkills(skills: KitSkills): Promise<void> {
+  await writeConfiguration({ ...(await storedConfiguration()), skills });
+  await placeSkills();
 }
 
 export async function applySettings(change: SettingsChange, kit: Working): Promise<Applied> {
@@ -243,11 +240,15 @@ export async function applySettings(change: SettingsChange, kit: Working): Promi
 }
 
 function changeOf(operands: string[]): SettingsChange | null {
-  const [name, value, ...rest] = operands;
+  const [name, ...values] = operands;
   if (name === undefined) return null;
-  if (rest.length === 0 && name === 'skills' && (value === 'on' || value === 'off')) return { skills: value === 'on' };
-  if (rest.length === 0 && name === 'workspace' && value !== undefined) return { workspace: value };
+  if (name === 'skills') return { skills: values.length === 1 && values[0] === 'all' ? 'all' : [...new Set(values)] };
+  if (name === 'workspace' && values.length === 1) return { workspace: values[0] };
   throw new Error(SETTINGS_USAGE);
+}
+
+function skillsLine(skills: KitSkills): string {
+  return skills === 'all' ? 'skills all' : ['skills', ...skills].join(' ');
 }
 
 async function appliedHere(change: SettingsChange): Promise<Applied> {
@@ -268,5 +269,5 @@ export async function kitSettings(operands: string[]): Promise<void> {
   const answer: Applied =
     change === null ? { settings: await heldSettings(), moved: false } : ((await askOwner<Applied>('/settings', change)) ?? (await appliedHere(change)));
   if ('refused' in answer) throw new Error(answer.refused);
-  process.stdout.write(`skills ${answer.settings.skills ? 'on' : 'off'}\nworkspace ${answer.settings.workspace}\n`);
+  process.stdout.write(`${skillsLine(answer.settings.skills)}\nworkspace ${answer.settings.workspace}\n`);
 }

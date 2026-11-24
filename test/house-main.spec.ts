@@ -30,7 +30,7 @@ const KIT_VERBS = [
   'logout: disconnects this computer and stops the Kit process',
   "connect: connects this computer, keeping the Environment it has, and starts Kit's service; the install runs it",
   "resident: keeps this Environment connected; Kit's service runs it",
-  "settings: prints Kit's settings, or changes whether Kit places House's Skills or where its workspace is",
+  "settings: prints Kit's settings, or changes which skills Kit installs or where its workspace is",
   "git-credential: answers git with this computer's House credential; git runs it",
 ];
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
@@ -566,7 +566,7 @@ it("runs a Kit verb where House lists a Tool of its name", async () => {
 
   const ran = await runHouse(home, ['settings']);
 
-  expect(ran).toEqual({ status: 0, stdout: 'skills off\nworkspace /srv/house\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'skills\nworkspace /srv/house\n', stderr: '' });
   expect(house.requests).toEqual([]);
 });
 

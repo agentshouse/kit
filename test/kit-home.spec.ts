@@ -2,7 +2,9 @@ import { spawn } from 'node:child_process';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listSkills } from '@agentshouse/skills';
 import { expect, it } from 'vitest';
+import { catalogue, serveCatalogue } from './catalogue.ts';
 import { settle, startHouse, until } from './double.ts';
 import { hostKit } from './environment.ts';
 import { accountOf, runKit, temporaryHome } from './kit.ts';
@@ -52,8 +54,9 @@ it('reconnects the Environment an earlier Kit recorded when it was disconnected'
   expect(started).toMatchObject({ act: 'existing_environment', environment_id: 'environment-one' });
 });
 
-it('places no Skill set when the configuration an earlier Kit wrote declines it, and places it when none is written', async () => {
+it('places no skill when the configuration an earlier Kit wrote declines the Skill set, and places all when none is written', async () => {
   const house = await startHouse();
+  serveCatalogue(house, listSkills().map(({ name }) => name));
   const declined = await temporaryHome();
   await writeFile(join(declined, 'kit.json'), '{"skills":false}\n');
   const unwritten = await temporaryHome();
@@ -105,13 +108,15 @@ it.each([
   ['before it placed one', '{"names":["retired"]}\n'],
 ])('replaces the skills the Skill set record an earlier Kit wrote %s names', async (_, record) => {
   const hosted = await hostKit([{}], {
-    skills: true,
+    skills: 'all',
+    tools: { guide: catalogue(listSkills().map(({ name }) => name)) },
     prepare: async (home) => {
       await writeFile(join(home, 'skill-set.json'), record);
       await mkdir(join(accountOf(home), '.agents', 'skills', 'retired'), { recursive: true });
     },
   });
 
+  await until(async () => (JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8')) as { digest?: string }).digest);
   await absent(join(accountOf(hosted.home), '.agents', 'skills', 'retired'));
   expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ version: KIT_RELEASE, origin: hosted.house.origin });
 });
