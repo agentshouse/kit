@@ -263,6 +263,10 @@ function marker(bridge: Bridge): string {
   return `HOUSE_BRIDGE=${bridge.env.HOUSE_BRIDGE}`;
 }
 
+function compactCommand(kind: string, text: string): string {
+  return CLIS[kind]!.compactWords ? text : text.split(' ', 1)[0]!;
+}
+
 function steers(adapter: Adapter): boolean {
   return (adapter.initialized._meta?.steering as { supported?: unknown } | undefined)?.supported === true;
 }
@@ -590,16 +594,15 @@ export class Conversations {
   }
 
   private async message(conversation: Conversation, call: Said): Promise<{ result: Promise<KitCallResult> }> {
-    const content: ContentBlock[] = [
-      ...(call.recent === undefined ? [] : [{ type: 'text' as const, text: call.recent }]),
-      { type: 'text', text: call.text },
-    ];
+    const content: ContentBlock[] = call.recent === undefined ? [] : [{ type: 'text', text: call.recent }];
     let route: DesiredAgentRoute;
     let instructing: Promise<string> | null = null;
     try {
       route = conversationRoute(await this.route(conversation, call.agent_id), call);
+      const text = call.compact === true ? compactCommand(route.kind, call.text) : call.text;
+      content.push({ type: 'text', text });
       if (call.first === true) instructing = this.instructed(conversation, route);
-      if (call.message_id !== null) content.push(...(await this.transcribed(conversation, call.message_id, call.text)));
+      if (call.message_id !== null) content.push(...(await this.transcribed(conversation, call.message_id, text)));
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
       this.closeIdleBridge(conversation);
