@@ -5,11 +5,11 @@ import { fileURLToPath } from 'node:url';
 import type { Scope } from './scope.ts';
 import type { Work } from './work.ts';
 
-export type Judgment = Omit<KitOneWayCallOf<'judgment'>, 'type' | 'conversation_id'>;
+export type Activity = Omit<KitOneWayCallOf<'activity'>, 'type' | 'conversation_id'>;
 
-export const IDLE: Judgment = { turn: 'ended', secret: false, background: false };
+export const IDLE: Activity = { turn: 'ended', secret: false, background: false };
 
-export interface Judged {
+export interface Observed {
   turns: number;
   asking: { secret: boolean } | null;
   running: { work: Work; scope: Scope } | null;
@@ -28,7 +28,7 @@ function waitsOnRuns(command: string): boolean {
   }
 }
 
-function background({ running, leftovers }: Judged, turn: Judgment['turn']): Judgment['background'] {
+function background({ running, leftovers }: Observed, turn: Activity['turn']): Activity['background'] {
   if (turn === 'running') return true;
   if ([...leftovers].some((scope) => scope.working())) return true;
   if (running === null) return false;
@@ -38,16 +38,16 @@ function background({ running, leftovers }: Judged, turn: Judgment['turn']): Jud
   return running.scope.waiting(waitsOnRuns) ? 'runs' : true;
 }
 
-export function judged(process: Judged): Judgment {
+export function activityOf(process: Observed): Activity {
   const asking = process.turns === 1 ? process.asking : null;
   const turn = process.turns === 0 ? 'ended' : asking !== null ? 'asking' : 'running';
   return { turn, secret: asking?.secret ?? false, background: background(process, turn) };
 }
 
-export function idle(judgment: Judgment): boolean {
-  return judgment.turn === 'ended' && judgment.background === false;
+export function idle(activity: Activity): boolean {
+  return activity.turn === 'ended' && activity.background === false;
 }
 
-export function stoppable(judgment: Judgment): boolean {
-  return judgment.background === false && (judgment.turn === 'ended' || (judgment.turn === 'asking' && !judgment.secret));
+export function stoppable(activity: Activity): boolean {
+  return activity.background === false && (activity.turn === 'ended' || (activity.turn === 'asking' && !activity.secret));
 }
