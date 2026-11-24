@@ -207,3 +207,25 @@ it("answers the CLI House's own words for an upload refusal it does not mark ret
   expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
   expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
 });
+
+it("writes the Room's current instructions back into a conversation's upload House keeps as a proposal, and prints the proposal that waits in its person's Asks you", async () => {
+  const { hosted, rooms, room } = await copied();
+  room.put('settings/instructions.md', 'Keep notes short.\n');
+  room.proposing = { base_version: 1, waits_on: 'Ada' };
+  await rooms.download([room]);
+  const current = room.revision('settings/instructions.md');
+
+  const proposed = await shell(hosted, `cd ${room.repository} && echo 'Date every note.' >> settings/instructions.md && house upload && house upload`);
+
+  expect(proposed).toMatchObject({
+    status: 0,
+    stdout:
+      "House accepted 0 files of /rooms/notes.\n/rooms/notes/settings/instructions.md: House keeps your change as a proposal, which waits for Ada to answer it in their Asks you; this copy holds the Room's current instructions again\nNothing to upload: /rooms/notes matches House.\n",
+  });
+  expect(rooms.edits().map(changesOf)).toEqual([
+    [{ op: 'write', path: '/rooms/notes/settings/instructions.md', content: 'Keep notes short.\nDate every note.\n', base: current }],
+  ]);
+  expect(room.proposals).toEqual([{ proposal: 'p-1', content: 'Keep notes short.\nDate every note.\n', base: current }]);
+  expect(await readFile(join(room.repository, 'settings', 'instructions.md'), 'utf8')).toBe('Keep notes short.\n');
+  expect((await manifestOf(room)).files['settings/instructions.md']!.revision).toBe(current);
+});

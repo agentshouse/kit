@@ -88,6 +88,14 @@ export interface Written {
   revision: string | null;
   content?: string | null;
   cut?: unknown;
+  proposal?: Proposal;
+}
+
+interface Proposal {
+  proposal: string;
+  base_version?: number;
+  waits_on: string;
+  approval?: string;
 }
 
 export interface Upload {
@@ -2245,12 +2253,18 @@ export class LocalCopies {
     const root = rootOf(copy.room_handle);
     const manifest = await readManifest(copy.repository);
     const work = await staging();
-    const answered = new Map(accepted.filter((written) => written.revision !== null).map((written) => [relative(written.path), written]));
+    const answered = new Map(accepted.filter((written) => written.revision !== null && written.proposal === undefined).map((written) => [relative(written.path), written]));
+    const proposed = new Map(accepted.flatMap((written) => (written.proposal === undefined ? [] : [[relative(written.path), written] as const])));
     const lines: string[] = [];
     const sent = new Set<string>();
     for (const change of pending.changes) {
       const path = relative(change.path);
       sent.add(path);
+      const proposal = proposed.get(path);
+      if (proposal !== undefined) {
+        lines.push(await this.writtenBack(copy, work, manifest, pending.read[path]!, path, proposal));
+        continue;
+      }
       if (change.op === 'delete') {
         delete manifest.files[path];
         continue;
@@ -2292,7 +2306,23 @@ export class LocalCopies {
     }
     await writeManifest(copy.repository, work, manifest);
     await this.save(without(copy));
-    return { refused: false, files: pending.changes.length, lines };
+    return { refused: false, files: pending.changes.length - proposed.size, lines };
+  }
+
+  private async writtenBack(copy: Copy, work: string, manifest: Manifest, read: Read, path: string, written: Written): Promise<string> {
+    const { proposal } = written as Written & { proposal: Proposal };
+    const answer = proposal.approval === undefined ? 'in their Asks you' : `at ${proposal.approval}`;
+    const said = `${rootOf(copy.room_handle)}/${path}: House keeps your change as a proposal, which waits for ${proposal.waits_on} to answer it ${answer}`;
+    if (!(await holding(copy.repository, read.name, read.sha256))) return `${said}; it changed here while it uploaded, so the next house upload proposes it again`;
+    if (written.revision === null) {
+      await removed(copy.repository, read.name);
+      delete manifest.files[path];
+      return `${said}; the Room has no instructions, so this copy holds none`;
+    }
+    const text = await this.textOf(written, undefined);
+    await placed(work, join(copy.repository, read.name), text);
+    manifest.files[path] = { revision: written.revision, sha256: digest(text), bytes: Buffer.byteLength(text) };
+    return `${said}; this copy holds the Room's current instructions again`;
   }
 
   private async deletedByHouse(held: EarlierCopy, named: string, path: string, sha256: string): Promise<boolean> {

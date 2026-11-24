@@ -44,7 +44,17 @@ interface Write {
   from?: string;
   merged?: true;
   binary?: { bytes: number; sha256: string };
+  proposal?: Proposal;
 }
+
+export interface Proposal {
+  proposal: string;
+  base_version?: number;
+  waits_on: string;
+  approval?: string;
+}
+
+const INSTRUCTIONS = 'settings/instructions.md';
 
 interface Missing {
   bytes: number;
@@ -241,6 +251,8 @@ export class Room {
   readonly batches: EditChange[][] = [];
   models: Record<string, unknown>[] = [];
   instructions = '';
+  proposing: Omit<Proposal, 'proposal'> | null = null;
+  readonly proposals: { readonly proposal: string; readonly content: string; readonly base?: string }[] = [];
   bound = ANSWER_BYTES;
   conflictText: 'omit' | 'cut' = 'cut';
   private built: { position: number; entries: object[] } | null = null;
@@ -482,7 +494,11 @@ export class Room {
       const held = current ?? binary;
       const conflict = (code: string, extra: Partial<Conflict> = {}) =>
         conflicts.push({ change: index, path: change.path, code, state: held === undefined ? 'absent' : 'current', ...(held === undefined ? {} : { revision: held.revision }), ...extra });
-      if (change.op === 'write') {
+      if (change.op === 'write' && path === INSTRUCTIONS && this.proposing !== null) {
+        const proposal = `p-${this.proposals.length + 1}`;
+        this.proposals.push({ proposal, content: change.content!, ...(typeof change.base === 'string' ? { base: change.base } : {}) });
+        writes.set(path, { path, op: 'write', content: current?.content ?? null, revision: current?.revision ?? null, proposal: { proposal, ...this.proposing } });
+      } else if (change.op === 'write') {
         if (binary !== undefined) conflict('binary_file');
         else if (change.base === undefined) {
           if (current === undefined) set(path, change.content!);
@@ -553,7 +569,8 @@ export class Room {
     this.files = next;
     this.binaries = binaries;
     this.batches.push(changes);
-    this.advance([...new Set([...[...writes.values()].flatMap((write) => [write.path, ...(write.from === undefined ? [] : [write.from])]), ...removed])]);
+    const changed = [...writes.values()].filter((write) => write.proposal === undefined);
+    this.advance([...new Set([...changed.flatMap((write) => [write.path, ...(write.from === undefined ? [] : [write.from])]), ...removed])]);
     return { writes: [...writes.values()] };
   }
 }
@@ -613,6 +630,7 @@ function doorContents(writes: Write[]): Record<string, unknown>[] {
       content: write.content,
       revision: write.revision,
       ...(write.binary === undefined ? {} : { ...write.binary, media_type: 'image/jpeg' }),
+      ...(write.proposal === undefined ? {} : { proposal: write.proposal }),
     },
   ]);
 }
@@ -622,7 +640,8 @@ function toolResults(room: Room, writes: Write[]): Record<string, unknown>[] {
     path: write.path,
     ...(write.revision === null ? {} : { revision: write.revision }),
     ...(write.from === undefined ? {} : { from: write.from }),
-    ...(write.merged === true ? room.merged(write.content!) : {}),
+    ...(write.merged === true || (write.proposal !== undefined && write.content !== null) ? room.merged(write.content!) : {}),
+    ...(write.proposal === undefined ? {} : { proposal: write.proposal }),
   }));
 }
 

@@ -383,3 +383,52 @@ it('refuses an upload while a file it marked under a decomposed name still holds
   expect(batches(hosted)).toHaveLength(1);
   expect(room.files.get('Café.md')!.content).toBe('one\nTWO, theirs\nthree\nfour\nfive\n');
 });
+
+it("writes the Room's current instructions back into the file and its manifest entry when House keeps the upload of a changed settings/instructions.md as a proposal, prints the proposal, and sends nothing on the next upload", async () => {
+  const { hosted, room } = await copied((held) => {
+    held.put('settings/instructions.md', 'Keep notes short.\n');
+    held.proposing = { base_version: 1, waits_on: 'Ada', approval: 'https://agents.house/approve/p-1' };
+  });
+  const current = room.revision('settings/instructions.md');
+  await writeFile(join(room.repository, 'settings', 'instructions.md'), 'Keep notes short and dated.\n');
+
+  expect(await upload(hosted, room)).toEqual({
+    status: 0,
+    stdout:
+      'House accepted 0 files of /rooms/notes.\n/rooms/notes/settings/instructions.md: House keeps your change as a proposal, which waits for Ada to answer it at https://agents.house/approve/p-1; this copy holds the Room\'s current instructions again\n',
+    stderr: '',
+  });
+
+  expect(room.proposals).toEqual([{ proposal: 'p-1', content: 'Keep notes short and dated.\n', base: current }]);
+  expect(room.files.get('settings/instructions.md')!.content).toBe('Keep notes short.\n');
+  expect(await readFile(join(room.repository, 'settings', 'instructions.md'), 'utf8')).toBe('Keep notes short.\n');
+  expect((await manifestOf(room)).files['settings/instructions.md']).toEqual({
+    revision: current,
+    sha256: digest('Keep notes short.\n'),
+    bytes: 18,
+  });
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
+  expect(batches(hosted)).toHaveLength(1);
+});
+
+it('removes a new settings/instructions.md and its manifest entry when House keeps it as a proposal of a Room with no instructions, with the rest of the batch accepted', async () => {
+  const { hosted, room } = await copied((held) => {
+    held.proposing = { waits_on: 'Ada' };
+  });
+  await mkdir(join(room.repository, 'settings'), { recursive: true });
+  await writeFile(join(room.repository, 'settings', 'instructions.md'), 'Write dates as YYYY-MM-DD.\n');
+  await writeFile(join(room.repository, 'new.md'), 'new\n');
+
+  expect(await upload(hosted, room)).toEqual({
+    status: 0,
+    stdout:
+      'House accepted 1 file of /rooms/notes.\n/rooms/notes/settings/instructions.md: House keeps your change as a proposal, which waits for Ada to answer it in their Asks you; the Room has no instructions, so this copy holds none\n',
+    stderr: '',
+  });
+
+  expect(room.proposals).toEqual([{ proposal: 'p-1', content: 'Write dates as YYYY-MM-DD.\n' }]);
+  expect(existsSync(join(room.repository, 'settings', 'instructions.md'))).toBe(false);
+  expect((await manifestOf(room)).files['settings/instructions.md']).toBeUndefined();
+  expect((await manifestOf(room)).files['new.md']).toEqual({ revision: room.revision('new.md'), sha256: digest('new\n'), bytes: 4 });
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
+});
