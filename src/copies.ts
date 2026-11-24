@@ -3,7 +3,6 @@ import { isUtf8 } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { parse } from 'yaml';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
@@ -24,7 +23,7 @@ import {
   type Manifest,
   type Present,
 } from './manifest.ts';
-import { environmentTool, toolAnswer, Unsettled, type Forwarded, type Message, type ToolResult } from './mcp.ts';
+import { answerDocument, environmentTool, toolAnswer, Unsettled, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { firstLine, namedWait, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
@@ -267,7 +266,7 @@ export type Submitted = { accepted: Written[] } | { refused: Refusal };
 export function updateAnswer(forwarded: Forwarded): Submitted {
   const answer = toolAnswer(forwarded);
   if ('refused' in answer) return answer;
-  const results = (parse(answer.text) as { results?: (Omit<Written, 'revision'> & { revision?: string })[] } | null)?.results ?? [];
+  const results = answerDocument<{ results?: (Omit<Written, 'revision'> & { revision?: string })[] } | null>(answer.text)?.results ?? [];
   return {
     accepted: results.flatMap(({ revision, ...written }) => [
       ...(written.from === undefined ? [] : [{ path: written.from, revision: null, content: null }]),
