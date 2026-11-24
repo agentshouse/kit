@@ -176,14 +176,35 @@ const GROK_QUESTION = {
   },
 };
 
+type Written = Tokens[number]['cache_write'];
+
+function writes(written: Written): number {
+  return typeof written === 'number' ? written : written.five_minutes + written.one_hour;
+}
+
+function addedWrites(held: Written, written: Written): Written {
+  if (typeof held === 'number' || typeof written === 'number') return writes(held) + writes(written);
+  return { five_minutes: held.five_minutes + written.five_minutes, one_hour: held.one_hour + written.one_hour };
+}
+
 function addedTokens(sum: Tokens | null, tokens: Tokens): Tokens {
-  if (sum === null) return tokens;
-  return {
-    input: sum.input + tokens.input,
-    output: sum.output + tokens.output,
-    cache_read: sum.cache_read + tokens.cache_read,
-    cache_write: sum.cache_write + tokens.cache_write,
-  };
+  const models = new Map((sum ?? []).map((row) => [row.model, row]));
+  for (const row of tokens) {
+    const held = models.get(row.model);
+    models.set(
+      row.model,
+      held === undefined
+        ? row
+        : {
+            model: row.model,
+            input: held.input + row.input,
+            cache_write: addedWrites(held.cache_write, row.cache_write),
+            cache_read: held.cache_read + row.cache_read,
+            output: held.output + row.output,
+          },
+    );
+  }
+  return [...models.values()];
 }
 
 function cliSaid(error: unknown): string {
