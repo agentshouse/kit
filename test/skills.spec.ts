@@ -199,7 +199,7 @@ it("installs every Guide page the package labels a Skill as that Skill under its
   expect((await recorded(hosted.home))!.names).toContain(SKILL_PAGE);
 });
 
-it("installs for all exactly the names House's catalogue answers, page by page: a User's own by name, page by page too, one of a built-in's name in that built-in's place, and no Skill of the package the catalogue leaves out", async () => {
+it("installs for all exactly the names House's catalogue answers, page by page: a User's own by name, one ask each, one of a built-in's name in that built-in's place, and no Skill of the package the catalogue leaves out", async () => {
   own = { [OWN]: OWN_FILES, [FIRST]: { 'SKILL.md': 'my own first\n' } };
 
   const hosted = await host({}, NAMES.filter((name) => name !== SECOND));
@@ -216,11 +216,28 @@ it("installs for all exactly the names House's catalogue answers, page by page: 
   expect(await recorded(hosted.home)).toEqual(record(hosted.house.origin, names));
   const pages = Array.from({ length: Math.ceil(names.length / 4) }, (_, page) => ({ op: 'skill', ...(page === 0 ? {} : { cursor: String(page * 4) }) }));
   expect(pages.length).toBeGreaterThan(1);
-  expect(guideCalls(hosted)).toEqual([
-    ...pages,
-    { op: 'skill', names: [FIRST, OWN].sort() },
-    { op: 'skill', names: [FIRST, OWN].sort(), cursor: '1' },
-  ]);
+  expect(guideCalls(hosted)).toEqual([...pages, ...[FIRST, OWN].sort().map((name) => ({ op: 'skill', names: [name] }))]);
+});
+
+it("installs a User's own skill whole when House cuts its files across the pages of its answer, beside another one cut too", async () => {
+  const long = (line: string) => Array.from({ length: 120 }, (_, index) => `${line} ${index}.\n`).join('');
+  own = {
+    [OWN]: { 'SKILL.md': `${OWN_FILES['SKILL.md']}${long('Read the week')}`, 'steps/first.md': long('First') },
+    'long-errand': { 'SKILL.md': `---\nname: long-errand\ndescription: Runs a long errand.\n---\n${long('Run the errand')}` },
+  };
+
+  const hosted = await host();
+  await placed(hosted.home);
+
+  for (const [name, files] of Object.entries(own)) {
+    expect(await tree(skills(hosted.home, name))).toEqual(Object.keys(files).sort());
+    for (const [path, text] of Object.entries(files)) {
+      expect(text.length, `${name}/${path}`).toBeGreaterThan(1_000);
+      expect(await readFile(join(skills(hosted.home, name), path), 'utf8'), `${name}/${path}`).toBe(text);
+    }
+  }
+  expect(guideCalls(hosted).filter((args) => args.names !== undefined && args.cursor !== undefined).length).toBeGreaterThan(2);
+  expect(await recorded(hosted.home)).toEqual(record(hosted.house.origin, [...NAMES, OWN, 'long-errand'].sort()));
 });
 
 it("installs for a list only its names, House's from the package and a User's own by name, and none the catalogue does not hold", async () => {
@@ -435,6 +452,26 @@ it('replaces only the names an earlier Kit release recorded when a new version s
   await absent(claude(home, 'retired'));
   expect(await readFile(join(skills(home, 'my-tdd'), 'SKILL.md'), 'utf8')).toBe('my copy\n');
   expect(await recorded(home)).toEqual(record(restarted.house.origin, [...NAMES, OWN].sort()));
+});
+
+it("replaces what an earlier Kit release installed even when House's catalogue and the User's own skills did not change", async () => {
+  own = { [OWN]: OWN_FILES };
+  const house = await startHouse();
+  served(house);
+  const home = await temporaryHome();
+  serveLogin(house, 'environment-one', 'ahk_first');
+  await logIn(house, home, planted);
+  const first = (await recorded(home))!;
+  await writeFile(join(skills(home, FIRST), 'SKILL.md'), "the owner's edit\n");
+  await writeFile(join(skills(home, OWN), 'SKILL.md'), 'edited\n');
+  await writeFile(join(home, RECORD), JSON.stringify({ ...first, version: '0.2.1-c000000000000' }));
+  serveLogin(house, 'environment-one', 'ahk_second');
+
+  await logIn(house, home, planted);
+
+  expect(await readFile(join(skills(home, FIRST), 'SKILL.md'), 'utf8')).toBe(await readFile(join(SKILL_SET, FIRST, 'SKILL.md'), 'utf8'));
+  expect(await readFile(join(skills(home, OWN), 'SKILL.md'), 'utf8')).toBe(OWN_FILES['SKILL.md']);
+  expect(await recorded(home)).toEqual(first);
 });
 
 it("brings the package's set with a new Kit release: a Skill the package dropped leaves both directories and one it added arrives, a Skill page among them", async () => {

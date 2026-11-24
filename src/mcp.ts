@@ -1,5 +1,6 @@
 import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { randomUUID } from 'node:crypto';
+import { parseDocument } from 'yaml';
 import { KIT_RELEASE } from './clis.ts';
 import { carried } from './hold.ts';
 import { readEnrolment } from './home.ts';
@@ -112,4 +113,16 @@ export function toolAnswer(forwarded: Forwarded): { text: string } | { refused: 
   if (answer.error !== undefined) return { refused: refusalIn(answer.error.message, forwarded.status) };
   const text = answer.result!.content.map((content) => content.text).join('\n');
   return answer.result!.isError === true ? { refused: refusalIn(text, forwarded.status) } : { text };
+}
+
+export async function environmentTool(name: string, args: Record<string, unknown>): Promise<string> {
+  const read = toolAnswer({ status: 200, text: await environmentCall(rpc('tools/call', { name, arguments: args })) });
+  if ('refused' in read) throw new Error(read.refused.text);
+  return read.text;
+}
+
+export function answerDocument<T>(answer: string): T {
+  const document = parseDocument(answer);
+  if (document.errors.length > 0) throw new Error("House's answer could not be read");
+  return document.toJS() as T;
 }

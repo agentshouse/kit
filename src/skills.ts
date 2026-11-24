@@ -4,10 +4,10 @@ import { homedir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import type { KitSkills } from '@agentshouse/kit-wire';
 import { GUIDE, listSkills } from '@agentshouse/skills';
-import { parse, parseDocument } from 'yaml';
+import { parse } from 'yaml';
 import { KIT_RELEASE } from './clis.ts';
 import { kitHome, readConfiguration, readEnrolment, readHome, writeHome } from './home.ts';
-import { environmentCall, rpc, toolAnswer } from './mcp.ts';
+import { answerDocument, environmentTool } from './mcp.ts';
 
 interface Installed {
   version?: string;
@@ -36,7 +36,7 @@ interface Catalogue extends Paged {
 }
 
 interface Answered extends Paged {
-  skills: { name: string; files: Record<string, string> }[];
+  skills: { files: Record<string, unknown> }[];
 }
 
 const RECORD = 'skill-set.json';
@@ -96,36 +96,33 @@ function ownSkill(name: string, files: Readonly<Record<string, string>>): Skill 
   return { name, files, place };
 }
 
-async function guided<T>(args: Record<string, unknown>): Promise<T> {
-  const read = toolAnswer({ status: 200, text: await environmentCall(rpc('tools/call', { name: 'guide', arguments: { op: 'skill', ...args } })) });
-  if ('refused' in read) throw new Error(read.refused.text);
-  const document = parseDocument(read.text);
-  if (document.errors.length > 0) throw new Error("House's answer could not be read");
-  return document.toJS() as T;
-}
-
 async function paged<T extends Paged>(args: Record<string, unknown>): Promise<T[]> {
   const pages: T[] = [];
   let cursor: string | undefined;
   do {
-    const page = await guided<T>({ ...args, ...(cursor === undefined ? {} : { cursor }) });
+    const page = answerDocument<T>(await environmentTool('guide', { op: 'skill', ...args, ...(cursor === undefined ? {} : { cursor }) }));
     pages.push(page);
     cursor = page.next_cursor;
   } while (cursor !== undefined);
   return pages;
 }
 
-async function ownFiles(names: readonly string[]): Promise<Map<string, Record<string, string>>> {
-  if (names.length === 0) return new Map();
-  const pages = await paged<Answered>({ names });
-  return new Map(pages.flatMap((page) => page.skills.map(({ name, files }) => [name, files] as const)));
+async function ownFiles(name: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  for (const page of await paged<Answered>({ names: [name] })) {
+    for (const skill of page.skills) {
+      for (const [path, text] of Object.entries(skill.files)) if (typeof text === 'string') files[path] = (files[path] ?? '') + text;
+    }
+  }
+  return files;
 }
 
 async function wanted(setting: KitSkills, origin: string): Promise<Skill[]> {
   if (setting !== 'all' && setting.length === 0) return [];
   const catalogue = (await paged<Catalogue>({})).flatMap((page) => page.catalogue);
   const chosen = setting === 'all' ? catalogue : catalogue.filter(({ name }) => setting.includes(name));
-  const own = await ownFiles(chosen.filter((skill) => skill.own === true).map(({ name }) => name));
+  const own = new Map<string, Record<string, string>>();
+  for (const { name } of chosen.filter((skill) => skill.own === true)) own.set(name, await ownFiles(name));
   const house = houseSkills(origin);
   return chosen
     .flatMap(({ name }) => {
@@ -138,7 +135,7 @@ async function wanted(setting: KitSkills, origin: string): Promise<Skill[]> {
 
 function digestOf(origin: string, skills: readonly Skill[]): string {
   const held = skills.map(({ name, files }) => [name, files]);
-  return createHash('sha256').update(JSON.stringify([KIT_RELEASE, origin, held])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([origin, held])).digest('hex');
 }
 
 async function install(origin: string, skills: readonly Skill[], digest: string): Promise<void> {
@@ -167,7 +164,7 @@ async function replaced(): Promise<void> {
   const skills = await wanted((await readConfiguration()).skills, enrolment.house);
   const digest = digestOf(enrolment.house, skills);
   const installed = await readHome<Installed>(RECORD);
-  if (installed?.digest === digest) return;
+  if (installed?.version === KIT_RELEASE && installed.digest === digest) return;
   for (const name of installed?.names ?? []) {
     await rm(join(claudeDirectory(), name), { recursive: true, force: true });
     await rm(join(skillsDirectory(), name), { recursive: true, force: true });
