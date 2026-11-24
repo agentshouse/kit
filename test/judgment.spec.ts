@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { settle, until, type KitConnection } from './double.ts';
 import { hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
-import { stop } from './kit.ts';
+import { alive, stop } from './kit.ts';
 
 type Judged = { turn: string; secret: boolean; background: boolean | 'runs' };
 
@@ -27,8 +27,13 @@ function judgments(connection: KitConnection, conversation = 'conversation-1'): 
     .map(({ turn, secret, background }) => ({ turn, secret, background }) as Judged);
 }
 
-function judging(hosted: Hosted, judgment: Judged): Promise<unknown> {
-  return until(() => JSON.stringify(judgments(hosted.house.connections.at(-1)!).at(-1)) === JSON.stringify(judgment));
+async function judging(hosted: Hosted, judgment: Judged): Promise<void> {
+  const reported = () => judgments(hosted.house.connections.at(-1)!);
+  try {
+    await until(() => JSON.stringify(reported().at(-1)) === JSON.stringify(judgment));
+  } catch {
+    throw new Error(`the Kit never reported ${JSON.stringify(judgment)} last; it reported ${JSON.stringify(reported())}`);
+  }
 }
 
 async function opened(hosting: Hosting = {}): Promise<Hosted> {
@@ -111,9 +116,10 @@ it.each([
   await judging(hosted, WAITING);
   await said(hosted, '@spawn');
   await judging(hosted, WORKING);
-  const job = await logged(hosted, 'spawned');
-  stop(await logged(hosted, 'clean'));
+  const [job, clean] = [await logged(hosted, 'spawned'), await logged(hosted, 'clean')];
+  stop(clean);
   stop(job);
+  await until(() => !alive(job) && !alive(clean));
   await said(hosted, '@say again');
   await judging(hosted, WAITING);
   await settle();
