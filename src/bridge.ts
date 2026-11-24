@@ -10,7 +10,7 @@ import { parse } from 'yaml';
 import { finalRefusal, HouseRefusal, resendDelay, retrying } from './api.ts';
 import type { Staged } from './binaries.ts';
 import { loginPath } from './clis.ts';
-import { changedPaths, DEFAULT_MAX_SIZE, type Caller, type Change, type LocalCopies, type Submitted, type Upload } from './copies.ts';
+import { changedPaths, DEFAULT_MAX_SIZE, updateChanges, UPDATE_PATH, type Caller, type Change, type LocalCopies, type Submitted, type Updating, type Upload } from './copies.ts';
 import { fileInfo, instructionsText, type Finished } from './files.ts';
 import { answered, carried, held, judgement, type Answer, type Pass } from './hold.ts';
 import { readEnrolment, socketDirectory } from './home.ts';
@@ -28,12 +28,17 @@ export interface Bridge {
 
 interface Holder {
   key: string;
+  conversation: string | null;
   named: Record<string, string>;
   git: Record<string, string>;
   path: string | null;
 }
 
 const MCP_REQUEST_BYTES = 4_000_000;
+
+function logged(error: unknown): void {
+  process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
+}
 
 export async function received(request: IncomingMessage): Promise<string> {
   let text = '';
@@ -107,6 +112,7 @@ function editAnswer(forwarded: Forwarded): Submitted {
 export async function openBridge(copies: LocalCopies, conversationId: string): Promise<Bridge> {
   return bridgeFor(copies, {
     key: `conversation:${conversationId}`,
+    conversation: conversationId,
     named: { [CONVERSATION_META_KEY]: conversationId },
     git: { [CONVERSATION_GIT_HEADER]: conversationId },
     path: [dirname(process.execPath), await loginPath()].join(delimiter),
@@ -114,7 +120,7 @@ export async function openBridge(copies: LocalCopies, conversationId: string): P
 }
 
 export function openRunBridge(copies: LocalCopies, run: string): Promise<Bridge> {
-  return bridgeFor(copies, { key: `function-run:${run}`, named: { [FUNCTION_RUN_META_KEY]: run }, git: {}, path: null });
+  return bridgeFor(copies, { key: `function-run:${run}`, conversation: null, named: { [FUNCTION_RUN_META_KEY]: run }, git: {}, path: null });
 }
 
 async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
@@ -218,6 +224,12 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
     if (path === '/copy/download') {
       const { attachments = false, max_size: maxSize = DEFAULT_MAX_SIZE, cwd } = JSON.parse(text) as { attachments?: boolean; max_size?: number; cwd: string };
       return { status: 200, text: JSON.stringify(await copies.download(caller, { attachments, maxSize }, cwd)) };
+    }
+    if (path === UPDATE_PATH) {
+      const { message, cwd } = JSON.parse(text) as Updating;
+      const forwarded = await forward(JSON.stringify(message));
+      if (forwarded.status === 200) await copies.updated(holder.conversation, cwd, updateChanges(message), forwarded.text).catch(logged);
+      return forwarded;
     }
     if (path !== '/') return { status: 404, text: '' };
     return forward(text);

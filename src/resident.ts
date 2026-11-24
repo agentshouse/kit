@@ -9,7 +9,7 @@ import { Agents } from './agents.ts';
 import { house } from './api.ts';
 import { received } from './bridge.ts';
 import { Conversations } from './conversations.ts';
-import { DEFAULT_MAX_SIZE, LocalCopies, type Answered } from './copies.ts';
+import { DEFAULT_MAX_SIZE, LocalCopies, updateChanges, UPDATE_PATH, type Answered, type Updating } from './copies.ts';
 import { restart, restartPlaced } from './end.ts';
 import { agentBase, enrolled, forgetRecordedRelay, kitHome, ownerSocket, recordPlannedRestart, roomsFolder, takePlannedRestart } from './home.ts';
 import { Calls } from './calls.ts';
@@ -25,6 +25,7 @@ import { quoted } from './shell.ts';
 import { SignIns } from './sign-in.ts';
 import { placeSkills } from './skills.ts';
 import { holdConnection, type Connection } from './connection.ts';
+import { environmentCall } from './mcp.ts';
 import { KitUpdate } from './update.ts';
 import { takeUnservedRelease } from './wire.ts';
 import { codexLauncher } from './work.ts';
@@ -60,6 +61,12 @@ async function serveOwner(lock: DatabaseSync, copies: LocalCopies, settling: Set
       if (request.url === '/copy/download') {
         const { attachments = false, max_size: maxSize = DEFAULT_MAX_SIZE, cwd } = JSON.parse(text) as { attachments?: boolean; max_size?: number; cwd: string };
         answered = await copies.download(copies.owner, { attachments, maxSize }, cwd);
+      } else if (request.url === UPDATE_PATH) {
+        const { message, cwd } = JSON.parse(text) as Updating;
+        const answer = await environmentCall(message);
+        await copies.updated(null, cwd, updateChanges(message), answer).catch(report);
+        response.writeHead(200, { 'content-type': 'application/json' }).end(answer);
+        return;
       } else if (request.url === '/copy/upload') {
         const { cwd } = JSON.parse(text) as { cwd: string };
         answered = await copies.upload(cwd, copies.owner);
