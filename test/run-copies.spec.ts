@@ -241,10 +241,13 @@ it("removes a deleted conversation's copy only once no other living conversation
   expect(await held(notes.repository)).toEqual(MADE);
 });
 
-it("writes each document a house update changed, as House accepted it, into the file of the copy the conversation works in, or else of the copy holding the working directory, advancing its manifest entry, and keeps the bytes of a file changed since its entry", async () => {
-  const { hosted, notes } = await staged([{}]);
+it("writes each document a house update changed and each attachment write of a file the copy holds, as House accepted it, into the file of the copy the conversation works in, or else of the copy holding the working directory, advancing its manifest entry, and keeps the bytes of a file changed since its entry, saying its local integration is pending", async () => {
+  const { hosted, rooms, notes } = await staged([{}, {}]);
+  notes.upload('table.csv', Buffer.from('a,b\n'));
+  await rooms.download([notes], '--with-attachments');
   const imp = copyOf(hosted, 'notes', 'imp-1');
   await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
+  await session(hosted, 2, notes, 'rev-1', { kind: 'none' });
   await writeFile(join(imp, 'plan.md'), 'Plant beans here\n');
   const plan = (await manifestOf(notes)).files['plan.md']!;
 
@@ -255,28 +258,40 @@ it("writes each document a house update changed, as House accepted it, into the 
       { op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nfour\n', base: notes.revision('a.md') },
       { op: 'write', path: '/rooms/notes/plan.md', content: 'Plant peas\n', base: notes.revision('plan.md') },
       { op: 'write', path: '/rooms/notes/new.md', content: 'new\n' },
+      { op: 'write', path: '/rooms/notes/table.csv', content: 'a,b,c\n', base: notes.revision('table.csv') },
+      { op: 'write', path: '/rooms/notes/new.csv', content: 'x\n' },
     ])}`,
   );
 
   expect(await readFile(join(imp, 'a.md'), 'utf8')).toBe('one\ntwo\nfour\n');
   expect(await readFile(join(imp, 'new.md'), 'utf8')).toBe('new\n');
   expect(await readFile(join(imp, 'plan.md'), 'utf8')).toBe('Plant beans here\n');
+  expect(await readFile(join(imp, 'table.csv'), 'utf8')).toBe('a,b,c\n');
+  await absent(join(imp, 'new.csv'));
   const entries = JSON.parse(await readFile(join(imp, '.house'), 'utf8')) as { files: Record<string, { revision: string }> };
-  expect(entries.files['a.md']!.revision).toBe(notes.revision('a.md'));
-  expect(entries.files['new.md']!.revision).toBe(notes.revision('new.md'));
+  for (const path of ['a.md', 'new.md', 'table.csv']) expect(entries.files[path]!.revision).toBe(notes.revision(path));
   expect(entries.files['plan.md']!.revision).toBe(plan.revision);
+  expect(entries.files).not.toHaveProperty('new.csv');
   expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
+  expect(await readFile(join(notes.repository, 'table.csv'), 'utf8')).toBe('a,b\n');
 
-  const answered = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/a.md', content: 'one\n', base: notes.revision('a.md') }] }));
-  const outside = await house(hosted, '/', 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant corn\n', base: notes.revision('plan.md') }] }));
+  await turn(hosted, 2, `@sh cd ${notes.repository} && house update ${updating([{ op: 'write', path: '/rooms/notes/a.md', content: 'one\n', base: notes.revision('a.md') }])}`);
 
-  expect(answered).toMatchObject({ status: 0, stderr: '' });
-  expect(outside).toMatchObject({ status: 0, stderr: '' });
   expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\n');
   expect((await manifestOf(notes)).files['a.md']!.revision).toBe(notes.revision('a.md'));
-  expect(await readFile(join(notes.repository, 'plan.md'), 'utf8')).toBe('Plant beans\n');
-  expect((await manifestOf(notes)).files['plan.md']).toEqual(plan);
   expect(await readFile(join(imp, 'a.md'), 'utf8')).toBe('one\ntwo\nfour\n');
+
+  await writeFile(join(notes.repository, 'plan.md'), 'Plant beans there\n');
+  const pending = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant corn\n', base: notes.revision('plan.md') }] }));
+  const outside = await house(hosted, '/', 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/a.md', content: 'one, outside\n', base: notes.revision('a.md') }] }));
+
+  expect(pending).toMatchObject({ status: 0, stderr: '' });
+  expect(pending.stdout).toContain('/rooms/notes/plan.md: changed here, so House accepted the update and local integration is pending; the next house upload sends this file as it is\n');
+  expect(await readFile(join(notes.repository, 'plan.md'), 'utf8')).toBe('Plant beans there\n');
+  expect((await manifestOf(notes)).files['plan.md']).toEqual(plan);
+  expect(outside).toMatchObject({ status: 0, stderr: '' });
+  expect(notes.files.get('a.md')!.content).toBe('one, outside\n');
+  expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\n');
 });
 
 it("gives Claude Code's session the Run's name at its start and its resume, and no other CLI's or conversation's", async () => {
@@ -296,31 +311,85 @@ it("gives Claude Code's session the Run's name at its start and its resume, and 
   expect(options(await opening(hosted, 'session/resume', 0))).toMatchObject({ extraArgs: { name: 'rev-2' } });
 });
 
-it("moves and deletes with a house update each file unchanged since its entry, writes the links House rewrote and the text it merged, and leaves the copy as it was where House refused the update", async () => {
+it("moves and deletes with a house update each file unchanged since its entry, writes the text House merged, keeps a file changed since its entry saying its local integration is pending, and leaves the copy as it was where House refused the update", async () => {
   const { hosted, rooms, notes } = await staged([{}]);
-  notes.put('index.md', 'See [plan](plan.md).\n');
+  notes.put('b.md', 'bee\n');
   notes.put('c.md', 'one\ntwo\n');
   await rooms.download([notes]);
   const read = (await manifestOf(notes)).files['c.md']!.revision;
+  const bee = (await manifestOf(notes)).files['b.md']!;
   notes.put('c.md', 'zero\none\ntwo\n');
+  await writeFile(join(notes.repository, 'b.md'), 'bee, mine\n');
   const changes = [
     { op: 'move', path: '/rooms/notes/plan.md', to: '/rooms/notes/done.md', base: notes.revision('plan.md') },
     { op: 'delete', path: '/rooms/notes/a.md', base: notes.revision('a.md') },
+    { op: 'delete', path: '/rooms/notes/b.md', base: notes.revision('b.md') },
     { op: 'write', path: '/rooms/notes/c.md', content: 'one\ntwo\nthree\n', base: read },
   ];
   const refused = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ ...changes[1], base: read }] }));
 
   expect(refused.status).toBe(1);
-  expect(await held(notes.repository)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'c.md', 'index.md', 'plan.md']);
+  expect(await held(notes.repository)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'b.md', 'c.md', 'plan.md']);
 
   const answered = await house(hosted, notes.repository, 'update', JSON.stringify({ changes }));
 
   expect(answered).toMatchObject({ status: 0, stderr: '' });
-  expect(await held(notes.repository)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'c.md', 'done.md', 'index.md']);
+  expect(answered.stdout).toContain('/rooms/notes/b.md: changed here, so House accepted the update and local integration is pending; the next house upload sends this file as it is\n');
+  expect(await held(notes.repository)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'b.md', 'c.md', 'done.md']);
   expect(await readFile(join(notes.repository, 'done.md'), 'utf8')).toBe('Plant beans\n');
-  expect(await readFile(join(notes.repository, 'index.md'), 'utf8')).toBe('See [plan](done.md).\n');
+  expect(await readFile(join(notes.repository, 'b.md'), 'utf8')).toBe('bee, mine\n');
   expect(await readFile(join(notes.repository, 'c.md'), 'utf8')).toBe('zero\none\ntwo\nthree\n');
   const { files } = await manifestOf(notes);
-  expect(Object.keys(files).sort()).toEqual(['c.md', 'done.md', 'index.md']);
-  for (const path of ['c.md', 'done.md', 'index.md']) expect(files[path]!.revision).toBe(notes.revision(path));
+  expect(Object.keys(files).sort()).toEqual(['b.md', 'c.md', 'done.md']);
+  expect(files['b.md']).toEqual(bee);
+  for (const path of ['c.md', 'done.md']) expect(files[path]!.revision).toBe(notes.revision(path));
+});
+
+it("keeps a Room's folder a Run works in through the Room's handle change, so the Run's next session opens where it worked, moves it to the new handle once that Run is deleted, and writes a house update naming the new handle into a Run's copy", async () => {
+  const { hosted, rooms, notes } = await staged([{}, {}]);
+  const imp = copyOf(hosted, 'notes', 'imp-1');
+  const folder = notes.repository;
+  await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
+  const worked = await session(hosted, 2, notes, 'rev-1', { kind: 'existing', path: folder });
+  await turn(hosted, 2, '@say first');
+  expect(await killed(hosted, 2)).toEqual({});
+
+  notes.rehandle('notes-2');
+  expect(await rooms.download([notes])).toMatchObject({ status: 0, stderr: '' });
+  await turn(hosted, 1, `@sh house update ${updating([{ op: 'write', path: '/rooms/notes-2/a.md', content: 'one\n', base: notes.revision('a.md') }])}`);
+  await turn(hosted, 2, '@say again', { provider_session_id: worked });
+
+  expect(await readFile(join(imp, 'a.md'), 'utf8')).toBe('one\n');
+  expect(JSON.parse(await readFile(join(imp, '.house'), 'utf8')).files['a.md'].revision).toBe(notes.revision('a.md'));
+  expect((await opening(hosted, 'session/resume', 0)).cwd).toBe(folder);
+  expect(await held(folder)).toEqual(MADE);
+
+  expect(await killed(hosted, 2, true)).toEqual({});
+  expect(await rooms.download([notes])).toMatchObject({ status: 0, stderr: '' });
+
+  expect(notes.repository).not.toBe(folder);
+  expect(await held(notes.repository)).toEqual(MADE);
+  expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\n');
+  await absent(folder);
+});
+
+it("counts a linked attachment another folder of the Room wrote in place and uploaded as House's in a Run's copy, so that copy goes once no turn ran in it for 24 hours", async () => {
+  const clock = await clocked();
+  const { hosted, rooms, notes } = await staged([{}, {}], clock.hosting);
+  notes.upload('table.csv', Buffer.from('a,b\n'));
+  await rooms.download([notes], '--with-attachments');
+  const imp = copyOf(hosted, 'notes', 'imp-1');
+  await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
+  await session(hosted, 2, notes, 'rev-1', { kind: 'none' });
+  await turn(hosted, 1, '@say first');
+  expect(await killed(hosted, 1)).toEqual({});
+  await writeFile(join(notes.repository, 'table.csv'), 'a,b,c\n');
+  expect(await house(hosted, notes.repository, 'upload')).toMatchObject({ status: 0, stderr: '' });
+  expect(await readFile(join(imp, 'table.csv'), 'utf8')).toBe('a,b,c\n');
+
+  await clock.shift(25 * HOUR);
+  await turn(hosted, 2, '@say looking');
+  await until(() => (existsSync(imp) ? undefined : true));
+
+  expect(await readFile(join(notes.repository, 'table.csv'), 'utf8')).toBe('a,b,c\n');
 });

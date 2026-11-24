@@ -10,7 +10,7 @@ import { parse } from 'yaml';
 import { finalRefusal, HouseRefusal, resendDelay, retrying } from './api.ts';
 import type { Staged } from './binaries.ts';
 import { loginPath } from './clis.ts';
-import { changedPaths, DEFAULT_MAX_SIZE, updateChanges, UPDATE_PATH, type Caller, type Change, type LocalCopies, type Submitted, type Updating, type Upload } from './copies.ts';
+import { changedPaths, DEFAULT_MAX_SIZE, updateAnswer, updateChanges, UPDATE_PATH, type Caller, type Change, type LocalCopies, type Updating, type Upload } from './copies.ts';
 import { fileInfo, instructionsText, type Finished } from './files.ts';
 import { answered, carried, held, judgement, type Answer, type Pass } from './hold.ts';
 import { readEnrolment, socketDirectory } from './home.ts';
@@ -95,18 +95,6 @@ function resendAfter(forwarded: Forwarded | null, attempt: number, pushing: bool
   }
   const seconds = pendingSeconds(forwarded);
   return seconds === null ? null : seconds * 1000;
-}
-
-function editAnswer(forwarded: Forwarded): Submitted {
-  const answer = toolAnswer(forwarded);
-  if ('refused' in answer) return answer;
-  const { results } = parse(answer.text) as { results: { path: string; revision?: string; from?: string; content?: string; cut?: unknown }[] };
-  return {
-    accepted: results.flatMap(({ from, revision, ...written }) => [
-      ...(from === undefined ? [] : [{ path: from, revision: null, content: null }]),
-      { ...written, revision: revision ?? null },
-    ]),
-  };
 }
 
 export async function openBridge(copies: LocalCopies, conversationId: string): Promise<Bridge> {
@@ -201,7 +189,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
         upload = prepared;
         await retain(upload);
       }
-      return editAnswer(
+      return updateAnswer(
         await send(upload === undefined ? inline : call('update', { paths: changedPaths(changes), upload }), operation, true),
       );
     },
@@ -228,8 +216,10 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
     if (path === UPDATE_PATH) {
       const { message, cwd } = JSON.parse(text) as Updating;
       const forwarded = await forward(JSON.stringify(message));
-      if (forwarded.status === 200) await copies.updated(holder.conversation, cwd, updateChanges(message), forwarded.text).catch(logged);
-      return forwarded;
+      return copies.updated(holder.conversation, cwd, updateChanges(message), forwarded).catch((error: unknown) => {
+        logged(error);
+        return forwarded;
+      });
     }
     if (path !== '/') return { status: 404, text: '' };
     return forward(text);

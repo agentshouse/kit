@@ -63,9 +63,12 @@ async function serveOwner(lock: DatabaseSync, copies: LocalCopies, settling: Set
         answered = await copies.download(copies.owner, { attachments, maxSize }, cwd);
       } else if (request.url === UPDATE_PATH) {
         const { message, cwd } = JSON.parse(text) as Updating;
-        const answer = await environmentCall(message);
-        await copies.updated(null, cwd, updateChanges(message), answer).catch(report);
-        response.writeHead(200, { 'content-type': 'application/json' }).end(answer);
+        const forwarded = { status: 200, text: await environmentCall(message) };
+        const written = await copies.updated(null, cwd, updateChanges(message), forwarded).catch((error: unknown) => {
+          report(error);
+          return forwarded;
+        });
+        response.writeHead(200, { 'content-type': 'application/json' }).end(written.text);
         return;
       } else if (request.url === '/copy/upload') {
         const { cwd } = JSON.parse(text) as { cwd: string };
