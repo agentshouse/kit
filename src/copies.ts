@@ -1068,7 +1068,9 @@ export class LocalCopies {
     if (key === undefined) return forwarded;
     const lines = await this.exclusive(key, async () =>
       this.wroteBack(await this.currentlyNamed(await this.converted(this.copies.get(key)!), answer.accepted), changes, answer.accepted),
-    );
+    ).catch((error: unknown) => [
+      `${this.copies.get(key)!.repository}: House accepted the update, but Kit could not write it here (${houseCause(error)}), so local integration is pending; house download here brings House's text`,
+    ]);
     return withLines(forwarded, lines);
   }
 
@@ -1104,38 +1106,41 @@ export class LocalCopies {
       delete files[path];
       changed = true;
     };
-    for (const written of accepted) {
-      const path = local(written.path);
-      const from = written.from === undefined ? null : local(written.from);
-      if (written.ref !== undefined) continue;
-      if (from !== null && files[from] !== undefined) {
-        if (path === null) await dropped(from);
-        else if (!(await unchanged(from)) || (await exists(join(copy.repository, path)))) pending(from);
-        else {
-          const { revision: _revision, ...entry } = files[from]!;
-          if (entry.skipped !== true) {
-            await mkdir(dirname(join(copy.repository, path)), { recursive: true });
-            await rename(join(copy.repository, from), join(copy.repository, path));
-            await removed(copy.repository, from);
+    try {
+      for (const written of accepted) {
+        const path = local(written.path);
+        const from = written.from === undefined ? null : local(written.from);
+        if (written.ref !== undefined) continue;
+        if (from !== null && files[from] !== undefined) {
+          if (path === null) await dropped(from);
+          else if (!(await unchanged(from)) || (await exists(join(copy.repository, path)))) pending(from);
+          else {
+            const { revision: _revision, ...entry } = files[from]!;
+            if (entry.skipped !== true) {
+              await mkdir(dirname(join(copy.repository, path)), { recursive: true });
+              await rename(join(copy.repository, from), join(copy.repository, path));
+              await removed(copy.repository, from);
+            }
+            delete files[from];
+            files[path] = { ...entry, revision: written.revision! };
+            changed = true;
           }
-          delete files[from];
-          files[path] = { ...entry, revision: written.revision! };
-          changed = true;
+          continue;
         }
-        continue;
+        if (path === null || path === '') continue;
+        if (written.revision === null) {
+          for (const held of Object.keys(files).filter((name) => deleting.some((gone) => covers(name, gone) && covers(name, path)))) await dropped(held);
+          continue;
+        }
+        const entry = files[path];
+        if (entry === undefined ? !isDocument(path) : entry.read_only === true || entry.skipped === true) continue;
+        const text = await this.textOf(written, sent(written.path));
+        if (await integratedFile(into, path, path, entry?.sha256 ?? null, written.revision, text)) changed = true;
+        else pending(path);
       }
-      if (path === null || path === '') continue;
-      if (written.revision === null) {
-        for (const held of Object.keys(files).filter((name) => deleting.some((gone) => covers(name, gone) && covers(name, path)))) await dropped(held);
-        continue;
-      }
-      const entry = files[path];
-      if (entry === undefined ? !isDocument(path) : entry.read_only === true || entry.skipped === true) continue;
-      const text = await this.textOf(written, sent(written.path));
-      if (await integratedFile(into, path, path, entry?.sha256 ?? null, written.revision, text)) changed = true;
-      else pending(path);
+    } finally {
+      if (changed) await writeManifest(copy.repository, into.work, into.manifest);
     }
-    if (changed) await writeManifest(copy.repository, into.work, into.manifest);
     return lines;
   }
 

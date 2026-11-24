@@ -36,10 +36,6 @@ interface Holder {
 
 const MCP_REQUEST_BYTES = 4_000_000;
 
-function logged(error: unknown): void {
-  process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
-}
-
 export async function received(request: IncomingMessage): Promise<string> {
   let text = '';
   request.setEncoding('utf8');
@@ -216,10 +212,7 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
     if (path === UPDATE_PATH) {
       const { message, cwd } = JSON.parse(text) as Updating;
       const forwarded = await forward(JSON.stringify(message));
-      return copies.updated(holder.conversation, cwd, updateChanges(message), forwarded).catch((error: unknown) => {
-        logged(error);
-        return forwarded;
-      });
+      return copies.updated(holder.conversation, cwd, updateChanges(message), forwarded);
     }
     if (path !== '/') return { status: 404, text: '' };
     return forward(text);

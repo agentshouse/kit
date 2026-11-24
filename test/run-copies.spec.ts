@@ -294,6 +294,47 @@ it("writes each document a house update changed and each attachment write of a f
   expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\n');
 });
 
+it("says House accepted a house update whose write into a Run's copy failed and that its local integration is pending, keeping the entries of what it wrote, so a house download there brings House's text", async () => {
+  const { hosted, rooms, notes } = await staged([{}]);
+  notes.put('c.md', 'one\ntwo\n');
+  await rooms.download([notes]);
+  const imp = copyOf(hosted, 'notes', 'imp-1');
+  await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
+  const read = notes.revision('c.md');
+  notes.put('c.md', 'zero\none\ntwo\n');
+  notes.bound = 8;
+  rooms.refusesReads = [
+    { status: 503, body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; call again shortly', retryable: true } } },
+  ];
+  const entries = async () => (JSON.parse(await readFile(join(imp, '.house'), 'utf8')) as { files: Record<string, { revision: string }> }).files;
+
+  const updated = await house(
+    hosted,
+    imp,
+    'update',
+    JSON.stringify({
+      changes: [
+        { op: 'write', path: '/rooms/notes/a.md', content: 'one, here\n', base: notes.revision('a.md') },
+        { op: 'write', path: '/rooms/notes/c.md', content: 'one\ntwo\nthree\n', base: read },
+      ],
+    }),
+  );
+
+  expect(updated).toMatchObject({ status: 0, stderr: '' });
+  expect(updated.stdout).toContain(
+    `${imp}: House accepted the update, but Kit could not write it here (house_unavailable: House is unavailable; call again shortly), so local integration is pending; house download here brings House's text\n`,
+  );
+  expect(notes.files.get('c.md')!.content).toBe('zero\none\ntwo\nthree\n');
+  expect(await readFile(join(imp, 'a.md'), 'utf8')).toBe('one, here\n');
+  expect((await entries())['a.md']!.revision).toBe(notes.revision('a.md'));
+  expect(await readFile(join(imp, 'c.md'), 'utf8')).toBe('one\ntwo\n');
+  expect((await entries())['c.md']!.revision).toBe(read);
+
+  expect(await house(hosted, imp, 'download')).toMatchObject({ status: 0, stderr: '' });
+  expect(await readFile(join(imp, 'c.md'), 'utf8')).toBe('zero\none\ntwo\nthree\n');
+  expect((await entries())['c.md']!.revision).toBe(notes.revision('c.md'));
+});
+
 it("gives Claude Code's session the Run's name at its start and its resume, and no other CLI's or conversation's", async () => {
   const { hosted, notes } = await staged([{}, { kind: 'claude-agent-acp' }, { kind: 'claude-agent-acp' }]);
   await session(hosted, 1, notes, 'rev-1', { kind: 'none' });

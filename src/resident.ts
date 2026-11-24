@@ -64,10 +64,7 @@ async function serveOwner(lock: DatabaseSync, copies: LocalCopies, settling: Set
       } else if (request.url === UPDATE_PATH) {
         const { message, cwd } = JSON.parse(text) as Updating;
         const forwarded = { status: 200, text: await environmentCall(message) };
-        const written = await copies.updated(null, cwd, updateChanges(message), forwarded).catch((error: unknown) => {
-          report(error);
-          return forwarded;
-        });
+        const written = await copies.updated(null, cwd, updateChanges(message), forwarded);
         response.writeHead(200, { 'content-type': 'application/json' }).end(written.text);
         return;
       } else if (request.url === '/copy/upload') {
