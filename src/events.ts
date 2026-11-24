@@ -93,6 +93,10 @@ const WINDOW_MINUTES: Record<string, number> = { five_hour: 300, seven_day: 10_0
 const WAKEUP = /Next wakeup scheduled for \d\d:\d\d:\d\d \(in (\d+)s\)/;
 const CHILD_UPDATES = new Set(['tool_call', 'tool_call_update']);
 
+function startedItself(result: Fields): boolean {
+  return AUTONOMOUS_ORIGINS.has(result.origin?.kind) && (result.user_message_uuids ?? []).length === 0;
+}
+
 function isWhole(report: Reported): report is Whole {
   const { model, ...figures } = report;
   return typeof model === 'string' && model !== '' && Object.values(figures).every((figure) => count(figure) !== null);
@@ -533,7 +537,7 @@ class ClaudeReader extends Reader {
     const sdk = message.params!.message as Fields;
     switch (sdk.type) {
       case 'result':
-        if (AUTONOMOUS_ORIGINS.has(sdk.origin?.kind)) {
+        if (startedItself(sdk)) {
           this.stop = null;
         } else {
           this.measured(sdk.model_usage_since_last_result);

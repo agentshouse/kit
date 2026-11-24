@@ -762,14 +762,15 @@ function claudeAnswer(...rows: Record<string, unknown>[]): Record<string, unknow
   return { _meta: { quota: { model_usage: rows } } };
 }
 
-function claudeResult(origin: string, lifetimes: Record<string, [number, number] | null>): string {
+function claudeResult(origin: string, lifetimes: Record<string, [number, number] | null>, prompts: string[] = []): string {
   const counted = Object.fromEntries(
     Object.entries(lifetimes).map(([model, split]) => [
       model,
       split === null ? {} : { cacheCreationInputTokens: split[0] + split[1], cacheCreationEphemeral5mInputTokens: split[0], cacheCreationEphemeral1hInputTokens: split[1] },
     ]),
   );
-  return emit('_claude/sdkMessage', { message: { type: 'result', subtype: 'success', origin: { kind: origin }, model_usage_since_last_result: counted } });
+  const answered = prompts.length === 0 ? {} : { user_message_uuid: prompts.at(-1), user_message_uuids: prompts };
+  return emit('_claude/sdkMessage', { message: { type: 'result', subtype: 'success', origin: { kind: origin }, ...answered, model_usage_since_last_result: counted } });
 }
 
 it("carries each model Claude Code reports for the turn in its own row, a sub-agent's model among them, its cache writes by the lifetimes Claude Code counted on the turn's results, and adds them to the session's tokens", async () => {
@@ -790,6 +791,11 @@ it('carries a recorded Claude Code turn with each model in its own row and its c
     { model: 'claude-sonnet-5-5', input: 10, cache_write_5m: 0, cache_write_1h: 9978, cache_read: 135_735, output: 460 },
     { model: 'claude-haiku-5-5', input: 12_842, cache_write_5m: 0, cache_write_1h: 0, cache_read: 0, output: 1417 },
   ]);
+});
+
+it("splits the cache writes of a Claude Code turn whose prompt a model cycle Claude Code started on its own took in by that cycle's lifetimes", async () => {
+  const body = await spent('claude-agent-acp', claudeAnswer(claudeRow('claude-main', 5, 11, 13, 7)), [claudeResult('task-notification', { 'claude-main': [3, 10] }, ['prompt-folded'])]);
+  expect(body.content.tokens).toEqual([{ model: 'claude-main', input: 5, cache_write_5m: 3, cache_write_1h: 10, cache_read: 11, output: 7 }]);
 });
 
 it("splits each Claude Code turn's cache writes by the lifetimes its own results counted, a resumed session's first turn among them, and adds every turn's to the session's tokens", async () => {
@@ -813,7 +819,7 @@ it.each([
   ['Claude Code counted no lifetimes', []],
   ['its lifetimes do not add up to it', [claudeResult('human', { 'claude-main': [3, 9] })]],
   ['one of its results does not tell them apart', [claudeResult('human', { 'claude-main': [3, 10] }), claudeResult('human', { 'claude-main': null })]],
-  ['a model cycle Claude Code started on its own wrote them', [claudeResult('task-notification', { 'claude-main': [3, 10] })]],
+  ['a model cycle Claude Code started on its own and took no prompt into wrote them', [claudeResult('task-notification', { 'claude-main': [3, 10] })]],
 ])("keeps a Claude Code turn's cache writes whole where %s", async (_case, before) => {
   const body = await spent('claude-agent-acp', claudeAnswer(claudeRow('claude-main', 5, 11, 13, 7)), before);
   expect(body.content.tokens).toEqual([{ model: 'claude-main', input: 5, cache_write: 13, cache_read: 11, output: 7 }]);
