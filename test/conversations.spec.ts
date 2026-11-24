@@ -250,8 +250,7 @@ it('writes a message to a running process while the Kit is still reporting its C
   expect(sent.text).toBe('@say reached');
 });
 
-async function promptOf(kind: string, message: Record<string, unknown>): Promise<unknown> {
-  const hosted = await hostKit([{ kind }]);
+async function promptOf(hosted: Hosted, message: Record<string, unknown>): Promise<unknown> {
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
 
@@ -268,11 +267,19 @@ it.each([
   ['codex-acp', '/compact Keep the open Runs', '/compact'],
   ['grok-build', '/compact Keep the open Runs', '/compact'],
 ])("runs House's compact message on %s as the CLI's own compact command, `%s` reaching it as `%s`", async (kind, text, reached) => {
-  expect(await promptOf(kind, { text, compact: true })).toEqual([{ type: 'text', text: reached }]);
+  expect(await promptOf(await hostKit([{ kind }]), { text, compact: true })).toEqual([{ type: 'text', text: reached }]);
 });
 
 it("sends a person's own compact command to a CLI whose command takes no words as typed", async () => {
-  expect(await promptOf('codex-acp', { text: '/compact Keep the open Runs' })).toEqual([{ type: 'text', text: '/compact Keep the open Runs' }]);
+  expect(await promptOf(await hostKit([{ kind: 'codex-acp' }]), { text: '/compact Keep the open Runs' })).toEqual([{ type: 'text', text: '/compact Keep the open Runs' }]);
+});
+
+it("reads no link in House's compaction words that a CLI's compact command does not take", async () => {
+  const hosted = await hostKit([{ kind: 'codex-acp' }]);
+  const [voice] = attached(hosted, [{ name: 'voice.ogg', media_type: 'audio/ogg', content: Buffer.from('OggS') }]);
+
+  expect(await promptOf(hosted, { text: `/compact Keep what ${voice!.link} says`, compact: true })).toEqual([{ type: 'text', text: '/compact' }]);
+  expect(infoCalls(hosted)).toEqual([]);
 });
 
 it('opens a conversation with the launch settings House changed while the Kit was still reporting its CLIs', async () => {
