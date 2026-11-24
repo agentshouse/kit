@@ -373,7 +373,7 @@ it("keeps a Room's folder a Run works in through the Room's handle change, so th
   await absent(folder);
 });
 
-it("counts a linked attachment another folder of the Room wrote in place and uploaded as House's in a Run's copy, so that copy goes once no turn ran in it for 24 hours", async () => {
+it("counts a linked attachment another folder of the Room wrote in place and uploaded as House's in a Run's copy, which reckoning downloads nothing into, so that copy goes once no turn ran in it for 24 hours", async () => {
   const clock = await clocked();
   const { hosted, rooms, notes } = await staged([{}, {}], clock.hosting);
   notes.upload('table.csv', Buffer.from('a,b\n'));
@@ -386,10 +386,12 @@ it("counts a linked attachment another folder of the Room wrote in place and upl
   await writeFile(join(notes.repository, 'table.csv'), 'a,b,c\n');
   expect(await house(hosted, notes.repository, 'upload')).toMatchObject({ status: 0, stderr: '' });
   expect(await readFile(join(imp, 'table.csv'), 'utf8')).toBe('a,b,c\n');
+  const fetched = downloads(hosted);
 
   await clock.shift(25 * HOUR);
   await turn(hosted, 2, '@say looking');
   await until(() => (existsSync(imp) ? undefined : true));
 
+  expect(downloads(hosted)).toBe(fetched);
   expect(await readFile(join(notes.repository, 'table.csv'), 'utf8')).toBe('a,b,c\n');
 });
