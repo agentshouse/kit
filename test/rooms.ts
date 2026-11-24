@@ -640,7 +640,8 @@ function toolResults(room: Room, writes: Write[]): Record<string, unknown>[] {
     path: write.path,
     ...(write.revision === null ? {} : { revision: write.revision }),
     ...(write.from === undefined ? {} : { from: write.from }),
-    ...(write.merged === true ? room.merged(write.content!) : {}),
+    ...(write.merged === true || (write.proposal !== undefined && write.content !== null) ? room.merged(write.content!) : {}),
+    ...(write.proposal === undefined ? {} : { proposal: write.proposal }),
   }));
 }
 
