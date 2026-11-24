@@ -1,5 +1,5 @@
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk';
-import type { PartOf, SessionState, Tokens } from '@agentshouse/session-content';
+import type { ModelTokens, PartOf, SessionState } from '@agentshouse/session-content';
 import type { Called, FileLines, Kind } from './content.ts';
 
 type Fields = Record<string, any>;
@@ -23,9 +23,11 @@ type Files = SessionState['files'];
 
 type Limit = SessionState['limits'][number];
 
-type Written = Tokens[number]['cache_write'];
+type Lifetimes = Required<Pick<ModelTokens, 'cache_write_5m' | 'cache_write_1h'>>;
 
-type Lifetimes = Exclude<Written, number>;
+type Written = Required<Pick<ModelTokens, 'cache_write'>> | Lifetimes;
+
+export type Spent = { readonly model: string } & Required<Pick<ModelTokens, 'input' | 'cache_read' | 'output'>> & Written;
 
 interface Reported {
   model: unknown;
@@ -60,7 +62,7 @@ export type Event =
   | { kind: 'notice'; notice: NoticeKind; text: string }
   | { kind: 'image'; data: string; mediaType: string }
   | { kind: 'state'; state: Partial<SessionState> }
-  | { kind: 'tokens'; tokens: Tokens }
+  | { kind: 'tokens'; tokens: Spent[] }
   | { kind: 'commands'; commands: AvailableCommand[] }
   | { kind: 'options'; options: SessionConfigOption[] };
 
@@ -90,16 +92,16 @@ const NOTICES: Record<string, NoticeKind> = { info: 'info', warning: 'warning', 
 const WINDOW_MINUTES: Record<string, number> = { five_hour: 300, seven_day: 10_080 };
 const WAKEUP = /Next wakeup scheduled for \d\d:\d\d:\d\d \(in (\d+)s\)/;
 const CHILD_UPDATES = new Set(['tool_call', 'tool_call_update']);
-const NO_WRITES: Lifetimes = { five_minutes: 0, one_hour: 0 };
+const NO_WRITES: Lifetimes = { cache_write_5m: 0, cache_write_1h: 0 };
 
 function isWhole(report: Reported): report is Whole {
   const { model, ...figures } = report;
   return typeof model === 'string' && model !== '' && Object.values(figures).every((figure) => count(figure) !== null);
 }
 
-function counted(reports: Reported[], written: (model: string, total: number) => Written = (_model, total) => total): Event[] {
+function counted(reports: Reported[], written: (model: string, total: number) => Written = (_model, total) => ({ cache_write: total })): Event[] {
   if (reports.length === 0 || !reports.every(isWhole)) return [];
-  const tokens = reports.map(({ model, input, cache_write, cache_read, output }) => ({ model, input, cache_write: written(model, cache_write), cache_read, output }));
+  const tokens = reports.map(({ model, input, cache_write, cache_read, output }) => ({ model, input, ...written(model, cache_write), cache_read, output }));
   return [{ kind: 'tokens', tokens }];
 }
 
@@ -116,7 +118,7 @@ function quotaReports(result: Fields | undefined, written: string): Reported[] {
 function lifetimesOf(used: Fields | undefined): Lifetimes | null {
   const five = count(used?.cacheCreationEphemeral5mInputTokens);
   const hour = count(used?.cacheCreationEphemeral1hInputTokens);
-  return five === null || hour === null ? null : { five_minutes: five, one_hour: hour };
+  return five === null || hour === null ? null : { cache_write_5m: five, cache_write_1h: hour };
 }
 
 function since(reading: ReadonlyMap<string, Lifetimes | null> | null, model: string): Lifetimes | null {
@@ -126,14 +128,14 @@ function since(reading: ReadonlyMap<string, Lifetimes | null> | null, model: str
 
 function grown(now: Lifetimes | null, before: Lifetimes | null): Lifetimes | null {
   if (now === null || before === null) return null;
-  if (now.five_minutes < before.five_minutes || now.one_hour < before.one_hour) return now;
-  return { five_minutes: now.five_minutes - before.five_minutes, one_hour: now.one_hour - before.one_hour };
+  if (now.cache_write_5m < before.cache_write_5m || now.cache_write_1h < before.cache_write_1h) return now;
+  return { cache_write_5m: now.cache_write_5m - before.cache_write_5m, cache_write_1h: now.cache_write_1h - before.cache_write_1h };
 }
 
 function joined(held: Lifetimes | null | undefined, grew: Lifetimes | null): Lifetimes | null {
   if (held === undefined) return grew;
   if (held === null || grew === null) return null;
-  return { five_minutes: held.five_minutes + grew.five_minutes, one_hour: held.one_hour + grew.one_hour };
+  return { cache_write_5m: held.cache_write_5m + grew.cache_write_5m, cache_write_1h: held.cache_write_1h + grew.cache_write_1h };
 }
 
 function contentText(content: Fields[] | undefined): string {
@@ -497,7 +499,7 @@ class ClaudeReader extends Reader {
     if (result?._meta?.quota === undefined) return super.answered(result);
     const spent = counted(quotaReports(result, 'cachedWriteTokens'), (model, total) => {
       const parts = this.lived.get(model);
-      return parts !== undefined && parts !== null && parts.five_minutes + parts.one_hour === total ? parts : total;
+      return parts !== undefined && parts !== null && parts.cache_write_5m + parts.cache_write_1h === total ? parts : { cache_write: total };
     });
     this.lived.clear();
     return [...spent, ...super.answered(result)];

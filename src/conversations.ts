@@ -20,7 +20,7 @@ import type {
   KitQuestion,
   SecretCeremonyStep,
 } from '@agentshouse/kit-wire';
-import type { Operation, SessionState, Tokens } from '@agentshouse/session-content';
+import type { Operation, SessionState, Tokens, Turn as TurnContent } from '@agentshouse/session-content';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -33,7 +33,7 @@ import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
 import type { Answered, LocalCopies, Opening, Place } from './copies.ts';
 import { Content } from './content.ts';
-import { answeredFailure, readerFor, type CallEvent, type Event, type Message, type Reader, type Stop } from './events.ts';
+import { answeredFailure, readerFor, type CallEvent, type Event, type Message, type Reader, type Spent, type Stop } from './events.ts';
 import { fileInfo, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, type GrokPlan, type GrokQuestions } from './grok.ts';
 import { agentBase } from './home.ts';
@@ -176,35 +176,35 @@ const GROK_QUESTION = {
   },
 };
 
-type Written = Tokens[number]['cache_write'];
-
-function writes(written: Written): number {
-  return typeof written === 'number' ? written : written.five_minutes + written.one_hour;
+function writes(spent: Spent): number {
+  return 'cache_write' in spent ? spent.cache_write : spent.cache_write_5m + spent.cache_write_1h;
 }
 
-function addedWrites(held: Written, written: Written): Written {
-  if (typeof held === 'number' || typeof written === 'number') return writes(held) + writes(written);
-  return { five_minutes: held.five_minutes + written.five_minutes, one_hour: held.one_hour + written.one_hour };
+function joinedSpent(held: Spent, spent: Spent): Spent {
+  const figures = { model: spent.model, input: held.input + spent.input, cache_read: held.cache_read + spent.cache_read, output: held.output + spent.output };
+  if ('cache_write' in held || 'cache_write' in spent) return { ...figures, cache_write: writes(held) + writes(spent) };
+  return { ...figures, cache_write_5m: held.cache_write_5m + spent.cache_write_5m, cache_write_1h: held.cache_write_1h + spent.cache_write_1h };
 }
 
-function addedTokens(sum: Tokens | null, tokens: Tokens): Tokens {
-  const models = new Map((sum ?? []).map((row) => [row.model, row]));
-  for (const row of tokens) {
-    const held = models.get(row.model);
-    models.set(
-      row.model,
-      held === undefined
-        ? row
-        : {
-            model: row.model,
-            input: held.input + row.input,
-            cache_write: addedWrites(held.cache_write, row.cache_write),
-            cache_read: held.cache_read + row.cache_read,
-            output: held.output + row.output,
-          },
-    );
+function addedSpent(held: readonly Spent[], spent: readonly Spent[]): Spent[] {
+  const models = new Map(held.map((row) => [row.model, row]));
+  for (const row of spent) {
+    const before = models.get(row.model);
+    models.set(row.model, before === undefined ? row : joinedSpent(before, row));
   }
   return [...models.values()];
+}
+
+function addedTokens(sum: Tokens | null, spent: readonly Spent[]): Tokens {
+  return spent.reduce(
+    (total, row) => ({
+      input: total.input + row.input,
+      output: total.output + row.output,
+      cache_read: total.cache_read + row.cache_read,
+      cache_write: total.cache_write + writes(row),
+    }),
+    sum ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  );
 }
 
 function cliSaid(error: unknown): string {
@@ -322,7 +322,7 @@ class Conversation {
   reader: Reader | null = null;
   state: SessionState = QUIET;
   sentState: string | null = null;
-  tokens: Tokens | null = null;
+  tokens: Spent[] = [];
   readonly leftovers = new Set<Scope>();
   readonly waiting: Waiting[] = [];
   sending: Promise<void> | null = null;
@@ -1178,11 +1178,11 @@ export class Conversations {
     conversation.turns.delete(turn);
     if (conversation.turn === turn) conversation.turn = null;
     const tokens = conversation.tokens;
-    conversation.tokens = null;
-    if (tokens !== null) this.stated(conversation, { tokens: addedTokens(conversation.state.tokens, tokens) });
+    conversation.tokens = [];
+    if (tokens.length > 0) this.stated(conversation, { tokens: addedTokens(conversation.state.tokens, tokens) });
     const body = Promise.allSettled(turn.uploads).then(() => ({
       ...turnOf(conversation, turn),
-      content: { parts: turn.content.parts, tokens, state: conversation.state },
+      content: { parts: turn.content.parts, tokens, state: conversation.state } satisfies TurnContent,
       ...(failed === null ? {} : { failed: failed.failure }),
     }));
     void this.deliver(conversation, 'turns/end', body).catch(logged);
@@ -1345,7 +1345,7 @@ export class Conversations {
         this.stated(conversation, event.state);
         return;
       case 'tokens':
-        conversation.tokens = addedTokens(conversation.tokens, event.tokens);
+        conversation.tokens = addedSpent(conversation.tokens, event.tokens);
         return;
       case 'call':
         this.called(conversation, event);

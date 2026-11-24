@@ -772,28 +772,27 @@ function claudeResult(origin: string, lifetimes: Record<string, [number, number]
   return emit('_claude/sdkMessage', { message: { type: 'result', subtype: 'success', origin: { kind: origin }, modelUsage } });
 }
 
-it("carries each model Claude Code reports for the turn in its own row, a sub-agent's model among them, its cache writes by the lifetimes Claude Code's running counts grew by, and adds each model's to the session's", async () => {
+it("carries each model Claude Code reports for the turn in its own row, a sub-agent's model among them, its cache writes by the lifetimes Claude Code's running counts grew by, and adds them to the session's tokens", async () => {
   const body = await spent('claude-agent-acp', claudeAnswer(claudeRow('claude-main', 5, 11, 13, 7), claudeRow('claude-subagent', 100, 200, 300, 400)), [
     claudeResult('human', { 'claude-main': [1, 4], 'claude-subagent': [0, 0] }),
     claudeResult('human', { 'claude-main': [3, 10], 'claude-subagent': [300, 0] }),
   ]);
-  const tokens = [
-    { model: 'claude-main', input: 5, cache_write: { five_minutes: 3, one_hour: 10 }, cache_read: 11, output: 7 },
-    { model: 'claude-subagent', input: 100, cache_write: { five_minutes: 300, one_hour: 0 }, cache_read: 200, output: 400 },
-  ];
-  expect(body.content.tokens).toEqual(tokens);
-  expect(body.content.state.tokens).toEqual(tokens);
+  expect(body.content.tokens).toEqual([
+    { model: 'claude-main', input: 5, cache_write_5m: 3, cache_write_1h: 10, cache_read: 11, output: 7 },
+    { model: 'claude-subagent', input: 100, cache_write_5m: 300, cache_write_1h: 0, cache_read: 200, output: 400 },
+  ]);
+  expect(body.content.state.tokens).toEqual({ input: 105, output: 407, cache_read: 211, cache_write: 313 });
 });
 
 it('carries a recorded Claude Code turn with each model in its own row and its cache writes by the lifetimes Claude Code counted for it', async () => {
   const { turns } = await replayed('claude-web');
   expect(turns[0]!.content.tokens).toEqual([
-    { model: 'claude-sonnet-5-5', input: 10, cache_write: { five_minutes: 0, one_hour: 9978 }, cache_read: 135_735, output: 460 },
-    { model: 'claude-haiku-5-5', input: 12_842, cache_write: { five_minutes: 0, one_hour: 0 }, cache_read: 0, output: 1417 },
+    { model: 'claude-sonnet-5-5', input: 10, cache_write_5m: 0, cache_write_1h: 9978, cache_read: 135_735, output: 460 },
+    { model: 'claude-haiku-5-5', input: 12_842, cache_write_5m: 0, cache_write_1h: 0, cache_read: 0, output: 1417 },
   ]);
 });
 
-it("splits each later Claude Code turn's cache writes by what its lifetimes grew since the turn before, and the session's tokens add each model's", async () => {
+it("splits each later Claude Code turn's cache writes by what its lifetimes grew since the turn before, and the session's tokens add every turn's", async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
   const turn = async (lifetimes: [number, number], write: number): Promise<Ended> => {
     const said = [claudeResult('human', { 'claude-main': lifetimes }), `@spent ${JSON.stringify(claudeAnswer(claudeRow('claude-main', 1, 2, write, 3)))}`, '@say ok'];
@@ -805,8 +804,8 @@ it("splits each later Claude Code turn's cache writes by what its lifetimes grew
   await turn([3, 10], 13);
   const second = await turn([8, 30], 25);
 
-  expect(second.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write: { five_minutes: 5, one_hour: 20 }, cache_read: 2, output: 3 }]);
-  expect(second.content.state.tokens).toEqual([{ model: 'claude-main', input: 2, cache_write: { five_minutes: 8, one_hour: 30 }, cache_read: 4, output: 6 }]);
+  expect(second.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write_5m: 5, cache_write_1h: 20, cache_read: 2, output: 3 }]);
+  expect(second.content.state.tokens).toEqual({ input: 2, output: 6, cache_read: 4, cache_write: 38 });
 });
 
 it.each([
@@ -829,7 +828,7 @@ it("keeps a resumed Claude Code session's first cache writes whole, since its ru
   const second = endedOf(await until(() => hosted.turns.filter((ended) => ended.path === '/kit/turns/end')[1]));
 
   expect(first.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write: 100, cache_read: 2, output: 3 }]);
-  expect(second.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write: { five_minutes: 5, one_hour: 20 }, cache_read: 2, output: 3 }]);
+  expect(second.content.tokens).toEqual([{ model: 'claude-main', input: 1, cache_write_5m: 5, cache_write_1h: 20, cache_read: 2, output: 3 }]);
 });
 
 it("carries a recorded Codex turn under its model: its input less its cached input, its cached input as cache reads and its output with its reasoning inside, Codex's running total counted once", async () => {
@@ -844,8 +843,8 @@ it("carries Grok's tokens under its model: its input holds its cache reads, its 
 
 it("leaves out a Grok sub-agent that outlives its turn, which its parent and the turn after it leave out too, and the session's tokens sum its turns", async () => {
   const { turns } = await replayed('grok-subagent', 2);
-  const total = { model: 'grok-4.7-build', input: 34_955 - 18_944 + (17_878 - 17_536), cache_write: 0, cache_read: 18_944 + 17_536, output: 89 + 70 };
-  expect(turns[1]!.content.state.tokens).toEqual([total]);
+  const total = { input: 34_955 - 18_944 + (17_878 - 17_536), output: 89 + 70, cache_read: 18_944 + 17_536, cache_write: 0 };
+  expect(turns[1]!.content.state.tokens).toEqual(total);
 });
 
 it.each([
@@ -858,7 +857,7 @@ it.each([
   const hosted = await hostKit([{ kind: 'grok-build' }]);
   hosted.call({ kind: 'message', text: `@say ok\n@completed ${JSON.stringify(usage)}`, first: true });
   const ended = endedOf(await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end')));
-  expect(ended.content.tokens).toBeNull();
+  expect(ended.content.tokens).toEqual([]);
   expect(types(ended.content.parts)).toContain('text');
 });
 
@@ -873,6 +872,6 @@ it.each([
   ['grok-build', {}],
 ])('carries no tokens on a %s turn whose usage is absent or incomplete, and the turn still ends', async (kind, usage) => {
   const body = await spent(kind, usage);
-  expect(body.content.tokens).toBeNull();
+  expect(body.content.tokens).toEqual([]);
   expect(types(body.content.parts)).toContain('text');
 });
