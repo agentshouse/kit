@@ -61,7 +61,6 @@ it('connects a fresh Linux account with a login code, writes the absent settings
     `ExecStart="${join(home, 'bin', 'house')}" resident`,
     'Restart=on-failure',
     'RestartSec=5',
-    'Delegate=yes',
     'OOMPolicy=continue',
     '',
     '[Install]',

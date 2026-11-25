@@ -66,7 +66,6 @@ Description=Kit
 ExecStart=${unitWord(launcher())} resident
 Restart=on-failure
 RestartSec=${RESTART_SECONDS}
-Delegate=yes
 OOMPolicy=continue
 
 [Install]
