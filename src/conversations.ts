@@ -31,7 +31,7 @@ import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
-import type { Answered, LocalCopies, Opening, Place } from './copies.ts';
+import { PlaceRefused, type Answered, type LocalCopies, type Opening, type Place } from './copies.ts';
 import { Content } from './content.ts';
 import { answeredFailure, readerFor, type CallEvent, type Event, type Message, type Reader, type Spent, type Stop } from './events.ts';
 import { fileInfo, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
@@ -143,6 +143,10 @@ async function step<T>(reason: string | ((error: unknown) => string), work: Prom
   } catch (error) {
     throw new NotStarted(typeof reason === 'string' ? reason : reason(error), { cause: error });
   }
+}
+
+function unplaced(error: unknown): string {
+  return error instanceof PlaceRefused ? error.message : NO_COPY;
 }
 
 function unopened(reason: string): (error: unknown) => string {
@@ -525,7 +529,7 @@ export class Conversations {
 
   private async open(conversation: Conversation, call: KitCallOf<'open'>): Promise<{ result: Promise<KitCallResult> }> {
     await this.stop(conversation);
-    const opening = { room_ref: call.room_ref, name: call.name };
+    const opening: Opening = { room_ref: call.room_ref, name: call.name, ...(call.run === undefined ? {} : { run: call.run }) };
     const launch =
       conversation.launch ??
       this.launch(conversation, this.route(conversation, call.agent_id).then((route) => conversationRoute(route, call)), null, true, opening);
@@ -692,7 +696,7 @@ export class Conversations {
       }
       await conversation.uploading;
       const place = conversation.place!;
-      if (place.copy) await this.freshened(conversation, place);
+      if (place.copy && place.synced) await this.freshened(conversation, place);
       if (call.first === true) {
         const reads = CLIS[waiting.route.kind]!.reads !== null;
         const block = place.copy ? copyInstructions(waiting.route.base_instructions, place.directory, reads) : (instructing ?? this.instructed(conversation, waiting.route)!);
@@ -738,7 +742,7 @@ export class Conversations {
   private uploaded(conversation: Conversation): void {
     const running = conversation.running;
     const place = conversation.place;
-    if (running === null || running.killed || running.adapter.connection.signal.aborted || place === null || !place.copy) return;
+    if (running === null || running.killed || running.adapter.connection.signal.aborted || place === null || !place.copy || !place.synced) return;
     this.uploads++;
     conversation.uploading = this.kit.copies
       .ended(place.directory, running.bridge.caller)
@@ -944,7 +948,7 @@ export class Conversations {
     let place: Place;
     try {
       if (conversation.kills > 0) throw new Error(KILLED);
-      place = await step(NO_COPY, this.kit.copies.placed(conversation.id, opening, bridge.caller, route.working_directory));
+      place = await step(unplaced, this.kit.copies.placed(conversation.id, opening, bridge.caller, route.working_directory));
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
       this.closeBridge(conversation, bridging, bridge);
@@ -987,7 +991,7 @@ export class Conversations {
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
       const agent = adapter.connection.agent;
       const cwd = place.directory;
-      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!);
+      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name);
       const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
       const opened =
         resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));

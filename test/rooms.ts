@@ -117,7 +117,6 @@ const CAPPED: Stopped = {
 export function said(refusal: Refused): string {
   if (refusal.code === 'protected_path') return `protected_path: ${refusal.path} is not writable`;
   if (refusal.code === 'binary_content') return `binary_content: ${refusal.path} is a document, which holds Markdown text only; write it with update`;
-  if (refusal.code === 'attachment_path') return `attachment_path: ${refusal.path} holds an attachment, since its Path does not end .md; send its bytes with upload`;
   if (refusal.code === 'handle_changed') return `handle_changed: its handle changed; use ${refusal.current_path}`;
   if (refusal.code === 'batch_too_large') {
     return `batch_too_large: this batch names ${refusal.documents} documents and attachments, over ${BATCH_FILES} per call; split it into several batches`;
@@ -481,7 +480,6 @@ export class Room {
       const to = change.to === undefined ? undefined : local(change.to);
       if (!this.writable(path) || (to !== undefined && !this.writable(to))) return { refusal: { code: 'protected_path', path: change.path } };
       if (change.op === 'upload' && DOCUMENT.test(path)) return { refusal: { code: 'binary_content', path: change.path } };
-      if (change.op === 'write' && !DOCUMENT.test(path)) return { refusal: { code: 'attachment_path', path: change.path } };
       if (typeof change.base === 'string' && !REVISION.test(change.base)) return { refusal: { code: 'invalid_base_revision', path: change.path } };
       if (removed.has(path)) return { refusal: { code: 'duplicate_path', path: change.path } };
       const named = to ?? path;
@@ -498,6 +496,15 @@ export class Room {
         const proposal = `p-${this.proposals.length + 1}`;
         this.proposals.push({ proposal, content: change.content!, ...(typeof change.base === 'string' ? { base: change.base } : {}) });
         writes.set(path, { path, op: 'write', content: current?.content ?? null, revision: current?.revision ?? null, proposal: { proposal, ...this.proposing } });
+      } else if (change.op === 'write' && !DOCUMENT.test(path)) {
+        if (binary === undefined && change.base !== undefined) conflict('path_absent');
+        else if (binary !== undefined && change.base !== binary.revision) conflict(change.base === undefined ? 'path_exists' : 'base_revision_stale');
+        else {
+          const stored = { revision: minted(), bytes: Buffer.from(change.content!) };
+          binaries.set(path, stored);
+          this.binaryHistory.set(stored.revision, { ...stored, path });
+          writes.set(path, { path, op: 'upload', content: null, revision: stored.revision, binary: { bytes: stored.bytes.length, sha256: digest(stored.bytes) } });
+        }
       } else if (change.op === 'write') {
         if (binary !== undefined) conflict('binary_file');
         else if (change.base === undefined) {

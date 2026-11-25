@@ -1,5 +1,6 @@
+import { stat } from 'node:fs/promises';
 import { request } from 'node:http';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { text as textOf } from 'node:stream/consumers';
 import { parseArgs } from 'node:util';
 import {
@@ -14,9 +15,9 @@ import {
   type UploadParts,
   type Way,
 } from './files.ts';
-import { DEFAULT_MAX_SIZE } from './copies.ts';
+import { DEFAULT_MAX_SIZE, UPDATE_PATH } from './copies.ts';
 import { ownerSocket } from './home.ts';
-import { fileDigest } from './manifest.ts';
+import { fileDigest, MANIFEST } from './manifest.ts';
 import { DISCONNECTED, environmentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { proxyUnlessRelayed } from './relay.ts';
@@ -86,7 +87,7 @@ function refused(path: string, status: number, text: string, local: boolean): st
   const refusal = refusalOf(text);
   if (refusal !== null) return said(refusal.text);
   if (status === 502 && local) return text;
-  return path === '/' ? unconfirmed(status) : `${path} answered ${status}`;
+  return path === '/' || path === UPDATE_PATH ? unconfirmed(status) : `${path} answered ${status}`;
 }
 
 function bridged(path: string, body: unknown, to = socketPath): Promise<string> {
@@ -307,14 +308,37 @@ async function house(args: string[]): Promise<string | undefined> {
     return [USAGE, HELP, ...[...KIT_VERBS].map(([name, { about }]) => `${name}: ${about}`), UPLOAD, DOWNLOAD, ...listing].join('\n');
   }
   if (flags.has('--help')) return toolHelp(verb);
+  if (verb === 'update') return update(await argumentsOf(argument));
   return called(verb, await argumentsOf(argument));
 }
 
 async function called(name: string, args: Record<string, unknown>, operation?: string): Promise<string> {
-  const result = await mcp<ToolResult>('tools/call', { name, arguments: args }, operation);
+  return toolText(await mcp<ToolResult>('tools/call', { name, arguments: args }, operation));
+}
+
+function toolText(result: ToolResult): string {
   const text = result.content.map((content) => content.text).join('\n');
   if (result.isError === true) throw new Error(said(text.replace(/\n+$/, '')));
   return text;
+}
+
+async function inLocalCopy(cwd: string): Promise<boolean> {
+  for (let folder = cwd; ; folder = dirname(folder)) {
+    if ((await stat(join(folder, MANIFEST)).catch(() => null))?.isFile() === true) return true;
+    if (dirname(folder) === folder) return false;
+  }
+}
+
+async function update(args: Record<string, unknown>): Promise<string> {
+  const cwd = process.cwd();
+  const through = socketPath ?? ((await inLocalCopy(cwd)) ? ownerSocket() : undefined);
+  if (through === undefined) return called('update', args);
+  const answer = JSON.parse(await bridged(UPDATE_PATH, { message: rpc('tools/call', { name: 'update', arguments: args }), cwd }, through)) as {
+    result?: ToolResult;
+    error?: { message: string };
+  };
+  if (answer.error !== undefined) throw new Error(said(answer.error.message));
+  return toolText(answer.result!);
 }
 
 function counted(usage: string, about: string, operands: number, args: string[], verb: (operands: string[]) => Promise<void>): Promise<void> {

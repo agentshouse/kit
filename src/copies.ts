@@ -1,8 +1,8 @@
-import type { KitBinaryChange, LocalCopyRoom } from '@agentshouse/kit-wire';
+import type { KitBinaryChange, KitRun, LocalCopyRoom } from '@agentshouse/kit-wire';
 import { isUtf8 } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
@@ -23,7 +23,7 @@ import {
   type Manifest,
   type Present,
 } from './manifest.ts';
-import { environmentTool, Unsettled } from './mcp.ts';
+import { answerDocument, environmentTool, toolAnswer, Unsettled, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { firstLine, namedWait, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
@@ -51,11 +51,18 @@ interface RoomFolder {
   lost?: true;
 }
 
+interface Ran {
+  copy: KitRun['copy']['kind'];
+  name: string;
+}
+
 interface Placed {
   copies: Record<string, string>;
   session?: string;
   ended?: Record<string, number>;
   removed?: string[];
+  run?: Ran;
+  deleted?: true;
 }
 
 export interface KeptCopy {
@@ -66,11 +73,33 @@ export interface KeptCopy {
 export interface Place {
   directory: string;
   copy: boolean;
+  synced: boolean;
+  name: string | null;
 }
 
 export interface Opening {
   room_ref: string | null;
   name: string;
+  run?: KitRun;
+}
+
+export class PlaceRefused extends Error {}
+
+export interface Sent {
+  op: string;
+  path: string;
+  content?: unknown;
+}
+
+export const UPDATE_PATH = '/copy/update';
+
+export interface Updating {
+  message: Message;
+  cwd: string;
+}
+
+export function updateChanges(message: Message): Sent[] {
+  return (message.params.arguments as { changes?: Sent[] }).changes ?? [];
 }
 
 export const DEFAULT_MAX_SIZE = 10;
@@ -89,6 +118,8 @@ export interface Written {
   content?: string | null;
   cut?: unknown;
   proposal?: Proposal;
+  from?: string;
+  ref?: string;
 }
 
 interface Proposal {
@@ -203,6 +234,14 @@ interface Report {
 
 type Linking = (path: string, held: { revision: string; sha256: string }, target: string) => Promise<boolean>;
 
+type Reckoning = (conversation: string, room: string, directory: string) => Promise<void>;
+
+interface Integrating {
+  repository: string;
+  manifest: Manifest;
+  work: string;
+}
+
 interface Folder {
   repository: string;
   manifest: Manifest;
@@ -223,6 +262,18 @@ class NotReady extends Error {
 }
 
 export type Submitted = { accepted: Written[] } | { refused: Refusal };
+
+export function updateAnswer(forwarded: Forwarded): Submitted {
+  const answer = toolAnswer(forwarded);
+  if ('refused' in answer) return answer;
+  const results = answerDocument<{ results?: (Omit<Written, 'revision'> & { revision?: string })[] } | null>(answer.text)?.results ?? [];
+  return {
+    accepted: results.flatMap(({ revision, ...written }) => [
+      ...(written.from === undefined ? [] : [{ path: written.from, revision: null, content: null }]),
+      { ...written, revision: revision ?? null },
+    ]),
+  };
+}
 
 export interface Caller {
   key: string;
@@ -450,6 +501,20 @@ async function exists(path: string): Promise<boolean> {
     () => true,
     () => false,
   );
+}
+
+function withLines(forwarded: Forwarded, lines: readonly string[]): Forwarded {
+  if (lines.length === 0) return forwarded;
+  const answer = JSON.parse(forwarded.text) as { result: ToolResult };
+  return { ...forwarded, text: JSON.stringify({ ...answer, result: { ...answer.result, content: [...answer.result.content, { type: 'text', text: lines.join('\n') }] } }) };
+}
+
+async function integratedFile(into: Integrating, path: string, name: string, held: string | null, revision: string, text: string): Promise<boolean> {
+  const target = join(into.repository, name);
+  if (held === null ? await exists(target) : !(await holding(into.repository, name, held))) return false;
+  await placed(into.work, target, text);
+  into.manifest.files[path] = { revision, sha256: digest(text), bytes: Buffer.byteLength(text) };
+  return true;
 }
 
 function without(copy: Copy): Copy {
@@ -841,6 +906,7 @@ export class LocalCopies {
 
   private owe(room: string | null): void {
     for (const [conversation, place] of this.places) {
+      if (place.run !== undefined || place.deleted === true) continue;
       for (const copied of Object.keys(place.copies)) {
         if (place.removed?.includes(copied)) continue;
         if (room === null || room === copied) this.owed.add(copyKey(conversation, copied));
@@ -896,7 +962,7 @@ export class LocalCopies {
     const synced = new Map(rooms.filter((room) => room.level === 'keep').map((room) => [`${ROOMS}${room.room_ref}`, room.room_handle]));
     const asked = notice === null ? synced : new Map([...synced].filter(([key]) => key === `${ROOMS}${notice}`));
     return this.holding([...new Set([...this.roomCopies().map((copy) => copy.key), ...synced.keys()])].sort(), async () => {
-      const chosen = await this.launched();
+      const chosen = [...(await this.launched()), ...this.workedIn()];
       const said: string[] = [];
       const made = new Set<string>();
       let refused = false;
@@ -993,6 +1059,90 @@ export class LocalCopies {
     return this.keyAt(cwd).then((key) => (key === undefined ? outside(cwd) : this.exclusive(key, () => this.uploaded(key, caller))));
   }
 
+  async updated(conversation: string | null, cwd: string, changes: readonly Sent[], forwarded: Forwarded): Promise<Forwarded> {
+    const answer = updateAnswer(forwarded);
+    if ('refused' in answer) return forwarded;
+    const session = conversation === null ? undefined : this.places.get(conversation)?.session;
+    const key = (session === undefined ? undefined : await this.keyAt(session)) ?? (await this.keyAt(cwd));
+    if (key === undefined) return forwarded;
+    const lines = await this.exclusive(key, async () =>
+      this.wroteBack(await this.currentlyNamed(await this.converted(this.copies.get(key)!), answer.accepted), changes, answer.accepted),
+    ).catch((error: unknown) => [
+      `${this.copies.get(key)!.repository}: House accepted the update, but Kit could not write it here (${houseCause(error)}), so local integration is pending; house download here brings House's text`,
+    ]);
+    return withLines(forwarded, lines);
+  }
+
+  private async currentlyNamed(copy: Copy, accepted: readonly Written[]): Promise<Copy> {
+    if (accepted.every((written) => written.path.startsWith(`${rootOf(copy.room_handle)}/`))) return copy;
+    const reached = await this.reachedRoom(copy.room_ref);
+    return reached === null || reached.room_handle === copy.room_handle ? copy : this.save({ ...copy, room_handle: reached.room_handle });
+  }
+
+  private async wroteBack(copy: Copy, changes: readonly Sent[], accepted: readonly Written[]): Promise<string[]> {
+    const root = rootOf(copy.room_handle);
+    const local = (path: string) => (path.startsWith(`${root}/`) ? path.slice(root.length + 1) : null);
+    const into: Integrating = { repository: copy.repository, manifest: await readManifest(copy.repository), work: await staging() };
+    const { files } = into.manifest;
+    const lines: string[] = [];
+    const pending = (path: string): void => {
+      lines.push(`${root}/${path}: changed here, so House accepted the update and local integration is pending; the next house upload sends this file as it is`);
+    };
+    const unchanged = async (path: string) =>
+      files[path]!.skipped === true ? !(await exists(join(copy.repository, path))) : await holding(copy.repository, path, files[path]!.sha256);
+    const sent = (path: string) => {
+      const named = changes.filter((change) => change.path === path);
+      return named.length === 1 && named[0]!.op === 'write' && typeof named[0]!.content === 'string' ? named[0]!.content : undefined;
+    };
+    const deleting = changes.flatMap((change) => (change.op === 'delete' ? [local(change.path)].filter((path) => path !== null) : []));
+    let changed = false;
+    const dropped = async (path: string) => {
+      if (!(await unchanged(path))) {
+        pending(path);
+        return;
+      }
+      await removed(copy.repository, path);
+      delete files[path];
+      changed = true;
+    };
+    try {
+      for (const written of accepted) {
+        const path = local(written.path);
+        const from = written.from === undefined ? null : local(written.from);
+        if (written.ref !== undefined) continue;
+        if (from !== null && files[from] !== undefined) {
+          if (path === null) await dropped(from);
+          else if (!(await unchanged(from)) || (await exists(join(copy.repository, path)))) pending(from);
+          else {
+            const { revision: _revision, ...entry } = files[from]!;
+            if (entry.skipped !== true) {
+              await mkdir(dirname(join(copy.repository, path)), { recursive: true });
+              await rename(join(copy.repository, from), join(copy.repository, path));
+              await removed(copy.repository, from);
+            }
+            delete files[from];
+            files[path] = { ...entry, revision: written.revision! };
+            changed = true;
+          }
+          continue;
+        }
+        if (path === null || path === '') continue;
+        if (written.revision === null) {
+          for (const held of Object.keys(files).filter((name) => deleting.some((gone) => covers(name, gone) && covers(name, path)))) await dropped(held);
+          continue;
+        }
+        const entry = files[path];
+        if (entry === undefined ? !isDocument(path) : entry.read_only === true || entry.skipped === true) continue;
+        const text = await this.textOf(written, sent(written.path));
+        if (await integratedFile(into, path, path, entry?.sha256 ?? null, written.revision, text)) changed = true;
+        else pending(path);
+      }
+    } finally {
+      if (changed) await writeManifest(copy.repository, into.work, into.manifest);
+    }
+    return lines;
+  }
+
   private async keyAt(cwd: string): Promise<string | undefined> {
     const held = new Map<string, string>();
     for (const copy of this.copies.values()) held.set(await realpath(copy.repository).catch(() => copy.repository), copy.key);
@@ -1004,27 +1154,68 @@ export class LocalCopies {
   }
 
   async placed(conversation: string, opening: Opening | null, caller: Caller, launch: string): Promise<Place> {
-    if (opening === null) {
-      const held = this.places.get(conversation) ?? { copies: {} };
-      const directory = held.session ?? launch;
-      const room = Object.keys(held.copies).find((ref) => held.copies[ref] === directory);
-      if (room === undefined) return { directory, copy: false };
-      await this.ensured(conversation, room, directory, caller, () => this.reachedRoom(room));
-      return { directory, copy: true };
+    if (opening === null) return this.placedAgain(conversation, caller, launch);
+    const run = opening.run === undefined ? undefined : { copy: opening.run.copy.kind, name: opening.run.name };
+    const place = (directory: string, copy: boolean): Place => ({ directory, copy, synced: run === undefined, name: run?.name ?? null });
+    if (opening.run?.copy.kind === 'none') {
+      await this.session(conversation, launch, run);
+      return place(launch, false);
+    }
+    if (opening.run?.copy.kind === 'existing') {
+      const directory = await this.existing(opening.run.copy.path, opening.room_ref, caller);
+      await this.session(conversation, directory, run);
+      return place(directory, true);
     }
     const reached = opening.room_ref === null ? null : await this.reachedRoom(opening.room_ref);
     if (reached === null) {
-      await this.exclusive(PLACES, () => this.savePlace(conversation, { ...(this.places.get(conversation) ?? { copies: {} }), session: launch }));
-      return { directory: launch, copy: false };
+      await this.session(conversation, launch, run);
+      return place(launch, false);
     }
     const directory = await this.exclusive(PLACES, async () => {
       const recorded = this.places.get(conversation) ?? { copies: {} };
-      const path = recorded.copies[reached.room_ref] ?? (await this.freePath(reached.room_handle, opening.name));
-      await this.savePlace(conversation, { ...recorded, copies: { ...recorded.copies, [reached.room_ref]: path }, session: path });
+      const path = recorded.copies[reached.room_ref] ?? (await this.freePath(reached.room_handle, run?.name ?? opening.name));
+      await this.savePlace(conversation, { ...recorded, copies: { ...recorded.copies, [reached.room_ref]: path }, session: path, ...(run === undefined ? {} : { run }) });
       return path;
     });
     await this.ensured(conversation, reached.room_ref, directory, caller, () => Promise.resolve(reached));
-    return { directory, copy: true };
+    return place(directory, true);
+  }
+
+  private async placedAgain(conversation: string, caller: Caller, launch: string): Promise<Place> {
+    const held = this.places.get(conversation) ?? { copies: {} };
+    const directory = held.session ?? launch;
+    const place = (copy: boolean): Place => ({ directory, copy, synced: held.run === undefined, name: held.run?.name ?? null });
+    const room = Object.keys(held.copies).find((ref) => held.copies[ref] === directory);
+    if (room !== undefined) {
+      await this.ensured(conversation, room, directory, caller, () => this.reachedRoom(room));
+      return place(true);
+    }
+    if (held.run?.copy !== 'existing') return place(false);
+    const owner = this.conversationCopyAt(directory);
+    if (owner !== null) await this.ensured(owner.conversation, owner.room, directory, caller, () => this.reachedRoom(owner.room));
+    return place(true);
+  }
+
+  private session(conversation: string, directory: string, run: Ran | undefined): Promise<void> {
+    return this.exclusive(PLACES, () =>
+      this.savePlace(conversation, { ...(this.places.get(conversation) ?? { copies: {} }), session: directory, ...(run === undefined ? {} : { run }) }),
+    );
+  }
+
+  private async existing(path: string, room: string | null, caller: Caller): Promise<string> {
+    const physical = await realpath(path).catch(() => resolve(path));
+    let owner: { conversation: string; room: string; path: string } | null = null;
+    for (const [conversation, place] of this.places) {
+      for (const [copied, held] of Object.entries(place.copies)) {
+        if (copied === room && (await realpath(held).catch(() => held)) === physical) owner = { conversation, room: copied, path: held };
+      }
+    }
+    if (owner !== null) await this.ensured(owner.conversation, owner.room, owner.path, caller, () => this.reachedRoom(owner.room));
+    const directory = owner?.path ?? physical;
+    const manifest = await readManifest(directory).catch(() => null);
+    if (manifest === null) throw new PlaceRefused(`${path} holds no Local copy of a Room`);
+    if (manifest.room_ref !== room) throw new PlaceRefused(`${path} is a Local copy of another Room`);
+    return directory;
   }
 
   async turnEnded(directory: string): Promise<void> {
@@ -1035,14 +1226,29 @@ export class LocalCopies {
   }
 
   async deleted(conversation: string): Promise<KeptCopy[]> {
-    const kept: KeptCopy[] = [];
     const reckon = this.reckoning();
+    const session = this.places.get(conversation)?.session;
+    const kept = await this.deletedPlace(conversation, reckon);
+    const owner = session === undefined ? null : this.conversationCopyAt(session);
+    if (owner !== null && owner.conversation !== conversation && this.places.get(owner.conversation)?.deleted === true) {
+      kept.push(...(await this.deletedPlace(owner.conversation, reckon)));
+    }
+    return kept;
+  }
+
+  private async deletedPlace(conversation: string, reckon: Reckoning): Promise<KeptCopy[]> {
+    const kept: KeptCopy[] = [];
+    const shared: Record<string, string> = {};
     for (const [room, path] of Object.entries(this.places.get(conversation)?.copies ?? {})) {
+      if (this.workedInBeside(conversation, path)) {
+        shared[room] = path;
+        continue;
+      }
       const key = copyKey(conversation, room);
       const removed = await this.exclusive(key, async () => {
         if (!this.places.get(conversation)?.removed?.includes(room)) {
-          await reckon(key);
-          if (await this.holdsWork(key, path)) return false;
+          await reckon(conversation, room, path);
+          if (await this.holdsWork(conversation, room, path)) return false;
         }
         await this.removedHeld(conversation, room, path);
         return true;
@@ -1050,10 +1256,30 @@ export class LocalCopies {
       if (!removed) kept.push({ room_ref: room, path });
     }
     await this.exclusive(PLACES, async () => {
+      const place = this.places.get(conversation);
+      if (place !== undefined && Object.keys(shared).length > 0) {
+        await this.savePlace(conversation, { ...place, copies: shared, deleted: true });
+        return;
+      }
       await rm(placeOf(conversation), { force: true });
       this.places.delete(conversation);
     });
     return kept;
+  }
+
+  private workedIn(): string[] {
+    return [...this.places.values()].flatMap((place) => (place.deleted === true || place.session === undefined ? [] : [place.session]));
+  }
+
+  private workedInBeside(conversation: string, directory: string): boolean {
+    return [...this.places].some(([other, place]) => other !== conversation && place.deleted !== true && place.session === directory);
+  }
+
+  private runWorksIn(conversation: string, directory: string): boolean {
+    return (
+      this.places.get(conversation)?.run !== undefined ||
+      [...this.places.values()].some((place) => place.deleted !== true && place.run?.copy === 'existing' && place.session === directory)
+    );
   }
 
   async removedIdle(before: number, runsIn: (directory: string) => boolean): Promise<void> {
@@ -1069,8 +1295,8 @@ export class LocalCopies {
             return;
           }
           if ((current.ended?.[room] ?? 0) > before || !(await exists(path))) return;
-          await reckon(key);
-          if (await this.holdsWork(key, path)) return;
+          await reckon(conversation, room, path);
+          if (await this.holdsWork(conversation, room, path)) return;
           await this.removedHeld(conversation, room, path);
         });
       }
@@ -1102,11 +1328,12 @@ export class LocalCopies {
     await this.savePlace(conversation, { ...held, ended: { ...held.ended, [room]: Date.now() }, ...(still.length === 0 ? {} : { removed: still }) });
   }
 
-  private reckoning(): (key: string) => Promise<void> {
+  private reckoning(): Reckoning {
     let selection: Promise<LocalCopyRoom[]> | undefined;
-    return async (key) => {
+    return async (conversation, room, directory) => {
+      const key = copyKey(conversation, room);
       const copy = this.copies.get(key) as Copy | undefined;
-      if (copy === undefined || copy.pending !== undefined || !(await exists(copy.repository))) return;
+      if (copy === undefined || copy.pending !== undefined || !(await exists(copy.repository)) || this.runWorksIn(conversation, directory)) return;
       try {
         selection ??= this.selection();
         const reached = (await selection).find((room) => room.room_ref === copy.room_ref);
@@ -1119,15 +1346,19 @@ export class LocalCopies {
     };
   }
 
-  private async holdsWork(key: string, directory: string): Promise<boolean> {
+  private async holdsWork(conversation: string, room: string, directory: string): Promise<boolean> {
+    const key = copyKey(conversation, room);
     const copy = this.copies.get(key) as Copy | undefined;
     if (copy === undefined || !(await exists(directory))) return false;
     if (copy.pending !== undefined) return true;
     try {
       const manifest = await readManifest(directory);
       if (Object.values(manifest.files).some((entry) => entry.conflicted)) return true;
-      const { added, changed, gone } = changeSet(manifest, await scanned(directory));
-      return added.length + changed.length + gone.length > 0;
+      const present = await scanned(directory);
+      const { added, changed, gone } = changeSet(manifest, present);
+      const uploaded = this.runWorksIn(conversation, directory) && changed.some((path) => !isDocument(path)) ? await this.foldersOf(copy.room_ref, key) : [];
+      const own = changed.filter((path) => isDocument(path) || !uploaded.some((folder) => folder.manifest.files[path]?.sha256 === present.get(path)!.sha256));
+      return added.length + own.length + gone.length > 0;
     } catch {
       return true;
     }
@@ -2251,8 +2482,8 @@ export class LocalCopies {
   private async integrated(copy: Copy, accepted: Written[]): Promise<Settled> {
     const pending = copy.pending!;
     const root = rootOf(copy.room_handle);
-    const manifest = await readManifest(copy.repository);
-    const work = await staging();
+    const into: Integrating = { repository: copy.repository, manifest: await readManifest(copy.repository), work: await staging() };
+    const { manifest } = into;
     const answered = new Map(accepted.filter((written) => written.revision !== null && written.proposal === undefined).map((written) => [relative(written.path), written]));
     const proposed = new Map(accepted.flatMap((written) => (written.proposal === undefined ? [] : [[relative(written.path), written] as const])));
     const lines: string[] = [];
@@ -2262,7 +2493,7 @@ export class LocalCopies {
       sent.add(path);
       const proposal = proposed.get(path);
       if (proposal !== undefined) {
-        lines.push(await this.writtenBack(copy, work, manifest, pending.read[path]!, path, proposal));
+        lines.push(await this.writtenBack(copy, into.work, manifest, pending.read[path]!, path, proposal));
         continue;
       }
       if (change.op === 'delete') {
@@ -2286,10 +2517,7 @@ export class LocalCopies {
       const read = pending.read[path]!;
       if (text === change.content) {
         manifest.files[path] = { revision: written.revision!, sha256: read.sha256, bytes: Buffer.byteLength(text) };
-      } else if (await holding(copy.repository, read.name, read.sha256)) {
-        await placed(work, join(copy.repository, read.name), text);
-        manifest.files[path] = { revision: written.revision!, sha256: digest(text), bytes: Buffer.byteLength(text) };
-      } else {
+      } else if (!(await integratedFile(into, path, read.name, read.sha256, written.revision!, text))) {
         lines.push(`${root}/${path}: changed while it uploaded; House accepted it and local integration is pending, so the next house upload merges it`);
       }
     }
@@ -2297,14 +2525,11 @@ export class LocalCopies {
       const entry = manifest.files[path];
       if (sent.has(path) || entry === undefined || entry.revision === written.revision) continue;
       const text = await this.textOf(written, undefined);
-      if (!(await holding(copy.repository, path, entry.sha256))) {
+      if (!(await integratedFile(into, path, path, entry.sha256, written.revision!, text))) {
         lines.push(`${root}/${path}: changed here, so House's change was not brought; the next house upload merges it`);
-        continue;
       }
-      await placed(work, join(copy.repository, path), text);
-      manifest.files[path] = { revision: written.revision!, sha256: digest(text), bytes: Buffer.byteLength(text) };
     }
-    await writeManifest(copy.repository, work, manifest);
+    await writeManifest(copy.repository, into.work, manifest);
     await this.save(without(copy));
     return { refused: false, files: pending.changes.length - proposed.size, lines };
   }
