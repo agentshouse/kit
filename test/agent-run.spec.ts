@@ -196,6 +196,25 @@ it("waits again on refs, its own Runs' names or references, starting nothing, an
   });
 });
 
+it("refuses a wait that would make this computer's waiting commands wait on more than 1000 Runs together, naming none of its Runs to House", async () => {
+  const hosted = await hostKit();
+  const bridge = await bridgeOf(hosted);
+  const refs = (from: number, count: number) => Array.from({ length: count }, (_unused, index) => `019a0000-0000-7000-8000-${String(from + index).padStart(12, '0')}`);
+  const [held, more, fitting] = [refs(1000, 600), refs(2000, 401), refs(3000, 400)];
+  agentRun(hosted, { refs: held }, bridge);
+  await named(hosted, held);
+
+  expect(await agentRun(hosted, { refs: more }, bridge).ended).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: "house: this computer's waiting house agent run commands already wait on 600 Runs, and together they wait on at most 1000; wait on these 401 once one ends\n",
+  });
+  agentRun(hosted, { refs: fitting }, bridge);
+  await named(hosted, fitting);
+  expect(waitings(hosted.house.connections.at(-1)!).filter((waiting) => waiting.runs.some((run) => more.includes(run)))).toEqual([]);
+  expect(await records(hosted)).toHaveLength(2);
+});
+
 it('names its Runs again on a Kit connection that opens again and ends on the states House reads then', async () => {
   const hosted = await hostKit();
   answering(hosted, started(RUN_1, 'rev-1'), started(RUN_2, 'ba-1'));

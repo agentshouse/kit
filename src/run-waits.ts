@@ -98,7 +98,15 @@ export class RunWaits {
       await mkdir(join(kitHome(), RECORDS), { recursive: true, mode: 0o700 });
       await writeHome(recordOf(id), { conversation_id: conversation, runs } satisfies WaitRecord);
     }
-    wait = { id, runs: new Set(runs), heard: (line) => response.write(line) };
+    const held = [...this.waits.values()].reduce((sum, one) => sum + one.runs.size, 0);
+    if (held + runs.length > KIT_WAITED_RUNS_MAX) {
+      if (conversation !== null) await rm(join(kitHome(), recordOf(id)), { force: true });
+      response
+        .writeHead(409, { 'content-type': 'text/plain; charset=utf-8' })
+        .end(`this computer's waiting house agent run commands already wait on ${held} Runs, and together they wait on at most ${KIT_WAITED_RUNS_MAX}; wait on these ${runs.length} once one ends`);
+      return;
+    }
+    wait ={ id, runs: new Set(runs), heard: (line) => response.write(line) };
     this.waits.set(id, wait);
     response.writeHead(200, { 'content-type': 'application/x-ndjson' });
     response.write(`${JSON.stringify({ runs: resolved } satisfies Resolved)}\n`);
