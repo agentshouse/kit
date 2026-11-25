@@ -213,12 +213,13 @@ export async function moveIntoHouse(copies: LocalCopies): Promise<string | null>
   return `the workspace could not be moved to ${to}: ${failure}; it stays at ${from} and its supervisor starts Kit again`;
 }
 
-async function changeSkills(skills: KitSkills): Promise<void> {
+async function changeSkills(skills: KitSkills, copies: LocalCopies): Promise<void> {
   await writeConfiguration({ ...(await storedConfiguration()), skills });
   await placeSkills();
+  await copies.reskilled();
 }
 
-export async function applySettings(change: SettingsChange, kit: Working): Promise<Applied> {
+export async function applySettings(change: SettingsChange, kit: Working, copies: LocalCopies): Promise<Applied> {
   const from = workspaceRoot();
   let move: Move | null = null;
   if (change.workspace !== undefined) {
@@ -242,7 +243,7 @@ export async function applySettings(change: SettingsChange, kit: Working): Promi
     const failure = await finished(move);
     if (failure !== null) return { refused: `the workspace could not be moved to ${move.to}: ${failure}`, ended: true };
   }
-  if (change.skills !== undefined) await changeSkills(change.skills);
+  if (change.skills !== undefined) await changeSkills(change.skills, copies);
   return { settings: await heldSettings(), moved: move !== null };
 }
 
@@ -265,7 +266,7 @@ async function appliedHere(change: SettingsChange): Promise<Applied> {
     const copies = new LocalCopies(house, launchDirectories);
     await copies.load();
     await moveIntoHouse(copies);
-    return await applySettings(change, IDLE);
+    return await applySettings(change, IDLE, copies);
   } finally {
     lock.close();
   }

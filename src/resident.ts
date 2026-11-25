@@ -147,7 +147,7 @@ export async function resident(): Promise<void> {
           await running.agents.read();
           return running.agents.desired.routes;
         },
-      }),
+      }, copies),
     );
     settings = applied.catch(() => undefined);
     return applied.then((answer) => {

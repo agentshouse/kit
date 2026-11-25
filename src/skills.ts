@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cp, lstat, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import type { KitSkills } from '@agentshouse/kit-wire';
@@ -43,9 +43,63 @@ interface Answered extends Paged {
   skills: { files: Record<string, unknown>; attachments?: Record<string, string> }[];
 }
 
+type Values = Record<string, unknown>;
+
+interface RoomSkillAnswer {
+  name?: unknown;
+  own?: unknown;
+  files?: Values;
+  attachments?: Values;
+}
+
+interface RoomListing extends Paged {
+  skills?: RoomSkillAnswer[];
+}
+
+interface ListedSkill {
+  name: string;
+  own: boolean;
+  files: Record<string, string>;
+  attachments: Record<string, string>;
+}
+
+type Holder = 'attachments' | 'files';
+
+interface CutValue {
+  skill: ListedSkill;
+  holder: Holder;
+  field: string;
+}
+
+export interface RoomSkillsRecord {
+  approved?: number | null;
+  release: string;
+  listed: string[];
+  names: string[];
+  digest: string;
+}
+
+export interface RoomSkillSet {
+  listed: string[];
+  skills: readonly Skill[];
+  digest: string;
+}
+
+export interface RoomSkillsReading {
+  of(room: string): Promise<RoomSkillSet>;
+}
+
 const RECORD = 'skill-set.json';
 const ENTRY = 'SKILL.md';
 const ORIGIN = '<origin>';
+const CUT = 'cut';
+const UNREAD = "House's answer of the Room's skills could not be read";
+
+export const SKILL_FOLDERS = ['.agents/skills', '.claude/skills'];
+
+const ROOM_SKILL_FOLDERS = SKILL_FOLDERS.map((folder) => join(...folder.split('/')));
+
+export const NO_ROOM_SKILLS: RoomSkillSet = { listed: [], skills: [], digest: '' };
 
 function skillsDirectory(): string {
   return join(homedir(), '.agents', 'skills');
@@ -132,10 +186,17 @@ async function ownFiles(name: string): Promise<Record<string, SkillFile>> {
   return files;
 }
 
+async function catalogueOf(): Promise<Catalogued[]> {
+  return (await paged<Catalogue>({})).flatMap((page) => page.catalogue);
+}
+
+function chosenOf(setting: KitSkills, catalogue: readonly Catalogued[]): readonly Catalogued[] {
+  return setting === 'all' ? catalogue : catalogue.filter(({ name }) => setting.includes(name));
+}
+
 async function wanted(setting: KitSkills, origin: string): Promise<Skill[]> {
   if (setting !== 'all' && setting.length === 0) return [];
-  const catalogue = (await paged<Catalogue>({})).flatMap((page) => page.catalogue);
-  const chosen = setting === 'all' ? catalogue : catalogue.filter(({ name }) => setting.includes(name));
+  const chosen = chosenOf(setting, await catalogueOf());
   const own = new Map<string, Record<string, SkillFile>>();
   for (const { name } of chosen.filter((skill) => skill.own === true)) own.set(name, await ownFiles(name));
   const house = houseSkills(origin);
@@ -146,6 +207,127 @@ async function wanted(setting: KitSkills, origin: string): Promise<Skill[]> {
       return skill === undefined ? [] : [skill];
     })
     .sort((left, right) => (left.name < right.name ? -1 : 1));
+}
+
+function textsOf(values: Values | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(values ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
+function cutField(values: Values | undefined): string | undefined {
+  const cut = values?.[CUT] as { field?: unknown } | undefined;
+  return typeof cut?.field === 'string' ? cut.field : undefined;
+}
+
+async function listedSkills(room: string): Promise<ListedSkill[]> {
+  const listed: ListedSkill[] = [];
+  const open: CutValue[] = [];
+  for (const page of await paged<RoomListing>({ room })) {
+    if (typeof page !== 'object' || page === null) throw new Error(UNREAD);
+    const answered = page.skills ?? [];
+    const value = open[0];
+    if (value !== undefined) {
+      const values = answered[0]?.[value.holder];
+      const part = values?.[value.field];
+      if (answered.length !== 1 || answered[0]!.name !== undefined || typeof part !== 'string') throw new Error(UNREAD);
+      value.skill[value.holder][value.field] += part;
+      if (cutField(values) !== value.field) open.shift();
+      continue;
+    }
+    for (const answer of answered) {
+      if (typeof answer.name !== 'string') throw new Error(UNREAD);
+      const skill = { name: answer.name, own: answer.own === true, files: textsOf(answer.files), attachments: textsOf(answer.attachments) };
+      listed.push(skill);
+      for (const holder of ['attachments', 'files'] as const) {
+        const field = cutField(answer[holder]);
+        if (field !== undefined) open.push({ skill, holder, field });
+      }
+    }
+  }
+  if (open.length > 0) throw new Error(UNREAD);
+  return listed;
+}
+
+async function carriedFiles({ name, files, attachments }: ListedSkill): Promise<Record<string, SkillFile>> {
+  const carried: Record<string, SkillFile> = { ...files };
+  for (const [path, download] of Object.entries(attachments)) carried[path] = await attached(name, path, download);
+  return carried;
+}
+
+function remembered<T>(held: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> {
+  const known = held.get(key);
+  if (known !== undefined) return known;
+  const reading = read();
+  held.set(key, reading);
+  return reading;
+}
+
+export function roomSkillsReading(): RoomSkillsReading {
+  let environment: Promise<{ origin: string; theirs: Set<string>; mine: Set<string> }> | undefined;
+  const own = new Map<string, Promise<Record<string, SkillFile>>>();
+  const rooms = new Map<string, Promise<RoomSkillSet>>();
+  const environmentSkills = async () => {
+    const enrolment = await readEnrolment();
+    if (enrolment === null) throw new Error('this Environment is not connected; run house login');
+    const catalogue = await catalogueOf();
+    return {
+      origin: enrolment.house,
+      theirs: new Set(chosenOf((await readConfiguration()).skills, catalogue).map(({ name }) => name)),
+      mine: new Set(catalogue.filter((skill) => skill.own === true).map(({ name }) => name)),
+    };
+  };
+  const set = async (room: string): Promise<RoomSkillSet> => {
+    const listed = (await listedSkills(room)).sort((left, right) => (left.name < right.name ? -1 : 1));
+    if (listed.length === 0) return NO_ROOM_SKILLS;
+    environment ??= environmentSkills();
+    const { origin, theirs, mine } = await environment;
+    const house = houseSkills(origin);
+    const skills: Skill[] = [];
+    for (const skill of listed) {
+      if (theirs.has(skill.name)) continue;
+      if (mine.has(skill.name)) skills.push(ownSkill(skill.name, await remembered(own, skill.name, () => ownFiles(skill.name))));
+      else if (skill.own) skills.push(ownSkill(skill.name, await carriedFiles(skill)));
+      else if (house.has(skill.name)) skills.push(house.get(skill.name)!);
+    }
+    return { listed: listed.map(({ name }) => name), skills, digest: digestOf(origin, skills) };
+  };
+  return { of: (room) => remembered(rooms, room, () => set(room)) };
+}
+
+function roomSkillFolders(folder: string, name: string): string[] {
+  return ROOM_SKILL_FOLDERS.map((skills) => join(folder, skills, name));
+}
+
+export async function removeRoomSkills(folder: string, names: readonly string[]): Promise<void> {
+  if (names.length === 0) return;
+  for (const name of names) for (const path of roomSkillFolders(folder, name)) await rm(path, { recursive: true, force: true });
+  for (const skills of ROOM_SKILL_FOLDERS) {
+    for (const path of [join(folder, skills), join(folder, dirname(skills))]) {
+      if (!(await rmdir(path).then(() => true, () => false))) break;
+    }
+  }
+}
+
+export async function placeRoomSkills(
+  folder: string,
+  skills: readonly Skill[],
+  written: readonly string[],
+  record: (names: string[]) => Promise<void>,
+): Promise<string[]> {
+  await removeRoomSkills(folder, written);
+  const placed: Skill[] = [];
+  for (const skill of skills) {
+    const taken = await Promise.all(roomSkillFolders(folder, skill.name).map(present));
+    if (!taken.includes(true)) placed.push(skill);
+  }
+  const names = placed.map(({ name }) => name);
+  await record(names);
+  for (const { name, place } of placed) {
+    for (const path of roomSkillFolders(folder, name)) {
+      await mkdir(dirname(path), { recursive: true });
+      await place(path);
+    }
+  }
+  return names;
 }
 
 function held(files: Readonly<Record<string, SkillFile>>): Record<string, string | { sha256: string }> {

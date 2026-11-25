@@ -11,7 +11,7 @@ import { finalRefusal, HouseRefusal, resendDelay, retrying } from './api.ts';
 import type { Staged } from './binaries.ts';
 import { loginPath } from './clis.ts';
 import { changedPaths, DEFAULT_MAX_SIZE, updateAnswer, updateChanges, UPDATE_PATH, type Caller, type Change, type LocalCopies, type Updating, type Upload } from './copies.ts';
-import { fileInfo, instructionsText, type Finished } from './files.ts';
+import { fileInfo, roomInstructions, type Finished } from './files.ts';
 import { answered, carried, held, judgement, type Answer, type Pass } from './hold.ts';
 import { readEnrolment, socketDirectory } from './home.ts';
 import { callHouse, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
@@ -199,7 +199,7 @@ async function bridgeFor(copies: LocalCopies, waits: RunWaits, holder: Holder): 
       return parse(answer.text) as Finished<Staged>;
     },
     info: async (path, revision) => fileInfo(await info({ path, ...(revision === undefined ? {} : { ref: revision }) })),
-    instructions: (root) => instructionsText(info, root),
+    instructions: (root) => roomInstructions(info, root),
   };
 
   const local = async (path: string, text: string): Promise<Forwarded> => {
