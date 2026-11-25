@@ -989,7 +989,7 @@ export class Conversations {
             work.read(message);
             return this.read(conversation, reader, work, message);
           },
-          { ...bridge.env, ...streamed, ...(place.code === null ? {} : CLIS[route.kind]!.writesIn(place.code)) },
+          { ...bridge.env, ...streamed },
           undefined,
           scope,
         ),

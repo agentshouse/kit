@@ -7,10 +7,12 @@ import { expect, it } from 'vitest';
 import { settle, until, type Received } from './double.ts';
 import { clocked, GIT_IDENTITY, hostKit, lastCall, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
 import { temporaryDirectory } from './kit.ts';
-import { serveRooms, type Room } from './rooms.ts';
+import { serveRooms, type Room, type Rooms } from './rooms.ts';
 
 const HOUR = 60 * 60_000;
 const LIST = '/rooms/notes/settings/repositories.md';
+const CLAUDE: RouteOverrides = { kind: 'claude-agent-acp' };
+const NO_COPY = "the Agent's computer could not copy this conversation's Room; try again";
 
 type Code = { kind: 'main' } | { kind: 'new_worktree'; branch?: string } | { kind: 'existing'; path: string; branch: string };
 type Copy = { kind: 'none' } | { kind: 'new' } | { kind: 'existing'; path: string };
@@ -78,7 +80,7 @@ function listReads(hosted: Hosted): number {
   }).length;
 }
 
-async function staged(routes: RouteOverrides[], hosting: Hosting = {}): Promise<{ hosted: Hosted; notes: Room; garden: Room }> {
+async function staged(routes: RouteOverrides[], hosting: Hosting = {}): Promise<{ hosted: Hosted; rooms: Rooms; notes: Room; garden: Room }> {
   const hosted = await hostKit(routes, hosting);
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -86,7 +88,7 @@ async function staged(routes: RouteOverrides[], hosting: Hosting = {}): Promise<
   const garden = rooms.room('garden');
   rooms.answered = [notes];
   await rooms.download([notes]);
-  return { hosted, notes, garden };
+  return { hosted, rooms, notes, garden };
 }
 
 function copyOf(hosted: Hosted, name: string): string {
@@ -132,13 +134,18 @@ async function launched(hosted: Hosted, method: 'session/new' | 'session/resume'
   return (await logged(hosted, 'initialize')).find((entry) => entry.pid === pid) as unknown as Launched;
 }
 
-async function writableRoots(hosted: Hosted, method: 'session/new' | 'session/resume', index: number): Promise<unknown> {
-  const config = JSON.parse((await launched(hosted, method, index)).env.CODEX_CONFIG!) as { sandbox_workspace_write?: { writable_roots?: unknown } };
-  return config.sandbox_workspace_write?.writable_roots;
-}
-
 function claudeSettings(params: Record<string, unknown>): Record<string, unknown> {
   return ((params._meta as { claudeCode: { options: { settings: Record<string, unknown> } } }).claudeCode.options.settings);
+}
+
+async function codeOf(hosted: Hosted, method: 'session/new' | 'session/resume', index: number): Promise<unknown> {
+  const { permissions } = claudeSettings((await opening(hosted, method, index)).params) as { permissions?: { additionalDirectories?: unknown } };
+  return permissions?.additionalDirectories;
+}
+
+async function modeOf(hosted: Hosted, session: string): Promise<unknown> {
+  const set = (await logged(hosted, 'session/set_config_option')).map((entry) => entry.params as { sessionId: string; configId: string; value: unknown });
+  return set.find((one) => one.sessionId === session && one.configId === 'mode')?.value;
 }
 
 function ended(hosted: Hosted): number {
@@ -164,7 +171,7 @@ function worktrees(clone: string): string[] {
 }
 
 it("gives a Run the clone's folder on whatever branch it has checked out, a new worktree beside the clone on its starter's branch or else its name, from the branch or commit the Room's list names for its entry at its first turn or else origin's default, or the existing worktree passed, starting its CLI in its copy every time and giving each later session of the Run, resumed or opened again, the folder its first had", async () => {
-  const { hosted, notes } = await staged([{}, {}, {}, {}, {}]);
+  const { hosted, notes } = await staged([CLAUDE, CLAUDE, CLAUDE, CLAUDE, CLAUDE]);
   const app = await origin();
   const clone = cloned(hosted, app.url);
   git(clone, 'switch', '--quiet', '-c', 'mine', 'origin/release');
@@ -184,7 +191,7 @@ it("gives a Run the clone's folder on whatever branch it has checked out, a new 
   const folders = [clone, join(added, 'feat', 'two'), join(added, 'imp-3'), join(added, 'imp-4'), held];
   for (const [index, name] of ['imp-1', 'imp-2', 'imp-3', 'imp-4', 'rev-1'].entries()) {
     expect(await cwdOf(hosted, 'session/new', index)).toBe(copyOf(hosted, name));
-    expect(await writableRoots(hosted, 'session/new', index)).toEqual([folders[index]]);
+    expect(await codeOf(hosted, 'session/new', index)).toEqual([folders[index]]);
   }
   expect(git(clone, 'branch', '--show-current')).toBe('mine');
   expect(git(folders[1]!, 'branch', '--show-current')).toBe('feat/two');
@@ -203,9 +210,9 @@ it("gives a Run the clone's folder on whatever branch it has checked out, a new 
   expect(await opened(hosted, 3, notes, 'imp-3', { url: app.url, code: { kind: 'new_worktree' } })).toHaveProperty('provider_session_id');
 
   expect(await cwdOf(hosted, 'session/resume', 0)).toBe(copyOf(hosted, 'imp-2'));
-  expect(await writableRoots(hosted, 'session/resume', 0)).toEqual([folders[1]]);
+  expect(await codeOf(hosted, 'session/resume', 0)).toEqual([folders[1]]);
   expect(await cwdOf(hosted, 'session/new', 5)).toBe(copyOf(hosted, 'imp-3'));
-  expect(await writableRoots(hosted, 'session/new', 5)).toEqual([folders[2]]);
+  expect(await codeOf(hosted, 'session/new', 5)).toEqual([folders[2]]);
   expect(listReads(hosted)).toBe(3);
   expect(worktrees(clone)).toHaveLength(5);
 });
@@ -250,7 +257,7 @@ it("leaves a Run not started, naming the cause, where its clone is missing or it
 });
 
 it("takes a clone whose origin names the Run's repository by one host and path in its https, ssh or scp form, with or without a user, a port or a trailing .git, and no clone of the same path on another host", async () => {
-  const { hosted, notes } = await staged([{}, {}, {}, {}]);
+  const { hosted, notes } = await staged([CLAUDE, CLAUDE, CLAUDE, CLAUDE]);
   const clone = join(repositories(hosted), 'app');
   await mkdir(clone, { recursive: true });
   git(clone, 'init', '--quiet');
@@ -259,14 +266,14 @@ it("takes a clone whose origin names the Run's repository by one host and path i
 
   for (const [index, url] of forms.entries()) await session(hosted, index + 1, notes, `imp-${index + 1}`, url, { kind: 'main' });
 
-  for (const index of [0, 1, 2]) expect(await writableRoots(hosted, 'session/new', index)).toEqual([clone]);
+  for (const index of [0, 1, 2]) expect(await codeOf(hosted, 'session/new', index)).toEqual([clone]);
   expect(await opened(hosted, 4, notes, 'imp-4', { url: 'https://gitlab.com/acme/app', code: { kind: 'main' } })).toEqual({
     refused: `${clone} is not a clone of https://gitlab.com/acme/app`,
   });
 });
 
-it("starts each CLI in the Run's copy and has it write in the code folder without asking, Claude Code by its permissions' additional directories, Codex by its sandbox's writable roots and Grok Build with its sandbox off and every tool approved, at the session's start and its resume, and gives no code folder to a Run with no repository", async () => {
-  const { hosted, notes } = await staged([{ kind: 'claude-agent-acp' }, { kind: 'codex-acp' }, { kind: 'grok-build' }, { kind: 'claude-agent-acp' }, { kind: 'codex-acp' }]);
+it("starts each CLI in the Run's copy, told the code folder only as a path, and has it write there without asking: Claude Code by its settings' additional directories at the session's start and its resume, Codex in the full access Kit opens it in and Grok Build with its sandbox off and every tool approved, no adapter taking the folder as an added directory, which would load the repository's own skills; a Run with no repository gets no code folder", async () => {
+  const { hosted, notes } = await staged([CLAUDE, { kind: 'codex-acp' }, { kind: 'grok-build' }, CLAUDE, { kind: 'codex-acp' }]);
   const app = await origin();
   const clone = cloned(hosted, app.url);
   const claude = await session(hosted, 1, notes, 'imp-1', app.url, { kind: 'main' });
@@ -280,20 +287,18 @@ it("starts each CLI in the Run's copy and has it write in the code folder withou
   await turn(hosted, 1, '@say again', { provider_session_id: claude });
   await turn(hosted, 2, '@say again', { provider_session_id: codex });
 
-  for (const [index, name] of ['imp-1', 'imp-2', 'imp-3', 'ask-4', 'ask-5'].entries()) expect(await cwdOf(hosted, 'session/new', index)).toBe(copyOf(hosted, name));
-  for (const method of ['session/new', 'session/resume'] as const) {
-    const { params } = await opening(hosted, method, 0);
-    expect(claudeSettings(params)).toMatchObject({ permissions: { additionalDirectories: [clone] } });
-    expect(params).not.toHaveProperty('additionalDirectories');
-    expect(await writableRoots(hosted, method, 1)).toEqual([clone]);
+  for (const [index, name] of ['imp-1', 'imp-2', 'imp-3', 'ask-4', 'ask-5'].entries()) {
+    expect(await cwdOf(hosted, 'session/new', index)).toBe(copyOf(hosted, name));
+    expect((await opening(hosted, 'session/new', index)).params).not.toHaveProperty('additionalDirectories');
   }
-  expect(JSON.parse((await launched(hosted, 'session/new', 1)).env.CODEX_CONFIG!)).toEqual({
-    features: { shell_zsh_fork: true },
-    sandbox_workspace_write: { writable_roots: [clone] },
-  });
+  for (const method of ['session/new', 'session/resume'] as const) {
+    expect(await codeOf(hosted, method, 0)).toEqual([clone]);
+    expect((await opening(hosted, method, 1)).params).not.toHaveProperty('additionalDirectories');
+  }
+  expect(await modeOf(hosted, codex)).toBe('agent-full-access');
+  expect(JSON.parse((await launched(hosted, 'session/new', 1)).env.CODEX_CONFIG!)).toEqual({ features: { shell_zsh_fork: true } });
   expect((await launched(hosted, 'session/new', 2)).argv.join(' ')).toContain('--sandbox off agent --always-approve');
-  expect(claudeSettings((await opening(hosted, 'session/new', 3)).params)).not.toHaveProperty('permissions');
-  expect(await writableRoots(hosted, 'session/new', 4)).toBeUndefined();
+  expect(await codeOf(hosted, 'session/new', 3)).toBeUndefined();
 });
 
 it("removes no worktree and no branch where a Run's conversation is deleted or its copy goes after a day with no turn, and refuses to move the workspace while its repositories folder holds anything", async () => {
@@ -327,4 +332,29 @@ it("removes no worktree and no branch where a Run's conversation is deleted or i
   });
   expect(existsSync(workspace)).toBe(false);
   expect(await readdir(repositories(hosted))).toEqual(['app', 'app.worktrees']);
+});
+
+it("keeps a Run's code folder through an opening whose copy, gone after a day with no turn, could not be made again, so the next opening works in the same worktree with no new read and no new branch", async () => {
+  const clock = await clocked();
+  const { hosted, rooms, notes } = await staged([CLAUDE], clock.hosting);
+  const app = await origin();
+  const clone = cloned(hosted, app.url);
+  listed(hosted, listing([{ url: app.url }]));
+  const repository = { url: app.url, code: { kind: 'new_worktree' } } as const;
+  await session(hosted, 1, notes, 'imp-1', app.url, { kind: 'new_worktree' });
+  await turn(hosted, 1, '@say first');
+  expect(await killed(hosted, 1)).toEqual({});
+  await clock.shift(25 * HOUR);
+  await hosted.restart();
+  await until(() => (existsSync(copyOf(hosted, 'imp-1')) ? undefined : true));
+
+  rooms.omitted.add(notes.ref);
+  expect(await opened(hosted, 1, notes, 'imp-1', repository)).toEqual({ refused: NO_COPY });
+  rooms.omitted.delete(notes.ref);
+  expect(await opened(hosted, 1, notes, 'imp-1', repository)).toHaveProperty('provider_session_id');
+
+  expect(await cwdOf(hosted, 'session/new', 1)).toBe(copyOf(hosted, 'imp-1'));
+  expect(await codeOf(hosted, 'session/new', 1)).toEqual([join(`${clone}.worktrees`, 'imp-1')]);
+  expect(listReads(hosted)).toBe(1);
+  expect(worktrees(clone)).toHaveLength(2);
 });

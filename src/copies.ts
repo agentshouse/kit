@@ -1159,7 +1159,7 @@ export class LocalCopies {
   async placed(conversation: string, opening: Opening | null, caller: Caller, launch: string, read: Reader): Promise<Place> {
     if (opening === null) return this.placedAgain(conversation, caller, launch);
     const coded = this.places.get(conversation)?.run?.code;
-    const place = await this.placedCopy(conversation, opening, caller, launch);
+    const place = await this.placedCopy(conversation, opening, caller, launch, coded);
     const repository = opening.run?.repository ?? null;
     if (repository === null) return place;
     const code =
@@ -1183,8 +1183,8 @@ export class LocalCopies {
     return listedRef(await read(`${rootOf(reached.room_handle)}/${REPOSITORIES}`), url);
   }
 
-  private async placedCopy(conversation: string, opening: Opening, caller: Caller, launch: string): Promise<Place> {
-    const run = opening.run === undefined ? undefined : { copy: opening.run.copy.kind, name: opening.run.name };
+  private async placedCopy(conversation: string, opening: Opening, caller: Caller, launch: string, code: string | undefined): Promise<Place> {
+    const run = opening.run === undefined ? undefined : { copy: opening.run.copy.kind, name: opening.run.name, ...(code === undefined ? {} : { code }) };
     const place = (directory: string, copy: boolean): Place => ({ directory, copy, synced: run === undefined, name: run?.name ?? null, code: null });
     if (opening.run?.copy.kind === 'none') {
       await this.session(conversation, launch, run);

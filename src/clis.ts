@@ -21,7 +21,6 @@ export interface Cli {
   compactWords: boolean;
   fullAccess: string | null;
   sessionMeta(bridge: string, name: string | null, code: string | null): Record<string, unknown>;
-  writesIn(folder: string): Record<string, string>;
   unknownSession(error: unknown): boolean;
   allowHouse(path: string): Promise<void>;
   questionFields(request: CreateElicitationRequest): string[];
@@ -120,8 +119,6 @@ function answered(error: unknown): Answered {
   return typeof error === 'object' && error !== null ? (error as Answered) : {};
 }
 
-const CODEX_CONFIG = { features: { shell_zsh_fork: true } };
-
 function bridgeInClaudeSandbox(bridge: string): Record<string, unknown> {
   return process.platform === 'darwin' ? { allowUnixSockets: [bridge] } : { allowAllUnixSockets: true };
 }
@@ -137,14 +134,13 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/codex-acp',
       bin: 'codex-acp',
       executable: 'CODEX_PATH',
-      env: { CODEX_CONFIG: JSON.stringify(CODEX_CONFIG) },
+      env: { CODEX_CONFIG: JSON.stringify({ features: { shell_zsh_fork: true } }) },
     },
     args: [],
     reads: 'AGENTS.md',
     compactWords: false,
     fullAccess: 'agent-full-access',
     sessionMeta: () => ({}),
-    writesIn: (folder) => ({ CODEX_CONFIG: JSON.stringify({ ...CODEX_CONFIG, sandbox_workspace_write: { writable_roots: [folder] } }) }),
     unknownSession: (error) => {
       const { code, data } = answered(error);
       return code === -32603 && typeof data?.details === 'string' && data.details.startsWith('no rollout found');
@@ -186,7 +182,6 @@ export const CLIS: Record<string, Cli> = {
         emitRawSDKMessages: [...RAW_SUBTYPES.map((subtype) => ({ type: 'system', subtype })), ...RAW_TYPES.map((type) => ({ type }))],
       },
     }),
-    writesIn: () => ({}),
     unknownSession: (error) => answered(error).code === -32002,
     allowHouse: nothing,
     questionFields: claudeQuestionFields,
@@ -207,7 +202,6 @@ export const CLIS: Record<string, Cli> = {
     compactWords: false,
     fullAccess: null,
     sessionMeta: () => ({}),
-    writesIn: () => ({}),
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
     allowHouse: nothing,
     questionFields: () => [],

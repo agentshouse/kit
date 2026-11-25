@@ -2,6 +2,7 @@ import type { KitRun } from '@agentshouse/kit-wire';
 import { realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { frontmatter } from './frontmatter.ts';
 import { run, type Ran } from './git.ts';
 import { repositoriesFolder } from './home.ts';
 import { PlaceRefused } from './refusals.ts';
@@ -12,7 +13,6 @@ export const REPOSITORIES = 'settings/repositories.md';
 
 const SCHEMED = /^[a-z][a-z0-9+.-]*:\/\//iu;
 const SCP = /^(?:[^@/]+@)?([^:/]+):(.*)$/u;
-const FRONTMATTER = /^---\n([\s\S]*?)\n---(?:\n|$)/u;
 
 function located(url: string): { host: string; path: string } {
   let host = '';
@@ -72,8 +72,8 @@ async function worktreeOf(clone: string, path: string, branch: string): Promise<
 }
 
 export function listedRef(document: string | null, url: string): string | null {
-  const front = document === null ? null : FRONTMATTER.exec(document);
-  const fields = (front === null ? null : parse(front[1]!, { schema: 'failsafe' })) as { repositories?: unknown } | null;
+  const front = document === null ? null : frontmatter(document);
+  const fields = (front === null ? null : parse(front, { schema: 'failsafe' })) as { repositories?: unknown } | null;
   const entries = Array.isArray(fields?.repositories) ? (fields.repositories as unknown[]) : [];
   const entry = entries.find((one): one is { url: string; ref?: unknown } => typeof one === 'object' && one !== null && (one as { url?: unknown }).url === url);
   if (entry === undefined) throw new PlaceRefused(`the Room's ${REPOSITORIES} lists no repository ${url}`);
