@@ -1,15 +1,14 @@
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it, onTestFinished } from 'vitest';
+import { expect, it } from 'vitest';
 import { RELEASES, updatesRun } from './cli.ts';
 import { settle, until } from './double.ts';
 import { hostKit, installHeld, lastCall, type Hosted } from './environment.ts';
 import { MODELS } from './fixtures/clis/session-options.ts';
-import { alive, stop } from './kit.ts';
+import { alive } from './kit.ts';
 import { callUpdate, released, serveRelease } from './release.ts';
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
@@ -22,12 +21,6 @@ const HUNG_READ_ENDED_MS = 20_000;
 async function opened(hosted: Hosted): Promise<void> {
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-}
-
-const CONTROL_GROUP = process.env.KIT_TEST_CGROUP === '1';
-
-function controlGroup(pid: number): string {
-  return readFileSync(`/proc/${pid}/cgroup`, 'utf8').split('\n').find((line) => line.startsWith('0::'))!.slice(3);
 }
 
 it('reports idle once no turn runs and not while a turn runs without waiting on a question', async () => {
@@ -58,27 +51,6 @@ it('reports idle once its deadline ends a model read whose CLI never answers', a
 
   await until(() => !alive(held));
   expect((await hosted.adapterLog()).some((entry) => entry.releasedProbe !== undefined)).toBe(false);
-});
-
-it("reports idle while an exited process of the Kit's user waits to be reaped beside a running conversation", async () => {
-  const hosted = await hostKit();
-  await opened(hosted);
-  await until(() => hosted.idles[1]);
-  const parent = spawn('sh', ['-c', 'sleep 0.2 & exec sleep 60'], { stdio: 'ignore' });
-  onTestFinished(() => stop(parent.pid!));
-  const children = () => {
-    try {
-      return readFileSync(`/proc/${parent.pid}/task/${parent.pid}/children`, 'utf8').split(' ').filter(Boolean);
-    } catch {
-      return [];
-    }
-  };
-  await until(() => children().some((child) => /\) Z /.test(readFileSync(`/proc/${child}/stat`, 'utf8'))));
-
-  hosted.call({ kind: 'message', text: '@say done', first: true });
-
-  await until(() => ended(hosted)[0]);
-  await until(() => hosted.idles[2]);
 });
 
 it('does not report idle while a CLI House asks for installs, and reports it once that CLI is reported', async () => {
@@ -149,38 +121,39 @@ it('counts a turn waiting on a non-secret question as idle', async () => {
   await until(() => hosted.idles[2]);
 });
 
-it('does not count a turn waiting on a question as idle while a process the conversation started runs', async () => {
+it('does not count a turn waiting on a question as idle while its CLI reports a running background job', async () => {
   const hosted = await hostKit();
   await opened(hosted);
   await until(() => hosted.idles[1]);
 
-  hosted.call({ kind: 'message', text: '@spawn\n@ask', first: true });
-  await until(() => hosted.interactions[0]);
+  hosted.call({ kind: 'message', text: '@job job-1\n@ask', first: true });
+  const question = await until(() => hosted.interactions[0]);
   await settle();
   expect(hosted.idles).toHaveLength(2);
 
-  const job = (await hosted.adapterLog()).find((entry) => entry.spawned !== undefined)!;
-  for (const target of [job.spawned, job.clean]) stop(target as number);
-
+  const { interaction_id } = question.body as { interaction_id: string };
+  hosted.call({ kind: 'answer', interaction_id, response: { outcome: { outcome: 'cancelled' } } });
+  await until(() => ended(hosted)[0]);
+  hosted.call({ kind: 'message', text: '@jobdone job-1', first: false });
   await until(() => hosted.idles[2]);
 });
 
-it(`holds the exit of a placed Kit release while a Conversation process its turn started still runs, tracked ${CONTROL_GROUP ? 'in a control group the Kit makes' : 'by the marker the Kit falls back to where it cannot make a control group'}, and ends once that process ended`, async () => {
+it('holds the exit of a placed Kit release while its CLI reports a running background job, and not for a process the conversation left, and ends once the job ended', async () => {
   const hosted = await hostKit();
   await serveRelease(hosted, await released('0.2.1-c000000000002'));
   await opened(hosted);
-  hosted.call({ kind: 'message', text: '@spawn\n@say started', first: true });
+  hosted.call({ kind: 'message', text: '@job job-1\n@spawn\n@say started', first: true });
   await until(() => ended(hosted)[0]);
   const job = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned !== undefined)))!;
-  expect(controlGroup(job.spawned as number) !== controlGroup(hosted.kit.pid)).toBe(CONTROL_GROUP);
 
   callUpdate(hosted, 'update-held', '0.2.1-c000000000002');
   expect(await hosted.result('update-held')).toEqual({});
   await settle();
   expect(alive(hosted.kit.pid)).toBe(true);
-  for (const target of [job.spawned, job.clean]) stop(target as number);
+  hosted.call({ kind: 'message', text: '@jobdone job-1', first: false });
 
   expect(await hosted.kit.exited).toBe(1);
+  expect([job.spawned, job.clean].map((pid) => alive(pid as number))).toEqual([true, true]);
 });
 
 it('does not count a turn waiting on a secret question as idle', async () => {

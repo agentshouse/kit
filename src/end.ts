@@ -1,6 +1,6 @@
 import { forgetRejected, recordPlannedRestart } from './home.ts';
 import { installCommand } from './placement.ts';
-import { killDescendants } from './scope.ts';
+import { killDescendants } from './kill.ts';
 
 export const REPLACED = 'another Kit process started for this Environment';
 

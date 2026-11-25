@@ -1,14 +1,11 @@
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { once } from 'node:events';
-import { access, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { expect, it, onTestFinished } from 'vitest';
+import { expect, it } from 'vitest';
 import { settle, until, type KitConnection } from './double.ts';
 import { hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
-import { alive, stop, temporaryDirectory } from './kit.ts';
+import { alive, temporaryDirectory } from './kit.ts';
 
 type Reported = { turn: string; secret: boolean; background: boolean | 'runs' };
 
@@ -17,12 +14,7 @@ const RUNNING: Reported = { turn: 'running', secret: false, background: true };
 const WORKING: Reported = { turn: 'ended', secret: false, background: true };
 const WAITING: Reported = { turn: 'ended', secret: false, background: 'runs' };
 
-const FAST_INTERVALS = ['--import', fileURLToPath(new URL('./fast-intervals.ts', import.meta.url))];
-const ENDING = ['--import', fileURLToPath(new URL('./ending.ts', import.meta.url))];
-const CONTROL_GROUP = process.env.KIT_TEST_CGROUP === '1';
-
-// A second and a half lets any look the Kit keeps at a scope, capped at 300 ms under fast-intervals, run several times.
-const LOOKS_MS = 1_500;
+const PROCESS_READS = fileURLToPath(new URL('./process-reads.ts', import.meta.url));
 
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
@@ -45,7 +37,6 @@ async function opened(hosting: Hosting = {}): Promise<Hosted> {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }], hosting);
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-  await reporting(hosted, IDLE);
   await until(() => hosted.idles[1]);
   return hosted;
 }
@@ -54,15 +45,6 @@ async function said(hosted: Hosted, text: string): Promise<void> {
   const turns = ended(hosted).length;
   hosted.call({ kind: 'message', text: `${text}\n@say done`, first: turns === 0 });
   await until(() => ended(hosted)[turns]);
-}
-
-async function outside(): Promise<number> {
-  const holder = spawn('sh', ['-c', 'sleep 600 & echo $!; exec sleep 600'], { stdio: ['ignore', 'pipe', 'ignore'] });
-  onTestFinished(() => void holder.kill('SIGKILL'));
-  const [line] = (await once(createInterface({ input: holder.stdout }), 'line')) as [string];
-  const pid = Number(line);
-  onTestFinished(() => stop(pid));
-  return pid;
 }
 
 async function logged(hosted: Hosted, field: string): Promise<number> {
@@ -88,49 +70,31 @@ it("reports each change of a process's turn and background work once, both parts
   }
 });
 
-it.skipIf(CONTROL_GROUP)("reports no background work for a process of the Kit's user outside the conversation that ends while the Kit reads the conversation's processes", async () => {
-  const ending = join(await temporaryDirectory(), 'ending');
-  const hosted = await opened({ environment: { KIT_ENDING: ending }, node: ENDING });
-  const from = activities(hosted.connection).length;
-  await writeFile(ending, String(await outside()));
+async function reads(log: string): Promise<number> {
+  return (await readFile(log, 'utf8').catch(() => '')).split('\n').filter((line) => line !== '').length;
+}
 
-  await said(hosted, '@say read');
+it('reports the process idle once its turn ends while what it started runs that its CLI tracks as no unfinished work, reading no process for it: an MCP server it started with its session, a language server it started in the turn and a server the agent left running', async () => {
+  const log = join(await temporaryDirectory(), 'process-reads');
+  const hosted = await opened({
+    environment: { KIT_PROCESS_READS: log },
+    node: ['--import', PROCESS_READS],
+    prepare: (home) => writeFile(join(home, 'start-server'), ''),
+  });
+  const mcp = await logged(hosted, 'server');
+  const idles = hosted.idles.length;
+  const read = await reads(log);
+
+  await said(hosted, '@server\n@sh sleep 606 > /dev/null 2>&1 & echo $!');
+  const [language, left] = [await logged(hosted, 'server'), Number(await logged(hosted, 'stdout'))];
+
   await reporting(hosted, IDLE);
+  await until(() => hosted.idles[idles]);
   await settle();
-
-  await expect(access(ending)).rejects.toMatchObject({ code: 'ENOENT' });
-  expect(activities(hosted.connection).slice(from)).toEqual([RUNNING, IDLE]);
-});
-
-it("reports background work while a process the conversation started whose environment the Kit cannot read runs, and the process idle once it ends", async () => {
-  const hosted = await opened();
-  const socket = join(await temporaryDirectory(), 'agent.sock');
-
-  await said(hosted, `@sh ssh-agent -D -a ${socket} > /dev/null 2>&1 & echo $!`);
-  const agent = Number(await logged(hosted, 'stdout'));
-  onTestFinished(() => stop(agent));
-  await reporting(hosted, WORKING);
-
-  stop(agent);
-
-  await reporting(hosted, IDLE);
-});
-
-it('reports the process idle while a server the CLI started for itself during a turn runs, and background work while a server a command left behind runs', async () => {
-  const hosted = await opened();
-
-  await said(hosted, '@server');
-  await reporting(hosted, IDLE);
-  expect(alive(await logged(hosted, 'server'))).toBe(true);
-
-  await said(hosted, '@sh sleep 606 > /dev/null 2>&1 & echo $!');
-  const left = Number(await logged(hosted, 'stdout'));
-  onTestFinished(() => stop(left));
-  await reporting(hosted, WORKING);
-
-  stop(left);
-
-  await reporting(hosted, IDLE);
+  expect(activities(hosted.connection).at(-1)).toEqual(IDLE);
+  expect([mcp, language, left].map(alive)).toEqual([true, true, true]);
+  expect(new Set([mcp, language, left]).size).toBe(3);
+  expect(await reads(log)).toBe(read);
 });
 
 it('reports a turn waiting on a secret question as asking for a secret', async () => {
@@ -164,42 +128,35 @@ it('reports background work while its evidence is uncertain, a schedule file the
 });
 
 it.each([
-  ['the command itself', ''],
-  ['the shell that waits on it', ' sh'],
-])('reports waiting on Runs while all its background work is house agent run commands, through %s, and background work once anything else runs beside them', async (_form, through) => {
+  ['by its name', `house agent run '{"refs":["019a0000-0000-7000-8000-000000000a17"]}'`],
+  ['by a path', '/usr/local/bin/house agent run -'],
+])('reports waiting on Runs while all its background work is background commands its CLI reports running house agent run %s, and background work once anything else runs beside them', async (_form, command) => {
   const hosted = await opened();
   const idles = hosted.idles.length;
 
-  await said(hosted, `@job job-1\n@runs${through}`);
+  await said(hosted, `@job job-1 ${command}`);
 
   await reporting(hosted, WAITING);
-  await said(hosted, '@spawn');
+  await said(hosted, '@job job-2 sleep 600');
   await reporting(hosted, WORKING);
-  const [job, clean] = [await logged(hosted, 'spawned'), await logged(hosted, 'clean')];
-  stop(clean);
-  stop(job);
-  await until(() => !alive(job) && !alive(clean));
-  await said(hosted, '@say again');
+  await said(hosted, '@jobdone job-2');
   await reporting(hosted, WAITING);
   await settle();
   expect(hosted.idles).toHaveLength(idles);
 
-  stop(-(await logged(hosted, 'waiting')));
   await said(hosted, '@jobdone job-1');
   await reporting(hosted, IDLE);
   await until(() => hosted.idles[idles]);
 });
 
-it('reports background work for what a crashed process left, after its end, and the process idle once that ends', async () => {
+it('reports the process idle once it crashes, though what it started still runs', async () => {
   const hosted = await opened();
 
   await said(hosted, '@spawn\n@exit 1');
 
   await until(() => hosted.connection.oneWayCalls.find(({ type, running }) => type === 'process' && running === false));
-  await reporting(hosted, WORKING);
-  stop(await logged(hosted, 'clean'));
-  stop(await logged(hosted, 'spawned'));
   await reporting(hosted, IDLE);
+  expect(alive(await logged(hosted, 'spawned'))).toBe(true);
 });
 
 it("reports each running process's activity again on a Kit connection that reopens", async () => {
@@ -215,9 +172,11 @@ it("reports each running process's activity again on a Kit connection that reope
   expect(activities(reopened)).toEqual([IDLE]);
 });
 
-it('tells a reopened Kit connection the activity a closed one did not take, after the process and what it left ended', async () => {
-  const hosted = await opened({ node: FAST_INTERVALS });
-  await said(hosted, '@spawn\n@exit 1');
+it('tells a reopened Kit connection the activity a closed one did not take, after the background work its CLI keeps ended', async () => {
+  const hosted = await opened();
+  await mkdir(join(hosted.workingDirectory, '.claude'));
+  const tasks = join(hosted.workingDirectory, '.claude', 'scheduled_tasks.json');
+  await writeFile(tasks, JSON.stringify({ tasks: [{ id: '7b99af94', cron: '0 3 1 1 *', prompt: 'say hi', createdAt: 1791648534000, recurring: true }] }));
   await reporting(hosted, WORKING);
   const upgrades = () => hosted.house.requests.filter((request) => request.method === 'UPGRADE').length;
   const before = upgrades();
@@ -225,9 +184,8 @@ it('tells a reopened Kit connection the activity a closed one did not take, afte
 
   hosted.house.connections.at(-1)!.close(1001, 'shutting_down');
   await until(() => upgrades() > before);
-  stop(await logged(hosted, 'clean'));
-  stop(await logged(hosted, 'spawned'));
-  await new Promise((resolve) => setTimeout(resolve, LOOKS_MS));
+  await rm(tasks);
+  await settle();
   expect(activities(hosted.connection).at(-1)).toEqual(WORKING);
   admit();
 

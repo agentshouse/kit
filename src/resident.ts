@@ -18,7 +18,7 @@ import { moveEarlier } from './earlier.ts';
 import { IdleCopies } from './idle-copies.ts';
 import { foldKitIntoHouse } from './one-command.ts';
 import { holdOwner } from './owner.ts';
-import { killDescendants } from './scope.ts';
+import { killDescendants } from './kill.ts';
 import { removeInputs, Scripts } from './scripts.ts';
 import { applySettings, enrolledRoutes, launchDirectories, moveIntoHouse, resumeWorkspaceMove, type Applied, type SettingsChange } from './settings.ts';
 import { quoted } from './shell.ts';

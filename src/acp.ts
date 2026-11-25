@@ -10,13 +10,14 @@ import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { CLIS, KIT_RELEASE, adapterCommand, cliEnvironment } from './clis.ts';
 import type { Message } from './events.ts';
-import { killTree, type Scope } from './scope.ts';
+import { killTree } from './kill.ts';
 
 export interface Adapter {
   connection: ClientConnection;
   initialized: InitializeResponse;
   exited: Promise<string>;
   lost: Promise<string>;
+  kill(): void;
   retire(): void;
 }
 
@@ -36,12 +37,9 @@ export async function startAdapter(
   events: (message: Message) => Promise<void> | null = () => null,
   added: Record<string, string> = {},
   signal?: AbortSignal,
-  scope: Scope | null = null,
 ): Promise<Adapter> {
   const adapter = CLIS[kind]!.adapter;
-  const started: [string, string[]] = [adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args];
-  const [command, args] = scope?.command(...started) ?? started;
-  const child = spawn(command, args, {
+  const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args, {
     cwd,
     env: { ...(await cliEnvironment(kind)), ...(adapter === null ? {} : { ...adapter.env, [adapter.executable]: cli }), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -89,12 +87,14 @@ export async function startAdapter(
       end(`the CLI exited with ${code ?? signal}${last ? `: ${last}` : ''}`);
     });
   });
+  const kill = () => {
+    if (child.pid !== undefined) killTree(child);
+  };
   const retire = () => {
     owned = false;
     if (retired) return;
     retired = true;
-    if (child.pid !== undefined) killTree(child);
-    scope?.kill();
+    kill();
     connection.close(new Error(RETIRED));
   };
   signal?.addEventListener('abort', retire, { once: true });
@@ -111,8 +111,7 @@ export async function startAdapter(
       },
       clientInfo: { name: '@agentshouse/kit', version: KIT_RELEASE },
     });
-    scope?.entered(child.pid!);
-    return { connection, initialized, exited, lost, retire };
+    return { connection, initialized, exited, lost, kill, retire };
   } catch (error) {
     retire();
     throw error;

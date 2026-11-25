@@ -14,7 +14,7 @@ import { loginPath, onLoginPath } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
 import { kitHome } from './home.ts';
 import { childEnvironment } from './relay.ts';
-import { killTree } from './scope.ts';
+import { killTree } from './kill.ts';
 import { launcher } from './supervisor.ts';
 
 export type ScriptCall = KitCallOf<'run_wizard' | 'run_function'>;

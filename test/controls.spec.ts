@@ -9,6 +9,17 @@ import { alive, filesUnder } from './kit.ts';
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 const started = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
 
+async function descendingAndLeft(hosted: Hosted): Promise<[number[], number[]]> {
+  const log = await until(async () => {
+    const entries = await hosted.adapterLog();
+    return entries.some((entry) => entry.spawned) ? entries : undefined;
+  });
+  const one = (field: string) => log.find((entry) => entry[field] !== undefined)!;
+  const descending = [one('spawned').pid, one('server').server, one('background').background] as number[];
+  expect(descending.map(alive)).toEqual([true, true, true]);
+  return [descending, [one('spawned').spawned, one('spawned').clean] as number[]];
+}
+
 async function opened(hosted: Hosted): Promise<string> {
   hosted.call({ kind: 'open' });
   return ((await hosted.result(lastCall())) as { provider_session_id: string }).provider_session_id;
@@ -41,19 +52,17 @@ it('cancels the running turn on interrupt and keeps the process and session', as
   ]);
 });
 
-it('kills the process and every process it started, and the next message resumes the session', async () => {
+it('kills the process and every process still descending from it, and leaves running what has left it, and the next message resumes the session', async () => {
   const hosted = await hostKit();
   const session = await opened(hosted);
-  hosted.call({ kind: 'message', text: '@spawn\n@wait', first: true });
-  const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
-  const adapter = spawned.pid as number;
-  expect(alive(spawned.spawned as number)).toBe(true);
+  hosted.call({ kind: 'message', text: '@server\n@background\n@spawn\n@wait', first: true });
+  const [descending, left] = await descendingAndLeft(hosted);
 
   hosted.call({ kind: 'kill' });
 
   expect(await hosted.result(lastCall())).toEqual({});
-  expect(alive(adapter)).toBe(false);
-  await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
+  await until(() => descending.every((pid) => !alive(pid)));
+  expect(left.map(alive)).toEqual([true, true]);
   expect(await until(() => ended(hosted)[0])).toMatchObject({ body: { failed: 'killed' } });
   await until(() => hosted.connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'process' && oneWayCall.running === false));
 
@@ -68,14 +77,14 @@ it('kills a process still opening its session and refuses the open, and the next
   await writeFile(join(hosted.home, 'hold-open'), '');
   hosted.call({ kind: 'open' });
   const open = lastCall();
-  const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
+  const held = await until(async () => (await hosted.adapterLog()).find((entry) => entry.held));
 
   hosted.call({ kind: 'kill' });
 
   expect(await hosted.result(lastCall())).toEqual({});
   expect(await hosted.result(open)).toEqual({ refused: 'the conversation was killed' });
-  expect(alive(spawned.pid as number)).toBe(false);
-  await until(() => !alive(spawned.spawned as number));
+  expect(alive(held.pid as number)).toBe(false);
+  await until(() => !alive(held.held as number));
   await rm(join(hosted.home, 'hold-open'));
   hosted.call({ kind: 'message', text: '@say again', first: false });
   expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
@@ -121,41 +130,36 @@ it('refuses an open and returns the result of the kill at once while the Kit sti
 });
 
 it.each(['SIGTERM', 'SIGINT'] as const)(
-  'kills every process it started, of a running conversation and of one still opening, when %s stops it',
+  'kills every process still descending from a running conversation and from one still opening, and leaves running what has left them, when %s stops it',
   async (signal) => {
     const hosted = await hostKit();
     await opened(hosted);
-    hosted.call({ kind: 'message', text: '@spawn\n@wait', first: true });
-    await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
+    hosted.call({ kind: 'message', text: '@server\n@background\n@spawn\n@wait', first: true });
+    const [descending, left] = await descendingAndLeft(hosted);
     await writeFile(join(hosted.home, 'hold-open'), '');
     hosted.call({ kind: 'open', conversation_id: 'conversation-2' });
-    const spawned = await until(async () => {
-      const entries = (await hosted.adapterLog()).filter((entry) => entry.spawned);
-      return entries.length === 2 ? entries : undefined;
-    });
+    const held = await until(async () => (await hosted.adapterLog()).find((entry) => entry.held));
 
     process.kill(hosted.kit.pid, signal);
     await hosted.kit.exited;
 
-    await until(() =>
-      spawned.every((entry) => [entry.pid, entry.spawned, entry.clean].every((pid) => !alive(pid as number))),
-    );
+    await until(() => [...descending, held.pid as number, held.held as number].every((pid) => !alive(pid)));
+    expect(left.map(alive)).toEqual([true, true]);
   },
 );
 
-it('kills a background job its crashed process left behind when SIGTERM stops it', async () => {
+it('leaves running what its crashed process left when SIGTERM stops the Kit', async () => {
   const hosted = await hostKit();
-  hosted.call({ kind: 'message', text: '@spawn\n@exit 1', first: false });
-  const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
+  hosted.call({ kind: 'message', text: '@background\n@spawn\n@exit 1', first: false });
   await until(() => ended(hosted)[0]);
-  expect(alive(spawned.pid as number)).toBe(false);
-  expect(alive(spawned.spawned as number)).toBe(true);
-  expect(alive(spawned.clean as number)).toBe(true);
+  const log = await hosted.adapterLog();
+  const left = [log.find((entry) => entry.background)!.background, log.find((entry) => entry.spawned)!.spawned, log.find((entry) => entry.spawned)!.clean] as number[];
+  expect(alive(log.find((entry) => entry.background)!.pid as number)).toBe(false);
 
   process.kill(hosted.kit.pid, 'SIGTERM');
   await hosted.kit.exited;
 
-  await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
+  expect(left.map(alive)).toEqual([true, true, true]);
 });
 
 it('sets an option on the running process and relays the commands and options the CLI sends', async () => {

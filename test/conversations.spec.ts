@@ -1405,15 +1405,15 @@ it.each(['codex-acp', 'claude-agent-acp'])('cancels a turn %s reported ended bef
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toHaveLength(1);
 });
 
-it('ends the running process, every process it started and its bridge for an open, opens a new session in a new process, answers its id and resumes only that session after', async () => {
+it('ends the running process, every process still descending from it and its bridge for an open, opens a new session in a new process, answers its id and resumes only that session after', async () => {
   const hosted = await hostKit();
   hosted.call({ kind: 'open' });
   const { provider_session_id: old } = (await hosted.result(lastCall())) as { provider_session_id: string };
-  hosted.call({ kind: 'message', provider_session_id: old, text: '@spawn\n@say before', first: true });
+  hosted.call({ kind: 'message', provider_session_id: old, text: '@background\n@say before', first: true });
   await ends(hosted, 1);
   const [before] = await sessionsOpened(hosted);
-  const job = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
-  expect(alive(job.spawned as number)).toBe(true);
+  const job = await until(async () => (await hosted.adapterLog()).find((entry) => entry.background));
+  expect(alive(job.background as number)).toBe(true);
 
   hosted.call({ kind: 'open', provider_session_id: old });
 
@@ -1422,7 +1422,7 @@ it('ends the running process, every process it started and its bridge for an ope
   expect(sessions.map((entry) => entry.sessionId)).toEqual([old, fresh]);
   expect(fresh).not.toBe(old);
   expect(alive(before!.pid as number)).toBe(false);
-  await until(() => !alive(job.spawned as number) && !alive(job.clean as number));
+  await until(() => !alive(job.background as number));
   expect(alive(sessions[1]!.pid as number)).toBe(true);
   expect(processes(hosted)).toEqual([true, false, true]);
   hosted.call({ kind: 'message', provider_session_id: old, text: '@say after\n@exit 3', first: false });
