@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, startHouse, until, type KitConnection, type Received } from './double.ts';
-import { hostKit, opened, type Hosted, type McpCall, type ToolResult } from './environment.ts';
+import { hostKit, opened, runs, type Hosted, type McpCall, type ToolResult } from './environment.ts';
 import { writeFile } from 'node:fs/promises';
 import { accountOf, runKit, stop, temporaryHome } from './kit.ts';
 
@@ -114,6 +114,22 @@ it('starts two Runs by one start act each, prints both names and references at o
 
   expect(await command.ended).toEqual({ status: 0, stdout: `rev-1 ${RUN_1}\nba-1 ${RUN_2}\nrev-1 ${RUN_1} idle\nba-1 ${RUN_2} idle\n`, stderr: '' });
   await until(() => waitings(hosted.house.connections.at(-1)!).find((waiting) => waiting.wait === wait && waiting.runs.length === 0));
+});
+
+it("holds the wait in the foreground of a conversation's turn, which ends once the command does", async () => {
+  const hosted = await hostKit();
+  answering(hosted, started(RUN_1, 'rev-1'));
+  await opened(hosted);
+
+  hosted.call({ kind: 'message', text: `@house agent run ${JSON.stringify({ runs: [REVIEW] })}\n@say done`, first: true });
+
+  await named(hosted, [RUN_1]);
+  await settle();
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/end')).toEqual([]);
+  told(hosted, RUN_1, 'idle', { name: 'rev-1' });
+  const [ran] = await runs(hosted, 1);
+  expect(ran).toMatchObject({ house: ['agent', 'run', JSON.stringify({ runs: [REVIEW] })], status: 0, stdout: `rev-1 ${RUN_1}\nrev-1 ${RUN_1} idle\n` });
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
 });
 
 it.each([

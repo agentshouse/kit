@@ -428,7 +428,8 @@ async function directive(
     } as never);
   }
   if (name === 'house') {
-    const args = rest.length > 1 ? [rest[0]!, rest.slice(1).join(' ')] : rest;
+    const verb = rest[0] === 'agent' && rest[1] === 'run' ? 2 : 1;
+    const args = rest.length > verb ? [...rest.slice(0, verb), rest.slice(verb).join(' ')] : rest;
     ran({ house: args }, spawnSync(process.execPath, [HOUSE, ...args], { encoding: 'utf8' }));
   }
   if (name === 'sh') ran({ sh: argument }, spawnSync('setsid', ['-w', 'sh', '-c', argument], { encoding: 'utf8' }));
