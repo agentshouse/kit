@@ -23,7 +23,6 @@ jobs:
         run: |
           set -euo pipefail
           docker compose run --rm -T test sh -c 'npm test && npm run build'
-          docker compose run --rm -T cgroup
           docker compose run --rm -T windows
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:

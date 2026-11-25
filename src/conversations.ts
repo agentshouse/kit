@@ -43,7 +43,7 @@ import { activityOf, IDLE, idle, stoppable, type Activity } from './activity.ts'
 import type { ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
-import { killMarked, Scope } from './scope.ts';
+import { killMarked } from './kill.ts';
 import { holdSecretInput } from './secret-input.ts';
 import { transcribe } from './transcription.ts';
 import { workFor, type Work } from './work.ts';
@@ -297,7 +297,6 @@ interface Running {
   killed: boolean;
   reader: Reader;
   work: Work;
-  scope: Scope;
 }
 
 interface Waiting {
@@ -331,7 +330,6 @@ class Conversation {
   state: SessionState = QUIET;
   sentState: string | null = null;
   tokens: Spent[] = [];
-  readonly leftovers = new Set<Scope>();
   readonly waiting: Waiting[] = [];
   sending: Promise<void> | null = null;
   readonly subagents = new Set<string>();
@@ -438,23 +436,6 @@ export class Conversations {
     );
   }
 
-  private scopeChanged(conversation: Conversation, scope: Scope): void {
-    if (conversation.leftovers.has(scope)) this.drop(conversation, scope);
-    this.changed(conversation);
-  }
-
-  private leave(conversation: Conversation, scope: Scope): void {
-    scope.ended();
-    conversation.leftovers.add(scope);
-    this.drop(conversation, scope);
-  }
-
-  private drop(conversation: Conversation, scope: Scope): void {
-    if (!scope.empty()) return;
-    scope.close();
-    conversation.leftovers.delete(scope);
-  }
-
   stopped(): void {
     this.stopping = true;
     for (const conversation of this.conversations.values()) {
@@ -469,7 +450,7 @@ export class Conversations {
         this.facts(conversation);
         this.stateChanged(conversation, true);
       } else if (conversation.exitUntold) this.process(conversation, false);
-      if (conversation.running !== null || conversation.leftovers.size > 0 || conversation.reported === null) this.tellActivity(conversation, true);
+      if (conversation.running !== null || conversation.reported === null) this.tellActivity(conversation, true);
       if (conversation.untold || conversation.told !== null) this.retell(conversation);
     }
   }
@@ -547,7 +528,7 @@ export class Conversations {
 
   private async stop(conversation: Conversation): Promise<void> {
     const running = conversation.running;
-    running?.scope.kill();
+    running?.adapter.kill();
     await running?.adapter.exited;
   }
 
@@ -867,10 +848,9 @@ export class Conversations {
 
   private halt(conversation: Conversation): void {
     if (conversation.opening !== null) killMarked(marker(conversation.opening));
-    for (const scope of conversation.leftovers) scope.kill();
     if (conversation.running === null) return;
     conversation.running.killed = true;
-    conversation.running.scope.kill();
+    conversation.running.adapter.kill();
   }
 
   private async kill(conversation: Conversation): Promise<void> {
@@ -959,14 +939,10 @@ export class Conversations {
     }
     conversation.place = place;
     conversation.opening = bridge;
-    const scope: Scope = new Scope(marker(bridge), randomUUID(), cli, () => this.scopeChanged(conversation, scope));
     const work = workFor(
       route.kind,
       place.directory,
-      () => {
-        scope.heard();
-        this.changed(conversation);
-      },
+      () => this.changed(conversation),
       (message) => this.tapped(conversation, reader, message),
     );
     let adapter: Adapter | null = null;
@@ -987,8 +963,6 @@ export class Conversations {
             return this.read(conversation, reader, work, message);
           },
           { ...bridge.env, ...streamed },
-          undefined,
-          scope,
         ),
       );
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
@@ -1000,12 +974,8 @@ export class Conversations {
         resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));
       reader.session = opened.sessionId;
       if (opened.sessionId !== conversation.session) conversation.state = QUIET;
-      const running: Running = { adapter, bridging, bridge, sessionId: opened.sessionId, killed: false, reader, work, scope };
+      const running: Running = { adapter, bridging, bridge, sessionId: opened.sessionId, killed: false, reader, work };
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));
-      void work.settled().then(() => {
-        scope.record();
-        this.changed(conversation);
-      });
       conversation.running = running;
       conversation.session = running.sessionId;
       conversation.options = options;
@@ -1016,7 +986,6 @@ export class Conversations {
     } catch (error) {
       adapter?.retire();
       work.close();
-      this.leave(conversation, scope);
       this.closeBridge(conversation, bridging, bridge);
       throw conversation.kills > 0 ? new Error(KILLED) : error;
     } finally {
@@ -1067,7 +1036,6 @@ export class Conversations {
   private detach(conversation: Conversation, running: Running): void {
     if (conversation.bridge === running.bridging) conversation.bridge = null;
     running.work.close();
-    this.leave(conversation, running.scope);
     conversation.running = null;
     conversation.commands = null;
     conversation.options = null;
@@ -1089,8 +1057,7 @@ export class Conversations {
     conversation.activity = activityOf({
       turns: conversation.turns.size,
       asking: turn === null || turn.questions === 0 ? null : { secret: turn.secrets > 0 },
-      running: conversation.running,
-      leftovers: conversation.leftovers,
+      work: conversation.running?.work ?? null,
     });
     const activity = JSON.stringify(conversation.activity);
     if (!again && activity === conversation.reported) return;
@@ -1197,7 +1164,6 @@ export class Conversations {
     this.kit.turnEnded(stamped.catch(logged));
     this.uploaded(conversation);
     this.next(conversation);
-    conversation.running?.scope.heard();
     this.changed(conversation);
   }
 
@@ -1250,7 +1216,6 @@ export class Conversations {
     if (stop !== null) return;
     conversation.reader?.closeTurn();
     conversation.turn = null;
-    conversation.running?.scope.heard();
     this.changed(conversation);
   }
 

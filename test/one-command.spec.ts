@@ -40,7 +40,7 @@ async function folded(home: string): Promise<void> {
 }
 
 function unitNaming(home: string, command: string): string {
-  return `[Unit]\nDescription=Kit\n\n[Service]\nExecStart="${join(home, 'bin', command)}" resident\nRestart=on-failure\nRestartSec=5\nDelegate=yes\nOOMPolicy=continue\n\n[Install]\nWantedBy=default.target\n`;
+  return `[Unit]\nDescription=Kit\n\n[Service]\nExecStart="${join(home, 'bin', command)}" resident\nRestart=on-failure\nRestartSec=5\nOOMPolicy=continue\n\n[Install]\nWantedBy=default.target\n`;
 }
 
 function agentNaming(home: string, command: string): string {

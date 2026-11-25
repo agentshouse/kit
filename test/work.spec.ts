@@ -189,6 +189,41 @@ it('stays busy while a Codex background terminal is open after its turn ends', a
   await stays(hosted, `@stream ${fixture('codex-terminal')} ${end}`, true);
 });
 
+function lastBackground(hosted: Hosted): unknown {
+  return hosted.connection.oneWayCalls.filter(({ type }) => type === 'activity').at(-1)?.background;
+}
+
+it('waits on Runs over Claude Code’s recorded background shell whose command runs house agent run, until it ends', async () => {
+  const hosted = await opened('claude-agent-acp');
+  const lines = readFileSync(fileURLToPath(new URL('./fixtures/events/claude-background.jsonl', import.meta.url)), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line.replaceAll('"command":"sleep 8"', '"command":"house agent run -"')) as Recorded);
+  const end = lines.findIndex((line) => line.params?.message?.subtype === 'task_updated');
+  const played = await written(hosted, 'claude-background', lines);
+
+  await stays(hosted, `@play ${played} 0 ${end}`, false);
+  expect(lastBackground(hosted)).toBe('runs');
+
+  await stays(hosted, `@play ${played} ${end}`, true);
+});
+
+it('waits on Runs over a Codex background terminal whose command runs house agent run, until it ends', async () => {
+  const hosted = await opened('codex-acp');
+  const terminal = 'exec-57554527-d25b-409a-aa06-8f7e0beea8d1';
+  const update = (fields: Record<string, unknown>) => `@emit ${JSON.stringify({ method: 'session/update', params: { sessionId: '$SESSION', update: fields } })}`;
+  const started = [
+    update({ sessionUpdate: 'tool_call', toolCallId: terminal, title: 'house agent run -', kind: 'execute', status: 'in_progress', rawInput: { command: 'house agent run -' } }),
+    update({ sessionUpdate: 'async_task_spawned', asyncTaskId: terminal, name: 'house agent run -', taskType: 'shell', toolCallId: terminal }),
+  ];
+  const end = recorded('codex-terminal').findLastIndex((line) => line.method === 'item/completed');
+
+  await stays(hosted, [...started, `@stream ${fixture('codex-terminal')} 0 ${end}`].join('\n'), false);
+  expect(lastBackground(hosted)).toBe('runs');
+
+  await stays(hosted, [`@stream ${fixture('codex-terminal')} ${end}`, update({ sessionUpdate: 'async_task_state_update', asyncTaskId: terminal, state: 'completed' })].join('\n'), true);
+});
+
 it('stays busy while a Codex sub-agent’s thread runs, also after the adapter reports the sub-agent failed', async () => {
   const hosted = await opened('codex-acp');
   const lines = recorded('codex-subagent');

@@ -16,6 +16,8 @@ const COMMAND_ITEM = 'commandExecution';
 const SCHEDULING = new Set(['CronCreate', 'CronDelete', 'ScheduleWakeup']);
 const QUEUE_LIST = 'house-kit-queue-';
 const SYNC = 'house-kit-sync-';
+const ENDED_CALL = new Set(['completed', 'failed']);
+const RUNS_WAIT = /^\s*(?:\S*\/)?house\s+agent\s+run(?:\s|$)/;
 const WAKEUP = /Next wakeup scheduled for (\d\d):(\d\d):(\d\d) \(in (\d+)s\)/;
 const HALF_DAY = 12 * 60 * 60 * 1000;
 const SETTINGS = '.claude';
@@ -25,20 +27,25 @@ export function codexLauncher(): string {
   return join(kitHome(), 'launchers', 'codex');
 }
 
-export type Shown = 'none' | 'shells' | 'work';
+export type Shown = 'none' | 'runs' | 'work';
 
-function shells(types: Iterable<unknown>, shell: string): Shown {
+function shown(waits: Iterable<boolean>): Shown {
   let shown: Shown = 'none';
-  for (const type of types) {
-    if (type !== shell) return 'work';
-    shown = 'shells';
+  for (const wait of waits) {
+    if (!wait) return 'work';
+    shown = 'runs';
   }
   return shown;
 }
 
+function joined(first: Shown, second: Shown): Shown {
+  return first === 'work' || second === 'work' ? 'work' : first === 'runs' || second === 'runs' ? 'runs' : 'none';
+}
+
 export class Work {
   protected readonly changed: () => void;
-  private readonly jobs = new Map<string, unknown>();
+  private readonly commands = new Map<string, string>();
+  private readonly jobs = new Map<string, boolean>();
 
   constructor(changed: () => void) {
     this.changed = changed;
@@ -47,8 +54,6 @@ export class Work {
   async open(_cli: string): Promise<Record<string, string>> {
     return {};
   }
-
-  async settled(): Promise<void> {}
 
   caughtUp(): Promise<void> | null {
     return null;
@@ -61,16 +66,28 @@ export class Work {
 
   protected take(message: Message): void {
     const update = message.params?.update as Fields | undefined;
-    if (message.method !== 'session/update' || update?.asyncTaskId === undefined) return;
-    if (update.sessionUpdate === 'async_task_spawned') this.jobs.set(update.asyncTaskId, update.taskType);
+    if (message.method !== 'session/update' || update === undefined) return;
+    if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') this.called(update);
+    if (update.sessionUpdate === 'async_task_spawned') {
+      this.jobs.set(update.asyncTaskId, update.taskType === SHELL_JOB && RUNS_WAIT.test(this.commands.get(update.toolCallId) ?? ''));
+    }
     if (update.sessionUpdate === 'async_task_state_update' && !RUNNING_JOB.has(update.state)) this.jobs.delete(update.asyncTaskId);
   }
 
+  protected waits(job: string): boolean {
+    return this.jobs.get(job) === true;
+  }
+
   shown(): Shown {
-    return shells(this.jobs.values(), SHELL_JOB);
+    return shown(this.jobs.values());
   }
 
   close(): void {}
+
+  private called(update: Fields): void {
+    if (typeof update.rawInput?.command === 'string') this.commands.set(update.toolCallId, update.rawInput.command);
+    if (ENDED_CALL.has(update.status)) this.commands.delete(update.toolCallId);
+  }
 }
 
 class ClaudeWork extends Work {
@@ -115,9 +132,9 @@ class ClaudeWork extends Work {
   override shown(): Shown {
     const jobs = super.shown();
     if (jobs === 'work' || this.running || this.hooks.size > 0 || this.crons.size > 0 || this.wakeups.length > 0 || this.goal) return 'work';
-    const tasks = shells([...this.level.values(), ...this.started.values()], SHELL_TASK);
+    const tasks = shown([...this.level, ...this.started].map(([id, type]) => type === SHELL_TASK && this.waits(id)));
     if (tasks === 'work' || this.durable()) return 'work';
-    return jobs === 'shells' ? jobs : tasks;
+    return joined(jobs, tasks);
   }
 
   private sdk(message: Fields): void {
@@ -235,10 +252,8 @@ class CodexWork extends Work {
   private readonly threads = new Map<string, boolean>();
   private readonly queues = new Map<string, number>();
   private readonly goals = new Set<string>();
-  private readonly items = new Map<string, unknown>();
+  private readonly items = new Map<string, { type: unknown; id: string }>();
   private readonly hooks = new Set<string>();
-  private readonly starting = new Set<string>();
-  private readonly settling: (() => void)[] = [];
   private readonly waiting: { heard: number; resolve: () => void }[] = [];
   private memories: boolean | null = null;
   private lost = false;
@@ -263,13 +278,6 @@ class CodexWork extends Work {
     return { CODEX_PATH: codexLauncher(), HOUSE_KIT_CODEX: cli, HOUSE_KIT_CODEX_STREAM: this.path };
   }
 
-  override settled(): Promise<void> {
-    return new Promise((resolve) => {
-      this.settling.push(resolve);
-      this.settle();
-    });
-  }
-
   protected override take(message: Message): void {
     super.take(message);
     this.heard++;
@@ -285,7 +293,7 @@ class CodexWork extends Work {
 
   override shown(): Shown {
     const jobs = super.shown();
-    const items = shells(this.items.values(), COMMAND_ITEM);
+    const items = shown([...this.items.values()].map(({ type, id }) => type === COMMAND_ITEM && this.waits(id)));
     if (
       jobs === 'work' ||
       items === 'work' ||
@@ -302,7 +310,7 @@ class CodexWork extends Work {
       this.prove();
       return 'work';
     }
-    return jobs === 'shells' ? jobs : items;
+    return joined(jobs, items);
   }
 
   override close(): void {
@@ -322,7 +330,6 @@ class CodexWork extends Work {
         buffer = buffer.slice(index + 1);
         if (message !== null) this.stream(message, socket);
       }
-      this.settle();
       this.changed();
     });
   }
@@ -352,10 +359,6 @@ class CodexWork extends Work {
     while (this.waiting[0] !== undefined && (this.lost || this.waiting[0].heard <= this.proven)) this.waiting.shift()!.resolve();
   }
 
-  private settle(): void {
-    if (this.starting.size === 0) for (const resolve of this.settling.splice(0)) resolve();
-  }
-
   private stream(message: Message, socket: Socket): void {
     const params = message.params as Fields;
     if (message.method !== undefined) this.tapped(message);
@@ -380,7 +383,7 @@ class CodexWork extends Work {
         this.goals.delete(params.threadId);
         break;
       case 'item/started':
-        this.items.set(`${params.threadId} ${params.item.id}`, params.item.type);
+        this.items.set(`${params.threadId} ${params.item.id}`, { type: params.item.type, id: params.item.id });
         break;
       case 'item/completed':
         this.items.delete(`${params.threadId} ${params.item.id}`);
@@ -390,10 +393,6 @@ class CodexWork extends Work {
         break;
       case 'hook/completed':
         this.hooks.delete(params.run.id);
-        break;
-      case 'mcpServer/startupStatus/updated':
-        if (params.status === 'starting') this.starting.add(`${params.threadId} ${params.name}`);
-        else this.starting.delete(`${params.threadId} ${params.name}`);
         break;
       case undefined:
         this.answered(message);

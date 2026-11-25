@@ -1,8 +1,8 @@
 import { agent, ndJsonStream, RequestError, type AgentContext, type PromptResponse } from '@agentclientprotocol/sdk';
-import { spawn, spawnSync, type ChildProcess, type SpawnSyncReturns } from 'node:child_process';
+import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { appendFileSync, closeSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Readable, Writable } from 'node:stream';
@@ -11,7 +11,6 @@ import { MODELS, SESSION_OPTIONS, type CliModel } from './fixtures/clis/session-
 import { recordStart } from './started.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
-const HELD_COMMAND = fileURLToPath(new URL('./held-command.ts', import.meta.url));
 const EVENTS = fileURLToPath(new URL('./fixtures/events/', import.meta.url));
 const kind = process.env.ADAPTER_KIND ?? 'codex-acp';
 const home = join(process.env.HOME ?? '/tmp', '.agents', 'house');
@@ -73,17 +72,8 @@ const LAUNCHER = `const job = require('node:child_process').spawn(process.execPa
 const LINGER =
   "const [gate, line] = process.argv.slice(1); const wait = setInterval(() => { if (!require('node:fs').existsSync(gate)) return; clearInterval(wait); process.stdout.write(line); }, 20);";
 
-const SERVER =
-  "require('node:readline').createInterface({ input: process.stdin }).on('line', () => process.stdout.write(`${require('node:child_process').spawn('sleep', ['603'], { stdio: 'ignore' }).pid}\\n`));";
-let server: ChildProcess | null = null;
-
 function spawnJob(): void {
   log(JSON.parse(spawnSync(process.execPath, ['-e', LAUNCHER], { encoding: 'utf8' }).stdout) as Record<string, unknown>);
-}
-
-function runsCommand(shell: number): boolean {
-  const [child = ''] = readFileSync(`/proc/${shell}/task/${shell}/children`, 'utf8').trim().split(' ');
-  return child !== '' && readFileSync(`/proc/${child}/cmdline`, 'utf8').includes('\0agent\0run\0');
 }
 
 function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): void {
@@ -409,13 +399,21 @@ async function directive(
   if (name === 'job' && kind === 'grok-build') {
     await client.notify('_x.ai/task_backgrounded', {
       sessionId,
-      update: { sessionUpdate: 'task_backgrounded', task_id: argument, command: 'sleep 600' },
+      update: { sessionUpdate: 'task_backgrounded', task_id: rest[0]!, command: 'sleep 600' },
     });
   } else if (name === 'job') {
+    const [id, ...command] = rest;
+    if (command.length > 0) {
+      await client.notify('session/update', {
+        sessionId,
+        update: { sessionUpdate: 'tool_call', toolCallId: id!, title: 'Terminal', kind: 'execute', status: 'in_progress', rawInput: { command: command.join(' ') } },
+      });
+    }
     await client.notify('session/update', {
       sessionId,
-      update: { sessionUpdate: 'async_task_spawned', asyncTaskId: argument, name: 'job', taskType: 'shell' },
+      update: { sessionUpdate: 'async_task_spawned', asyncTaskId: id, name: 'job', taskType: 'shell', toolCallId: id },
     } as never);
+    if (command.length > 0) await client.notify('session/update', { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: id!, status: 'completed' } });
   }
   if (name === 'jobdone' && kind === 'grok-build') {
     await client.notify('_x.ai/task_completed', {
@@ -432,21 +430,11 @@ async function directive(
     const args = rest.length > 1 ? [rest[0]!, rest.slice(1).join(' ')] : rest;
     ran({ house: args }, spawnSync(process.execPath, [HOUSE, ...args], { encoding: 'utf8' }));
   }
-  if (name === 'sh') ran({ sh: argument }, spawnSync('sh', ['-c', argument], { encoding: 'utf8' }));
+  if (name === 'sh') ran({ sh: argument }, spawnSync('setsid', ['-w', 'sh', '-c', argument], { encoding: 'utf8' }));
   if (name === 'git') {
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }
   if (name === 'spawn') spawnJob();
-  if (name === 'runs') {
-    const command = [process.execPath, HOUSE, 'agent', 'run', '-'];
-    const [file, ...args] = argument === 'sh' ? ['sh', '-c', '"$@"; :', 'sh', ...command] : command;
-    const env = { ...process.env, NODE_OPTIONS: `--import=${HELD_COMMAND}` };
-    const waiting = spawn(file!, args, { detached: true, stdio: 'ignore', env });
-    waiting.unref();
-    // Twenty milliseconds sees the shell's command start at once, so the turn ends only once it runs.
-    while (argument === 'sh' && !runsCommand(waiting.pid!)) await new Promise((resolve) => setTimeout(resolve, 20));
-    log({ waiting: waiting.pid });
-  }
   if (name === 'linger') {
     const update = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: rest.slice(1).join(' ') }, ...messageSignal('final_answer') };
     const line = `${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } })}\n`;
@@ -459,15 +447,10 @@ async function directive(
     later.unref();
     log({ server: later.pid });
   }
-  if (name === 'host') {
-    const host = spawn('sleep', ['604'], { argv0: `${realpathSync(cli.path!)}-code-mode-host`, stdio: 'ignore' });
-    host.unref();
-    log({ host: host.pid });
-  }
-  if (name === 'serve') {
-    const served = new Promise<string>((resolve) => server!.stdout!.once('data', (chunk) => resolve(String(chunk))));
-    server!.stdin!.write('\n');
-    log({ served: Number(await served) });
+  if (name === 'background') {
+    const command = spawn('setsid', ['sleep', '607'], { stdio: 'ignore' });
+    command.unref();
+    log({ background: command.pid });
   }
   if (name === 'emit') {
     const { method, params } = JSON.parse(argument.split('$SESSION').join(sessionId)) as { method: string; params: unknown };
@@ -560,11 +543,14 @@ const app = agent({ name: 'adapter-double' })
       log({ releasedProbe: models[0]!.id });
     }
     if (existsSync(join(home, 'start-server'))) {
-      server = spawn(process.execPath, ['-e', SERVER], { stdio: ['pipe', 'pipe', 'ignore'] });
+      const server = spawn('sleep', ['601'], { stdio: 'ignore' });
+      server.unref();
       log({ server: server.pid });
     }
     if (existsSync(join(home, 'hold-open'))) {
-      spawnJob();
+      const held = spawn('sleep', ['608'], { stdio: 'ignore' });
+      held.unref();
+      log({ held: held.pid });
       await new Promise(() => undefined);
     }
     return { sessionId, configOptions: options() };

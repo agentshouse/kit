@@ -11,19 +11,25 @@ it('reports macOS and its version as the operating system on a Mac', async () =>
   expect(report.body).toMatchObject({ os: 'macOS 27.0.1', form: 'laptop' });
 });
 
-it('kills the process and every process it started on a Mac', async () => {
+it('kills the process and every process still descending from it on a Mac, and leaves running what has left it', async () => {
   const hosted = await hostMac();
   hosted.call({ kind: 'open' });
   await hosted.result(lastCall());
-  hosted.call({ kind: 'message', text: '@spawn\n@wait', first: true });
-  const spawned = await until(async () => (await hosted.adapterLog()).find((entry) => entry.spawned));
-  expect(alive(spawned.spawned as number)).toBe(true);
+  hosted.call({ kind: 'message', text: '@server\n@background\n@spawn\n@wait', first: true });
+  const log = await until(async () => {
+    const entries = await hosted.adapterLog();
+    return entries.some((entry) => entry.spawned) ? entries : undefined;
+  });
+  const one = (field: string) => log.find((entry) => entry[field] !== undefined)!;
+  const descending = [one('spawned').pid, one('server').server, one('background').background] as number[];
+  const left = [one('spawned').spawned, one('spawned').clean] as number[];
+  expect([...descending, ...left].map(alive)).toEqual([true, true, true, true, true]);
 
   hosted.call({ kind: 'kill' });
 
   expect(await hosted.result(lastCall())).toEqual({});
-  expect(alive(spawned.pid as number)).toBe(false);
-  await until(() => !alive(spawned.spawned as number) && !alive(spawned.clean as number));
+  await until(() => descending.every((pid) => !alive(pid)));
+  expect(left.map(alive)).toEqual([true, true]);
 });
 
 it("opens a Claude Code session whose sandbox lets through its conversation's bridge socket alone on a Mac", async () => {

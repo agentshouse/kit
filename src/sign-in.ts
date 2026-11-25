@@ -5,7 +5,7 @@ import type { Agents } from './agents.ts';
 import type { House } from './api.ts';
 import { CLIS, cliEnvironment } from './clis.ts';
 import type { Calls, Carried } from './calls.ts';
-import { killTree } from './scope.ts';
+import { killTree } from './kill.ts';
 import { holdSecretInput } from './secret-input.ts';
 
 export type SignInCall = KitCallOf<'sign_in'>;
