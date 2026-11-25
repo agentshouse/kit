@@ -84,8 +84,12 @@ function carries(pid: string, marker: string, doubted: boolean): boolean {
   } catch (error) {
     if (GONE.has(failure(error))) return false;
     if (failure(error) !== 'EACCES') throw error;
-    return doubted && statSync(`/proc/${pid}`, { throwIfNoEntry: false })?.uid === process.getuid!();
+    return doubted && statSync(`/proc/${pid}`, { throwIfNoEntry: false })?.uid === process.getuid!() && stillRuns(pid);
   }
+}
+
+function stillRuns(pid: string): boolean {
+  return Boolean(read(pid)?.command);
 }
 
 function killAll(pids: number[]): void {

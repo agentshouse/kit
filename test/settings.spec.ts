@@ -81,8 +81,8 @@ async function kitSettings(home: string, ...operands: string[]) {
   return { status, stdout: kit.stdout(), stderr: kit.stderr() };
 }
 
-async function lastReport(hosted: Hosted, reported: (report: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
-  return until(() => hosted.reports.findLast(reported));
+async function lastReport(hosted: Hosted, reported: (report: Record<string, unknown>) => boolean, from = 0): Promise<Record<string, unknown>> {
+  return until(() => hosted.reports.slice(from).findLast(reported));
 }
 
 async function enrolled(skills: unknown, house = HOUSE): Promise<string> {
@@ -191,8 +191,9 @@ it('declares its skills as all or a list and changes them for a settings Kit cal
   await lastReport(hosted, (report) => (report.settings as { skills: unknown }).skills === 'all');
   expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ origin: hosted.house.origin, names: NAMES });
 
+  const declared = hosted.reports.length;
   expect(await kitSettings(hosted.home, 'skills', FIRST)).toEqual({ status: 0, stdout: `skills ${FIRST}\nworkspace ${hosted.workspace}\n`, stderr: '' });
-  expect(await lastReport(hosted, (report) => Array.isArray((report.settings as { skills: unknown }).skills))).toMatchObject({ settings: { skills: [FIRST] } });
+  expect(await lastReport(hosted, (report) => Array.isArray((report.settings as { skills: unknown }).skills), declared)).toMatchObject({ settings: { skills: [FIRST] } });
   expect(JSON.parse(await readFile(join(hosted.home, 'skill-set.json'), 'utf8'))).toMatchObject({ names: [FIRST] });
 
   const none = callSettings(hosted, { skills: [] });
