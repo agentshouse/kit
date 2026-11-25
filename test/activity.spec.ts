@@ -59,8 +59,10 @@ async function said(hosted: Hosted, text: string): Promise<void> {
 async function outside(): Promise<number> {
   const holder = spawn('sh', ['-c', 'sleep 600 & echo $!; exec sleep 600'], { stdio: ['ignore', 'pipe', 'ignore'] });
   onTestFinished(() => void holder.kill('SIGKILL'));
-  const [pid] = (await once(createInterface({ input: holder.stdout }), 'line')) as [string];
-  return Number(pid);
+  const [line] = (await once(createInterface({ input: holder.stdout }), 'line')) as [string];
+  const pid = Number(line);
+  onTestFinished(() => stop(pid));
+  return pid;
 }
 
 async function logged(hosted: Hosted, field: string): Promise<number> {
@@ -98,6 +100,20 @@ it.skipIf(CONTROL_GROUP)("reports no background work for a process of the Kit's 
 
   await expect(access(ending)).rejects.toMatchObject({ code: 'ENOENT' });
   expect(activities(hosted.connection).slice(from)).toEqual([RUNNING, IDLE]);
+});
+
+it("reports background work while a process the conversation started whose environment the Kit cannot read runs, and the process idle once it ends", async () => {
+  const hosted = await opened();
+  const socket = join(await temporaryDirectory(), 'agent.sock');
+
+  await said(hosted, `@sh ssh-agent -D -a ${socket} > /dev/null 2>&1 & echo $!`);
+  const agent = Number(await logged(hosted, 'stdout'));
+  onTestFinished(() => stop(agent));
+  await reporting(hosted, WORKING);
+
+  stop(agent);
+
+  await reporting(hosted, IDLE);
 });
 
 it('reports a turn waiting on a secret question as asking for a secret', async () => {
