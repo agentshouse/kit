@@ -112,6 +112,10 @@ export function conversationsFolder(): string {
   return join(workspaceRoot(), 'conversations');
 }
 
+export function repositoriesFolder(): string {
+  return join(workspaceRoot(), 'repositories');
+}
+
 function parsed<T>(name: string, text: string): T {
   try {
     return JSON.parse(text) as T;

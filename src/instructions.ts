@@ -13,15 +13,15 @@ function cutOf(lines: string[]): RegExpExecArray | null {
   return cut !== null && Buffer.byteLength(lines.slice(1).join('\n')) === Number(cut[1]) ? cut : null;
 }
 
-async function readOwnerRules(bridge: Bridge): Promise<string> {
+export async function shellDocument(bridge: Pick<Bridge, 'tool'>, path: string): Promise<string | null> {
   let document = '';
-  for (let command: string | undefined = `cat ${OWNER_RULES}`; command !== undefined; ) {
+  for (let command: string | undefined = `cat ${path}`; command !== undefined; ) {
     const read = await bridge.tool('shell', { command });
     const text = read.content.map((content) => content.text).join('\n');
     const lines = text.split('\n');
     if (read.isError === true || (FAILED.test(lines[0] ?? '') && lines[1]?.startsWith('stderr: '))) {
       const refusal = read.isError === true ? text : lines.slice(1).join('\n').replace(/^stderr: /gm, '');
-      if (UNREADABLE.test(refusal)) return '';
+      if (UNREADABLE.test(refusal)) return null;
       throw new Error(refusal);
     }
     const cut = cutOf(lines);
@@ -36,7 +36,7 @@ function block(base: string, last: string): string {
 }
 
 export async function instructions(bridge: Bridge, base: string): Promise<string> {
-  return block(base, await readOwnerRules(bridge));
+  return block(base, (await shellDocument(bridge, OWNER_RULES)) ?? '');
 }
 
 export async function copyInstructions(base: string, copy: string, reads: boolean): Promise<string> {

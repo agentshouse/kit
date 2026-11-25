@@ -31,17 +31,17 @@ import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
-import { PlaceRefused, type Answered, type LocalCopies, type Opening, type Place } from './copies.ts';
+import type { Answered, LocalCopies, Opening, Place } from './copies.ts';
 import { Content } from './content.ts';
 import { answeredFailure, readerFor, type CallEvent, type Event, type Message, type Reader, type Spent, type Stop } from './events.ts';
 import { fileInfo, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
 import { grokPlanAnswer, grokPlanForm, grokQuestionAnswer, grokQuestionForm, type GrokPlan, type GrokQuestions } from './grok.ts';
 import { agentBase } from './home.ts';
 import type { Calls } from './calls.ts';
-import { copyInstructions, instructions } from './instructions.ts';
+import { copyInstructions, instructions, shellDocument } from './instructions.ts';
 import { activityOf, IDLE, idle, stoppable, type Activity } from './activity.ts';
 import type { ToolResult } from './mcp.ts';
-import { refusalOf } from './refusals.ts';
+import { PlaceRefused, refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { killMarked, Scope } from './scope.ts';
 import { holdSecretInput } from './secret-input.ts';
@@ -951,7 +951,10 @@ export class Conversations {
     let place: Place;
     try {
       if (conversation.kills > 0) throw new Error(KILLED);
-      place = await step(unplaced, this.kit.copies.placed(conversation.id, opening, bridge.caller, route.working_directory));
+      place = await step(
+        unplaced,
+        this.kit.copies.placed(conversation.id, opening, bridge.caller, route.working_directory, (path) => shellDocument(bridge, path)),
+      );
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
       this.closeBridge(conversation, bridging, bridge);
@@ -986,7 +989,7 @@ export class Conversations {
             work.read(message);
             return this.read(conversation, reader, work, message);
           },
-          { ...bridge.env, ...streamed },
+          { ...bridge.env, ...streamed, ...(place.code === null ? {} : CLIS[route.kind]!.writesIn(place.code)) },
           undefined,
           scope,
         ),
@@ -994,7 +997,7 @@ export class Conversations {
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
       const agent = adapter.connection.agent;
       const cwd = place.directory;
-      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name);
+      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name, place.code);
       const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
       const opened =
         resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));
