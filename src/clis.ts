@@ -18,6 +18,7 @@ export interface Cli {
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
   args: string[];
   reads: 'AGENTS.md' | 'CLAUDE.md' | null;
+  compactWords: boolean;
   fullAccess: string | null;
   sessionMeta(bridge: string, name: string | null): Record<string, unknown>;
   unknownSession(error: unknown): boolean;
@@ -137,6 +138,7 @@ export const CLIS: Record<string, Cli> = {
     },
     args: [],
     reads: 'AGENTS.md',
+    compactWords: false,
     fullAccess: 'agent-full-access',
     sessionMeta: () => ({}),
     unknownSession: (error) => {
@@ -164,6 +166,7 @@ export const CLIS: Record<string, Cli> = {
     },
     args: [],
     reads: 'CLAUDE.md',
+    compactWords: true,
     fullAccess: 'bypassPermissions',
     sessionMeta: (bridge, name) => ({
       claudeCode: {
@@ -193,6 +196,7 @@ export const CLIS: Record<string, Cli> = {
     adapter: null,
     args: ['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio'],
     reads: null,
+    compactWords: false,
     fullAccess: null,
     sessionMeta: () => ({}),
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
