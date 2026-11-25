@@ -17,8 +17,14 @@ async function spawned(hosted: Hosted): Promise<{ spawned: number; clean: number
   };
 }
 
-async function serving(prepare: (home: string) => void = () => undefined): Promise<Hosted> {
+async function startedLast(hosted: Hosted, fields: string[]): Promise<number[]> {
+  const log = await hosted.adapterLog();
+  return fields.map((field) => log.findLast((entry) => entry[field] !== undefined)![field] as number);
+}
+
+async function serving(prepare: (home: string) => void = () => undefined, hosting: Hosting = {}): Promise<Hosted> {
   const hosted = await hostKit([{}], {
+    ...hosting,
     prepare: async (home) => {
       prepare(home);
       await writeFile(join(home, 'start-server'), '');
@@ -47,38 +53,37 @@ it('stays busy while a process the conversation started runs, double-forked into
   await until(() => hosted.idles[2]);
 });
 
-it("stays busy while a process started after the session started runs, while a helper the CLI ships beside the file its link names does not", async () => {
+it("reports idle while what the CLI starts in its session after the session started runs: a server in the CLI's process group or a group of its own, and a helper it ships beside the file its link names", async () => {
   const hosted = await serving((home) => {
     linkUserCli(home, userBin(home), 'codex-acp');
   });
-  hosted.call({ kind: 'message', text: '@host\n@say hosted', first: true });
+  hosted.call({ kind: 'message', text: '@server\n@group\n@host\n@say started', first: true });
   await until(() => ended(hosted)[0]);
+
   await until(() => hosted.idles[2]);
-  const host = (await hosted.adapterLog()).find((entry) => entry.host !== undefined)!.host as number;
-  expect(alive(host)).toBe(true);
-
-  hosted.call({ kind: 'message', text: '@server\n@say started', first: false });
-  await until(() => ended(hosted)[1]);
-  const later = (await hosted.adapterLog()).filter((entry) => entry.server !== undefined).at(-1)!.server as number;
-  await settle();
-  expect(hosted.idles).toHaveLength(3);
-
-  stop(later);
-
-  await until(() => hosted.idles[3]);
+  expect((await startedLast(hosted, ['server', 'grouped', 'host'])).map(alive)).toEqual([true, true, true]);
 });
 
-it('stays busy while a process a server started after the session started runs', async () => {
+it('reports idle while a process a server started after the session started runs in the CLI session', async () => {
   const hosted = await serving();
   hosted.call({ kind: 'message', text: '@serve\n@say served', first: true });
   await until(() => ended(hosted)[0]);
   const child = (await until(async () => (await hosted.adapterLog()).find((entry) => entry.served))).served as number;
-  await settle();
-  expect(hosted.idles).toHaveLength(2);
-
-  stop(child);
 
   await until(() => hosted.idles[2]);
+  expect(alive(child)).toBe(true);
+});
+
+it("reports idle on a Mac, whose process table shows no session, while a server the CLI starts after the session started runs in the CLI's process group, and a helper it ships beside the file its link names in a group of its own", async () => {
+  const hosting = await onMac();
+  const hosted = await serving((home) => {
+    linkUserCli(home, userBin(home), 'codex-acp');
+  }, hosting);
+  hosted.call({ kind: 'message', text: '@server\n@host\n@say started', first: true });
+  await until(() => ended(hosted)[0]);
+
+  await until(() => hosted.idles[2]);
+  expect((await startedLast(hosted, ['server', 'host'])).map(alive)).toEqual([true, true]);
 });
 
 it('stays busy while the processes of a conversation cannot be read', async () => {

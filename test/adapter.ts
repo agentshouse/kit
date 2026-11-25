@@ -77,6 +77,12 @@ const SERVER =
   "require('node:readline').createInterface({ input: process.stdin }).on('line', () => process.stdout.write(`${require('node:child_process').spawn('sleep', ['603'], { stdio: 'ignore' }).pid}\\n`));";
 let server: ChildProcess | null = null;
 
+const OWN_GROUP = 'setpgrp(0, 0); my $file = shift; exec { $file } @ARGV';
+
+function grouped(file: string, args: string[], options: Parameters<typeof spawn>[2]): ChildProcess {
+  return spawn('perl', ['-e', OWN_GROUP, file, ...args], options);
+}
+
 function spawnJob(): void {
   log(JSON.parse(spawnSync(process.execPath, ['-e', LAUNCHER], { encoding: 'utf8' }).stdout) as Record<string, unknown>);
 }
@@ -432,7 +438,7 @@ async function directive(
     const args = rest.length > 1 ? [rest[0]!, rest.slice(1).join(' ')] : rest;
     ran({ house: args }, spawnSync(process.execPath, [HOUSE, ...args], { encoding: 'utf8' }));
   }
-  if (name === 'sh') ran({ sh: argument }, spawnSync('sh', ['-c', argument], { encoding: 'utf8' }));
+  if (name === 'sh') ran({ sh: argument }, spawnSync('setsid', ['-w', 'sh', '-c', argument], { encoding: 'utf8' }));
   if (name === 'git') {
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }
@@ -459,8 +465,13 @@ async function directive(
     later.unref();
     log({ server: later.pid });
   }
+  if (name === 'group') {
+    const own = grouped('sleep', ['sleep', '605'], { stdio: 'ignore' });
+    own.unref();
+    log({ grouped: own.pid });
+  }
   if (name === 'host') {
-    const host = spawn('sleep', ['604'], { argv0: `${realpathSync(cli.path!)}-code-mode-host`, stdio: 'ignore' });
+    const host = grouped('sleep', [`${realpathSync(cli.path!)}-code-mode-host`, '604'], { stdio: 'ignore' });
     host.unref();
     log({ host: host.pid });
   }
@@ -560,7 +571,7 @@ const app = agent({ name: 'adapter-double' })
       log({ releasedProbe: models[0]!.id });
     }
     if (existsSync(join(home, 'start-server'))) {
-      server = spawn(process.execPath, ['-e', SERVER], { stdio: ['pipe', 'pipe', 'ignore'] });
+      server = grouped(process.execPath, [process.execPath, '-e', SERVER], { stdio: ['pipe', 'pipe', 'ignore'] });
       log({ server: server.pid });
     }
     if (existsSync(join(home, 'hold-open'))) {

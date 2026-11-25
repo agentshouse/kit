@@ -116,6 +116,23 @@ it("reports background work while a process the conversation started whose envir
   await reporting(hosted, IDLE);
 });
 
+it('reports the process idle while a server the CLI started for itself during a turn runs, and background work while a server a command left behind runs', async () => {
+  const hosted = await opened();
+
+  await said(hosted, '@server');
+  await reporting(hosted, IDLE);
+  expect(alive(await logged(hosted, 'server'))).toBe(true);
+
+  await said(hosted, '@sh sleep 606 > /dev/null 2>&1 & echo $!');
+  const left = Number(await logged(hosted, 'stdout'));
+  onTestFinished(() => stop(left));
+  await reporting(hosted, WORKING);
+
+  stop(left);
+
+  await reporting(hosted, IDLE);
+});
+
 it('reports a turn waiting on a secret question as asking for a secret', async () => {
   const hosted = await opened();
   hosted.house.route('POST', '/kit/secret-inputs/await', async () => {

@@ -4,7 +4,8 @@ import { join } from 'node:path';
 
 interface Running {
   parent: number;
-  session: string;
+  session: string | null;
+  processGroup: string;
   command: string;
 }
 
@@ -22,13 +23,13 @@ function failure(error: unknown): string {
 
 function listed(environment: boolean): Map<number, Running> {
   const found = new Map<number, Running>();
-  const output = execFileSync('ps', [environment ? '-AEww' : '-Aww', '-o', 'pid=,ppid=,sess=,command='], {
+  const output = execFileSync('ps', [environment ? '-AEww' : '-Aww', '-o', 'pid=,ppid=,pgid=,command='], {
     encoding: 'utf8',
     maxBuffer: LISTING_BYTES,
   });
   for (const line of output.split('\n')) {
-    const fields = /^\s*(\d+)\s+(\d+)\s+(\S+)\s?(.*)$/.exec(line);
-    if (fields !== null) found.set(Number(fields[1]), { parent: Number(fields[2]), session: fields[3]!, command: fields[4]! });
+    const fields = /^\s*(\d+)\s+(\d+)\s+(\d+)\s?(.*)$/.exec(line);
+    if (fields !== null) found.set(Number(fields[1]), { parent: Number(fields[2]), session: null, processGroup: fields[3]!, command: fields[4]! });
   }
   return found;
 }
@@ -39,7 +40,7 @@ function read(pid: string): Running | null {
     const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
     if (EXITED.has(fields[0]!)) return null;
     const command = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ');
-    return { parent: Number(fields[1]), session: fields[3]!, command };
+    return { parent: Number(fields[1]), session: fields[3]!, processGroup: fields[2]!, command };
   } catch (error) {
     if (GONE.has(failure(error))) return null;
     throw error;
@@ -198,7 +199,7 @@ export class Scope {
   private readonly helpers: string | null;
   private readonly changed: () => void;
   private group: string | null;
-  private session: string | null = null;
+  private leader: string | null = null;
   private recorded: Set<number> | null = null;
   private exited = false;
   private stale = true;
@@ -226,7 +227,7 @@ export class Scope {
   }
 
   entered(pid: number): void {
-    this.session = process.platform === 'darwin' ? (listed(false).get(pid)?.session ?? null) : String(pid);
+    this.leader = String(pid);
     if (this.group === null) return;
     const joined = readFileSync(`/proc/${pid}/cgroup`, 'utf8').split('\n').find((entry) => entry.startsWith('0::'));
     if (joined !== undefined && join(CGROUPS, joined.slice(3)) === this.group) return;
@@ -236,7 +237,7 @@ export class Scope {
 
   record(): void {
     const found = this.found();
-    if (found !== null) this.recorded = new Set([...found].filter(([, { session }]) => session === this.session).map(([pid]) => pid));
+    if (found !== null) this.recorded = new Set(found.keys());
     this.heard();
   }
 
@@ -342,9 +343,10 @@ export class Scope {
     }
   }
 
-  private beyond(pid: number, { session, command }: Running): boolean {
+  private beyond(pid: number, { session, processGroup, command }: Running): boolean {
     if (this.recorded === null) return true;
-    return session !== this.session || !(this.recorded.has(pid) || (this.helpers !== null && command.startsWith(this.helpers)));
+    if (session !== null) return session !== this.leader;
+    return processGroup !== this.leader && !this.recorded.has(pid) && !(this.helpers !== null && command.startsWith(this.helpers));
   }
 
   private watch(group: string): boolean {
