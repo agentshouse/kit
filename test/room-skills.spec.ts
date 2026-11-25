@@ -185,6 +185,42 @@ it("writes none for a member at no version, asking House nothing of the Room's s
   expect(await written(copyOf(hosted, 'notes', 'Fresh'), OWNED)).toEqual(OWNED_FILES);
 });
 
+it("writes the skills of an approved version whose text compiles to nothing beside no AGENTS.md, in a Room's folder and a conversation's copy, keeps them once the folder's text goes, and deletes them once the Environment no longer reaches the Room", async () => {
+  const { hosted, rooms, notes } = await staged({}, [owned()]);
+  const plans = rooms.room('plans');
+  plans.put('p.md', 'p\n');
+  plans.instructions = '';
+  plans.skills = [owned()];
+  await rooms.download([notes, plans]);
+
+  expect(await written(plans.repository, OWNED)).toEqual(OWNED_FILES);
+  await absent(join(plans.repository, 'AGENTS.md'));
+  await absent(join(plans.repository, 'CLAUDE.md'));
+  expect(await recorded(plans)).toEqual(record([OWNED], [OWNED]));
+
+  await opened(hosted, 1, plans, 'Chat');
+  const chat = copyOf(hosted, 'plans', 'Chat');
+  expect(await written(chat, OWNED)).toEqual(OWNED_FILES);
+  await absent(join(chat, 'AGENTS.md'));
+
+  notes.instructions = '';
+  expect(await rooms.download([notes, plans])).toMatchObject({ status: 0 });
+
+  await absent(join(notes.repository, 'AGENTS.md'));
+  expect(await manifestOf(notes)).not.toHaveProperty('kit');
+  expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
+  expect(await recorded(notes)).toEqual(record([OWNED], [OWNED]));
+
+  expect(await rooms.download([notes])).toMatchObject({ status: 0 });
+
+  await absent(join(plans.repository, '.agents'));
+  await absent(join(plans.repository, '.claude'));
+  expect(await recorded(plans)).toBeUndefined();
+  await absent(join(chat, '.agents'));
+  await absent(join(chat, '.claude'));
+  expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
+});
+
 it("rewrites a conversation's copy's skills at the notice naming the Room once the member follows a new version, a Room's folder's at its next house download, and asks House nothing of them while the approved version stays", async () => {
   const { hosted, rooms, notes } = await staged({}, [owned()]);
   await rooms.download([notes]);

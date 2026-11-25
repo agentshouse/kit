@@ -256,7 +256,7 @@ export class Room {
   readonly log: { position: number; paths: string[] }[] = [];
   readonly batches: EditChange[][] = [];
   models: Record<string, unknown>[] = [];
-  instructions = '';
+  instructions: string | null = null;
   approved: number | null = 1;
   skills: RoomSkill[] = [];
   skillPages: Record<string, unknown>[] | null = null;
@@ -353,8 +353,9 @@ export class Room {
   }
 
   instructionsFrom(start: number): Record<string, unknown> {
-    if (this.instructions === '') return {};
+    if (this.instructions === null) return {};
     const held = { version: Math.max(1, this.approved ?? 1), ...(this.approved === null ? {} : { approved_version: this.approved }) };
+    if (this.instructions === '') return { instructions: held };
     const rest = Buffer.from(this.instructions).subarray(start).toString();
     const part = cutOf(rest, this.bound, 'text');
     if (part === null) return { instructions: { ...held, text: rest } };
