@@ -16,6 +16,7 @@ const AGENT = '019a0000-0000-7000-8000-0000000000a2';
 const RUN_1 = '019a0000-0000-7000-8000-000000000001';
 const RUN_2 = '019a0000-0000-7000-8000-000000000002';
 const WAITED_RUN = '019a0000-0000-7000-8000-000000000a17';
+const NO_REFERENCE = '11111111-1111-1111-1111-111111111111';
 const REVIEW = { room: ROOM, agent_function: 'review', payload: 'the diff' };
 const USAGE = `usage: house agent run '{"runs":[{"room":"<handle>","agent_function":"<card>","payload":"<brief>"}]}', each Run with agent_update request_send's arguments, or house agent run '{"refs":["<Run reference or name>"]}' to wait again; - reads them from stdin`;
 const OWN_WORDS = { room: ROOM, agent: AGENT, payload: 'the plan', model: 'route-model', copy: 'new' };
@@ -188,6 +189,11 @@ it("waits again on refs, its own Runs' names or references, starting nothing, an
     stdout: '',
     stderr: 'house: rev-9 names no Run started on this computer; wait on its reference\n',
   });
+  expect(await agentRun(hosted, { refs: [NO_REFERENCE] }, bridge).ended).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: `house: ${NO_REFERENCE} names no Run started on this computer; wait on its reference\n`,
+  });
 });
 
 it('names its Runs again on a Kit connection that opens again and ends on the states House reads then', async () => {
@@ -273,7 +279,11 @@ it("keeps the wait of a command your own agent holds outside any conversation th
 
   await until(() => waitings(hosted.house.connections.at(-1)!).find((waiting) => waiting.runs[0] === RUN_1));
   told(hosted, RUN_1, 'idle', { name: 'rev-1' });
-  expect(await command.ended).toEqual({ status: 0, stdout: `rev-1 ${RUN_1}\nrev-1 ${RUN_1} idle\n`, stderr: '' });
+  expect(await command.ended).toEqual({
+    status: 0,
+    stdout: `rev-1 ${RUN_1}\nrev-1 ${RUN_1} idle\n`,
+    stderr: 'house: the Kit process does not answer on this computer; house agent run waits until it does\n',
+  });
   expect(hosted.house.requests.filter((request) => request.path === '/kit/kits/report-restart').map((request) => request.body)).toEqual([{}, {}]);
 });
 
@@ -293,6 +303,28 @@ it('keeps its output within 32 kB, cutting the lines past it and saying how many
   expect(Buffer.byteLength(stdout)).toBeLessThanOrEqual(32 * 1024);
   expect(stdout.split('\n').slice(0, count)).toEqual(runs.map((run, index) => `rev-${index + 1} ${run}`));
   expect(stdout).toMatch(/\n\d+ more lines cut to stay within 32 kB\n$/u);
+});
+
+it('keeps its output within 32 kB where its bridge closes, listing the Runs to wait on again that fit and saying how many it cut', async () => {
+  const hosted = await hostKit();
+  const count = 450;
+  const runs = Array.from({ length: count }, (_unused, index) => `019a0000-0000-7000-8000-${String(index + 100).padStart(12, '0')}`);
+  answering(hosted, ...runs.map((run, index) => started(run, `rev-${index + 1}`)));
+  const bridge = await bridgeOf(hosted);
+  const command = agentRun(hosted, { runs: runs.map(() => REVIEW) }, bridge);
+  await named(hosted, runs);
+
+  await restarted(hosted, 'SIGKILL');
+
+  const { status, stdout, stderr } = await command.ended;
+  expect(status).toBe(1);
+  expect(Buffer.byteLength(stdout) + Buffer.byteLength(stderr)).toBeLessThanOrEqual(32 * 1024);
+  expect(stdout).toMatch(/\n\d+ more lines cut to stay within 32 kB\n$/u);
+  const [, again, cut] =
+    /^house: the Kit ended this wait before its Runs ended; house agent run '(.+)' waits again; (\d+) more of its Runs cut to stay within 32 kB\n$/u.exec(stderr)!;
+  const { refs } = JSON.parse(again!) as { refs: string[] };
+  expect(refs).toEqual(runs.slice(0, refs.length));
+  expect(refs.length + Number(cut)).toBe(count);
 });
 
 it.each([

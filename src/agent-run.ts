@@ -1,4 +1,4 @@
-import { KIT_WAITED_RUNS_MAX, type KitRunState } from '@agentshouse/kit-wire';
+import { KIT_WAITED_RUNS, KIT_WAITED_RUNS_MAX, type KitRunState } from '@agentshouse/kit-wire';
 import { request, type ClientRequest, type IncomingMessage } from 'node:http';
 import { createInterface } from 'node:readline';
 import { text as textOf } from 'node:stream/consumers';
@@ -16,7 +16,6 @@ const LINE_BYTES_MAX = 1024;
 
 const CUT_NOTE_BYTES = 80;
 
-export const RUN_REFERENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 const ENDS: ReadonlySet<KitRunState> = new Set(['idle', 'failed', 'not_started', 'declined', 'withdrawn', 'deleted']);
 
@@ -70,6 +69,10 @@ interface Waited {
 
 type Given = { runs: Record<string, unknown>[] } | { refs: string[] };
 
+export function isRunReference(text: string): boolean {
+  return KIT_WAITED_RUNS.element.safeParse(text).success;
+}
+
 function cutTo(text: string, bytes: number): string {
   if (Buffer.byteLength(text) <= bytes) return text;
   let kept = text.slice(0, bytes);
@@ -90,6 +93,16 @@ class Printed {
     }
     this.used += bytes;
     process.stdout.write(line);
+  }
+
+  note(text: string): void {
+    const line = `house: ${text}\n`;
+    this.used += Buffer.byteLength(line);
+    process.stderr.write(line);
+  }
+
+  left(): number {
+    return OUTPUT_BYTES_MAX - this.used - CUT_NOTE_BYTES;
   }
 
   end(): void {
@@ -214,8 +227,9 @@ function waitedOnce(asking: Asking, asked: Asked[], waited: Waited[]): Promise<v
   });
 }
 
-async function waitedOn(asking: Asking, asked: Asked[]): Promise<Waited[] | null> {
+async function waitedOn(asking: Asking, asked: Asked[], printed: Printed): Promise<Waited[] | null> {
   const waited: Waited[] = [];
+  let told = false;
   for (;;) {
     const again = waited.length === 0 ? asked : waited.map(({ run, name }) => ({ run, ...(name === null ? {} : { name }) }));
     try {
@@ -224,14 +238,27 @@ async function waitedOn(asking: Asking, asked: Asked[]): Promise<Waited[] | null
     } catch (error) {
       if (!(error instanceof Lost)) throw error;
       if (asking.inside) return waited.length === 0 ? null : waited;
+      if (!told) printed.note('the Kit process does not answer on this computer; house agent run waits until it does');
+      told = true;
     }
     await new Promise((resolve) => setTimeout(resolve, KIT_BACK_MS));
   }
 }
 
-function waitAgain(waited: Waited[], asked: Asked[]): string {
+function waitAgain(waited: Waited[], asked: Asked[], bytes: number): string {
   const refs = waited.length === 0 ? asked.map(({ run, name }) => run ?? name!) : waited.map(({ run }) => run);
-  return `the Kit ended this wait before its Runs ended; house agent run '${JSON.stringify({ refs })}' waits again`;
+  const said = (kept: string[]) => `the Kit ended this wait before its Runs ended; house agent run '${JSON.stringify({ refs: kept })}' waits again`;
+  const whole = said(refs);
+  if (Buffer.byteLength(whole) <= bytes) return whole;
+  const cutNote = (cut: number) => `; ${cut} more of its Runs cut to stay within 32 kB`;
+  let used = Buffer.byteLength(said([])) + Buffer.byteLength(cutNote(refs.length));
+  const kept: string[] = [];
+  for (const ref of refs) {
+    used += Buffer.byteLength(JSON.stringify(ref)) + 1;
+    if (used > bytes) break;
+    kept.push(ref);
+  }
+  return `${said(kept)}${cutNote(refs.length - kept.length)}`;
 }
 
 export async function agentRun(args: string[], asking: Asking, about: string): Promise<void> {
@@ -244,16 +271,22 @@ export async function agentRun(args: string[], asking: Asking, about: string): P
   const { asked, refused } =
     'runs' in input
       ? await started(input.runs, asking, printed)
-      : { asked: input.refs.map((ref): Asked => (RUN_REFERENCE.test(ref) ? { run: ref } : { name: ref })), refused: false };
+      : { asked: input.refs.map((ref): Asked => (isRunReference(ref) ? { run: ref } : { name: ref })), refused: false };
   process.exitCode = 1;
   if (asked.length === 0) {
     printed.end();
     return;
   }
-  const waited = await waitedOn(asking, asked);
+  let waited: Waited[] | null;
+  try {
+    waited = await waitedOn(asking, asked, printed);
+  } catch (error) {
+    printed.end();
+    throw new Error(cutTo(error instanceof Error ? error.message : String(error), printed.left()));
+  }
   if (waited === null || !ended(waited)) {
     printed.end();
-    throw new Error(waitAgain(waited ?? [], asked));
+    throw new Error(waitAgain(waited ?? [], asked, printed.left()));
   }
   for (const one of waited) printed.line(stateLine(one), OUTPUT_BYTES_MAX - CUT_NOTE_BYTES);
   printed.end();

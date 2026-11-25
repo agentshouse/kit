@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rm } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
-import { RUN_REFERENCE, type Again, type Asked, type Heard, type Resolved } from './agent-run.ts';
+import { isRunReference, type Again, type Asked, type Heard, type Resolved } from './agent-run.ts';
 import { received } from './bridge.ts';
 import { kitHome, readHome, writeHome } from './home.ts';
 
@@ -137,10 +137,10 @@ export class RunWaits {
   private resolved(asked: Asked[]): Promise<Resolved['runs']> {
     const reading = this.names.then(async () => {
       const kept = (await readHome<Named[]>(NAMES)) ?? [];
-      const learned = asked.filter((one): one is Named => one.run !== undefined && one.name !== undefined && RUN_REFERENCE.test(one.run));
+      const learned = asked.filter((one): one is Named => one.run !== undefined && one.name !== undefined && isRunReference(one.run));
       const resolved = asked.map(({ run, name }) => {
         if (run !== undefined) {
-          if (!RUN_REFERENCE.test(run)) throw new Refused(`${run} is no Run reference`);
+          if (!isRunReference(run)) throw new Refused(`${run} is no Run reference`);
           return { run, name: name ?? null };
         }
         const runs = new Set([...learned, ...kept].filter((one) => one.name === name).map((one) => one.run));
