@@ -23,6 +23,8 @@ interface Answered {
   data?: { code?: unknown; retryable?: unknown; retry_after?: unknown } | null;
 }
 
+export class PlaceRefused extends Error {}
+
 const HEAD = /^([a-z][a-z0-9_]*): \S/;
 
 const PUSH_STOPS = new Set(['limit_reached', 'cap_reached']);

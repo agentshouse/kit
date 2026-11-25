@@ -20,7 +20,7 @@ export interface Cli {
   reads: 'AGENTS.md' | 'CLAUDE.md' | null;
   compactWords: boolean;
   fullAccess: string | null;
-  sessionMeta(bridge: string, name: string | null): Record<string, unknown>;
+  sessionMeta(bridge: string, name: string | null, code: string | null): Record<string, unknown>;
   unknownSession(error: unknown): boolean;
   allowHouse(path: string): Promise<void>;
   questionFields(request: CreateElicitationRequest): string[];
@@ -168,12 +168,15 @@ export const CLIS: Record<string, Cli> = {
     reads: 'CLAUDE.md',
     compactWords: true,
     fullAccess: 'bypassPermissions',
-    sessionMeta: (bridge, name) => ({
+    sessionMeta: (bridge, name, code) => ({
       claudeCode: {
         options: {
           allowedTools: ['Bash(house:*)'],
           includeHookEvents: true,
-          settings: { sandbox: { network: bridgeInClaudeSandbox(bridge) } },
+          settings: {
+            sandbox: { network: bridgeInClaudeSandbox(bridge) },
+            ...(code === null ? {} : { permissions: { additionalDirectories: [code] } }),
+          },
           ...(name === null ? {} : { extraArgs: { name } }),
         },
         emitRawSDKMessages: [...RAW_SUBTYPES.map((subtype) => ({ type: 'system', subtype })), ...RAW_TYPES.map((type) => ({ type }))],

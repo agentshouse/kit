@@ -25,7 +25,8 @@ import {
 } from './manifest.ts';
 import { answerDocument, environmentTool, toolAnswer, Unsettled, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
-import { firstLine, namedWait, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
+import { firstLine, namedWait, PlaceRefused, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
+import { codeFolder, listedRef, REPOSITORIES } from './repositories.ts';
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
 
 const ROOMS = 'rooms/';
@@ -54,6 +55,7 @@ interface RoomFolder {
 interface Ran {
   copy: KitRun['copy']['kind'];
   name: string;
+  code?: string;
 }
 
 interface Placed {
@@ -75,15 +77,16 @@ export interface Place {
   copy: boolean;
   synced: boolean;
   name: string | null;
+  code: string | null;
 }
+
+export type Reader = (path: string) => Promise<string | null>;
 
 export interface Opening {
   room_ref: string | null;
   name: string;
   run?: KitRun;
 }
-
-export class PlaceRefused extends Error {}
 
 export interface Sent {
   op: string;
@@ -1153,10 +1156,36 @@ export class LocalCopies {
     }
   }
 
-  async placed(conversation: string, opening: Opening | null, caller: Caller, launch: string): Promise<Place> {
+  async placed(conversation: string, opening: Opening | null, caller: Caller, launch: string, read: Reader): Promise<Place> {
     if (opening === null) return this.placedAgain(conversation, caller, launch);
-    const run = opening.run === undefined ? undefined : { copy: opening.run.copy.kind, name: opening.run.name };
-    const place = (directory: string, copy: boolean): Place => ({ directory, copy, synced: run === undefined, name: run?.name ?? null });
+    const coded = this.places.get(conversation)?.run?.code;
+    const place = await this.placedCopy(conversation, opening, caller, launch, coded);
+    const repository = opening.run?.repository ?? null;
+    if (repository === null) return place;
+    const code =
+      coded ??
+      (await codeFolder(
+        repository,
+        opening.run!.name,
+        () => this.listed(opening.room_ref, repository.url, read),
+        (key, work) => this.exclusive(key, work),
+      ));
+    await this.exclusive(PLACES, () => {
+      const held = this.places.get(conversation)!;
+      return this.savePlace(conversation, { ...held, run: { ...held.run!, code } });
+    });
+    return { ...place, code };
+  }
+
+  private async listed(room: string | null, url: string, read: Reader): Promise<string | null> {
+    const reached = room === null ? null : await this.reachedRoom(room);
+    if (reached === null) throw new PlaceRefused(`this Environment does not reach the Run's Room, so Kit cannot read its ${REPOSITORIES}`);
+    return listedRef(await read(`${rootOf(reached.room_handle)}/${REPOSITORIES}`), url);
+  }
+
+  private async placedCopy(conversation: string, opening: Opening, caller: Caller, launch: string, code: string | undefined): Promise<Place> {
+    const run = opening.run === undefined ? undefined : { copy: opening.run.copy.kind, name: opening.run.name, ...(code === undefined ? {} : { code }) };
+    const place = (directory: string, copy: boolean): Place => ({ directory, copy, synced: run === undefined, name: run?.name ?? null, code: null });
     if (opening.run?.copy.kind === 'none') {
       await this.session(conversation, launch, run);
       return place(launch, false);
@@ -1184,7 +1213,7 @@ export class LocalCopies {
   private async placedAgain(conversation: string, caller: Caller, launch: string): Promise<Place> {
     const held = this.places.get(conversation) ?? { copies: {} };
     const directory = held.session ?? launch;
-    const place = (copy: boolean): Place => ({ directory, copy, synced: held.run === undefined, name: held.run?.name ?? null });
+    const place = (copy: boolean): Place => ({ directory, copy, synced: held.run === undefined, name: held.run?.name ?? null, code: held.run?.code ?? null });
     const room = Object.keys(held.copies).find((ref) => held.copies[ref] === directory);
     if (room !== undefined) {
       await this.ensured(conversation, room, directory, caller, () => this.reachedRoom(room));

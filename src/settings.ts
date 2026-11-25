@@ -14,6 +14,7 @@ import {
   oneFolder,
   readConfiguration,
   readHome,
+  repositoriesFolder,
   storedConfiguration,
   workspaceRoot,
   writeConfiguration,
@@ -105,6 +106,12 @@ async function refusedRoot(from: string, to: string): Promise<string | null> {
     return `${to} already holds ${held}`;
   }
   return null;
+}
+
+async function clonesHeld(): Promise<string | null> {
+  const clones = repositoriesFolder();
+  if ((await readdir(clones).catch(() => [])).length === 0) return null;
+  return `${clones} is not empty, and Kit moves no clone or worktree; move them yourself, then change the workspace`;
 }
 
 async function forward({ from, to, kept = [] }: Move): Promise<void> {
@@ -221,7 +228,7 @@ export async function applySettings(change: SettingsChange, kit: Working): Promi
     if (!isAbsolute(change.workspace)) return { refused: `${change.workspace} is not an absolute path`, ended: false };
     const to = resolve(change.workspace);
     if (to !== from) {
-      const refused = await refusedRoot(from, to);
+      const refused = (await clonesHeld()) ?? (await refusedRoot(from, to));
       if (refused !== null) return { refused, ended: false };
       const routes = await kit.routes();
       if (routes === null) return { refused: LOGGED_OUT, ended: false };

@@ -7,6 +7,7 @@ import { GUIDE, listSkills } from '@agentshouse/skills';
 import { parse } from 'yaml';
 import { KIT_RELEASE } from './clis.ts';
 import { fetched } from './files.ts';
+import { frontmatter } from './frontmatter.ts';
 import { kitHome, readConfiguration, readEnrolment, readHome, writeHome } from './home.ts';
 import { answerDocument, environmentTool } from './mcp.ts';
 
@@ -44,7 +45,6 @@ interface Answered extends Paged {
 
 const RECORD = 'skill-set.json';
 const ENTRY = 'SKILL.md';
-const FRONTMATTER = /^---\n([\s\S]*?)\n---\n/u;
 const ORIGIN = '<origin>';
 
 function skillsDirectory(): string {
@@ -66,8 +66,8 @@ async function present(path: string): Promise<boolean> {
 }
 
 function skillName(text: string): string | undefined {
-  const front = FRONTMATTER.exec(text);
-  const fields = (front === null ? null : parse(front[1]!)) as { name?: unknown; description?: unknown } | null;
+  const front = frontmatter(text);
+  const fields = (front === null ? null : parse(front)) as { name?: unknown; description?: unknown } | null;
   return typeof fields?.name === 'string' && typeof fields.description === 'string' ? fields.name : undefined;
 }
 
