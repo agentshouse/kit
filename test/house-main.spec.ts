@@ -33,6 +33,9 @@ const KIT_VERBS = [
   "settings: prints Kit's settings, or changes which skills Kit installs or where its workspace is",
   "git-credential: answers git with this computer's House credential; git runs it",
 ];
+const AGENT_RUN_USAGE = `usage: house agent run '{"runs":[{"room":"<handle>","agent_function":"<card>","payload":"<brief>"}]}', each Run with agent_update request_send's arguments, or house agent run '{"refs":["<Run reference or name>"]}' to wait again; - reads them from stdin`;
+const AGENT_RUN =
+  'agent run: starts each of "runs" by agent_update request_send, prints its name and reference, and waits until every Run is idle, failed, not started, declined, withdrawn or deleted, printing each one\'s state and never its message; exits 0 only when every Run is idle; with "refs" it starts nothing and waits again';
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 
 function runHouse(
@@ -541,7 +544,7 @@ function listing(house: House, tools: unknown[]): void {
   });
 }
 
-it("prints the same help for house help as for house --help, naming house help <tool>, listing help, the Kit's own verbs and both forms of upload and download, and no Git sync verb", async () => {
+it("prints the same help for house help as for house --help, naming house help <tool>, listing help, the Kit's own verbs, both forms of upload and download and agent run, and no Git sync verb", async () => {
   const house = await startHouse();
   const home = await connected(house);
 
@@ -550,7 +553,7 @@ it("prints the same help for house help as for house --help, naming house help <
 
   expect(help).toEqual(dashed);
   expect(help.status).toBe(0);
-  expect(help.stdout.split('\n').slice(0, 10)).toEqual([USAGE, 'help [tool]', ...KIT_VERBS, UPLOAD, DOWNLOAD]);
+  expect(help.stdout.split('\n').slice(0, 11)).toEqual([USAGE, 'help [tool]', ...KIT_VERBS, UPLOAD, DOWNLOAD, AGENT_RUN]);
   expect(help.stdout).not.toMatch(/\bcommit\b|\brebase\b|house push|house fetch|git (?:push|fetch|pull)/);
 });
 
@@ -717,6 +720,8 @@ it.each([
   [['download', '--help'], `${DOWNLOAD_USAGE}\n${DOWNLOAD}`],
   [['help', 'upload'], `${UPLOAD_USAGE}\n${UPLOAD}`],
   [['upload', '--help'], `${UPLOAD_USAGE}\n${UPLOAD}`],
+  [['help', 'agent', 'run'], `${AGENT_RUN_USAGE}\n${AGENT_RUN}`],
+  [['agent', 'run', '--help'], `${AGENT_RUN_USAGE}\n${AGENT_RUN}`],
 ])('prints house %j as the usage of the command it names and calls nothing', async (argv, usage) => {
   const house = await startHouse();
   const home = await connected(house);

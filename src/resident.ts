@@ -19,6 +19,7 @@ import { IdleCopies } from './idle-copies.ts';
 import { foldKitIntoHouse } from './one-command.ts';
 import { holdOwner } from './owner.ts';
 import { killDescendants } from './kill.ts';
+import { endedWaits, RunWaits } from './run-waits.ts';
 import { removeInputs, Scripts } from './scripts.ts';
 import { applySettings, enrolledRoutes, launchDirectories, moveIntoHouse, resumeWorkspaceMove, type Applied, type SettingsChange } from './settings.ts';
 import { quoted } from './shell.ts';
@@ -29,6 +30,7 @@ import { environmentCall } from './mcp.ts';
 import { KitUpdate } from './update.ts';
 import { takeUnservedRelease } from './wire.ts';
 import { codexLauncher } from './work.ts';
+import { WAIT_PATH } from './agent-run.ts';
 
 function report(error: unknown): void {
   process.stderr.write(`kit: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -49,9 +51,13 @@ interface Settling {
   answered(applied: Applied): void;
 }
 
-async function serveOwner(lock: DatabaseSync, copies: LocalCopies, settling: Settling): Promise<void> {
+async function serveOwner(lock: DatabaseSync, copies: LocalCopies, waits: RunWaits, settling: Settling): Promise<void> {
   const server = createServer(async (request, response) => {
     try {
+      if (request.url === WAIT_PATH) {
+        await waits.serve(null, request, response);
+        return;
+      }
       const text = await received(request);
       let answered: Answered | Applied;
       if (request.url === '/resident') {
@@ -159,19 +165,22 @@ export async function resident(): Promise<void> {
     else void running.stop(() => restart(ended));
   };
   await copies.swept();
-  await serveOwner(lock, copies, { settle, answered });
+  let connection: Connection | null = null;
+  const waits = new RunWaits((oneWayCall) => connection?.send(oneWayCall) ?? false);
+  await serveOwner(lock, copies, waits, { settle, answered });
   await started().catch((error: unknown) => {
     report(error);
     process.exit(1);
   });
   process.env.HOUSE_KIT_RESIDENT = String(process.pid);
+  const restartEnded = await endedWaits();
   const agents = new Agents(house, () => changed());
-  let connection: Connection | null = null;
   let reported = false;
   let stopping = false;
   const stop = async (then: () => void): Promise<void> => {
     if (stopping) return;
     stopping = true;
+    waits.stop();
     conversations.stopped();
     killDescendants();
     await connection?.close();
@@ -202,6 +211,7 @@ export async function resident(): Promise<void> {
     agents,
     copies,
     calls,
+    waits,
     send: (oneWayCall) => connection?.send(oneWayCall) ?? false,
     changed,
     turnEnded: (stamped) => idleCopies.look(stamped),
@@ -211,7 +221,7 @@ export async function resident(): Promise<void> {
   const update = new KitUpdate(calls);
   takeUnservedRelease((release) => logged(update.takeRefused(release)));
   removeInputs();
-  const scripts = new Scripts(calls, (oneWayCall) => connection?.send(oneWayCall) ?? false, copies);
+  const scripts = new Scripts(calls, (oneWayCall) => connection?.send(oneWayCall) ?? false, copies, waits);
   running = { conversations, agents, calls, stop };
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
@@ -228,13 +238,17 @@ export async function resident(): Promise<void> {
   watch(kitHome(), unenrolled);
   unenrolled();
 
-  await house.deliver('kits/report-restart', planned ? { planned } : {}).catch(report);
+  await house
+    .deliver('kits/report-restart', { ...(planned ? { planned } : {}), ...(restartEnded.waits.length > 0 ? { waits: restartEnded.waits } : {}) })
+    .then(() => restartEnded.forget())
+    .catch(report);
   logged(agents.refresh());
   agents.updateClis();
   idleCopies.look();
   connection = holdConnection({
     opened: () => {
       conversations.opened();
+      waits.opened();
       scripts.connected();
       changed();
       logged(copies.connected((directory) => conversations.turnsIn(directory)));
@@ -258,6 +272,7 @@ export async function resident(): Promise<void> {
     },
     oneWayCall: (oneWayCall) => {
       if (oneWayCall.type === 'watching') conversations.watching(oneWayCall.watching);
+      if (oneWayCall.type === 'run') waits.heard(oneWayCall);
       if (oneWayCall.type === 'work_available' && oneWayCall.subject === 'agents') logged(agents.refresh());
       if (oneWayCall.type === 'work_available' && oneWayCall.subject === 'rooms') {
         if (copies.isPrivate(oneWayCall.room_ref)) void placeSkills();

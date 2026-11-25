@@ -9,6 +9,7 @@ import type { Readable } from 'node:stream';
 import type { HouseOneWayCall, KitCallOf, KitCallResult, KitOneWayCall } from '@agentshouse/kit-wire';
 import type { IPty } from '@lydell/node-pty';
 import { openRunBridge, type Bridge } from './bridge.ts';
+import type { RunWaits } from './run-waits.ts';
 import type { Calls, Carried } from './calls.ts';
 import { loginPath, onLoginPath } from './clis.ts';
 import type { LocalCopies } from './copies.ts';
@@ -188,12 +189,14 @@ export class Scripts {
   private readonly calls: Calls;
   private readonly send: (oneWayCall: KitOneWayCall) => boolean;
   private readonly copies: LocalCopies;
+  private readonly waits: RunWaits;
   private readonly runs = new Map<string, Run>();
 
-  constructor(calls: Calls, send: (oneWayCall: KitOneWayCall) => boolean, copies: LocalCopies) {
+  constructor(calls: Calls, send: (oneWayCall: KitOneWayCall) => boolean, copies: LocalCopies, waits: RunWaits) {
     this.calls = calls;
     this.send = send;
     this.copies = copies;
+    this.waits = waits;
   }
 
   start(call: ScriptCall): void {
@@ -266,7 +269,7 @@ export class Scripts {
       await run.sized.promise;
       if (plan.function !== null) {
         run.input = await inputFile(plan.function.input);
-        run.bridge = await openRunBridge(this.copies, id);
+        run.bridge = await openRunBridge(this.copies, this.waits, id);
       }
       if (run.ended !== null) return run.ended;
       const environment = {

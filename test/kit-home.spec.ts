@@ -144,3 +144,23 @@ it("catches a Local copy up from the position its record keeps, reading the Room
     ['/kit/door/changes/enumerate', { prefixes: [notes.root], positions: [{ authority: notes.ref, position: String(kept.position), log_epoch: kept.log_epoch }] }],
   ]);
 });
+
+it("reports the waiting Runs of a wait record an earlier Kit kept at its start, and waits on a Run by a name an earlier Kit kept", async () => {
+  const [conversation, run] = ['019a0000-0000-7000-8000-0000000000c1', '019a0000-0000-7000-8000-000000000001'];
+  const hosted = await hostKit([], {
+    prepare: async (home) => {
+      await mkdir(join(home, 'run-waits'), { recursive: true });
+      await writeFile(join(home, 'run-waits', '019a0000-0000-7000-8000-0000000000d1.json'), `{"conversation_id":"${conversation}","runs":["${run}"]}\n`);
+      await writeFile(join(home, 'run-names.json'), `[{"name":"rev-1","run":"${run}"}]\n`);
+    },
+  });
+
+  const report = await until(() => hosted.house.requests.find((request) => request.path === '/kit/kits/report-restart'));
+  expect(report.body).toEqual({ waits: [{ conversation_id: conversation, runs: [run] }] });
+  const command = runHouse(hosted.home, ['agent', 'run', '{"refs":["rev-1"]}']);
+  const connection = hosted.house.connections.at(-1)!;
+  await until(() => connection.oneWayCalls.find((oneWayCall) => oneWayCall.type === 'waiting' && JSON.stringify(oneWayCall.runs) === JSON.stringify([run])));
+  connection.send({ type: 'run', run, state: 'idle', name: 'rev-1' });
+  expect(await command).toEqual({ status: 0, stdout: `rev-1 ${run} idle\n`, stderr: '' });
+  await until(() => access(join(hosted.home, 'run-waits', '019a0000-0000-7000-8000-0000000000d1.json')).then(() => false, () => true));
+});
