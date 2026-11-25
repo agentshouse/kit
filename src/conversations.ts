@@ -44,6 +44,7 @@ import type { ToolResult } from './mcp.ts';
 import { PlaceRefused, refusalOf } from './refusals.ts';
 import { relayed } from './relay.ts';
 import { killMarked } from './kill.ts';
+import type { RunWaits } from './run-waits.ts';
 import { holdSecretInput } from './secret-input.ts';
 import { transcribe } from './transcription.ts';
 import { workFor, type Work } from './work.ts';
@@ -53,6 +54,7 @@ export interface Kit {
   agents: Agents;
   copies: LocalCopies;
   calls: Calls;
+  waits: RunWaits;
   send(oneWayCall: KitOneWayCall): boolean;
   changed(): void;
   turnEnded(stamped: Promise<void>): void;
@@ -811,7 +813,7 @@ export class Conversations {
 
   private bridged(conversation: Conversation): Promise<Bridge> {
     if (conversation.bridge === null) {
-      const bridging = openBridge(this.kit.copies, conversation.id);
+      const bridging = openBridge(this.kit.copies, this.kit.waits, conversation.id);
       conversation.bridge = bridging;
       bridging.catch(() => {
         if (conversation.bridge === bridging) conversation.bridge = null;

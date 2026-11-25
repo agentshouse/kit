@@ -11,6 +11,7 @@ import { MODELS, SESSION_OPTIONS, type CliModel } from './fixtures/clis/session-
 import { recordStart } from './started.ts';
 
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
+const WAITED_RUN = '019a0000-0000-7000-8000-000000000a17';
 const EVENTS = fileURLToPath(new URL('./fixtures/events/', import.meta.url));
 const kind = process.env.ADAPTER_KIND ?? 'codex-acp';
 const home = join(process.env.HOME ?? '/tmp', '.agents', 'house');
@@ -435,6 +436,11 @@ async function directive(
     ran({ git: rest }, spawnSync('git', rest, { encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }));
   }
   if (name === 'spawn') spawnJob();
+  if (name === 'runs') {
+    const waiting = spawn(process.execPath, [HOUSE, 'agent', 'run', JSON.stringify({ refs: [WAITED_RUN] })], { detached: true, stdio: 'ignore' });
+    waiting.unref();
+    log({ waiting: waiting.pid });
+  }
   if (name === 'linger') {
     const update = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: rest.slice(1).join(' ') }, ...messageSignal('final_answer') };
     const line = `${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } })}\n`;

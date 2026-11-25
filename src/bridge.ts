@@ -18,6 +18,8 @@ import { callHouse, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwa
 import { operationId } from './operation.ts';
 import { namedWait, REFUSAL_HEADER, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { relayed } from './relay.ts';
+import type { RunWaits } from './run-waits.ts';
+import { WAIT_PATH } from './agent-run.ts';
 
 export interface Bridge {
   env: Record<string, string>;
@@ -93,8 +95,8 @@ function resendAfter(forwarded: Forwarded | null, attempt: number, pushing: bool
   return seconds === null ? null : seconds * 1000;
 }
 
-export async function openBridge(copies: LocalCopies, conversationId: string): Promise<Bridge> {
-  return bridgeFor(copies, {
+export async function openBridge(copies: LocalCopies, waits: RunWaits, conversationId: string): Promise<Bridge> {
+  return bridgeFor(copies, waits, {
     key: `conversation:${conversationId}`,
     conversation: conversationId,
     named: { [CONVERSATION_META_KEY]: conversationId },
@@ -103,11 +105,11 @@ export async function openBridge(copies: LocalCopies, conversationId: string): P
   });
 }
 
-export function openRunBridge(copies: LocalCopies, run: string): Promise<Bridge> {
-  return bridgeFor(copies, { key: `function-run:${run}`, conversation: null, named: { [FUNCTION_RUN_META_KEY]: run }, git: {}, path: null });
+export function openRunBridge(copies: LocalCopies, waits: RunWaits, run: string): Promise<Bridge> {
+  return bridgeFor(copies, waits, { key: `function-run:${run}`, conversation: null, named: { [FUNCTION_RUN_META_KEY]: run }, git: {}, path: null });
 }
 
-async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
+async function bridgeFor(copies: LocalCopies, waits: RunWaits, holder: Holder): Promise<Bridge> {
   const { named, path } = holder;
   const { house: origin, credential } = (await readEnrolment())!;
 
@@ -224,6 +226,10 @@ async function bridgeFor(copies: LocalCopies, holder: Holder): Promise<Bridge> {
       const path = request.url ?? '';
       if (URL.canParse(path)) {
         relay(request, response, new URL(path));
+        return;
+      }
+      if (path === WAIT_PATH) {
+        await waits.serve(holder.conversation, request, response);
         return;
       }
       const answered = await local(path, await received(request));

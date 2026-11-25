@@ -62,6 +62,8 @@ const UPLOAD =
   "upload: in a Room's Local copy, sends every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 const DOWNLOAD = `download: brings House's changes into every Room's Local copy, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next house upload; a copy holds the Room's documents and only the attachments asked for there, a conversation's copy linking each one already on this computer, and a download brings no attachment nobody asked for: one another writer changed it links where this computer holds it, or else removes its unchanged file and names it as left on House; --with-attachments brings each attachment the copy lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
+const AGENT_RUN =
+  'agent run: starts each of "runs" by agent_update request_send, prints its name and reference, and waits until every Run is idle, failed, not started, declined, withdrawn or deleted, printing each one\'s state and never its message; exits 0 only when every Run is idle; with "refs" it starts nothing and waits again';
 const MAX_SIZE = `--max-size takes a number of megabytes; ${DOWNLOAD_USAGE}`;
 const MEGABYTES = /^\d+(?:\.\d+)?$/;
 const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
@@ -305,7 +307,7 @@ async function house(args: string[]): Promise<string | undefined> {
     const listing = (await tools()).flatMap((tool) =>
       tool.description === undefined ? [tool.name, ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', false)] : [listed(tool)],
     );
-    return [USAGE, HELP, ...[...KIT_VERBS].map(([name, { about }]) => `${name}: ${about}`), UPLOAD, DOWNLOAD, ...listing].join('\n');
+    return [USAGE, HELP, ...[...KIT_VERBS].map(([name, { about }]) => `${name}: ${about}`), UPLOAD, DOWNLOAD, AGENT_RUN, ...listing].join('\n');
   }
   if (flags.has('--help')) return toolHelp(verb);
   if (verb === 'update') return update(await argumentsOf(argument));
@@ -417,11 +419,19 @@ async function kitVerb(name: string, verb: KitVerb, args: string[]): Promise<und
   return undefined;
 }
 
+async function agentRunVerb(args: string[]): Promise<undefined> {
+  const { agentRun } = await import('./agent-run.ts');
+  await agentRun(args, { call: (name, args) => called(name, args), socket: socketPath ?? ownerSocket(), inside: socketPath !== undefined }, AGENT_RUN);
+  return undefined;
+}
+
 function run(argv: string[]): Promise<string | undefined> {
   const named = argv.findIndex((arg) => !arg.startsWith('-'));
   const rest = argv.filter((_arg, index) => index !== named);
   const verb = KIT_VERBS.get(argv[named] ?? '');
   if (verb !== undefined) return kitVerb(argv[named]!, verb, rest);
+  if (argv[named] === 'help' && argv[named + 1] === 'agent' && argv[named + 2] === 'run' && argv.length === 3) return agentRunVerb(['--help']);
+  if (argv[named] === 'agent' && argv[named + 1] === 'run') return agentRunVerb(argv.filter((_arg, index) => index !== named && index !== named + 1));
   if (argv[named] === 'upload') return uploadVerb(rest);
   if (argv[named] === 'download') return download(rest);
   return house(argv);
