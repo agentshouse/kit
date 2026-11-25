@@ -85,7 +85,6 @@ export class RunWaits {
     }
     let resolved: Resolved['runs'];
     try {
-      if (this.waits.size >= KIT_WAITS_MAX) throw new Refused(`this computer already holds ${KIT_WAITS_MAX} waiting house agent run commands; end one first`);
       resolved = await this.resolved(asked);
     } catch (error) {
       if (!(error instanceof Refused)) throw error;

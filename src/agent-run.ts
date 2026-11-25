@@ -142,7 +142,7 @@ async function started(runs: Record<string, unknown>[], asking: Asking, printed:
   const asked: Asked[] = [];
   let refused = false;
   for (const [index, run] of runs.entries()) {
-    let answer: { request?: unknown; runName?: unknown } | null;
+    let answer: { request: string; runName?: string };
     try {
       answer = answerDocument(await asking.call('agent_update', { ...run, op: 'request_send' }));
     } catch (error) {
@@ -150,13 +150,7 @@ async function started(runs: Record<string, unknown>[], asking: Asking, printed:
       printed.line(`runs[${index}] refused: ${error instanceof Error ? error.message : String(error)}`, STARTS_BYTES_MAX);
       continue;
     }
-    const ref = typeof answer?.request === 'string' ? answer.request : null;
-    if (ref === null) {
-      refused = true;
-      printed.line(`runs[${index}] refused: House's answer named no Run`, STARTS_BYTES_MAX);
-      continue;
-    }
-    const name = typeof answer?.runName === 'string' ? answer.runName : undefined;
+    const { request: ref, runName: name } = answer;
     asked.push({ run: ref, ...(name === undefined ? {} : { name }) });
     printed.line(`${name ?? ref} ${ref}`, STARTS_BYTES_MAX);
   }
