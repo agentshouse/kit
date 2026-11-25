@@ -9,8 +9,6 @@ import { hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
 import { accountOf, runKit } from './kit.ts';
 import { house, manifestOf, serveRooms, upload, type Room, type RoomSkill, type Rooms } from './rooms.ts';
 
-const PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-const KIT_RELEASE = PACKAGE.version;
 const SKILL_SET = fileURLToPath(new URL('../node_modules/@agentshouse/skills/set/', import.meta.url));
 const [FIRST, SECOND] = listSkills().map((skill) => skill.name) as [string, string];
 const UPSTREAM = listSkills().map((skill) => skill.name);
@@ -102,8 +100,8 @@ async function recorded(room: Room): Promise<unknown> {
   return ((await manifestOf(room)) as { skills?: unknown }).skills;
 }
 
-function record(names: readonly string[], listed: readonly string[], approved: number | null = 1): unknown {
-  return { approved, release: KIT_RELEASE, listed: [...listed].sort(), names: [...names].sort(), digest: names.length === 0 ? expect.any(String) : expect.stringMatching(/^[0-9a-f]{64}$/u) };
+function record(names: readonly string[], listed: readonly string[], approved: number | null = 1): Record<string, unknown> {
+  return { approved, listed: [...listed].sort(), sources: expect.any(Object), names: [...names].sort(), digest: names.length === 0 ? expect.any(String) : expect.stringMatching(/^[0-9a-f]{64}$/u) };
 }
 
 async function opened(hosted: Hosted, index: number, room: Room, name: string, copy?: { kind: 'none' } | { kind: 'new' }): Promise<void> {
@@ -115,6 +113,12 @@ async function opened(hosted: Hosted, index: number, room: Room, name: string, c
 
 function copyOf(hosted: Hosted, handle: string, name: string): string {
   return join(hosted.workspace, 'conversations', handle, name);
+}
+
+async function reconnected(hosted: Hosted): Promise<void> {
+  const opens = hosted.house.connections.length;
+  hosted.connection.close(1012, 'deploy');
+  await until(() => hosted.house.connections.length > opens);
 }
 
 async function kitSettings(hosted: Hosted, ...operands: string[]): Promise<void> {
@@ -139,6 +143,7 @@ it("writes into a copied Room's folder, in .agents/skills and .claude/skills ali
   await absent(join(notes.repository, '.claude', 'skills', FIRST));
   await absent(join(notes.repository, '.agents', 'skills', NEWER));
   expect(await recorded(notes)).toEqual(record([OWNED, SECOND], [FIRST, SECOND, OWNED, NEWER]));
+  expect(((await recorded(notes)) as { sources: unknown }).sources).toEqual({ [FIRST]: 'environment', [SECOND]: expect.stringMatching(/^house:[0-9a-f]{64}$/u) });
   expect(Object.keys((await manifestOf(notes)).files)).toEqual(['a.md']);
   expect(roomAsks(hosted)).toEqual([{ op: 'skill', room: notes.ref }]);
 });
@@ -208,27 +213,31 @@ it("rewrites a conversation's copy's skills at the notice naming the Room once t
   expect(await recorded(notes)).toEqual(record([OWNED], [OWNED], 2));
 });
 
-it("rewrites the skills in every copy but a Run's when house settings changes the Environment's skills, a name the Environment now holds going and one it no longer holds coming back", async () => {
+it("rewrites the skills in every copy, a Run's among them, when house settings changes the Environment's skills, a name the Environment now holds going and one it no longer holds coming back", async () => {
   const { hosted, rooms, notes } = await staged({}, [{ name: SECOND, files: {} }, owned()]);
   await rooms.download([notes]);
   await opened(hosted, 1, notes, 'Fresh', { kind: 'new' });
+  const fresh = copyOf(hosted, 'notes', 'Fresh');
   expect(await folderTree(notes.repository)).toContain(join(SECOND, 'SKILL.md'));
+  expect(await written(fresh, SECOND)).toEqual(await packaged(SECOND));
 
   await kitSettings(hosted, 'skills', SECOND);
 
-  await absent(join(notes.repository, '.agents', 'skills', SECOND));
-  await absent(join(notes.repository, '.claude', 'skills', SECOND));
-  expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
+  for (const folder of [notes.repository, fresh]) {
+    await absent(join(folder, '.agents', 'skills', SECOND));
+    await absent(join(folder, '.claude', 'skills', SECOND));
+    expect(await written(folder, OWNED)).toEqual(OWNED_FILES);
+  }
   expect(await recorded(notes)).toEqual(record([OWNED], [SECOND, OWNED]));
-  expect(await written(copyOf(hosted, 'notes', 'Fresh'), SECOND)).toEqual(await packaged(SECOND));
 
   await kitSettings(hosted, 'skills');
 
   expect(await written(notes.repository, SECOND)).toEqual(await packaged(SECOND));
+  expect(await written(fresh, SECOND)).toEqual(await packaged(SECOND));
   expect(await recorded(notes)).toEqual(record([OWNED, SECOND], [SECOND, OWNED]));
 });
 
-it("rewrites the skills at the notice naming the Private Room once the member's own skill of a listed name changes, and at a connection's opening once a Kit release other than the one that wrote them runs", async () => {
+it("rewrites the skills at the notice naming the Private Room once the member's own skill of a listed name changes, and as a Kit release starts once it changed the package's text of a listed House skill", async () => {
   const { hosted, rooms, notes } = await staged({}, [owned(), { name: SECOND, files: {} }]);
   const privateRoom = rooms.room('private');
   privateRoom.instructions = INSTRUCTIONS;
@@ -248,15 +257,51 @@ it("rewrites the skills at the notice naming the Private Room once the member's 
 
   expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
 
-  const manifest = JSON.parse(await readFile(join(notes.repository, '.house'), 'utf8')) as { skills: { release: string } };
-  await writeFile(join(notes.repository, '.house'), JSON.stringify({ ...manifest, skills: { ...manifest.skills, release: '0.0.1' } }));
+  const manifest = JSON.parse(await readFile(join(notes.repository, '.house'), 'utf8')) as { skills: { sources: Record<string, string>; digest: string } };
+  const { sources, digest } = manifest.skills;
+  expect(sources[SECOND]).toMatch(/^house:[0-9a-f]{64}$/u);
+  const earlierRelease = { ...manifest.skills, sources: { ...sources, [SECOND]: 'house:an earlier package' }, digest: 'an earlier package' };
+  await writeFile(join(notes.repository, '.house'), JSON.stringify({ ...manifest, skills: earlierRelease }));
   await writeFile(join(notes.repository, '.agents', 'skills', SECOND, 'SKILL.md'), 'edited here\n');
-  const opens = hosted.house.connections.length;
-  hosted.connection.close(1012, 'deploy');
-  await until(() => hosted.house.connections.length > opens);
-  await until(async () => ((await recorded(notes)) as { release?: string } | undefined)?.release === KIT_RELEASE);
+
+  await hosted.restart();
+  await until(async () => ((await recorded(notes)) as { digest: string }).digest === digest);
 
   expect(await written(notes.repository, SECOND)).toEqual(await packaged(SECOND));
+  expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
+  expect(await recorded(notes)).toEqual({ ...record([OWNED, SECOND], [OWNED, SECOND]), sources });
+});
+
+it("asks House nothing of a Room's skills at a connection's opening or a notice naming the Private Room while nothing they come from changed, and reads again only the Rooms listing a name whose source changed", async () => {
+  const { hosted, rooms, notes } = await staged({}, [owned()]);
+  const plans = rooms.room('plans');
+  plans.put('p.md', 'p\n');
+  plans.instructions = INSTRUCTIONS;
+  plans.skills = [{ name: SECOND, files: {} }];
+  const privateRoom = rooms.room('private');
+  privateRoom.instructions = INSTRUCTIONS;
+  rooms.open = [privateRoom];
+  await rooms.download([notes, plans]);
+  await opened(hosted, 1, plans, 'Chat');
+  const chat = copyOf(hosted, 'plans', 'Chat');
+  expect(await written(chat, SECOND)).toEqual(await packaged(SECOND));
+  expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
+  const asked = roomAsks(hosted).length;
+
+  await reconnected(hosted);
+  noticed(hosted, privateRoom);
+  await settle();
+
+  expect(roomAsks(hosted)).toHaveLength(asked);
+
+  own = { [OWNED]: MINE };
+  noticed(hosted, privateRoom);
+  await until(async () => (await readFile(join(notes.repository, '.agents', 'skills', OWNED, 'SKILL.md'), 'utf8').catch(() => null)) === MINE['SKILL.md']);
+  await settle();
+
+  expect(roomAsks(hosted).slice(asked)).toEqual([{ op: 'skill', room: notes.ref }]);
+  expect(await written(plans.repository, SECOND)).toEqual(await packaged(SECOND));
+  expect(await written(chat, SECOND)).toEqual(await packaged(SECOND));
 });
 
 it("uploads nothing .agents/skills or .claude/skills hold in a Room's folder or a conversation's copy, a hand-written skill and a file House holds there included, and deletes only what it wrote, with its manifest record, once the Environment no longer reaches the Room", async () => {

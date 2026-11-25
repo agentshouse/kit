@@ -6,7 +6,6 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
-import { KIT_RELEASE } from './clis.ts';
 import { fileInfo, roomInstructions, type FileInfo, type Finished, type RoomInstructions } from './files.ts';
 import { conversationsFolder, kitHome, roomsFolder } from './home.ts';
 import {
@@ -39,6 +38,7 @@ import {
   SKILL_FOLDERS,
   type RoomSkillSet,
   type RoomSkillsReading,
+  type RoomSkillsRecord,
 } from './skills.ts';
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
 
@@ -58,6 +58,7 @@ const KIT_FILES = ['AGENTS.md', 'CLAUDE.md'];
 const IMPORTED = '@AGENTS.md\n';
 const FOLDERS = 'folders.json';
 const PRIVATE = 'private';
+const UNWRITTEN = 'unwritten';
 const NOTHING_NEW = 'Nothing new from House.';
 
 interface RoomFolder {
@@ -849,6 +850,9 @@ export class LocalCopies {
   private turning: ((directory: string) => boolean) | null = null;
   private privateRoom: string | null = null;
   private answering: Promise<unknown> = Promise.resolve();
+  private readonly skillRecords = new Map<string, RoomSkillsRecord | typeof UNWRITTEN | null>();
+  private reskilling: Promise<void> = Promise.resolve();
+  private reskill: Promise<void> | null = null;
 
   constructor(house: House, launched: () => Promise<readonly string[]>) {
     this.house = house;
@@ -1332,10 +1336,6 @@ export class LocalCopies {
     return kept;
   }
 
-  private runCopy(key: string): boolean {
-    return [...this.places].some(([conversation, place]) => place.run !== undefined && Object.keys(place.copies).some((room) => copyKey(conversation, room) === key));
-  }
-
   private workedIn(): string[] {
     return [...this.places.values()].flatMap((place) => (place.deleted === true || place.session === undefined ? [] : [place.session]));
   }
@@ -1626,7 +1626,7 @@ export class LocalCopies {
 
   private async skilled(folder: string, root: string, manifest: Manifest, approved: number | null, reading: RoomSkillsReading): Promise<string | null> {
     const held = manifest.skills;
-    if (held?.release === KIT_RELEASE && held.approved === approved) return null;
+    if (held !== undefined && held.approved === approved) return null;
     try {
       await this.reskilledIn(folder, manifest, approved === null ? NO_ROOM_SKILLS : await reading.of(manifest.room_ref), approved);
       return null;
@@ -1638,11 +1638,12 @@ export class LocalCopies {
   private async reskilledIn(folder: string, manifest: Manifest, set: RoomSkillSet, approved: number | null | undefined): Promise<void> {
     const held = manifest.skills;
     const record = async (names: string[], digest: string) => {
-      manifest.skills = { ...(approved === undefined ? {} : { approved }), release: KIT_RELEASE, listed: set.listed, names, digest };
+      manifest.skills = { ...(approved === undefined ? {} : { approved }), listed: set.listed, sources: set.sources, names, digest };
       await writeManifest(folder, await staging(), manifest);
+      this.skillRecords.set(folder, manifest.skills);
     };
-    if (held?.release === KIT_RELEASE && held.digest === set.digest) {
-      if (held.approved !== approved || held.listed.join('\n') !== set.listed.join('\n')) await record(held.names, held.digest);
+    if (held?.digest === set.digest) {
+      if (held.approved !== approved || JSON.stringify([held.listed, held.sources]) !== JSON.stringify([set.listed, set.sources])) await record(held.names, held.digest);
       return;
     }
     if (set.skills.length === 0 && (held?.names ?? []).length === 0) {
@@ -1652,18 +1653,49 @@ export class LocalCopies {
     await record(await placeRoomSkills(folder, set.skills, held?.names ?? [], (names) => record(names, '')), set.digest);
   }
 
-  async reskilled(): Promise<void> {
+  reskilled(): Promise<void> {
+    this.reskill ??= this.reskilling.then(() => {
+      this.reskill = null;
+      return this.reskilledWhereChanged();
+    });
+    this.reskilling = this.reskill.catch(() => undefined);
+    return this.reskill;
+  }
+
+  private async skillRecordOf(folder: string): Promise<RoomSkillsRecord | typeof UNWRITTEN | null> {
+    const known = this.skillRecords.get(folder);
+    if (known !== undefined) return known;
+    const manifest = await readManifest(folder).catch(() => null);
+    const record = manifest?.kit === undefined ? null : (manifest.skills ?? UNWRITTEN);
+    this.skillRecords.set(folder, record);
+    return record;
+  }
+
+  private async reskilledWhereChanged(): Promise<void> {
+    const due: { copy: Copy; record: RoomSkillsRecord | typeof UNWRITTEN }[] = [];
+    await eachAtOnce([...this.copies.values()], async (copy) => {
+      if (earlier(copy)) return;
+      const record = await this.skillRecordOf(copy.repository);
+      if (record === UNWRITTEN || (record !== null && record.listed.length > 0)) due.push({ copy, record });
+    });
+    if (due.length === 0) return;
     const reading = roomSkillsReading();
-    await eachAtOnce([...this.copies.values()], async ({ key, room_handle: handle }) => {
+    const sources = await reading.sources(due.flatMap(({ record }) => (record === UNWRITTEN ? [] : record.listed))).catch((error: unknown) => {
+      logged(`the Rooms' skills kept as they were: ${houseCause(error)}`);
+      return null;
+    });
+    if (sources === null) return;
+    await eachAtOnce(due, async ({ copy: { key, room_handle: handle }, record }) => {
+      if (record !== UNWRITTEN && record.listed.every((name) => record.sources[name] === sources[name])) return;
       await this.exclusive(key, () => this.reskilledHeld(key, reading)).catch((error: unknown) => logged(skillsKept(rootOf(handle), error)));
     });
   }
 
   private async reskilledHeld(key: string, reading: RoomSkillsReading): Promise<void> {
     const copy = this.copies.get(key);
-    if (copy === undefined || earlier(copy) || this.runCopy(key)) return;
+    if (copy === undefined || earlier(copy)) return;
     const manifest = await readManifest(copy.repository).catch(() => null);
-    if (manifest === null || manifest.kit === undefined || manifest.skills?.listed.length === 0) return;
+    if (manifest === null || manifest.kit === undefined) return;
     await this.reskilledIn(copy.repository, manifest, await reading.of(manifest.room_ref), manifest.skills?.approved);
   }
 
@@ -1862,6 +1894,7 @@ export class LocalCopies {
     } else if (manifest.kit === undefined) manifest.kit = [...KIT_FILES];
     else return;
     await writeManifest(folder, await staging(), manifest);
+    this.skillRecords.set(folder, manifest.kit === undefined ? null : (manifest.skills ?? UNWRITTEN));
   }
 
   async laidOut(earlier: string, rooms: string, kept: readonly string[]): Promise<{ moved: boolean; kept: string[] }> {

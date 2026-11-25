@@ -3,7 +3,7 @@ import { cp, lstat, mkdir, realpath, rm, rmdir, symlink, writeFile } from 'node:
 import { homedir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import type { KitSkills } from '@agentshouse/kit-wire';
-import { GUIDE, listSkills } from '@agentshouse/skills';
+import { GUIDE, listSkills, readSkill } from '@agentshouse/skills';
 import { parse } from 'yaml';
 import { KIT_RELEASE } from './clis.ts';
 import { fetched } from './files.ts';
@@ -22,7 +22,7 @@ type SkillFile = string | Buffer;
 
 interface Skill {
   name: string;
-  files: Readonly<Record<string, SkillFile>> | null;
+  files: Readonly<Record<string, SkillFile>>;
   place(destination: string): Promise<void>;
 }
 
@@ -39,24 +39,20 @@ interface Catalogue extends Paged {
   catalogue: Catalogued[];
 }
 
-interface Answered extends Paged {
-  skills: { files: Record<string, unknown>; attachments?: Record<string, string> }[];
-}
-
 type Values = Record<string, unknown>;
 
-interface RoomSkillAnswer {
+interface SkillAnswer {
   name?: unknown;
   own?: unknown;
   files?: Values;
   attachments?: Values;
 }
 
-interface RoomListing extends Paged {
-  skills?: RoomSkillAnswer[];
+interface SkillsAnswer extends Paged {
+  skills?: SkillAnswer[];
 }
 
-interface ListedSkill {
+interface AnsweredSkill {
   name: string;
   own: boolean;
   files: Record<string, string>;
@@ -66,40 +62,45 @@ interface ListedSkill {
 type Holder = 'attachments' | 'files';
 
 interface CutValue {
-  skill: ListedSkill;
+  skill: AnsweredSkill;
   holder: Holder;
   field: string;
 }
 
+export type SkillSources = Record<string, string>;
+
 export interface RoomSkillsRecord {
   approved?: number | null;
-  release: string;
   listed: string[];
+  sources: SkillSources;
   names: string[];
   digest: string;
 }
 
 export interface RoomSkillSet {
   listed: string[];
+  sources: SkillSources;
   skills: readonly Skill[];
   digest: string;
 }
 
 export interface RoomSkillsReading {
   of(room: string): Promise<RoomSkillSet>;
+  sources(names: Iterable<string>): Promise<SkillSources>;
 }
 
 const RECORD = 'skill-set.json';
 const ENTRY = 'SKILL.md';
 const ORIGIN = '<origin>';
 const CUT = 'cut';
-const UNREAD = "House's answer of the Room's skills could not be read";
+const UNREAD = "House's answer of the skills could not be read";
+const ENVIRONMENT = 'environment';
 
 export const SKILL_FOLDERS = ['.agents/skills', '.claude/skills'];
 
 const ROOM_SKILL_FOLDERS = SKILL_FOLDERS.map((folder) => join(...folder.split('/')));
 
-export const NO_ROOM_SKILLS: RoomSkillSet = { listed: [], skills: [], digest: '' };
+export const NO_ROOM_SKILLS: RoomSkillSet = { listed: [], sources: {}, skills: [], digest: 'none' };
 
 function skillsDirectory(): string {
   return join(homedir(), '.agents', 'skills');
@@ -128,17 +129,18 @@ function skillName(text: string): string | undefined {
 function houseSkills(origin: string): Map<string, Skill> {
   const upstream = listSkills().map(({ name, directory }) => ({
     name,
-    files: null,
+    files: Object.fromEntries(readSkill(name).map(({ path, content }) => [path, content])),
     place: (destination: string) => cp(directory, destination, { recursive: true }),
   }));
   const pages = GUIDE.flatMap(({ text }) => {
     const name = skillName(text);
     if (name === undefined) return [];
+    const entry = text.replaceAll(ORIGIN, origin);
     const place = async (destination: string) => {
       await mkdir(destination);
-      await writeFile(join(destination, ENTRY), text.replaceAll(ORIGIN, origin));
+      await writeFile(join(destination, ENTRY), entry);
     };
-    return [{ name, files: null, place }];
+    return [{ name, files: { [ENTRY]: entry }, place }];
   });
   return new Map([...upstream, ...pages].map((skill) => [skill.name, skill]));
 }
@@ -170,20 +172,6 @@ async function attached(name: string, path: string, download: string): Promise<B
   for await (const chunk of answer.body) chunks.push(chunk as Buffer);
   if (answer.status !== 200) throw new Error(`the download of ${name}/${path} answered ${answer.status}`);
   return Buffer.concat(chunks);
-}
-
-async function ownFiles(name: string): Promise<Record<string, SkillFile>> {
-  const texts: Record<string, string> = {};
-  const downloads: Record<string, string> = {};
-  for (const page of await paged<Answered>({ names: [name] })) {
-    for (const skill of page.skills) {
-      for (const [path, text] of Object.entries(skill.files)) if (typeof text === 'string') texts[path] = (texts[path] ?? '') + text;
-      Object.assign(downloads, skill.attachments);
-    }
-  }
-  const files: Record<string, SkillFile> = texts;
-  for (const [path, download] of Object.entries(downloads)) files[path] = await attached(name, path, download);
-  return files;
 }
 
 async function catalogueOf(): Promise<Catalogued[]> {
@@ -218,19 +206,22 @@ function cutField(values: Values | undefined): string | undefined {
   return typeof cut?.field === 'string' ? cut.field : undefined;
 }
 
-async function listedSkills(room: string): Promise<ListedSkill[]> {
-  const listed: ListedSkill[] = [];
+async function answeredSkills(args: Record<string, unknown>): Promise<AnsweredSkill[]> {
+  const listed: AnsweredSkill[] = [];
   const open: CutValue[] = [];
-  for (const page of await paged<RoomListing>({ room })) {
+  for (const page of await paged<SkillsAnswer>(args)) {
     if (typeof page !== 'object' || page === null) throw new Error(UNREAD);
     const answered = page.skills ?? [];
     const value = open[0];
     if (value !== undefined) {
       const values = answered[0]?.[value.holder];
-      const part = values?.[value.field];
-      if (answered.length !== 1 || answered[0]!.name !== undefined || typeof part !== 'string') throw new Error(UNREAD);
-      value.skill[value.holder][value.field] += part;
-      if (cutField(values) !== value.field) open.shift();
+      const fields = Object.keys(values ?? {}).filter((field) => field !== CUT);
+      const field = fields[0]!;
+      const part = values?.[field];
+      const heads = value.skill[value.holder];
+      if (answered.length !== 1 || answered[0]!.name !== undefined || fields.length !== 1 || typeof part !== 'string' || !(field in heads)) throw new Error(UNREAD);
+      heads[field] += part;
+      if (cutField(values) === undefined && field === value.field) open.shift();
       continue;
     }
     for (const answer of answered) {
@@ -247,10 +238,15 @@ async function listedSkills(room: string): Promise<ListedSkill[]> {
   return listed;
 }
 
-async function carriedFiles({ name, files, attachments }: ListedSkill): Promise<Record<string, SkillFile>> {
+async function skillFiles({ name, files, attachments }: AnsweredSkill): Promise<Record<string, SkillFile>> {
   const carried: Record<string, SkillFile> = { ...files };
   for (const [path, download] of Object.entries(attachments)) carried[path] = await attached(name, path, download);
   return carried;
+}
+
+async function ownFiles(name: string): Promise<Record<string, SkillFile>> {
+  const [own] = await answeredSkills({ names: [name] });
+  return own === undefined ? {} : skillFiles(own);
 }
 
 function remembered<T>(held: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> {
@@ -262,7 +258,7 @@ function remembered<T>(held: Map<string, Promise<T>>, key: string, read: () => P
 }
 
 export function roomSkillsReading(): RoomSkillsReading {
-  let environment: Promise<{ origin: string; theirs: Set<string>; mine: Set<string> }> | undefined;
+  let environment: Promise<{ origin: string; theirs: Set<string>; mine: Set<string>; house: Map<string, Skill> }> | undefined;
   const own = new Map<string, Promise<Record<string, SkillFile>>>();
   const rooms = new Map<string, Promise<RoomSkillSet>>();
   const environmentSkills = async () => {
@@ -273,24 +269,40 @@ export function roomSkillsReading(): RoomSkillsReading {
       origin: enrolment.house,
       theirs: new Set(chosenOf((await readConfiguration()).skills, catalogue).map(({ name }) => name)),
       mine: new Set(catalogue.filter((skill) => skill.own === true).map(({ name }) => name)),
+      house: houseSkills(enrolment.house),
     };
   };
+  const ownOf = (name: string) => remembered(own, name, () => ownFiles(name));
+  const sourceOf = async (name: string): Promise<string | undefined> => {
+    const { theirs, mine, house } = await (environment ??= environmentSkills());
+    if (theirs.has(name)) return ENVIRONMENT;
+    if (mine.has(name)) return `own:${filesDigest(await ownOf(name))}`;
+    const skill = house.get(name);
+    return skill === undefined ? undefined : `house:${filesDigest(skill.files)}`;
+  };
+  const sources = async (names: Iterable<string>): Promise<SkillSources> => {
+    const found: SkillSources = {};
+    for (const name of [...new Set(names)].sort()) {
+      const source = await sourceOf(name);
+      if (source !== undefined) found[name] = source;
+    }
+    return found;
+  };
   const set = async (room: string): Promise<RoomSkillSet> => {
-    const listed = (await listedSkills(room)).sort((left, right) => (left.name < right.name ? -1 : 1));
+    const listed = (await answeredSkills({ room })).sort((left, right) => (left.name < right.name ? -1 : 1));
     if (listed.length === 0) return NO_ROOM_SKILLS;
-    environment ??= environmentSkills();
-    const { origin, theirs, mine } = await environment;
-    const house = houseSkills(origin);
+    const { origin, theirs, mine, house } = await (environment ??= environmentSkills());
     const skills: Skill[] = [];
     for (const skill of listed) {
       if (theirs.has(skill.name)) continue;
-      if (mine.has(skill.name)) skills.push(ownSkill(skill.name, await remembered(own, skill.name, () => ownFiles(skill.name))));
-      else if (skill.own) skills.push(ownSkill(skill.name, await carriedFiles(skill)));
+      if (mine.has(skill.name)) skills.push(ownSkill(skill.name, await ownOf(skill.name)));
+      else if (skill.own) skills.push(ownSkill(skill.name, await skillFiles(skill)));
       else if (house.has(skill.name)) skills.push(house.get(skill.name)!);
     }
-    return { listed: listed.map(({ name }) => name), skills, digest: digestOf(origin, skills) };
+    const names = listed.map(({ name }) => name);
+    return { listed: names, sources: await sources(names), skills, digest: digestOf(origin, skills) };
   };
-  return { of: (room) => remembered(rooms, room, () => set(room)) };
+  return { of: (room) => remembered(rooms, room, () => set(room)), sources };
 }
 
 function roomSkillFolders(folder: string, name: string): string[] {
@@ -336,8 +348,12 @@ function held(files: Readonly<Record<string, SkillFile>>): Record<string, string
   );
 }
 
+function filesDigest(files: Readonly<Record<string, SkillFile>>): string {
+  return createHash('sha256').update(JSON.stringify(held(files))).digest('hex');
+}
+
 function digestOf(origin: string, skills: readonly Skill[]): string {
-  const kept = skills.map(({ name, files }) => [name, files === null ? null : held(files)]);
+  const kept = skills.map(({ name, files }) => [name, held(files)]);
   return createHash('sha256').update(JSON.stringify([origin, kept])).digest('hex');
 }
 
