@@ -208,9 +208,10 @@ it("rewrites a conversation's copy's skills at the notice naming the Room once t
   expect(await recorded(notes)).toEqual(record([OWNED], [OWNED], 2));
 });
 
-it("rewrites the skills in every copy when house settings changes the Environment's skills, a name the Environment now holds going and one it no longer holds coming back", async () => {
+it("rewrites the skills in every copy but a Run's when house settings changes the Environment's skills, a name the Environment now holds going and one it no longer holds coming back", async () => {
   const { hosted, rooms, notes } = await staged({}, [{ name: SECOND, files: {} }, owned()]);
   await rooms.download([notes]);
+  await opened(hosted, 1, notes, 'Fresh', { kind: 'new' });
   expect(await folderTree(notes.repository)).toContain(join(SECOND, 'SKILL.md'));
 
   await kitSettings(hosted, 'skills', SECOND);
@@ -219,6 +220,7 @@ it("rewrites the skills in every copy when house settings changes the Environmen
   await absent(join(notes.repository, '.claude', 'skills', SECOND));
   expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
   expect(await recorded(notes)).toEqual(record([OWNED], [SECOND, OWNED]));
+  expect(await written(copyOf(hosted, 'notes', 'Fresh'), SECOND)).toEqual(await packaged(SECOND));
 
   await kitSettings(hosted, 'skills');
 

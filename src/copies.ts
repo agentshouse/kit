@@ -1332,6 +1332,10 @@ export class LocalCopies {
     return kept;
   }
 
+  private runCopy(key: string): boolean {
+    return [...this.places].some(([conversation, place]) => place.run !== undefined && Object.keys(place.copies).some((room) => copyKey(conversation, room) === key));
+  }
+
   private workedIn(): string[] {
     return [...this.places.values()].flatMap((place) => (place.deleted === true || place.session === undefined ? [] : [place.session]));
   }
@@ -1657,7 +1661,7 @@ export class LocalCopies {
 
   private async reskilledHeld(key: string, reading: RoomSkillsReading): Promise<void> {
     const copy = this.copies.get(key);
-    if (copy === undefined || earlier(copy)) return;
+    if (copy === undefined || earlier(copy) || this.runCopy(key)) return;
     const manifest = await readManifest(copy.repository).catch(() => null);
     if (manifest === null || manifest.kit === undefined || manifest.skills?.listed.length === 0) return;
     await this.reskilledIn(copy.repository, manifest, await reading.of(manifest.room_ref), manifest.skills?.approved);
