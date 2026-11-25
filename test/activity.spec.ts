@@ -1,11 +1,14 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { settle, until, type KitConnection } from './double.ts';
 import { hostKit, lastCall, type Hosted, type Hosting } from './environment.ts';
-import { alive, stop } from './kit.ts';
+import { alive, stop, temporaryDirectory } from './kit.ts';
 
 type Reported = { turn: string; secret: boolean; background: boolean | 'runs' };
 
@@ -15,6 +18,8 @@ const WORKING: Reported = { turn: 'ended', secret: false, background: true };
 const WAITING: Reported = { turn: 'ended', secret: false, background: 'runs' };
 
 const FAST_INTERVALS = ['--import', fileURLToPath(new URL('./fast-intervals.ts', import.meta.url))];
+const ENDING = ['--import', fileURLToPath(new URL('./ending.ts', import.meta.url))];
+const CONTROL_GROUP = process.env.KIT_TEST_CGROUP === '1';
 
 // A second and a half lets any look the Kit keeps at a scope, capped at 300 ms under fast-intervals, run several times.
 const LOOKS_MS = 1_500;
@@ -51,6 +56,13 @@ async function said(hosted: Hosted, text: string): Promise<void> {
   await until(() => ended(hosted)[turns]);
 }
 
+async function outside(): Promise<number> {
+  const holder = spawn('sh', ['-c', 'sleep 600 & echo $!; exec sleep 600'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  onTestFinished(() => void holder.kill('SIGKILL'));
+  const [pid] = (await once(createInterface({ input: holder.stdout }), 'line')) as [string];
+  return Number(pid);
+}
+
 async function logged(hosted: Hosted, field: string): Promise<number> {
   return (await until(async () => (await hosted.adapterLog()).findLast((entry) => entry[field] !== undefined)))![field] as number;
 }
@@ -72,6 +84,20 @@ it("reports each change of a process's turn and background work once, both parts
   for (const oneWayCall of hosted.connection.oneWayCalls.filter(({ type }) => type === 'activity')) {
     expect(Object.keys(oneWayCall).sort()).toEqual(['background', 'conversation_id', 'secret', 'turn', 'type']);
   }
+});
+
+it.skipIf(CONTROL_GROUP)("reports no background work for a process of the Kit's user outside the conversation that ends while the Kit reads the conversation's processes", async () => {
+  const ending = join(await temporaryDirectory(), 'ending');
+  const hosted = await opened({ environment: { KIT_ENDING: ending }, node: ENDING });
+  const from = activities(hosted.connection).length;
+  await writeFile(ending, String(await outside()));
+
+  await said(hosted, '@say read');
+  await reporting(hosted, IDLE);
+  await settle();
+
+  await expect(access(ending)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(activities(hosted.connection).slice(from)).toEqual([RUNNING, IDLE]);
 });
 
 it('reports a turn waiting on a secret question as asking for a secret', async () => {
