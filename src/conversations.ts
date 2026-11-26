@@ -996,7 +996,7 @@ export class Conversations {
           { ...bridge.env, ...streamed },
           undefined,
           route.mode === null,
-          !unable,
+          unable,
         ),
       );
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));

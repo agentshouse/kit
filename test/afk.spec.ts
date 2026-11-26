@@ -8,13 +8,21 @@ const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/
 
 const CLAUDE = 'claude-agent-acp';
 
+const CODEX = 'codex-acp';
+
 const UNABLE = { claudeCode: { options: { disallowedTools: ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'], permissionPrompts: 'none' } } };
+
+const KIT_FEATURE = { features: { shell_zsh_fork: true } };
+
+const NO_QUESTION_TOOL = { tools: { experimental_request_user_input: { enabled: false } } };
+
+const NO_PLAN = 'an AFK conversation cannot enter Plan mode, since it cannot ask';
 
 const ASKS_ANYWAY: Hosting = { prepare: (home) => writeFile(join(home, 'asks-anyway'), '') };
 
-async function opened(kind: string, afk = true, hosting: Hosting = {}): Promise<Hosted> {
+async function opened(kind: string, afk = true, hosting: Hosting = {}, fields: Record<string, unknown> = {}): Promise<Hosted> {
   const hosted = await hostKit([{ kind }], hosting);
-  hosted.call({ kind: 'open', ...(afk ? { afk: true } : {}) });
+  hosted.call({ kind: 'open', ...fields, ...(afk ? { afk: true } : {}) });
   await hosted.result(lastCall());
   return hosted;
 }
@@ -35,13 +43,24 @@ function reachedHouse(hosted: Hosted): string[] {
   return hosted.house.requests.flatMap((request) => (/\/kit\/conversations\/interaction\/ask$|\/kit\/secret-inputs\/await$/.test(request.path) ? [request.path] : []));
 }
 
-function launch(log: Record<string, unknown>[], method: string): { _meta: unknown; capabilities: Record<string, unknown> } {
+function launch(log: Record<string, unknown>[], method: string): { _meta: unknown; capabilities: Record<string, unknown>; config: unknown; thread: unknown } {
   const started = log.find((entry) => entry.method === method)!;
   const initialized = log.find((entry) => entry.method === 'initialize' && entry.pid === started.pid)!;
+  const config = (initialized.env as Record<string, string | undefined>).CODEX_CONFIG;
   return {
     _meta: (started.params as { _meta: unknown })._meta,
     capabilities: (initialized.params as { clientCapabilities: Record<string, unknown> }).clientCapabilities,
+    config: config === undefined ? undefined : JSON.parse(config),
+    thread: log.find((entry) => entry.threadOpened !== undefined && entry.pid === started.pid)?.approvalPolicy,
   };
+}
+
+function turnSettings(log: Record<string, unknown>[]): Record<string, unknown>[] {
+  return log.flatMap((entry) => (entry.settingsUpdated === undefined ? [] : [(entry.settingsUpdated as { threadSettings: Record<string, unknown> }).threadSettings]));
+}
+
+function unasked(log: Record<string, unknown>[]): unknown[] {
+  return log.flatMap((entry) => ('unasked' in entry ? [entry.unasked] : []));
 }
 
 it.each([
@@ -66,34 +85,41 @@ it('starts a Claude Code session that is not AFK with none of it, its adapter to
   expect(capabilities).toMatchObject({ elicitation: { form: {} } });
 });
 
-it('runs an AFK Claude Code turn to its end with nothing asked, since its CLI starts unable to ask', async () => {
-  const hosted = await opened(CLAUDE);
-  hosted.call({ kind: 'message', text: '@asked claude-permission\n@asked claude-question\n@asked claude-mcp-form\n@say went on', first: true, afk: true });
+it.each([
+  ['Claude Code', CLAUDE, 'claude'],
+  ['Codex', CODEX, 'codex'],
+])('runs an AFK %s turn to its end with nothing asked, since its CLI starts unable to ask', async (_, kind, prefix) => {
+  const hosted = await opened(kind);
+  hosted.call({ kind: 'message', text: `@asked ${prefix}-permission\n@asked ${prefix}-question\n@asked ${prefix}-mcp-form\n@say went on`, first: true, afk: true });
 
   expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'went on' });
-  const log = await hosted.adapterLog();
-  expect(log.flatMap((entry) => ('unasked' in entry ? [entry.unasked] : []))).toEqual(['session/request_permission', 'elicitation/create', 'elicitation/create']);
+  expect(unasked(await hosted.adapterLog())).toEqual(['session/request_permission', 'elicitation/create', 'elicitation/create']);
   expect(await answersOf(hosted)).toEqual([]);
   expect(reachedHouse(hosted)).toEqual([]);
   expect(hosted.kit.stderr()).not.toContain('AFK session');
 });
 
 it.each([
-  ['claude-permission', 'session/request_permission'],
-  ['claude-question', 'elicitation/create'],
-  ['claude-mcp-form', 'elicitation/create'],
-])('fails %s that still reaches an AFK Claude Code session as a Fault naming the conversation, the CLI and %s, and tells House nothing', async (fixture, method) => {
-  const { hosted, answer } = await asked(CLAUDE, fixture, true, ASKS_ANYWAY);
+  ['Claude Code', CLAUDE, 'claude-permission', 'session/request_permission'],
+  ['Claude Code', CLAUDE, 'claude-question', 'elicitation/create'],
+  ['Claude Code', CLAUDE, 'claude-mcp-form', 'elicitation/create'],
+  ['Codex', CODEX, 'codex-permission', 'session/request_permission'],
+  ['Codex', CODEX, 'persistent-permission', 'session/request_permission'],
+  ['Codex', CODEX, 'codex-question', 'elicitation/create'],
+  ['Codex', CODEX, 'codex-secret', 'elicitation/create'],
+  ['Codex', CODEX, 'codex-mcp-form', 'elicitation/create'],
+])('fails what still reaches an AFK %s session from %s as a Fault naming the conversation, the CLI and %s, and tells House nothing', async (name, kind, fixture, method) => {
+  const { hosted, answer } = await asked(kind, fixture, true, ASKS_ANYWAY);
 
   expect(answer).toEqual({ code: -32603 });
-  expect(hosted.kit.stderr()).toContain(`kit: conversation conversation-1: Claude Code sent ${method} from an AFK session, which starts unable to ask\n`);
+  expect(hosted.kit.stderr()).toContain(`kit: conversation conversation-1: ${name} sent ${method} from an AFK session, which starts unable to ask\n`);
   expect(reachedHouse(hosted)).toEqual([]);
   expect(hosted.interactions).toEqual([]);
 });
 
 it.each([
   ['Claude Code', CLAUDE, 'claude-permission', { code: -32603 }],
-  ['Codex', 'codex-acp', 'codex-permission', { outcome: { outcome: 'selected', optionId: 'allow_once' } }],
+  ['Codex', CODEX, 'codex-permission', { code: -32603 }],
   ['Grok Build', 'grok-build', 'codex-permission', { outcome: { outcome: 'selected', optionId: 'allow_once' } }],
 ])('holds AFK for a %s session from the call that launched it, so a later message without it asks House nothing', async (_, kind, fixture, answer) => {
   const hosted = await opened(kind, true, ASKS_ANYWAY);
@@ -107,7 +133,7 @@ it.each([
 
 it.each([
   ['Claude Code', CLAUDE],
-  ['Codex', 'codex-acp'],
+  ['Codex', CODEX],
   ['Grok Build', 'grok-build'],
 ])('holds a %s session launched without AFK able to ask, so a later message marking it still asks and waits', async (_, kind) => {
   const hosted = await opened(kind, false);
@@ -128,45 +154,91 @@ it('starts Grok Build with its question tool off', async () => {
   expect(JSON.stringify(await meta(plain))).not.toMatch(/askUserQuestion/);
 });
 
-it('starts Codex as its own settings give it, whose question tool is off outside plan mode', async () => {
-  const hosted = await opened('codex-acp');
+it.each([
+  ['opens', { kind: 'open', afk: true }, 'session/new'],
+  ['resumes', { kind: 'message', provider_session_id: 'session-stored', text: '@say ok', first: false, afk: true }, 'session/resume'],
+])('%s an AFK Codex session with its question tool off beside the Kit’s own feature, its thread under approvals never and its adapter told the client shows no form', async (_, call, method) => {
+  const hosted = await hostKit([{ kind: CODEX }]);
 
-  const opening = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
-  expect((opening.params as { _meta?: unknown })._meta).toEqual({});
+  hosted.call(call);
+
+  await hosted.result(lastCall());
+  const { config, thread, capabilities } = launch(await hosted.adapterLog(), method);
+  expect(config).toEqual({ ...KIT_FEATURE, ...NO_QUESTION_TOOL });
+  expect(thread).toBe('never');
+  expect(capabilities).not.toHaveProperty('elicitation');
+});
+
+it('starts a Codex session that is not AFK with none of it, its adapter told the client shows forms', async () => {
+  const hosted = await opened(CODEX, false);
+
+  const { config, thread, capabilities } = launch(await hosted.adapterLog(), 'session/new');
+  expect(config).toEqual(KIT_FEATURE);
+  expect(thread).toBe('on-request');
+  expect(capabilities).toMatchObject({ elicitation: { form: {} } });
 });
 
 it.each([
-  ['codex-acp', 'codex-question', { action: 'decline' }],
-  ['grok-build', 'grok-question', { outcome: 'cancelled' }],
-])('answers no question %s raises anyway, declining it, and the turn goes on with nothing reported to House', async (kind, fixture, declined) => {
-  const { hosted, answer } = await asked(kind, fixture);
+  ['an AFK', 'read-only', 'never', true, { type: 'readOnly', networkAccess: false }],
+  ['an AFK', 'workspace-write', 'never', true, { type: 'workspaceWrite', networkAccess: false }],
+  ['an AFK', 'agent-full-access', 'never', true, { type: 'dangerFullAccess' }],
+  ['a', 'read-only', 'on-request', false, { type: 'readOnly', networkAccess: false }],
+])('runs %s Codex conversation’s turn in %s under approvals %s, in the sandbox its mode names', async (_, mode, approvalPolicy, afk, sandboxPolicy) => {
+  const hosted = await opened(CODEX, afk, {}, { mode });
 
-  expect(answer).toEqual(declined);
+  hosted.call({ kind: 'message', text: '@say went on', first: true, ...(afk ? { afk: true } : {}) });
+
+  expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'went on' });
+  expect(turnSettings(await hosted.adapterLog())).toEqual([{ approvalPolicy, approvalsReviewer: 'user', sandboxPolicy }]);
+});
+
+async function planned(afk: boolean): Promise<{ hosted: Hosted; turn: { body: unknown } }> {
+  const hosted = await opened(CODEX, afk, {}, { mode: 'read-only' });
+  hosted.call({ kind: 'message', text: '@say ok', first: true, ...(afk ? { afk: true } : {}) });
+  await until(() => ended(hosted)[0]);
+
+  hosted.call({ kind: 'message', text: '/plan', first: false, ...(afk ? { afk: true } : {}) });
+
+  return { hosted, turn: await until(() => ended(hosted)[1]) };
+}
+
+it('refuses an AFK Codex conversation’s switch into Plan mode, so /plan fails as a refused setting and nothing reaches Codex', async () => {
+  const { hosted, turn } = await planned(true);
+
+  expect(outcome(turn.body)).toEqual({ failed: 'error' });
+  expect(JSON.stringify(turn.body)).toContain(NO_PLAN);
+  expect(turnSettings(await hosted.adapterLog()).filter((settings) => 'collaborationMode' in settings)).toEqual([]);
+});
+
+it('passes a Codex conversation’s switch into Plan mode while it is not AFK', async () => {
+  const { hosted, turn } = await planned(false);
+
+  expect(outcome(turn.body)).toEqual({ text: '' });
+  expect(turnSettings(await hosted.adapterLog()).filter((settings) => 'collaborationMode' in settings)).toEqual([{ collaborationMode: expect.objectContaining({ mode: 'plan' }) }]);
+});
+
+it('starts an AFK Codex thread under approvals never, so a prompt Codex would raise in a turn of its own before any message is never asked', async () => {
+  const hosted = await hostKit([{ kind: CODEX }], {
+    prepare: (home) => writeFile(join(home, 'ask-unprompted'), ''),
+  });
+  hosted.call({ kind: 'open', afk: true });
+
+  expect(await until(async () => unasked(await hosted.adapterLog())[0])).toBe('session/request_permission');
+  expect(await answersOf(hosted)).toEqual([]);
   expect(reachedHouse(hosted)).toEqual([]);
 });
 
-it('declines a secret prompt and neither holds nor fetches a secret', async () => {
-  const { hosted, answer } = await asked('codex-acp', 'codex-secret');
+it('answers no question Grok Build raises anyway, declining it, and the turn goes on with nothing reported to House', async () => {
+  const { hosted, answer } = await asked('grok-build', 'grok-question');
 
-  expect(answer).toEqual({ action: 'decline' });
+  expect(answer).toEqual({ outcome: 'cancelled' });
   expect(reachedHouse(hosted)).toEqual([]);
 });
 
-it('declines an MCP server form on Codex, whose fields the Agent never reads', async () => {
-  const { hosted, answer } = await asked('codex-acp', 'codex-mcp-form');
+it('allows a permission prompt on Grok Build at once', async () => {
+  const { hosted, answer } = await asked('grok-build', 'codex-permission');
 
-  expect(answer).toEqual({ action: 'decline' });
-  expect(reachedHouse(hosted)).toEqual([]);
-});
-
-it.each([
-  ['codex-acp', 'codex-permission', 'allow_once'],
-  ['grok-build', 'codex-permission', 'allow_once'],
-  ['codex-acp', 'persistent-permission', 'allow_for_session'],
-])('allows a permission prompt on %s from %s at once', async (kind, fixture, optionId) => {
-  const { hosted, answer } = await asked(kind, fixture);
-
-  expect(answer).toEqual({ outcome: { outcome: 'selected', optionId } });
+  expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'allow_once' } });
   expect(reachedHouse(hosted)).toEqual([]);
 });
 
@@ -174,16 +246,6 @@ it('approves a Grok plan at once', async () => {
   const { hosted, answer } = await asked('grok-build', 'grok-plan-exit');
 
   expect(answer).toEqual({ outcome: 'approved' });
-  expect(reachedHouse(hosted)).toEqual([]);
-});
-
-it('allows a prompt a CLI raises before any message, on the word of the call that opened it', async () => {
-  const hosted = await hostKit([{ kind: 'codex-acp' }], {
-    prepare: (home) => writeFile(join(home, 'ask-unprompted'), ''),
-  });
-  hosted.call({ kind: 'open', afk: true });
-
-  expect(await until(async () => (await answersOf(hosted))[0])).toEqual({ outcome: { outcome: 'selected', optionId: 'allow_once' } });
   expect(reachedHouse(hosted)).toEqual([]);
 });
 

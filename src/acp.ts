@@ -38,12 +38,12 @@ export async function startAdapter(
   added: Record<string, string> = {},
   signal?: AbortSignal,
   fullAccess = false,
-  forms = true,
+  unable = false,
 ): Promise<Adapter> {
   const adapter = CLIS[kind]!.adapter;
   const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args(fullAccess), {
     cwd,
-    env: { ...(await cliEnvironment(kind)), ...(adapter === null ? {} : { ...adapter.env, [adapter.executable]: cli }), ...added },
+    env: { ...(await cliEnvironment(kind)), ...(adapter === null ? {} : { ...adapter.env(unable), [adapter.executable]: cli }), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
@@ -107,7 +107,7 @@ export async function startAdapter(
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
-        ...(forms ? { elicitation: { form: {} } } : {}),
+        ...(unable ? {} : { elicitation: { form: {} } }),
         session: { compaction: {}, notices: {} },
         _meta: { jetbrains: { air: { version: 1, capabilities: CLIS[kind]!.air } } },
       },

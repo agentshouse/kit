@@ -65,6 +65,13 @@ let spent: Record<string, unknown> = {};
 const steers = kind !== 'grok-build';
 let forms = true;
 const unprompted = new Set<string>();
+const approvals = new Map<string, unknown>();
+const CODEX_MODES: Record<string, { approvalPolicy: string; sandboxPolicy: Record<string, unknown> }> = {
+  'read-only': { approvalPolicy: 'on-request', sandboxPolicy: { type: 'readOnly', networkAccess: false } },
+  'workspace-write': { approvalPolicy: 'on-request', sandboxPolicy: { type: 'workspaceWrite', networkAccess: false } },
+  agent: { approvalPolicy: 'on-request', sandboxPolicy: { type: 'workspaceWrite', networkAccess: false } },
+  'agent-full-access': { approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } },
+};
 
 function launched(sessionId: string, meta: unknown): void {
   const options = (meta as { claudeCode?: { options?: { permissionPrompts?: unknown } } } | null | undefined)?.claudeCode?.options;
@@ -74,7 +81,7 @@ function launched(sessionId: string, meta: unknown): void {
 function asks(sessionId: string, method: string): boolean {
   if (existsSync(join(home, 'asks-anyway'))) return true;
   if (method === 'elicitation/create') return forms;
-  return method !== 'session/request_permission' || !unprompted.has(sessionId);
+  return method !== 'session/request_permission' || (!unprompted.has(sessionId) && approvals.get(sessionId) !== 'never');
 }
 
 // A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.
@@ -95,20 +102,61 @@ function ran(entry: Record<string, unknown>, result: SpawnSyncReturns<string>): 
 }
 
 const appServer = kind === 'codex-acp' ? spawn(process.env.CODEX_PATH!, ['app-server'], { stdio: ['pipe', 'pipe', 'inherit'] }) : null;
-const answers = new Map<unknown, () => void>();
-const configured = appServer === null ? Promise.resolve() : new Promise<void>((resolve) => answers.set('config', resolve));
-let emitted = 0;
+interface CodexMessage {
+  id?: unknown;
+  method?: string;
+  params?: { threadId: string; threadSettings: Record<string, unknown> };
+  result?: { approvalPolicy?: unknown };
+  error?: { code: number; message: string };
+}
+
+const answers = new Map<unknown, (message: CodexMessage) => void>();
+const configured = appServer === null ? Promise.resolve() : new Promise<void>((resolve) => answers.set('config', () => resolve()));
+let requested = 0;
 if (appServer !== null) {
   log({ appServer: appServer.pid });
-  createInterface({ input: appServer.stdout! }).on('line', (line) => answers.get((JSON.parse(line) as { id?: unknown }).id)?.());
+  createInterface({ input: appServer.stdout! }).on('line', (line) => {
+    const message = JSON.parse(line) as CodexMessage;
+    if (message.method === 'thread/settings/updated') {
+      log({ settingsUpdated: message.params });
+      if ('approvalPolicy' in message.params!.threadSettings) approvals.set(message.params!.threadId, message.params!.threadSettings.approvalPolicy);
+    }
+    answers.get(message.id)?.(message);
+  });
   appServer.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'config', method: 'config/read', params: { includeLayers: false } })}\n`);
 }
 
-function codex(params: unknown): Promise<void> {
-  const id = `emit-${++emitted}`;
-  const answered = new Promise<void>((resolve) => answers.set(id, resolve));
-  appServer!.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'emit', params })}\n`);
+function codexRequest(method: string, params: unknown): Promise<CodexMessage> {
+  const id = `${method}-${++requested}`;
+  const answered = new Promise<CodexMessage>((resolve) => answers.set(id, resolve));
+  appServer!.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
   return answered;
+}
+
+async function codex(params: unknown): Promise<void> {
+  await codexRequest('emit', params);
+}
+
+async function threadOpen(method: 'thread/start' | 'thread/resume', sessionId: string, cwd: string): Promise<void> {
+  const { result } = await codexRequest(method, { threadId: sessionId, cwd });
+  log({ threadOpened: method, approvalPolicy: result!.approvalPolicy });
+  approvals.set(sessionId, result!.approvalPolicy);
+}
+
+async function turnStart(sessionId: string, text: string): Promise<void> {
+  const { approvalPolicy, sandboxPolicy } = CODEX_MODES[mode ?? 'agent']!;
+  const input = [{ type: 'text', text, text_elements: [] }];
+  await codexRequest('turn/start', { threadId: sessionId, input, approvalPolicy, approvalsReviewer: 'user', sandboxPolicy });
+}
+
+async function plan(client: AgentContext, sessionId: string): Promise<PromptResponse> {
+  const wanted = collaboration === 'plan' ? 'default' : 'plan';
+  const collaborationMode = { mode: wanted, settings: { model, reasoning_effort: effort, developer_instructions: null } };
+  const { error } = await codexRequest('thread/settings/update', { threadId: sessionId, collaborationMode });
+  if (error !== undefined) throw new RequestError(-32603, 'Internal error', { details: error.message });
+  collaboration = wanted;
+  await client.notify('session/update', { sessionId, update: { sessionUpdate: 'config_option_update', configOptions: options() } });
+  return { stopReason: 'end_turn' };
 }
 
 function promptText(prompt: { type: string; text?: string }[]): string {
@@ -555,6 +603,7 @@ const app = agent({ name: 'adapter-double' })
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
     launched(sessionId, params._meta);
+    if (appServer !== null) await threadOpen('thread/start', sessionId, params.cwd);
     // The CLI asks a fifth of a second after it opens, with no prompt, once the Kit has taken the session.
     if (existsSync(join(home, 'ask-unprompted'))) setTimeout(() => void directive(client, sessionId, '@asked codex-permission'), 200);
     if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
@@ -586,6 +635,7 @@ const app = agent({ name: 'adapter-double' })
     await configured;
     log({ method: 'session/resume', params });
     launched(params.sessionId, params._meta);
+    if (appServer !== null) await threadOpen('thread/resume', params.sessionId, params.cwd);
     if (existsSync(join(home, 'refuse-resume'))) {
       throw new RequestError(-32002, 'the session cannot be resumed');
     }
@@ -637,10 +687,13 @@ const app = agent({ name: 'adapter-double' })
     const text = promptText(params.prompt);
     written(params.sessionId);
     log({ method: 'session/prompt', params, text });
+    const [first] = params.prompt;
+    if (appServer !== null && first?.type === 'text' && first.text.trim() === '/plan') return plan(client, params.sessionId);
     prompting.add(params.sessionId);
     turning.add(params.sessionId);
     spent = {};
     try {
+      if (appServer !== null) await turnStart(params.sessionId, text);
       const steps = directives(text);
       for (const line of steps.length === 0 ? ['@say ok'] : steps) {
         const outcome = await directive(client, params.sessionId, line);

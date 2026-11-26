@@ -4,6 +4,10 @@ import { connect } from 'node:net';
 
 const KIT_ANSWER = '"house-kit-';
 const SYNC = 'house-kit/sync';
+const NEVER_ASKS = new Set<unknown>(['thread/start', 'thread/resume', 'thread/fork', 'turn/start']);
+const SETTINGS = 'thread/settings/update';
+const INVALID_REQUEST = -32600;
+const NO_PLAN = 'an AFK conversation cannot enter Plan mode, since it cannot ask';
 
 function lines(each: (line: string) => void): (chunk: string) => void {
   let buffer = '';
@@ -26,14 +30,36 @@ function answersKit(line: string): boolean {
   }
 }
 
+interface Request {
+  id?: unknown;
+  method?: unknown;
+  params?: { collaborationMode?: { mode?: unknown } | null };
+}
+
+function unasking(line: string): string | null {
+  if (!line.includes('"thread/') && !line.includes('"turn/start"')) return line;
+  const request = JSON.parse(line) as Request;
+  if (NEVER_ASKS.has(request.method)) return `${JSON.stringify({ ...request, params: { ...request.params, approvalPolicy: 'never' } })}\n`;
+  if (request.method !== SETTINGS || request.params?.collaborationMode?.mode !== 'plan') return line;
+  process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: INVALID_REQUEST, message: NO_PLAN } })}\n`);
+  return null;
+}
+
 const args = process.argv.slice(2);
 const serving = args[0] === 'app-server';
+const afk = process.env.HOUSE_KIT_AFK === '1' && serving;
 if (process.env.HOUSE_KIT_SANDBOX === '1' && serving) args.push('--disable', 'memories');
 const codex = spawn(process.env.HOUSE_KIT_CODEX!, args, { stdio: ['pipe', 'pipe', 'inherit'] });
 const stream = serving ? connect(process.env.HOUSE_KIT_CODEX_STREAM!) : null;
 stream?.on('error', () => undefined);
 
-process.stdin.setEncoding('utf8').on('data', lines((line) => codex.stdin.write(line)));
+process.stdin.setEncoding('utf8').on(
+  'data',
+  lines((line) => {
+    const passed = afk ? unasking(line) : line;
+    if (passed !== null) codex.stdin.write(passed);
+  }),
+);
 process.stdin.on('end', () => codex.stdin.end());
 stream?.setEncoding('utf8').on(
   'data',

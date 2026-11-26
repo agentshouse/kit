@@ -14,7 +14,7 @@ export interface Cli {
   minimum: string;
   install: string;
   update: string;
-  adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
+  adapter: { package: string; bin: string; executable: string; env(unable: boolean): Record<string, string> } | null;
   args(fullAccess: boolean): string[];
   reads: 'AGENTS.md' | 'CLAUDE.md' | null;
   compactWords: boolean;
@@ -115,14 +115,20 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/codex-acp',
       bin: 'codex-acp',
       executable: 'CODEX_PATH',
-      env: { CODEX_CONFIG: JSON.stringify({ features: { shell_zsh_fork: true } }) },
+      env: (unable) => ({
+        CODEX_CONFIG: JSON.stringify({
+          features: { shell_zsh_fork: true },
+          ...(unable ? { tools: { experimental_request_user_input: { enabled: false } } } : {}),
+        }),
+        ...(unable ? { HOUSE_KIT_AFK: '1' } : {}),
+      }),
     },
     args: () => [],
     reads: 'AGENTS.md',
     compactWords: false,
     fullAccess: 'agent-full-access',
     sessionMeta: () => ({}),
-    unableToAsk: false,
+    unableToAsk: true,
     unknownSession: (error) => {
       const { code, data } = answered(error);
       return code === -32603 && typeof data?.details === 'string' && data.details.startsWith('no rollout found');
@@ -143,7 +149,7 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/claude-agent-acp',
       bin: 'claude-agent-acp',
       executable: 'CLAUDE_CODE_EXECUTABLE',
-      env: { CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1' },
+      env: () => ({ CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1' }),
     },
     args: () => [],
     reads: 'CLAUDE.md',
