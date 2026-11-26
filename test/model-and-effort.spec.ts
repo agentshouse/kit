@@ -8,7 +8,6 @@ type Entry = Record<string, unknown>;
 
 interface Kind {
   kind: string;
-  mode: string[];
   effort: string;
   agent: { model: string; effort: string };
   chosen: { model: string; effort: string };
@@ -17,21 +16,18 @@ interface Kind {
 const KINDS: Kind[] = [
   {
     kind: 'codex-acp',
-    mode: ['mode=agent-full-access'],
     effort: 'reasoning_effort',
     agent: { model: 'gpt-5.5', effort: 'high' },
     chosen: { model: 'gpt-5.5-mini', effort: 'low' },
   },
   {
     kind: 'claude-agent-acp',
-    mode: ['mode=bypassPermissions'],
     effort: 'effort',
     agent: { model: 'opus', effort: 'high' },
     chosen: { model: 'sonnet', effort: 'max' },
   },
   {
     kind: 'grok-build',
-    mode: [],
     effort: 'reasoning_effort',
     agent: { model: 'grok-4.6', effort: 'high' },
     chosen: { model: 'grok-4.5', effort: 'low' },
@@ -61,7 +57,7 @@ function settings(entries: Entry[], after = 0): string[] {
 }
 
 function launched(case_: Kind, model: string, effort: string): string[] {
-  return [...case_.mode, `model=${model}`, `${case_.effort}=${effort}`];
+  return [`model=${model}`, `${case_.effort}=${effort}`];
 }
 
 function expected(case_: Kind, start: string, model: string, effort: string): string[] {
@@ -115,7 +111,7 @@ it.each(KINDS)('runs a session $kind opens for an Agent that holds no effort wit
   hosted.call({ kind: 'message', text: '@say first', first: true });
 
   await turnsEnded(hosted, 1);
-  expect(beforePrompt(await hosted.adapterLog(), 0)).toEqual(['session/new', ...case_.mode, `model=${case_.agent.model}`]);
+  expect(beforePrompt(await hosted.adapterLog(), 0)).toEqual(['session/new', `model=${case_.agent.model}`]);
 });
 
 it.each(KINDS)("runs a session $kind opens for an Agent that holds no effort with the effort the conversation names, in the Agent's place", async (case_) => {
@@ -299,10 +295,10 @@ it('changes nothing for an `option` that reaches a conversation with no process,
 });
 
 it.each([
-  ['codex-acp', { model: 'codex-instant', effort: 'high' }, {}, ['mode=agent-full-access', 'model=codex-instant']],
-  ['codex-acp', { model: 'gpt-5.5', effort: 'high' }, { model: 'codex-instant', effort: 'low' }, ['mode=agent-full-access', 'model=codex-instant']],
-  ['claude-agent-acp', { model: 'opus', effort: 'high' }, { model: 'haiku' }, ['mode=bypassPermissions', 'model=haiku']],
-  ['codex-acp', { model: 'codex-instant', effort: null }, {}, ['mode=agent-full-access', 'model=codex-instant']],
+  ['codex-acp', { model: 'codex-instant', effort: 'high' }, {}, ['model=codex-instant']],
+  ['codex-acp', { model: 'gpt-5.5', effort: 'high' }, { model: 'codex-instant', effort: 'low' }, ['model=codex-instant']],
+  ['claude-agent-acp', { model: 'opus', effort: 'high' }, { model: 'haiku' }, ['model=haiku']],
+  ['codex-acp', { model: 'codex-instant', effort: null }, {}, ['model=codex-instant']],
 ] as const)('opens a %s session on a model that offers no effort with none, whatever effort the Agent or the call names or none', async (kind, agent, chosen, set) => {
   const hosted = await hostKit([{ kind, ...agent }]);
 
@@ -347,6 +343,6 @@ it("refuses an `open` whose model the CLI refuses as it refuses the Agent's, and
 
   hosted.call({ kind: 'open', model: 'gpt-refused' });
 
-  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI refused the Agent's model, mode or effort" });
+  expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI refused the model, effort or mode it was to start in" });
   expect(hosted.kit.stderr()).toContain('Model switch blocked by a PreModelSwitch hook: gpt-refused is not allowed');
 });
