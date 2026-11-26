@@ -166,7 +166,7 @@ it("leaves a raised Room's folder as it was where a document of the Room takes t
   expect(await held(join(folderOf(hosted, 'garden'), 'docs'))).toEqual(['work']);
 });
 
-it('changes AGENTS.md at the next download after an approval or a new version, and not at a reconnect before it', async () => {
+it('changes AGENTS.md at the next connection after an approval or a new version, and leaves it at the download after it', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -183,14 +183,13 @@ it('changes AGENTS.md at the next download after an approval or a new version, a
 
   await hosted.restart();
   await until(() => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read').length > selections || undefined);
+  await until(async () => ((await readFile(join(folderOf(hosted, 'garden'), 'AGENTS.md'), 'utf8')) === SECOND ? true : undefined));
 
-  expect(roomRootReads(hosted).slice(reads)).toEqual([]);
-  expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(FIRST);
-  expect(await readFile(join(folderOf(hosted, 'garden'), 'AGENTS.md'), 'utf8')).toBe(FIRST);
+  expect(roomRootReads(hosted).slice(reads).sort()).toEqual([garden.root, notes.root]);
+  expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(SECOND);
 
   expect(await rooms.download([notes])).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
 
-  expect(roomRootReads(hosted).slice(reads).sort()).toEqual([garden.root, notes.root]);
   expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(SECOND);
   expect(await readFile(join(folderOf(hosted, 'garden'), 'AGENTS.md'), 'utf8')).toBe(SECOND);
 });

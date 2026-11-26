@@ -94,8 +94,9 @@ function doorStopped(stopped: Stopped): Answer {
   return { status, body: { error: { code, ...detail, message, retryable } } };
 }
 
-function toolStopped({ status, code, message, retryable }: Stopped): ProtocolRefusal {
-  return new ProtocolRefusal(status, { code: -32000, message, data: { code, retryable } });
+function toolStopped({ status, code, message, detail, retryable }: Stopped): ProtocolRefusal {
+  const after: Record<string, string> = typeof detail.retry_after === 'number' ? { 'retry-after': String(detail.retry_after) } : {};
+  return new ProtocolRefusal(status, { code: -32000, message, data: { code, retryable } }, after);
 }
 
 const LIMITED: Stopped = {
@@ -635,6 +636,7 @@ export interface Rooms {
   unparsedChunks: boolean;
   openUploads: number;
   writeUnits: number;
+  retryAfter: number;
   partBytes: number;
   beforeEdit: ((changes: EditChange[]) => void) | null;
   edits(): Received[];
@@ -704,6 +706,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     unparsedChunks: false,
     openUploads: 10,
     writeUnits: Infinity,
+    retryAfter: 3600,
     partBytes: STAGED_PART_BYTES,
     beforeEdit: null,
     room: (handle) => {
@@ -727,6 +730,7 @@ export function serveRooms(hosted: Hosted): Rooms {
       }),
   };
   const roomOf = (path: string) => rooms.find((room) => room.names(path))!;
+  const limited = (): Stopped => ({ ...LIMITED, detail: { ...LIMITED.detail, retry_after: state.retryAfter } });
   const opened = new Map<string, { operation: string; sha256: string }>();
   const open = (id: string) => !hosted.store.objects.has(`staged/${id}`);
   const stagedBytes = (operation: string, sha256: string) => {
@@ -740,7 +744,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     const places = Math.max(0, state.openUploads - opening.length);
     if (kept.size === 0 && places === 0) return CAPPED;
     const fitting = files.filter((file) => !kept.has(file.sha256)).slice(0, places);
-    if (fitting.length > 0 && state.writeUnits <= 0) return LIMITED;
+    if (fitting.length > 0 && state.writeUnits <= 0) return limited();
     for (const file of fitting.slice(0, state.writeUnits)) {
       const { upload } = hosted.store.declare({ bytes: file.bytes, sha256: file.sha256, staged: true }, state.partBytes);
       opened.set(upload.id, { operation, sha256: file.sha256 });
@@ -772,7 +776,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     const room = roomOf(changes[0]!.path);
     const outcome = room.edit(changes, (sha256) => stagedBytes(operation, sha256), admitted);
     if ('missing' in outcome) return { stopped: unstaged(operation, outcome.missing) };
-    if ('limited' in outcome) return { stopped: LIMITED };
+    if ('limited' in outcome) return { stopped: limited() };
     if ('refusal' in outcome) return outcome;
     const kept: Receipt = {
       authority: room.ref,

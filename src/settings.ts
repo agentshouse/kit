@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { access, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { house } from './api.ts';
+import { conversationCaller } from './bridge.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { LocalCopies } from './copies.ts';
 import {
@@ -263,7 +264,7 @@ async function appliedHere(change: SettingsChange): Promise<Applied> {
   const lock = await holdOwner();
   try {
     await resumeWorkspaceMove();
-    const copies = new LocalCopies(house, launchDirectories);
+    const copies = new LocalCopies(house, launchDirectories, { caller: conversationCaller, changed: () => undefined });
     await copies.load();
     await moveIntoHouse(copies);
     return await applySettings(change, IDLE, copies);

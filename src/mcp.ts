@@ -2,7 +2,7 @@ import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { randomUUID } from 'node:crypto';
 import { parseDocument } from 'yaml';
 import { KIT_RELEASE } from './clis.ts';
-import { carried } from './hold.ts';
+import { carried, retryAt } from './hold.ts';
 import { readEnrolment } from './home.ts';
 import { operationId } from './operation.ts';
 import { namedWait, refusalOf, retryable, type Refusal } from './refusals.ts';
@@ -18,6 +18,7 @@ export interface Message {
 export interface Forwarded {
   status: number;
   text: string;
+  admits?: number;
 }
 
 export interface ToolResult {
@@ -83,7 +84,8 @@ export async function callHouse(origin: string, credential: string, message: Mes
     body: mcpBody(message, sending),
     signal: sending.signal,
   });
-  return { status: answer.status, text: await answer.text() };
+  const admits = retryAt(answer.headers.get('retry-after'));
+  return { status: answer.status, text: await answer.text(), ...(admits === null ? {} : { admits }) };
 }
 
 export function unconfirmed(status: number): string {

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { RoomSkillsRecord } from './skills.ts';
 
@@ -87,13 +87,18 @@ export async function removed(repository: string, name: string): Promise<void> {
 export interface Scan {
   present: Map<string, Present>;
   left: string[];
+  within?: string[];
+}
+
+export function covered(scan: Scan, path: string): boolean {
+  return scan.within === undefined || scan.within.some((root) => path === root || path.startsWith(`${root}/`));
 }
 
 export function leaves(left: readonly string[], path: string): boolean {
   return left.some((folder) => path.startsWith(`${folder}/`));
 }
 
-async function walked(repository: string, file: (name: string) => Promise<void>): Promise<string[]> {
+async function walked(repository: string, file: (name: string) => Promise<void>, from = ''): Promise<string[]> {
   const left: string[] = [];
   const walk = async (folder: string): Promise<void> => {
     const entries = await readdir(join(repository, folder), { withFileTypes: true });
@@ -108,7 +113,7 @@ async function walked(repository: string, file: (name: string) => Promise<void>)
       else if (entry.isFile()) await file(name);
     }
   };
-  await walk('');
+  await walk(from);
   return left.sort();
 }
 
@@ -119,6 +124,39 @@ export async function scanned(repository: string): Promise<Scan> {
     if (file !== null) present.set(name.normalize('NFC'), { name, ...file });
   });
   return { present, left };
+}
+
+async function workTreeOn(repository: string, name: string): Promise<string | null> {
+  const segments = name.split('/');
+  for (let count = 1; count < segments.length; count++) {
+    const folder = segments.slice(0, count).join('/');
+    if ((await lstat(join(repository, folder, GIT)).catch(() => null)) !== null) return folder;
+  }
+  return null;
+}
+
+export async function scannedAt(repository: string, names: Iterable<string>): Promise<Scan> {
+  const present = new Map<string, Present>();
+  const left = new Set<string>();
+  const within = new Set<string>();
+  const file = async (name: string) => {
+    const held = await hashed(join(repository, name));
+    if (held !== null) present.set(name.normalize('NFC'), { name, ...held });
+  };
+  for (const name of new Set(names)) {
+    const root = name.normalize('NFC');
+    if (root === MANIFEST || root === GIT || root.startsWith(`${GIT}/`)) continue;
+    within.add(root);
+    const holder = await workTreeOn(repository, name);
+    if (holder !== null) {
+      left.add(holder.normalize('NFC'));
+      continue;
+    }
+    const found = await lstat(join(repository, name)).catch(() => null);
+    if (found?.isFile()) await file(name);
+    else if (found?.isDirectory()) for (const folder of await walked(repository, file, name)) left.add(folder);
+  }
+  return { present, left: [...left].sort(), within: [...within] };
 }
 
 export function leftIn(repository: string): Promise<string[]> {

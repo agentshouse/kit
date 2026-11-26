@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
+import { until } from './double.ts';
 import { GIT_IDENTITY, hostKit, type Hosted } from './environment.ts';
 import { digest, house, manifestOf, serveRooms, upload, type Room } from './rooms.ts';
 
@@ -29,7 +30,7 @@ async function gitState(repository: string): Promise<Record<string, string>> {
   return Object.fromEntries(await Promise.all(kept.map(async (path) => [path, digest(await readFile(join(folder, path)))] as const)));
 }
 
-it("converts a copy an earlier Kit kept as a Git repository once, keeping its working files, leaving its .git unread, and removing only what Kit wrote", async () => {
+it("converts a copy an earlier Kit kept as a Git repository once, at the connection of its first start on this release, keeping its working files and saving the change never pushed, leaving its .git unread, and removing only what Kit wrote", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -85,10 +86,11 @@ it("converts a copy an earlier Kit kept as a Git repository once, keeping its wo
   );
   room.put('memo.md', 'memo, from House\n');
   await hosted.restart();
+  await until(() => (room.files.get('plan.md')!.content === 'one\ntwo\nmine, not pushed\n' ? true : undefined));
 
   const downloaded = await house(hosted, '/', 'download');
 
-  expect(downloaded).toEqual({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n', stderr: '' });
+  expect(downloaded).toEqual({ status: 0, stdout: 'Nothing new from House.\n', stderr: '' });
   expect((await readdir(repository)).sort()).toEqual(['.git', '.house', 'behind.md', 'capture', 'memo.md', 'photo.jpg', 'plan.md']);
   expect(await readFile(join(repository, 'plan.md'), 'utf8')).toBe('one\ntwo\nmine, not pushed\n');
   expect(await readFile(join(repository, 'memo.md'), 'utf8')).toBe('memo, from House\n');
@@ -105,16 +107,15 @@ it("converts a copy an earlier Kit kept as a Git repository once, keeping its wo
       'cover.jpg': { revision: room.revision('cover.jpg'), sha256: digest(COVER), bytes: COVER.length, skipped: true },
       'memo.md': { revision: room.revision('memo.md'), sha256: digest('memo, from House\n'), bytes: 17 },
       'photo.jpg': { revision: photo, sha256: digest(JPEG), bytes: JPEG.length },
-      'plan.md': { revision: plan, sha256: digest('one\ntwo\n'), bytes: 8 },
+      'plan.md': { revision: room.revision('plan.md'), sha256: digest('one\ntwo\nmine, not pushed\n'), bytes: 25 },
     },
   });
   const converted = JSON.parse(await readFile(record, 'utf8')) as Record<string, unknown>;
   expect(Object.keys(converted).sort()).toEqual(['key', 'log_epoch', 'position', 'protected', 'repository', 'room_handle', 'room_ref', 'write']);
 
-  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
   const sent = hosted.house.requests.filter((request) => request.path === '/kit/door/update').map((request) => (request.body as { changes: unknown }).changes);
   expect(sent).toEqual([[{ op: 'write', path: '/rooms/notes/plan.md', content: 'one\ntwo\nmine, not pushed\n', base: plan }]]);
-  expect(room.files.get('plan.md')!.content).toBe('one\ntwo\nmine, not pushed\n');
   expect(git(repository, 'log', '--format=%s')).toBe('House /rooms/notes\n');
 });
 
@@ -203,7 +204,7 @@ it("converts a copy an earlier Kit kept holding a clone with a .git folder, leav
   });
 });
 
-it("brings a copy an earlier Kit kept to what House changed that it received but never applied, so its next upload neither deletes House's file nor restores one House deleted", async () => {
+it("brings a copy an earlier Kit kept to what House changed that it received but never applied, so its first save neither deletes House's file nor restores one House deleted", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -219,8 +220,7 @@ it("brings a copy an earlier Kit kept to what House changed that it received but
     [`added.md=${added}`, 'gone.md=', 'kept.md='],
   ]);
   await hosted.restart();
-
-  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+  await until(() => room.files.get('kept.md'));
 
   const sent = hosted.house.requests.filter((request) => request.path === '/kit/door/update').map((request) => (request.body as { changes: unknown }).changes);
   expect(sent).toEqual([[{ op: 'write', path: '/rooms/notes/kept.md', content: 'kept, mine\n' }]]);
@@ -238,16 +238,16 @@ it('keeps a copy an earlier Kit kept unconverted when House does not answer a re
   rooms.answered = [room];
   const record = await earlierCopy(hosted, room, { 'plan.md': 'one\n' }, [[`plan.md=${plan}`]]);
   room.put('plan.md', 'one, later\n');
+  const unavailable = { status: 503, body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; call again shortly', retryable: true } } };
+  rooms.refusesReads = [unavailable, unavailable, unavailable];
   await hosted.restart();
-  rooms.refusesReads = [
-    { status: 503, body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; call again shortly', retryable: true } } },
-  ];
+  await until(() => (rooms.refusesReads.length === 1 ? true : undefined));
 
   expect(await house(hosted, '/', 'download')).toEqual({
     status: 1,
     stdout: '',
     stderr:
-      'house: /rooms/notes: Kit could not convert the copy an earlier Kit kept yet (house_unavailable: House is unavailable; call again shortly); the next house download or house upload converts it\n',
+      'house: /rooms/notes: Kit could not convert the copy an earlier Kit kept yet (house_unavailable: House is unavailable; call again shortly); the next save converts it\n',
   });
   expect(JSON.parse(await readFile(record, 'utf8'))).toHaveProperty('manifests');
   expect(existsSync(join(room.repository, '.house'))).toBe(false);
@@ -257,7 +257,7 @@ it('keeps a copy an earlier Kit kept unconverted when House does not answer a re
   expect(JSON.parse(await readFile(record, 'utf8'))).not.toHaveProperty('manifests');
 });
 
-it('takes as the base of a file edited on an older received revision the revision the earlier record holds closest to it, so House merges the change the copy never brought', async () => {
+it('takes as the base of a file edited on an older received revision the revision the earlier record holds closest to it, so House merges the change the copy never brought at its first save', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -266,8 +266,7 @@ it('takes as the base of a file edited on an older received revision the revisio
   rooms.answered = [room];
   await earlierCopy(hosted, room, { 'plan.md': 'one\ntwo\nthree\nfour\nFIVE, mine\n' }, [[`plan.md=${first}`], [`plan.md=${second}`]]);
   await hosted.restart();
-
-  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+  await until(async () => ((await readFile(join(room.repository, 'plan.md'), 'utf8')) === 'ONE\ntwo\nthree\nfour\nFIVE, mine\n' ? true : undefined));
 
   const sent = hosted.house.requests.filter((request) => request.path === '/kit/door/update').map((request) => (request.body as { changes: unknown }).changes);
   expect(sent).toEqual([[{ op: 'write', path: '/rooms/notes/plan.md', content: 'one\ntwo\nthree\nfour\nFIVE, mine\n', base: first }]]);
@@ -286,11 +285,11 @@ it('downloads every other Room when one copy an earlier Kit kept cannot be conve
   rooms.answered = [design, notes];
   const record = await earlierCopy(hosted, notes, { 'plan.md': 'one\n' }, [[`plan.md=${plan}`]]);
   notes.put('plan.md', 'one, later\n');
-  design.put('brief.md', 'Brief, from House\n');
+  const unavailable = { status: 503, body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; call again shortly', retryable: true } } };
+  rooms.refusesReads = [unavailable, unavailable, unavailable];
   await hosted.restart();
-  rooms.refusesReads = [
-    { status: 503, body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; call again shortly', retryable: true } } },
-  ];
+  await until(() => (rooms.refusesReads.length === 1 ? true : undefined));
+  design.put('brief.md', 'Brief, from House\n');
 
   const downloaded = await house(hosted, '/', 'download');
 
@@ -300,7 +299,7 @@ it('downloads every other Room when one copy an earlier Kit kept cannot be conve
     [
       '',
       '/rooms/design: 1 file updated from House',
-      '/rooms/notes: Kit could not convert the copy an earlier Kit kept yet (house_unavailable: House is unavailable; call again shortly); the next house download or house upload converts it',
+      '/rooms/notes: Kit could not convert the copy an earlier Kit kept yet (house_unavailable: House is unavailable; call again shortly); the next save converts it',
     ].sort(),
   );
   expect(await readFile(join(design.repository, 'brief.md'), 'utf8')).toBe('Brief, from House\n');

@@ -16,6 +16,8 @@ const IMPORTED = '@AGENTS.md\n';
 const PLACED = '0.2.1-c000000000002';
 const HOUR = 60 * 60_000;
 const HALTED_REMOVAL = ['--import', fileURLToPath(new URL('./halted-removal.ts', import.meta.url))];
+// Four seconds outlast the three a save waits after the last change, so a save nothing started has not come by then.
+const NO_SAVE_MS = 4_000;
 const REFUSED_LINKS = ['--import', fileURLToPath(new URL('./refused-links.ts', import.meta.url))];
 const MEGABYTE_AND_ONE = 1_000_001;
 const LIMITED = "limit_reached: you reached today's Write limit; try again at 2026-11-17T00:00:00.000Z";
@@ -101,11 +103,9 @@ async function contents(folder: string, skipped = ''): Promise<Record<string, st
 async function conflicted(hosted: Hosted, rooms: Rooms, marked: number, other: number): Promise<void> {
   const copy = copyOf(hosted, 'notes', `Plan ${marked}`);
   const edits = rooms.edits().length;
-  told(hosted, marked, "@sh sed -i 's/beans/corn/' plan.md\n@gate other-landed");
-  await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')) === 'Plant corn\n' ? true : undefined));
   told(hosted, other, "@sh sed -i 's/beans/peas/' plan.md");
   await edited(rooms, edits + 1);
-  await writeFile(join(hosted.home, 'other-landed'), '');
+  told(hosted, marked, "@sh sed -i 's/beans/corn/' plan.md");
   await edited(rooms, edits + 2);
   await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')).includes('<<<<<<<') ? true : undefined));
   await settle();
@@ -222,7 +222,7 @@ it("makes a conversation's copy from House's state linking each attachment the R
   expect(await held(join(hosted.workspace, 'conversations'))).toEqual(['notes']);
 });
 
-it("asks House nothing before a turn while no notice came, the first turn after the copy's making included, and downloads into a copy no turn runs in at once at a notice that its Room changed, reading the instructions of the copy's Room alone and keeping what the conversation changed", async () => {
+it("asks House nothing before a turn while no notice came, the first turn after the copy's making included, and downloads into a copy at once at a notice that its Room changed, reading the instructions of the copy's Room and its folder's alone and keeping what the conversation changed for its save", async () => {
   const { hosted, rooms, notes } = await staged();
   const garden = rooms.room('garden');
   garden.put('beds.md', 'Two beds\n');
@@ -253,7 +253,8 @@ it("asks House nothing before a turn while no notice came, the first turn after 
   await shows(join(copy, 'AGENTS.md'), `${INSTRUCTIONS}Put new tasks on the map.\n`);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree, from House\n');
   expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans and peas\n');
-  expect(roomRootReads(hosted).slice(read)).toEqual(['/rooms/notes']);
+  expect(roomRootReads(hosted).slice(read)).toEqual(['/rooms/garden', '/rooms/notes', '/rooms/notes']);
+  await until(() => (notes.files.get('plan.md')!.content === 'Plant beans and peas\n' ? true : undefined));
   await settle();
   asked = roomAsks(hosted);
 
@@ -264,7 +265,7 @@ it("asks House nothing before a turn while no notice came, the first turn after 
   await writeFile(join(hosted.home, 'second-ends'), '');
 });
 
-it("downloads a notice that arrives during a turn into the copy once that turn ends, and runs a turn whose download failed on the copy as it stands, downloading again once that turn ends", async () => {
+it("downloads a notice that arrives during a turn into the copy at once, and leaves the copy as it stands where that download fails, until the next notice downloads again", async () => {
   const { hosted, rooms, notes } = await staged();
   const copy = copyOf(hosted, 'notes', 'Plan');
   await opened(hosted, notes, 'Plan');
@@ -273,29 +274,23 @@ it("downloads a notice that arrives during a turn into the copy once that turn e
 
   notes.put('a.md', 'one\ntwo\nthree, from House\n');
   noticed(hosted, notes);
-  await settle();
-
-  expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
-  await writeFile(join(hosted.home, 'first-ends'), '');
   await shows(join(copy, 'a.md'), 'one\ntwo\nthree, from House\n');
-  await turned(hosted, 1);
+  expect(ended(hosted)).toHaveLength(0);
 
-  said(hosted, '@gate second-ends');
-  await prompt(hosted, 1);
   notes.put('a.md', 'one\n');
+  rooms.unreadable.add(notes.ref);
   noticed(hosted, notes);
   await settle();
-  rooms.reads.push(false);
-  said(hosted, '@gate third-ends');
-  await writeFile(join(hosted.home, 'second-ends'), '');
-
-  expect(await prompt(hosted, 2)).toBe('@gate third-ends');
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree, from House\n');
-  await writeFile(join(hosted.home, 'third-ends'), '');
+  rooms.unreadable.delete(notes.ref);
+  noticed(hosted, notes);
   await shows(join(copy, 'a.md'), 'one\n');
+  expect(ended(hosted)).toHaveLength(0);
+  await writeFile(join(hosted.home, 'first-ends'), '');
+  await turned(hosted, 1);
 });
 
-it("takes a change of the Environment's rights in the copy's Room at House's notice, and at a notice for the Private Room only rewrites the instructions of every copy", async () => {
+it("takes a change of the Environment's rights in the copy's Room at House's notice, and at a notice for the Private Room only rewrites the instructions of every copy and every other Room's folder", async () => {
   const { hosted, rooms, notes } = await staged();
   const own = rooms.room('private');
   rooms.answered = [notes, own];
@@ -316,10 +311,12 @@ it("takes a change of the Environment's rights in the copy's Room at House's not
   notes.put('a.md', 'one\n');
   noticed(hosted, own);
   await shows(join(copy, 'AGENTS.md'), `${INSTRUCTIONS}Your owner rules changed.\n`);
+  await shows(join(notes.repository, 'AGENTS.md'), `${INSTRUCTIONS}Your owner rules changed.\n`);
   await settle();
-  expect(roomRootReads(hosted).slice(read)).toEqual(['/rooms/notes']);
-  expect(roomAsks(hosted)).toBe(asked + 1);
+  expect(roomRootReads(hosted).slice(read).sort()).toEqual(['/rooms/notes', '/rooms/notes', '/rooms/private']);
+  expect(roomAsks(hosted)).toBe(asked + 6);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
+  expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
 });
 
 it('downloads into each copy once at a reconnection, which a notice lost to the disconnection leaves owed', async () => {
@@ -335,7 +332,7 @@ it('downloads into each copy once at a reconnection, which a notice lost to the 
   await shows(join(copy, 'a.md'), 'one\ntwo\nthree, from House\n');
 });
 
-it("sends a batch left pending in a conversation's copy only by the next upload in that copy, never by another conversation's or the Room folder's", async () => {
+it("sends a batch left pending in a conversation's copy only by that copy's next save, never by another conversation's or the Room folder's", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}]);
   const copy = copyOf(hosted, 'notes', 'Plan');
   await opened(hosted, notes, 'Plan');
@@ -356,29 +353,30 @@ it("sends a batch left pending in a conversation's copy only by the next upload 
   await settle();
   expect(rooms.edits()).toHaveLength(1);
 
-  said(hosted, '@say again');
-  const sent = (await edited(rooms, 2))[1];
+  said(hosted, '@sh echo three >> plan.md');
+  const [first, sent, newer] = await edited(rooms, 3);
 
   expect(sent!.headers.authorization).toBe('Bearer ahk_held');
+  expect(operationOf(sent!)).toBe(operationOf(first!));
   expect(changesOf(sent!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\ntwo\n', base: expect.any(String) }]);
-  expect(notes.files.get('plan.md')!.content).toBe('Plant beans\ntwo\n');
-  expect(await prompt(hosted, 2)).toBe(`@say again\nNot saved:\n- /rooms/notes/plan.md: ${LIMITED}`);
-  expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans\ntwo\n');
+  expect(changesOf(newer!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\ntwo\nthree\n', base: expect.any(String) }]);
+  expect(notes.files.get('plan.md')!.content).toBe('Plant beans\ntwo\nthree\n');
+  expect(await prompt(hosted, 2)).toBe(`@sh echo three >> plan.md\nNot saved:\n- /rooms/notes/plan.md: ${LIMITED}`);
+  expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans\ntwo\nthree\n');
 });
 
-it("uploads the copy at each turn's end as the conversation's call, brings the merged text back, sends nothing for a turn that changed nothing or a killed one, and holds an update's end and the idle report while it uploads", async () => {
+it("saves the copy as the conversation's call while its turn runs and brings the merged text back, starts no save at a turn that changed nothing, and saves what a killed turn wrote", async () => {
   const { hosted, rooms, notes } = await staged();
   notes.put('old.md', 'old\n');
-  await serveRelease(hosted, await released(PLACED));
   const copy = copyOf(hosted, 'notes', 'Plan');
   await opened(hosted, notes, 'Plan');
 
   said(hosted, "@sh sed -i 's/one/ONE/' a.md && echo new > new.md && rm old.md\n@gate merged");
   await until(async () => ((await readFile(join(copy, 'new.md'), 'utf8').catch(() => '')) === 'new\n' ? true : undefined));
   notes.put('a.md', 'one\ntwo\nTHREE\n');
-  await writeFile(join(hosted.home, 'merged'), '');
   const [batch] = await edited(rooms, 1);
 
+  expect(ended(hosted)).toHaveLength(0);
   expect(batch!.headers.authorization).toBe('Bearer ahk_held');
   expect(changesOf(batch!)).toEqual([
     { op: 'write', path: '/rooms/notes/a.md', content: 'ONE\ntwo\nthree\n', base: expect.any(String) },
@@ -386,43 +384,21 @@ it("uploads the copy at each turn's end as the conversation's call, brings the m
     { op: 'delete', path: '/rooms/notes/old.md', base: expect.any(String) },
   ]);
   expect(notes.files.get('a.md')!.content).toBe('ONE\ntwo\nTHREE\n');
-  await until(async () => ((await readFile(join(copy, 'a.md'), 'utf8')) === 'ONE\ntwo\nTHREE\n' ? true : undefined));
+  await shows(join(copy, 'a.md'), 'ONE\ntwo\nTHREE\n');
+  await writeFile(join(hosted.home, 'merged'), '');
+  await turned(hosted, 1);
 
   said(hosted, '@say nothing changed');
   await turned(hosted, 2);
-  await settle();
+  await new Promise((resolve) => setTimeout(resolve, NO_SAVE_MS));
   expect(rooms.edits()).toHaveLength(1);
 
   said(hosted, '@sh echo killed >> plan.md\n@wait');
   await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')).includes('killed') ? true : undefined));
   hosted.call({ kind: 'kill', conversation_id: 'conversation-1', agent_id: 'agent-1' });
   await turned(hosted, 3);
-  await settle();
-  expect(rooms.edits()).toHaveLength(1);
-
-  let release!: () => void;
-  const holding = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const update = hosted.tools.update!;
-  hosted.tools.update = async (args, request) => {
-    await holding;
-    return update(args, request);
-  };
-  said(hosted, '@say after the kill');
-  await turned(hosted, 4);
-  await edited(rooms, 2);
-  const idled = hosted.idles.length;
-  callUpdate(hosted, 'update-1', PLACED);
-  expect(await hosted.result('update-1')).toEqual({});
-  await settle();
-  expect(hosted.idles).toHaveLength(idled);
-  expect(alive(hosted.kit.pid)).toBe(true);
-
-  release();
-
-  expect(await hosted.kit.exited).toBe(1);
-  expect(changesOf(rooms.edits()[1]!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nkilled\n', base: expect.any(String) }]);
+  const [, saved] = await edited(rooms, 2);
+  expect(changesOf(saved!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nkilled\n', base: expect.any(String) }]);
 });
 
 it("brings back the whole text House merged where its update answer cuts that text with cut beside it", async () => {
@@ -466,18 +442,16 @@ function operationOf(received: Received): string {
 const MARKED = { path: '/rooms/notes/plan.md', markers: true };
 const MARKED_TEXT = 'Not saved:\n- /rooms/notes/plan.md: it holds conflict markers';
 
-it("lands the rest of a turn's upload around a file House answers in conflict, leaves the marked file out of the Kit's own uploads until its markers go, reports each turn's end that leaves a file unsaved, and ends the next prompt with House's text, a /command taking none", async () => {
+it("lands the rest of a save around a file House answers in conflict, leaves the marked file out of the Kit's own saves until its markers go, reports each turn's end that leaves a file unsaved, and ends the next prompt with House's text, a /command taking none", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}]);
   const copy = copyOf(hosted, 'notes', 'Plan');
   await opened(hosted, notes, 'Plan');
   await opened(hosted, notes, 'Other', 'conversation-2', 'agent-2');
   const alpha = notes.revision('a.md');
 
-  said(hosted, "@sh sed -i 's/beans/corn/' plan.md && echo four >> a.md\n@gate other-landed");
-  await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')) === 'Plant corn\n' ? true : undefined));
   hosted.call({ kind: 'message', conversation_id: 'conversation-2', agent_id: 'agent-2', text: "@sh sed -i 's/beans/peas/' plan.md", first: false });
   await edited(rooms, 1);
-  await writeFile(join(hosted.home, 'other-landed'), '');
+  said(hosted, "@sh sed -i 's/beans/corn/' plan.md && echo four >> a.md");
   const edits = await edited(rooms, 3);
   await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')).includes('<<<<<<<') ? true : undefined));
   const peas = notes.revision('plan.md');
@@ -680,10 +654,11 @@ it('moves the conversations folder with the workspace and its records, so the ne
   await turned(hosted, 2);
 });
 
-it("removes on a deletion's kill a copy whose every file matches its manifest and keeps, naming them, copies holding a changed, a new, a deleted or a conflicted file, each as its download leaves it, while a Conversation kill removes and names nothing", async () => {
+it("removes on a deletion's kill a copy whose every file matches its manifest and keeps, naming them, copies holding a changed, a new or a deleted file House refused or a conflicted one, each as its download leaves it, while a Conversation kill removes and names nothing", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}, {}, {}, {}, {}]);
   for (const index of [1, 2, 3, 4, 5, 6]) await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`);
   const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  for (const index of [2, 3, 4]) rooms.denied.add(`conversation-${index}`);
   await writeFile(join(copy(2), 'a.md'), 'one\ntwo\nchanged\n');
   await writeFile(join(copy(3), 'new.md'), 'new\n');
   await rm(join(copy(4), 'plan.md'));
@@ -710,6 +685,7 @@ it('removes or keeps each copy of a conversation in two Rooms by its own state o
   await rooms.download([notes, garden]);
   await opened(hosted, notes, 'Plan');
   await opened(hosted, garden, 'Plan');
+  rooms.denied.add('conversation-1');
   await writeFile(join(copyOf(hosted, 'garden', 'Plan'), 'beds.md'), 'Three beds\n');
   const outside = await contents(hosted.workspace, join(hosted.workspace, 'conversations'));
 
@@ -739,7 +715,7 @@ it("removes on a deletion's kill a clean copy of a Room no longer reached and on
   expect(await readFile(join(copy(3), 'plan.md'), 'utf8')).toBe('Plant beans\n');
 });
 
-it("removes a clean copy idle for 24 hours at the next turn's end, even one ending while another turn runs, and nothing while nothing happens, keeps one used within them and one holding a changed or conflicted file or a pending batch however long idle, notifying nobody, then makes the removed copy again at its path for the next turn, which resumes its session there, while a new conversation of its name takes another path", async () => {
+it("removes a clean copy idle for 24 hours at the next turn's end, even one ending while another turn runs, and nothing while nothing happens, keeps one used within them and one holding a changed file House refused, a conflicted file or a pending batch however long idle, notifying nobody, then makes the removed copy again at its path for the next turn, which resumes its session there, while a new conversation of its name takes another path", async () => {
   const clock = await clocked();
   const { hosted, rooms, notes } = await staged([{}, {}, {}, {}, {}, {}, {}], clock.hosting);
   const sessions: string[] = [];
@@ -749,6 +725,7 @@ it("removes a clean copy idle for 24 hours at the next turn's end, even one endi
   await turned(hosted, 1);
   told(hosted, 2, '@say first');
   await turned(hosted, 2);
+  rooms.denied.add('conversation-3');
   await writeFile(join(copy(3), 'a.md'), 'one\ntwo\nchanged\n');
   await pending(hosted, rooms, 4);
   await conflicted(hosted, rooms, 5, 6);
@@ -824,7 +801,7 @@ it("removes an idle copy at the Kit's start, reporting a Sandbox idle only once 
   expect(seen[0]).toBe(false);
 });
 
-it('removes an idle copy once the Kit goes idle after a call, and runs the next turn of a conversation whose Kit ended halfway through that removal in a whole copy made again from House, whose turn-end upload deletes nothing', async () => {
+it('removes an idle copy once the Kit goes idle after a call, and runs the next turn of a conversation whose Kit ended halfway through that removal in a whole copy made again from House, whose save deletes nothing', async () => {
   const clock = await clocked();
   const halted = join(await temporaryDirectory(), 'halted-removal');
   const { hosted, rooms, notes } = await staged([{}], { environment: { ...clock.hosting.environment, KIT_HALTED_REMOVAL: halted }, node: [...MOVED_CLOCK, ...HALTED_REMOVAL] });
@@ -1032,7 +1009,7 @@ it("brings a held attachment another writer changed down at its new revision, li
     stdout: [
       `${notes.root}: 5 files updated from House`,
       `${notes.root}: attachments brought at their new revision: big.bin, capture/left.jpg, capture/linked.jpg, cover.jpg, photo.jpg`,
-      `${notes.root}/mine.jpg: changed here, so House's change was not brought; the next house upload merges it`,
+      `${notes.root}/mine.jpg: changed here, so House's change was not brought; the next save merges it`,
       '',
     ].join('\n'),
     stderr: '',

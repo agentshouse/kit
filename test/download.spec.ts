@@ -155,8 +155,8 @@ it('overwrites a file House changed only while it is unchanged here, keeps one c
     status: 0,
     stdout: [
       '/rooms/notes: 3 files updated from House',
-      "/rooms/notes/b.md: changed here, so House's change was not brought; the next house upload merges it",
-      "/rooms/notes/c.md: changed here, so House's change was not brought; the next house upload merges it",
+      "/rooms/notes/b.md: changed here, so House's change was not brought; the next save merges it",
+      "/rooms/notes/c.md: changed here, so House's change was not brought; the next save merges it",
       '',
     ].join('\n'),
     stderr: '',
@@ -175,7 +175,7 @@ it('overwrites a file House changed only while it is unchanged here, keeps one c
   expect(refused).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'house: House accepted 1 file of /rooms/notes.\n/rooms/notes/c.md: conflict markers written; resolve them, then run house upload again\n',
+    stderr: 'house: House accepted 1 file of /rooms/notes.\n/rooms/notes/c.md: conflict markers written; the next save sends it once its markers go\n',
   });
   expect(room.files.get('b.md')!.content).toBe('ONE\ntwo\nTHREE\n');
   expect(await text(room, 'c.md')).toBe('<<<<<<< current\nc, theirs\n=======\nc, mine\n>>>>>>> yours\n');
@@ -523,7 +523,7 @@ it('keeps a file holding the conflict markers an upload wrote through a download
 
   expect(await house(hosted, '/', 'download')).toEqual({
     status: 0,
-    stdout: "/rooms/notes/plan.md: changed here, so House's change was not brought; the next house upload merges it\n",
+    stdout: "/rooms/notes/plan.md: changed here, so House's change was not brought; the next save merges it\n",
     stderr: '',
   });
   expect(await text(room, 'plan.md')).toBe(marked);

@@ -354,7 +354,7 @@ it("answers a run's house call House refuses for its Kit credential at once by s
   expect(hosted.house.requests.filter((received) => received.path === '/' && (received.body as McpCall).params.name === 'search')).toHaveLength(1);
 });
 
-it("uploads a run's Local copy with house upload through the run's bridge, naming the run, and takes no --owner", async () => {
+it("uploads a Room's folder with house upload through the run's bridge, naming the run, and takes no --owner", async () => {
   const hosted = await hostKit([]);
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
