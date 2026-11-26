@@ -465,7 +465,7 @@ it.each([
   ['codex-web', 1, ['title']],
   ['grok-tools', 1, ['title']],
 ] as [string, number, ('title' | 'cost')[]][])(
-  "sends no title and no cost in the session's state of %s, though its CLI reports its %j, and every turn it ends is Session content",
+  "sends neither the title nor the cost the CLI of %s reports in the session's state, and every turn it ends is Session content",
   async (fixture, count, fields) => {
     const { hosted, turns } = await replayed(fixture, count);
     await settle();
