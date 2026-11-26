@@ -164,6 +164,25 @@ it("keeps in the Room the files a folder held before it gained a .git: an upload
   expect(await upload(hosted, notes)).toEqual({ status: 0, stdout: ['Nothing to upload: /rooms/notes matches House.', leftOut('code'), ''].join('\n'), stderr: '' });
 });
 
+it("leaves a held attachment under a folder that gained a .git, its file and its entry, as they were when another writer changes it, downloading nothing", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  notes.put('plan.md', 'Plant beans\n');
+  notes.upload('code/logo.jpg', JPEG);
+  expect(await rooms.download([notes], '--with-attachments')).toMatchObject({ status: 0 });
+  const held = (await manifestOf(notes)).files['code/logo.jpg'];
+  git(join(notes.repository, 'code'), 'init', '--quiet', '--initial-branch=main');
+  notes.upload('code/logo.jpg', OTHER_JPEG);
+  const fetched = hosted.store.requests.length;
+
+  expect(await rooms.download([notes])).toMatchObject({ status: 0, stderr: '' });
+
+  expect(await readFile(join(notes.repository, 'code/logo.jpg'))).toEqual(JPEG);
+  expect((await manifestOf(notes)).files['code/logo.jpg']).toEqual(held);
+  expect(hosted.store.requests.slice(fetched).filter((request) => request.key.startsWith('binary/'))).toEqual([]);
+});
+
 it("leaves the files of a folder that gained a .git as they were when House answers a moved file's links rewritten in them, and uploads around one of them still holding conflict markers", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
