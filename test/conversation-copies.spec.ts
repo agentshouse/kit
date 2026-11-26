@@ -919,7 +919,7 @@ it("keeps House's bytes in every other folder when a copy replaces a linked atta
   expect((await entriesOf(copy))['brought.jpg']).toEqual({ revision: revisions.brought, sha256: digest('brought bytes'), bytes: 13 });
 });
 
-it("brings a held attachment another writer changed down at its new revision, linked from a folder holding it and otherwise downloaded through info's link and checked, whatever its size, records that revision and removes no file, keeps one changed here, does the same with a read-only one whatever its file holds, and leaves one the copy does not hold on House", async () => {
+it("brings a held attachment another writer changed down at its new revision, linked from a folder holding it and otherwise downloaded through info's link and checked, whatever its size, records that revision and names it in the answer, removes no file, keeps one changed here, does the same with a read-only one whatever its file holds, and leaves one the copy does not hold on House", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -948,6 +948,7 @@ it("brings a held attachment another writer changed down at its new revision, li
     status: 0,
     stdout: [
       `${notes.root}: 5 files updated from House`,
+      `${notes.root}: attachments brought at their new revision: big.bin, capture/left.jpg, capture/linked.jpg, cover.jpg, photo.jpg`,
       `${notes.root}/mine.jpg: changed here, so House's change was not brought; the next house upload merges it`,
       '',
     ].join('\n'),
@@ -993,7 +994,7 @@ it("with --with-attachments links what a folder holds unchanged and downloads th
 
   expect(await house(hosted, copy, 'download', '--with-attachments', '--max-size', '1')).toEqual({
     status: 0,
-    stdout: `${notes.root}: 4 files updated from House\n`,
+    stdout: `${notes.root}: 4 files updated from House\n${notes.root}: attachments brought at their new revision: big.bin, small.jpg\n`,
     stderr: '',
   });
 
@@ -1023,7 +1024,11 @@ it("with --with-attachments links what a folder holds unchanged and downloads th
   expect((await entriesOf(copy))['capture/shot.jpg']).not.toHaveProperty('skipped');
   notes.upload('capture/shot.jpg', bytes('shot, from House'));
 
-  expect(await house(hosted, copy, 'download')).toEqual({ status: 0, stdout: `${notes.root}: 1 file updated from House\n`, stderr: '' });
+  expect(await house(hosted, copy, 'download')).toEqual({
+    status: 0,
+    stdout: `${notes.root}: 1 file updated from House\n${notes.root}: attachment brought at its new revision: capture/shot.jpg\n`,
+    stderr: '',
+  });
 
   expect(await readFile(join(copy, 'capture/shot.jpg'), 'utf8')).toBe('shot, from House');
   expect((await entriesOf(copy))['capture/shot.jpg']).toEqual({ revision: notes.revision('capture/shot.jpg'), sha256: digest('shot, from House'), bytes: 16, read_only: true });

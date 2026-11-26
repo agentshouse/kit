@@ -122,7 +122,7 @@ it("uploads a document and an attachment under the Kit credential naming the con
   const downloaded = await ran(hosted, '@sh house download');
 
   expect(uploaded).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n' });
-  expect(downloaded).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n' });
+  expect(downloaded).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n/rooms/notes: attachment brought at its new revision: photo.jpg\n' });
   const credential = 'Bearer ahk_held';
   const labelOf = (received: Received) => (received.body as McpCall).params._meta[CONVERSATION_META_KEY];
   const finishing = { upload: expect.any(String), path: '/rooms/notes/photo.jpg', part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };

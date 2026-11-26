@@ -246,6 +246,7 @@ interface Scope {
 interface Report {
   touched: Map<string, string | null>;
   kept: Set<string>;
+  revised: Set<string>;
 }
 
 type Linking = (path: string, held: { revision: string; sha256: string }, target: string) => Promise<boolean>;
@@ -366,8 +367,12 @@ function counted(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+function revisedLine(root: string, paths: readonly string[]): string {
+  return `${root}: ${paths.length === 1 ? 'attachment brought at its' : 'attachments brought at their'} new revision: ${paths.join(', ')}`;
+}
+
 function blankReport(): Report {
-  return { touched: new Map<string, string | null>(), kept: new Set<string>() };
+  return { touched: new Map<string, string | null>(), kept: new Set<string>(), revised: new Set<string>() };
 }
 
 function expiredAuthority(error: unknown): string | undefined {
@@ -808,6 +813,7 @@ class Applying {
     }
     this.present.set(path, { name: this.nameOf(path), sha256, bytes });
     this.manifest.files[path] = held;
+    if (holds) this.report.revised.add(path);
   }
 
   private async removedHere(path: string): Promise<void> {
@@ -1086,6 +1092,7 @@ export class LocalCopies {
     for (const [path, before] of report.touched) if (((await hashed(join(copy.repository, path)))?.sha256 ?? null) !== before) updated++;
     return [
       ...(updated === 0 ? [] : [`${root}: ${counted(updated, 'file')} updated from House`]),
+      ...(report.revised.size === 0 ? [] : [revisedLine(root, [...report.revised].sort())]),
       ...[...report.kept].sort().map((path) => `${root}/${path}: changed here, so House's change was not brought; the next house upload merges it`),
     ];
   }

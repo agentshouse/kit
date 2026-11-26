@@ -254,7 +254,7 @@ it("leaves a held attachment's file and entry as they were where the bytes of it
   expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(JPEG);
   expect((await manifestOf(room)).files['photo.jpg']).toEqual(held);
   rooms.damages = false;
-  expect(await house(hosted, '/', 'download')).toEqual({ status: 0, stdout: updated(room), stderr: '' });
+  expect(await house(hosted, '/', 'download')).toEqual({ status: 0, stdout: `${updated(room)}${room.root}: attachment brought at its new revision: photo.jpg\n`, stderr: '' });
   expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(redrawn);
   expect((await manifestOf(room)).files['photo.jpg']).toEqual({ revision: room.revision('photo.jpg'), sha256: digest(redrawn), bytes: redrawn.length });
 });
