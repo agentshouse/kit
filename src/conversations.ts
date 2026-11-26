@@ -27,7 +27,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
-import { formAnswered, grokQuestionAnswered, permissionAllowed, PLAN_APPROVED } from './afk.ts';
+import { GROK_QUESTION_CANCELLED, permissionAllowed, PLAN_APPROVED, QUESTION_DECLINED } from './afk.ts';
 import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
@@ -65,12 +65,21 @@ type ConversationCall = Extract<KitCall, { conversation_id: string }>;
 
 type Said = Omit<KitCallOf<'message'>, 'kind' | 'message_id'> & { kind: 'message' | 'answer'; message_id: string | null };
 
-type Chosen = Pick<KitCallOf<'option'>, 'model' | 'effort'>;
+type Chosen = Pick<KitCallOf<'open'>, 'model' | 'effort' | 'mode'>;
+
+interface LaunchRoute extends DesiredAgentRoute {
+  mode?: string | null;
+}
 
 const EFFORT = 'thought_level';
 
-function conversationRoute(route: DesiredAgentRoute, chosen: Chosen): DesiredAgentRoute {
-  return { ...route, model: chosen.model ?? route.model, effort: chosen.effort ?? route.effort };
+function conversationRoute(route: DesiredAgentRoute, chosen: Chosen): LaunchRoute {
+  return {
+    ...route,
+    model: chosen.model ?? route.model,
+    effort: chosen.effort ?? route.effort,
+    ...(chosen.mode === undefined ? {} : { mode: chosen.mode }),
+  };
 }
 
 type Failure = 'signed_out' | 'limit' | 'refused' | 'exited' | 'killed' | 'error';
@@ -107,7 +116,7 @@ const NO_RESUME = "the Agent's CLI could not resume this conversation";
 
 const NOT_SIGNED_IN = "the Agent's CLI is not signed in; sign it in on the Agent's machine";
 
-const NO_SETTINGS = "the Agent's CLI refused the Agent's model, mode or effort";
+const NO_SETTINGS = "the Agent's CLI refused the model, effort or mode it was to start in";
 
 const UNSTEERED = "the Agent's CLI did not take the message into its running turn";
 
@@ -301,7 +310,7 @@ interface Running {
 interface Waiting {
   call: Said;
   atOnce: boolean;
-  route: DesiredAgentRoute;
+  route: LaunchRoute;
   content: ContentBlock[];
   instructing: Promise<string> | null;
   settle(result: KitCallResult): void;
@@ -545,7 +554,7 @@ export class Conversations {
 
   private launch(
     conversation: Conversation,
-    route: Promise<DesiredAgentRoute>,
+    route: Promise<LaunchRoute>,
     sessionId: string | null,
     empty: boolean,
     opening: Opening | null,
@@ -587,7 +596,7 @@ export class Conversations {
 
   private async message(conversation: Conversation, call: Said): Promise<{ result: Promise<KitCallResult> }> {
     const content: ContentBlock[] = call.recent === undefined ? [] : [{ type: 'text', text: call.recent }];
-    let route: DesiredAgentRoute;
+    let route: LaunchRoute;
     let instructing: Promise<string> | null = null;
     try {
       route = conversationRoute(await this.route(conversation, call.agent_id), call);
@@ -908,7 +917,7 @@ export class Conversations {
 
   private async start(
     conversation: Conversation,
-    routed: Promise<DesiredAgentRoute>,
+    routed: Promise<LaunchRoute>,
     sessionId: string | null,
     empty: boolean,
     bridged: (bridge: Bridge) => void,
@@ -923,13 +932,13 @@ export class Conversations {
         conversation.afk ? permissionAllowed(params) : this.ask(conversation, 'session/request_permission', params, false, signal),
       )
       .onRequest('elicitation/create', ({ params, signal }) =>
-        conversation.afk ? formAnswered(route.kind, params) : this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
+        conversation.afk ? QUESTION_DECLINED : this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
       )
       .onRequest('_x.ai/exit_plan_mode', GROK_PLAN, async ({ params, signal }) =>
         conversation.afk ? PLAN_APPROVED : grokPlanAnswer(await this.askForm(conversation, grokPlanForm(params), signal)),
       )
       .onRequest('_x.ai/ask_user_question', GROK_QUESTION, async ({ params, signal }) =>
-        conversation.afk ? grokQuestionAnswered(params) : grokQuestionAnswer(await this.askForm(conversation, grokQuestionForm(params), signal)),
+        conversation.afk ? GROK_QUESTION_CANCELLED : grokQuestionAnswer(await this.askForm(conversation, grokQuestionForm(params), signal)),
       );
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridging = this.bridged(conversation);
@@ -977,7 +986,7 @@ export class Conversations {
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
       const agent = adapter.connection.agent;
       const cwd = place.directory;
-      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name, place.code);
+      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name, place.code, conversation.afk);
       const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
       const opened =
         resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));
@@ -1022,11 +1031,11 @@ export class Conversations {
 
   private async launchSettings(
     running: Running,
-    route: DesiredAgentRoute,
+    route: LaunchRoute,
     offered: SessionConfigOption[],
   ): Promise<SessionConfigOption[]> {
     let options = offered;
-    const mode = route.mode ?? CLIS[route.kind]!.fullAccess;
+    const mode = route.mode === undefined ? null : (route.mode ?? CLIS[route.kind]!.fullAccess);
     if (mode !== null) options = (await this.setOption(running, options, 'mode', mode)) ?? options;
     options = (await this.setOption(running, options, 'model', route.model)) ?? options;
     if (route.effort !== null) options = (await this.setOption(running, options, EFFORT, route.effort)) ?? options;

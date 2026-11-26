@@ -17,10 +17,10 @@ const FAST_REPORTS = fileURLToPath(new URL('./fast-reports.ts', import.meta.url)
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-it('opens the provider session in the launch directory with the route settings and full access and reports its id', async () => {
+it("opens a Run's provider session in the launch directory with the route settings and the full access its call names, and reports its id", async () => {
   const hosted = await hostKit([{ model: 'gpt-route', effort: 'high' }]);
 
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
 
   const result = (await hosted.result(lastCall())) as { provider_session_id: string };
   const log = await hosted.adapterLog();
@@ -36,15 +36,15 @@ it('opens the provider session in the launch directory with the route settings a
   expect(hosted.connection.oneWayCalls).toContainEqual({ type: 'process', conversation_id: 'conversation-1', running: true });
 });
 
-it("opens the session in the mode the route names, and Codex runs each `house` on the conversation's PATH outside its sandbox whenever its shell starts it", async () => {
-  const hosted = await hostKit([{ mode: 'read-only' }], {
+it("opens the session in the mode its call names, and Codex runs each `house` on the conversation's PATH outside its sandbox whenever its shell starts it", async () => {
+  const hosted = await hostKit([{}], {
     prepare: async (home) => {
       await writeFile(join(userBin(home), 'house'), '#!/bin/sh\n', { mode: 0o755 });
       await writeFile(join(accountOf(home), '.profile'), `PATH="${userBin(home)}:/usr/bin:/bin"\n`);
     },
   });
 
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: 'read-only' });
 
   await hosted.result(lastCall());
   const log = await hosted.adapterLog();
@@ -61,10 +61,50 @@ it("opens the session in the mode the route names, and Codex runs each `house` o
   );
 });
 
-it('opens a Claude Code session in bypass permissions with `house` allowed in every mode and its sandbox open to unix sockets', async () => {
+async function launchedModes(kind: string, fields: Record<string, unknown>): Promise<string[]> {
+  const hosted = await hostKit([{ kind }]);
+  hosted.call({ kind: 'open', ...fields });
+  await hosted.result(lastCall());
+  return (await hosted.adapterLog())
+    .filter((entry) => entry.method === 'session/set_config_option')
+    .map((entry) => entry.params as { configId: string; value: string })
+    .filter((params) => params.configId === 'mode')
+    .map((params) => params.value);
+}
+
+it.each([
+  ['codex-acp', 'read-only', ['agent-full-access']],
+  ['claude-agent-acp', 'plan', ['bypassPermissions']],
+  ['grok-build', null, []],
+])("opens a %s session in the mode its call names, in the CLI's full access where the call names that, and sets no mode where the call carries none", async (kind, named, full) => {
+  if (named !== null) expect(await launchedModes(kind, { mode: named })).toEqual([named]);
+  expect(await launchedModes(kind, { mode: null })).toEqual(full);
+  expect(await launchedModes(kind, {})).toEqual([]);
+});
+
+it('resumes a session in the mode its call names, as it opens one', async () => {
+  const hosted = await hostKit();
+
+  hosted.call({ kind: 'message', provider_session_id: 'session-stored', text: 'hello', first: false, mode: 'read-only' });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  const log = await until(async () => {
+    const entries = await hosted.adapterLog();
+    return entries.some((entry) => entry.method === 'session/prompt') ? entries : undefined;
+  });
+  expect(log.some((entry) => entry.method === 'session/resume')).toBe(true);
+  expect(
+    log
+      .filter((entry) => entry.method === 'session/set_config_option')
+      .map((entry) => entry.params)
+      .find((params) => (params as { configId: string }).configId === 'mode'),
+  ).toMatchObject({ sessionId: 'session-stored', value: 'read-only' });
+});
+
+it("opens a Run's Claude Code session in bypass permissions with `house` allowed in every mode and its sandbox open to unix sockets", async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp', model: 'default', effort: 'high' }]);
 
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
 
   await hosted.result(lastCall());
   const log = await hosted.adapterLog();
@@ -132,7 +172,6 @@ it('opens a conversation of an Agent House added after the Kit read its Agents',
     working_directory: hosted.workingDirectory,
     model: 'route-model',
     effort: 'route-effort',
-    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: ['codex-acp'], routes: [added] } }));
 
@@ -167,7 +206,6 @@ it('opens a conversation with the CLI its route named after House moved that Age
     working_directory: directory,
     model: 'route-model',
     effort: 'route-effort',
-    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({
     body: { agents: ['codex-acp', 'grok-build'], routes: [route] },
@@ -200,7 +238,6 @@ it('opens a conversation with the launch settings House changed while the Kit wa
     working_directory: hosted.workingDirectory,
     model: 'changed-model',
     effort: 'changed-effort',
-    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', async () => {
     // House answers the read half a second late, so the open arrives while the Kit is still reading.
@@ -209,7 +246,7 @@ it('opens a conversation with the launch settings House changed while the Kit wa
   });
 
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');
@@ -292,12 +329,11 @@ it('opens a conversation with the launch settings House changed while the Kit wa
     working_directory: hosted.workingDirectory,
     model: 'changed-model',
     effort: 'changed-effort',
-    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: ['codex-acp'], routes: [changed] } }));
 
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   const settings = (await hosted.adapterLog()).filter((entry) => entry.method === 'session/set_config_option');

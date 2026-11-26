@@ -286,7 +286,6 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     working_directory: workingDirectory,
     model: 'route-model',
     effort: 'route-effort',
-    mode: null,
     ...route,
   }));
   const kinds = [...new Set(resolved.map((route) => route.kind))];
@@ -518,7 +517,6 @@ export async function installHeld(hosted: Hosted): Promise<string> {
     working_directory: hosted.workingDirectory,
     model: 'route-model',
     effort: 'route-effort',
-    mode: null,
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({
     body: { agents: ['codex-acp', 'claude-agent-acp'], routes: [added] },
