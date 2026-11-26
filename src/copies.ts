@@ -246,7 +246,6 @@ interface Scope {
 interface Report {
   touched: Map<string, string | null>;
   kept: Set<string>;
-  left: Set<string>;
 }
 
 type Linking = (path: string, held: { revision: string; sha256: string }, target: string) => Promise<boolean>;
@@ -368,11 +367,7 @@ function counted(count: number, one: string, many = `${one}s`): string {
 }
 
 function blankReport(): Report {
-  return { touched: new Map<string, string | null>(), kept: new Set<string>(), left: new Set<string>() };
-}
-
-function leftOnHouse(paths: readonly string[]): string {
-  return `Left on House, changed since this copy took them: ${paths.join(', ')}. house download --with-attachments brings them, adding --max-size <MB> for one over ${DEFAULT_MAX_SIZE} MB.`;
+  return { touched: new Map<string, string | null>(), kept: new Set<string>() };
 }
 
 function expiredAuthority(error: unknown): string | undefined {
@@ -799,18 +794,12 @@ class Applying {
       this.report.kept.add(path);
       return;
     }
-    const target = join(this.repository, this.nameOf(path));
-    const asked = this.fetching.attachments && bytes <= this.fetching.maxSize * MEGABYTE;
-    const fromFolder = (asked || (holds && !this.fetching.attachments)) && (await this.link(path, change, target));
-    if (!fromFolder && !asked) {
-      if (holds) {
-        if (local !== undefined) await removed(this.repository, local.name);
-        this.present.delete(path);
-        this.report.left.add(path);
-      }
+    if (!holds && !(this.fetching.attachments && bytes <= this.fetching.maxSize * MEGABYTE)) {
       this.manifest.files[path] = { ...held, skipped: true };
       return;
     }
+    const target = join(this.repository, this.nameOf(path));
+    const fromFolder = await this.link(path, change, target);
     this.touch(path);
     if (!fromFolder) {
       const file = await this.bytesOf(change);
@@ -1098,7 +1087,6 @@ export class LocalCopies {
     return [
       ...(updated === 0 ? [] : [`${root}: ${counted(updated, 'file')} updated from House`]),
       ...[...report.kept].sort().map((path) => `${root}/${path}: changed here, so House's change was not brought; the next house upload merges it`),
-      ...(report.left.size === 0 ? [] : [leftOnHouse([...report.left].sort().map((path) => `${root}/${path}`))]),
     ];
   }
 

@@ -237,6 +237,28 @@ it('moves or removes each attachment the copy holds as the Room does, records ev
   expect(await upload(hosted, room)).toMatchObject({ stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
 });
 
+it("leaves a held attachment's file and entry as they were where the bytes of its new revision fail their SHA-256 check, and the next download brings that revision", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  room.put('ROOM.md', 'The notes Room\n');
+  room.upload('photo.jpg', JPEG);
+  await rooms.download([room], '--with-attachments');
+  const held = (await manifestOf(room)).files['photo.jpg'];
+  const redrawn = Buffer.concat([JPEG, Buffer.from('redrawn')]);
+  room.upload('photo.jpg', redrawn);
+  rooms.damages = true;
+
+  expect(await house(hosted, '/', 'download')).toEqual({ status: 1, stdout: '', stderr: `house: ${room.root}/photo.jpg did not arrive whole; download it again\n` });
+
+  expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(JPEG);
+  expect((await manifestOf(room)).files['photo.jpg']).toEqual(held);
+  rooms.damages = false;
+  expect(await house(hosted, '/', 'download')).toEqual({ status: 0, stdout: updated(room), stderr: '' });
+  expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(redrawn);
+  expect((await manifestOf(room)).files['photo.jpg']).toEqual({ revision: room.revision('photo.jpg'), sha256: digest(redrawn), bytes: redrawn.length });
+});
+
 it.each([
   [['--max-size', 'big']],
   [['--with-attachments', '--max-size']],

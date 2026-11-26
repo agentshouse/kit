@@ -18,6 +18,7 @@ const HOUR = 60 * 60_000;
 const HALTED_REMOVAL = ['--import', fileURLToPath(new URL('./halted-removal.ts', import.meta.url))];
 const REFUSED_LINKS = ['--import', fileURLToPath(new URL('./refused-links.ts', import.meta.url))];
 const MEGABYTE_AND_ONE = 1_000_001;
+const PAST_DEFAULT_SIZE = 10_000_001;
 
 function copyOf(hosted: Hosted, handle: string, name: string): string {
   return join(hosted.workspace, 'conversations', handle, name);
@@ -142,8 +143,12 @@ async function entriesOf(copy: string): Promise<Record<string, ManifestEntry>> {
   return ((await manifestAt(copy)) as { files: Record<string, ManifestEntry> }).files;
 }
 
+function storeReads(hosted: Hosted): string[] {
+  return hosted.store.requests.filter((request) => request.method === 'GET' && request.key.startsWith('binary/')).map((request) => request.key);
+}
+
 function fetchedBytes(hosted: Hosted): number {
-  return hosted.store.requests.filter((request) => request.method === 'GET' && request.key.startsWith('binary/')).length;
+  return storeReads(hosted).length;
 }
 
 function noticed(hosted: Hosted, room: Room): void {
@@ -156,10 +161,6 @@ function roomAsks(hosted: Hosted): number {
 
 async function shows(path: string, text: string): Promise<void> {
   await until(async () => ((await readFile(path, 'utf8').catch(() => null)) === text ? true : undefined));
-}
-
-function leftOnHouse(...paths: string[]): string {
-  return `Left on House, changed since this copy took them: ${paths.join(', ')}. house download --with-attachments brings them, adding --max-size <MB> for one over 10 MB.`;
 }
 
 async function staged(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): Promise<{ hosted: Hosted; rooms: Rooms; notes: Room }> {
@@ -918,13 +919,15 @@ it("keeps House's bytes in every other folder when a copy replaces a linked atta
   expect((await entriesOf(copy))['brought.jpg']).toEqual({ revision: revisions.brought, sha256: digest('brought bytes'), bytes: 13 });
 });
 
-it("links a held attachment another writer changed at its new revision from a folder holding it, and otherwise removes its unchanged file, records the revision and names it, downloading nothing, keeps one changed here, and does the same with a read-only one whatever its file holds", async () => {
+it("brings a held attachment another writer changed down at its new revision, linked from a folder holding it and otherwise downloaded through info's link and checked, whatever its size, records that revision and removes no file, keeps one changed here, does the same with a read-only one whatever its file holds, and leaves one the copy does not hold on House", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
   notes.put('a.md', 'one\n');
   for (const path of ['photo.jpg', 'cover.jpg', 'mine.jpg', 'capture/linked.jpg', 'capture/left.jpg']) notes.upload(path, bytes(`${path} bytes`));
-  await rooms.download([notes], '--with-attachments');
+  notes.upload('big.bin', Buffer.alloc(PAST_DEFAULT_SIZE, 1));
+  await rooms.download([notes], '--with-attachments', '--max-size', '11');
+  notes.upload('far.jpg', bytes('far bytes'));
   const copy = copyOf(hosted, 'notes', 'Plan');
   await opened(hosted, notes, 'Plan');
   await replaced(join(copy, 'photo.jpg'), bytes('photo, drawn here'));
@@ -933,18 +936,19 @@ it("links a held attachment another writer changed at its new revision from a fo
   const wanted = { path: '/rooms/notes/capture/linked.jpg', file: join(copy, 'capture/linked.jpg') };
   expect(await house(hosted, copy, 'download', JSON.stringify(wanted))).toMatchObject({ status: 0 });
   expect(await house(hosted, copy, 'download')).toMatchObject({ status: 0 });
-  for (const path of ['cover.jpg', 'mine.jpg', 'capture/left.jpg']) notes.upload(path, bytes(`${path}, from House`));
+  const mine = notes.revision('mine.jpg');
+  for (const path of ['cover.jpg', 'mine.jpg', 'capture/left.jpg', 'far.jpg']) notes.upload(path, bytes(`${path}, from House`));
+  notes.upload('big.bin', Buffer.alloc(PAST_DEFAULT_SIZE, 2));
   await replaced(join(notes.repository, 'mine.jpg'), bytes('mine, drawn here'));
   await replaced(join(notes.repository, 'capture/linked.jpg'), bytes('scribbled here'));
   await replaced(join(notes.repository, 'capture/left.jpg'), bytes('scribbled here too'));
-  const fetched = fetchedBytes(hosted);
+  const fetched = storeReads(hosted).length;
 
   expect(await house(hosted, '/', 'download')).toEqual({
     status: 0,
     stdout: [
-      `${notes.root}: 2 files updated from House`,
+      `${notes.root}: 5 files updated from House`,
       `${notes.root}/mine.jpg: changed here, so House's change was not brought; the next house upload merges it`,
-      leftOnHouse(`${notes.root}/capture/left.jpg`, `${notes.root}/cover.jpg`),
       '',
     ].join('\n'),
     stderr: '',
@@ -953,17 +957,22 @@ it("links a held attachment another writer changed at its new revision from a fo
   expect(await inode(join(notes.repository, 'photo.jpg'))).toEqual(await inode(join(copy, 'photo.jpg')));
   expect(await inode(join(notes.repository, 'capture/linked.jpg'))).toEqual(await inode(join(copy, 'capture/linked.jpg')));
   expect(await readFile(join(notes.repository, 'capture/linked.jpg'), 'utf8')).toBe('capture/linked.jpg, from House');
-  expect(existsSync(join(notes.repository, 'cover.jpg'))).toBe(false);
-  expect(existsSync(join(notes.repository, 'capture/left.jpg'))).toBe(false);
+  expect(await readFile(join(notes.repository, 'cover.jpg'), 'utf8')).toBe('cover.jpg, from House');
+  expect(await readFile(join(notes.repository, 'capture/left.jpg'), 'utf8')).toBe('capture/left.jpg, from House');
+  expect(digest(await readFile(join(notes.repository, 'big.bin')))).toBe(digest(Buffer.alloc(PAST_DEFAULT_SIZE, 2)));
   expect(await readFile(join(notes.repository, 'mine.jpg'), 'utf8')).toBe('mine, drawn here');
-  expect(fetchedBytes(hosted)).toBe(fetched);
+  expect(existsSync(join(notes.repository, 'far.jpg'))).toBe(false);
+  expect(storeReads(hosted).slice(fetched).sort()).toEqual(['big.bin', 'capture/left.jpg', 'cover.jpg'].map((path) => `binary/${notes.ref}/${notes.revision(path)}`).sort());
   const { files } = await manifestOf(notes);
-  expect(files['cover.jpg']).toEqual({ revision: notes.revision('cover.jpg'), sha256: digest('cover.jpg, from House'), bytes: 21, skipped: true });
-  expect(files['capture/left.jpg']).toEqual({ revision: notes.revision('capture/left.jpg'), sha256: digest('capture/left.jpg, from House'), bytes: 28, read_only: true, skipped: true });
+  expect(files['cover.jpg']).toEqual({ revision: notes.revision('cover.jpg'), sha256: digest('cover.jpg, from House'), bytes: 21 });
+  expect(files['capture/left.jpg']).toEqual({ revision: notes.revision('capture/left.jpg'), sha256: digest('capture/left.jpg, from House'), bytes: 28, read_only: true });
+  expect(files['big.bin']).toEqual({ revision: notes.revision('big.bin'), sha256: digest(Buffer.alloc(PAST_DEFAULT_SIZE, 2)), bytes: PAST_DEFAULT_SIZE });
   expect(files['photo.jpg']).toEqual({ revision: notes.revision('photo.jpg'), sha256: digest('photo, drawn here'), bytes: 17 });
+  expect(files['mine.jpg']).toEqual({ revision: mine, sha256: digest('mine.jpg bytes'), bytes: 14 });
+  expect(files['far.jpg']).toEqual({ revision: notes.revision('far.jpg'), sha256: digest('far.jpg, from House'), bytes: 19, skipped: true });
 });
 
-it("with --with-attachments links what a folder holds unchanged and downloads the rest up to --max-size, brings a held attachment's new revision within it and leaves one over it an entry though a folder holds it, and a one-file download at a skipped attachment's own path, a read-only one's too, is held after the next download", async () => {
+it("with --with-attachments links what a folder holds unchanged and downloads the rest up to --max-size, leaving one over it an entry though a folder holds it, links a held attachment's new revision whatever its size, and a one-file download at a skipped attachment's own path, a read-only one's too, is held after the next download, which brings its new revision", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const notes = rooms.room('notes');
@@ -977,27 +986,30 @@ it("with --with-attachments links what a folder holds unchanged and downloads th
   expect(await held(copy)).toEqual(['.house', 'a.md', 'big.bin', 'small.jpg']);
   notes.upload('small.jpg', bytes('small, from House'));
   notes.upload('big.bin', Buffer.alloc(MEGABYTE_AND_ONE, 2));
+  notes.upload('huge.bin', Buffer.alloc(MEGABYTE_AND_ONE, 3));
   await rooms.download([notes], '--with-attachments', '--max-size', '3');
   notes.upload('far.jpg', bytes('far bytes'));
   const fetched = fetchedBytes(hosted);
 
   expect(await house(hosted, copy, 'download', '--with-attachments', '--max-size', '1')).toEqual({
     status: 0,
-    stdout: `${notes.root}: 3 files updated from House\n${leftOnHouse(`${notes.root}/big.bin`)}\n`,
+    stdout: `${notes.root}: 4 files updated from House\n`,
     stderr: '',
   });
 
-  expect(await held(copy)).toEqual(['.house', 'a.md', 'extra.jpg', 'far.jpg', 'small.jpg']);
+  expect(await held(copy)).toEqual(['.house', 'a.md', 'big.bin', 'extra.jpg', 'far.jpg', 'small.jpg']);
   expect(await inode(join(copy, 'small.jpg'))).toEqual(await inode(join(notes.repository, 'small.jpg')));
   expect(await inode(join(copy, 'extra.jpg'))).toEqual(await inode(join(notes.repository, 'extra.jpg')));
+  expect(await inode(join(copy, 'big.bin'))).toEqual(await inode(join(notes.repository, 'big.bin')));
   expect(await readFile(join(copy, 'far.jpg'), 'utf8')).toBe('far bytes');
   expect(fetchedBytes(hosted)).toBe(fetched + 1);
-  expect((await entriesOf(copy))['big.bin']).toEqual({ revision: notes.revision('big.bin'), sha256: digest(Buffer.alloc(MEGABYTE_AND_ONE, 2)), bytes: MEGABYTE_AND_ONE, skipped: true });
+  expect((await entriesOf(copy))['big.bin']).toEqual({ revision: notes.revision('big.bin'), sha256: digest(Buffer.alloc(MEGABYTE_AND_ONE, 2)), bytes: MEGABYTE_AND_ONE });
+  expect((await entriesOf(copy))['huge.bin']).toEqual({ revision: notes.revision('huge.bin'), sha256: digest(Buffer.alloc(MEGABYTE_AND_ONE, 3)), bytes: MEGABYTE_AND_ONE, skipped: true });
 
-  const wanted = { path: '/rooms/notes/big.bin', file: join(copy, 'big.bin') };
+  const wanted = { path: '/rooms/notes/huge.bin', file: join(copy, 'huge.bin') };
   expect(await house(hosted, copy, 'download', JSON.stringify(wanted))).toMatchObject({ status: 0 });
   expect(await house(hosted, copy, 'download')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
-  expect((await entriesOf(copy))['big.bin']).not.toHaveProperty('skipped');
+  expect((await entriesOf(copy))['huge.bin']).not.toHaveProperty('skipped');
   const sent = notes.batches.length;
   expect(await house(hosted, copy, 'upload')).toMatchObject({ status: 0, stdout: `Nothing to upload: ${notes.root} matches House.\n` });
   expect(notes.batches).toHaveLength(sent);
@@ -1011,8 +1023,8 @@ it("with --with-attachments links what a folder holds unchanged and downloads th
   expect((await entriesOf(copy))['capture/shot.jpg']).not.toHaveProperty('skipped');
   notes.upload('capture/shot.jpg', bytes('shot, from House'));
 
-  expect(await house(hosted, copy, 'download')).toEqual({ status: 0, stdout: `${leftOnHouse(`${notes.root}/capture/shot.jpg`)}\n`, stderr: '' });
+  expect(await house(hosted, copy, 'download')).toEqual({ status: 0, stdout: `${notes.root}: 1 file updated from House\n`, stderr: '' });
 
-  expect(existsSync(join(copy, 'capture/shot.jpg'))).toBe(false);
-  expect((await entriesOf(copy))['capture/shot.jpg']).toEqual({ revision: notes.revision('capture/shot.jpg'), sha256: digest('shot, from House'), bytes: 16, read_only: true, skipped: true });
+  expect(await readFile(join(copy, 'capture/shot.jpg'), 'utf8')).toBe('shot, from House');
+  expect((await entriesOf(copy))['capture/shot.jpg']).toEqual({ revision: notes.revision('capture/shot.jpg'), sha256: digest('shot, from House'), bytes: 16, read_only: true });
 });
