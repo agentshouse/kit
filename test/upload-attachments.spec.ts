@@ -39,12 +39,6 @@ function batches(hosted: Hosted): { operation_id: string; changes: Record<string
     .map((request) => request.body as { operation_id: string; changes: Record<string, unknown>[] });
 }
 
-function edits(hosted: Hosted): Record<string, unknown>[][] {
-  return hosted.mcp
-    .filter((received) => called(received).name === 'update' && called(received).arguments?.op !== 'stage')
-    .map((received) => called(received).arguments!.changes as Record<string, unknown>[]);
-}
-
 function called(received: Received): McpCall['params'] {
   return (received.body as McpCall).params;
 }
@@ -172,17 +166,17 @@ it("uploads nothing, no delete and no bytes, from a conversation's copy holding 
   const copy = await openedIn(hosted, room, 'Plan');
   expect((await stat(join(copy, 'linked.jpg'))).ino).toBe((await stat(join(room.repository, 'linked.jpg'))).ino);
   const kept = Object.fromEntries(['linked.jpg', 'entry.pdf', 'other.bin'].map((path) => [path, { ...room.binaries.get(path)! }]));
-  const sent = edits(hosted).length;
+  const sent = batches(hosted).length;
 
   expect(await house(hosted, copy, 'upload')).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
-  expect(edits(hosted)).toHaveLength(sent);
+  expect(batches(hosted)).toHaveLength(sent);
   expect(Object.fromEntries([...room.binaries].filter(([path]) => path in kept))).toEqual(kept);
 
   await writeFile(join(copy, 'entry.pdf'), PDF);
   await writeFile(join(copy, 'other.bin'), REDRAWN);
   expect(await house(hosted, copy, 'upload')).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
 
-  expect(edits(hosted).at(-1)).toEqual([part('other.bin', REDRAWN, 'application/octet-stream', kept['other.bin']!.revision)]);
+  expect(batches(hosted).at(-1)!.changes).toEqual([part('other.bin', REDRAWN, 'application/octet-stream', kept['other.bin']!.revision)]);
   expect(room.binaries.get('entry.pdf')).toEqual(kept['entry.pdf']);
   const { files } = JSON.parse(await readFile(join(copy, '.house'), 'utf8')) as { files: Record<string, unknown> };
   expect(files['entry.pdf']).toEqual({ revision: kept['entry.pdf']!.revision, sha256: digest(PDF), bytes: PDF.length });

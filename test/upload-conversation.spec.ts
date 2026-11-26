@@ -65,11 +65,11 @@ function bigFile(name: string, bytes: number): string {
   return `head -c ${bytes} /dev/zero | tr '\\000' '\\001' > ${name}`;
 }
 
-it("uploads a conversation's copy under the Kit credential naming that conversation, never as the Environment's own upload, and takes no --owner there", async () => {
+it("uploads a Room's folder from a Conversation process and a conversation's copy under the Kit credential naming the conversation that runs it, never as the Environment's own upload, and takes no --owner there", async () => {
   const { hosted, rooms, room, deny } = await copied([{}, { kind: 'claude-agent-acp' }]);
   deny('conversation-2');
 
-  const first = await shell(hosted, 'echo two >> plan.md && house upload');
+  const first = await shell(hosted, `cd ${room.repository} && echo two >> plan.md && house upload`);
   const second = await shell(hosted, 'cd ./. && echo three >> plan.md && house upload', 'conversation-2', 'agent-2');
   const owner = await shell(hosted, 'house upload --owner', 'conversation-2', 'agent-2');
 
@@ -135,16 +135,14 @@ it("prompts a conversation's first message while a house download still waits fo
 });
 
 it(
-  'sends a batch above the MCP bound as one prepared upload under its operation, keeps it pending when its answer is lost and sends it again at the next upload',
+  'sends a batch above the MCP bound as one prepared upload under its operation, and resends it when its answer is lost',
   async () => {
     const { hosted, rooms, room } = await copied();
     const big = '\u0001'.repeat(BIG);
     rooms.dropsEdits = 1;
 
-    const lost = await shell(hosted, `${bigFile('big.md', BIG)} && house upload`);
-    const uploaded = await shell(hosted, 'house upload');
+    const uploaded = await shell(hosted, `${bigFile('big.md', BIG)} && house upload`);
 
-    expect(lost).toMatchObject({ status: 1, stderr: "house: House's answer to this upload did not arrive; Kit sends it again with the next change\n" });
     expect(uploaded).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
     const bytes = Buffer.from(JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/big.md', content: big }] }));
     const sha256 = createHash('sha256').update(bytes).digest('hex');

@@ -137,8 +137,9 @@ export async function resident(): Promise<void> {
   const settle = (change: SettingsChange): Promise<Applied> => {
     const applied = settings.then(() =>
       applySettings(change, {
-        working: () => running !== null && (running.conversations.turnRuns() || running.calls.busy()),
+        working: () => running !== null && (running.conversations.turnRuns() || running.calls.busy() || copies.savesRun()),
         end: () => {
+          copies.halted();
           running?.conversations.stopped();
           killDescendants();
         },

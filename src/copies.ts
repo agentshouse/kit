@@ -1050,16 +1050,25 @@ export class LocalCopies {
       await this.selected(null);
       await this.sweep;
     } finally {
+      this.following = true;
+      this.watchedAll(true);
+      await Promise.all([...this.followed.keys()].map((key) => this.saved(key, WHOLE).catch(logged)));
       await this.reskilled();
     }
-    this.following = true;
-    this.watchedAll(true);
-    await Promise.all([...this.followed.keys()].map((key) => this.saved(key, WHOLE).catch(logged)));
+  }
+
+  halted(): void {
+    this.following = false;
+    this.watchedAll(false);
   }
 
   saving(directory: string): boolean {
     for (const state of this.followed.values()) if (state.repository === directory) return saving(state);
     return false;
+  }
+
+  savesRun(): boolean {
+    return [...this.followed.values()].some((state) => state.running > 0);
   }
 
   isPrivate(room: string): boolean {
@@ -1251,7 +1260,7 @@ export class LocalCopies {
     const key = await this.keyAt(cwd);
     if (key === undefined) return outside(cwd);
     const { refused, text } = this.followed.has(key)
-      ? await this.saved(key, BY_HAND)
+      ? await this.saved(key, BY_HAND, caller)
       : await this.exclusive(key, async () => {
           const answer = await this.uploaded(key, caller, true, null);
           if (this.livingConversation(key) === null) await this.reportedOutside(key);
@@ -1280,8 +1289,18 @@ export class LocalCopies {
     return run?.copy !== 'new' || run.follows === true;
   }
 
+  private followsNow(key: string): boolean {
+    const copy = this.copies.get(key);
+    return copy !== undefined && this.follows(key) && (key.startsWith(ROOMS) || this.kept === null || this.kept.has(copy.room_ref));
+  }
+
+  private followsAt(directory: string): boolean {
+    const held = this.conversationCopyAt(directory) ?? [...this.copies.values()].find((copy) => copy.repository === directory);
+    return held === undefined || this.follows(held.key);
+  }
+
   private nextOf(key: string): string {
-    return this.follows(key) ? 'the next save' : 'the next house upload';
+    return this.followsNow(key) ? 'the next save' : 'the next house upload';
   }
 
   private callerOf(key: string): Promise<Caller> {
@@ -1296,9 +1315,7 @@ export class LocalCopies {
   private watched(key: string, again = false): void {
     const copy = this.copies.get(key);
     const state = this.followed.get(key);
-    const wanted =
-      this.following && copy !== undefined && this.follows(key) && (key.startsWith(ROOMS) || this.kept === null || this.kept.has(copy.room_ref));
-    if (!wanted) {
+    if (!this.following || copy === undefined || !this.followsNow(key)) {
       if (state === undefined) return;
       this.followed.delete(key);
       state.watcher?.close();
@@ -1382,7 +1399,7 @@ export class LocalCopies {
     if (!was) this.saves.changed();
   }
 
-  private async saved(key: string, how: Saving): Promise<Uploaded> {
+  private async saved(key: string, how: Saving, requested?: Caller): Promise<Uploaded> {
     const state = this.followed.get(key);
     if (state === undefined) return { refused: false, text: NOTHING_NEW };
     const was = saving(state);
@@ -1400,7 +1417,8 @@ export class LocalCopies {
         if (!earlier(copy) && !(await exists(join(copy.repository, MANIFEST)))) {
           return { refused: false, text: `${rootOf(copy.room_handle)}: ${copy.repository} holds no manifest, so Kit sends nothing from it and copies the Room there again` };
         }
-        const answer = await this.uploaded(key, await this.callerOf(key), how.byHand, named === null ? null : [...named, ...Object.keys((copy as Copy).refused ?? {})]);
+        const caller = requested ?? (await this.callerOf(key));
+        const answer = await this.uploaded(key, caller, how.byHand, named === null ? null : [...named, ...Object.keys((copy as Copy).refused ?? {})]);
         if (answer.refused && !how.byHand) logged(`${copy.repository}: ${answer.text}`);
         this.refusedAt(key, state, answer.read);
         if (this.livingConversation(key) === null) await this.reportedOutside(key);
@@ -1605,7 +1623,7 @@ export class LocalCopies {
       opening.run === undefined
         ? undefined
         : { copy: opening.run.copy.kind, name: opening.run.name, ...(code === undefined ? {} : { code }), ...(kind === 'new' ? { follows: true as const } : {}) };
-    const place = (directory: string, copy: boolean): Place => ({ directory, copy, synced: true, name: run?.name ?? null, code: null });
+    const place = (directory: string, copy: boolean): Place => ({ directory, copy, synced: this.followsAt(directory), name: run?.name ?? null, code: null });
     if (opening.run?.copy.kind === 'none') {
       await this.session(conversation, launch, run);
       return place(launch, false);
@@ -1635,7 +1653,7 @@ export class LocalCopies {
     const directory = held.session ?? launch;
     const place = (copy: boolean): Place => {
       const run = this.places.get(conversation)?.run;
-      return { directory, copy, synced: run?.copy !== 'new' || run.follows === true, name: run?.name ?? null, code: run?.code ?? null };
+      return { directory, copy, synced: this.followsAt(directory), name: run?.name ?? null, code: run?.code ?? null };
     };
     const room = Object.keys(held.copies).find((ref) => held.copies[ref] === directory);
     if (room !== undefined) {

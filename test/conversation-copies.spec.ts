@@ -314,7 +314,7 @@ it("takes a change of the Environment's rights in the copy's Room at House's not
   await shows(join(notes.repository, 'AGENTS.md'), `${INSTRUCTIONS}Your owner rules changed.\n`);
   await settle();
   expect(roomRootReads(hosted).slice(read).sort()).toEqual(['/rooms/notes', '/rooms/notes', '/rooms/private']);
-  expect(roomAsks(hosted)).toBeGreaterThan(asked);
+  expect(roomAsks(hosted)).toBe(asked + 6);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
   expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
 });
