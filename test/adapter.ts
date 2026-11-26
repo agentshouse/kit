@@ -78,10 +78,16 @@ function launched(sessionId: string, meta: unknown): void {
   if (options?.permissionPrompts === 'none') unprompted.add(sessionId);
 }
 
-function asks(sessionId: string, method: string): boolean {
+function reviewsPlan(params: Record<string, unknown> | undefined): boolean {
+  return kind === 'codex-acp' && String((params?.toolCall as { toolCallId?: unknown } | undefined)?.toolCallId).startsWith('plan-review:');
+}
+
+function asks(sessionId: string, method: string, params?: Record<string, unknown>): boolean {
   if (existsSync(join(home, 'asks-anyway'))) return true;
   if (method === 'elicitation/create') return forms;
-  return method !== 'session/request_permission' || (!unprompted.has(sessionId) && approvals.get(sessionId) !== 'never');
+  if (method !== 'session/request_permission') return true;
+  if (reviewsPlan(params)) return collaboration === 'plan';
+  return !unprompted.has(sessionId) && approvals.get(sessionId) !== 'never';
 }
 
 // A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.
@@ -557,7 +563,7 @@ interface Recorded {
 async function sent(client: AgentContext, sessionId: string, entries: Recorded[]): Promise<void> {
   for (const { request, method, params, tap } of entries) {
     if (tap !== undefined) await codex({ messages: [tap] });
-    else if (request && !asks(sessionId, method!)) log({ unasked: method });
+    else if (request && !asks(sessionId, method!, params)) log({ unasked: method });
     else if (request) {
       const answered = await client.request(method as 'session/request_permission', params as never).catch((error: RequestError) => ({ code: error.code }));
       log({ replayed: method, answered });
