@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import type { RoomSkillsRecord } from './skills.ts';
 
 export const MANIFEST = '.house';
 
@@ -22,6 +23,7 @@ export interface Manifest {
   room_ref: string;
   files: Record<string, Entry>;
   kit?: string[];
+  skills?: RoomSkillsRecord;
 }
 
 export interface Present {
@@ -71,7 +73,8 @@ export async function placed(staging: string, target: string, content: Buffer | 
 export async function writeManifest(repository: string, staging: string, manifest: Manifest): Promise<void> {
   const files = Object.fromEntries(Object.entries(manifest.files).sort(([left], [right]) => (left < right ? -1 : 1)));
   const kit = manifest.kit === undefined ? {} : { kit: manifest.kit };
-  await placed(staging, join(repository, MANIFEST), `${JSON.stringify({ room_ref: manifest.room_ref, files, ...kit })}\n`);
+  const skills = manifest.skills === undefined ? {} : { skills: manifest.skills };
+  await placed(staging, join(repository, MANIFEST), `${JSON.stringify({ room_ref: manifest.room_ref, files, ...kit, ...skills })}\n`);
 }
 
 export async function removed(repository: string, name: string): Promise<void> {

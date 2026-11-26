@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
-import { fileInfo, instructionsText, type FileInfo, type Finished } from './files.ts';
+import { fileInfo, roomInstructions, type FileInfo, type Finished, type RoomInstructions } from './files.ts';
 import { conversationsFolder, kitHome, roomsFolder } from './home.ts';
 import {
   digest,
@@ -30,6 +30,16 @@ import { answerDocument, environmentTool, toolAnswer, Unsettled, type Forwarded,
 import { operationId } from './operation.ts';
 import { firstLine, namedWait, PlaceRefused, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { codeFolder, listedRef, REPOSITORIES } from './repositories.ts';
+import {
+  NO_ROOM_SKILLS,
+  placeRoomSkills,
+  removeRoomSkills,
+  roomSkillsReading,
+  SKILL_FOLDERS,
+  type RoomSkillSet,
+  type RoomSkillsReading,
+  type RoomSkillsRecord,
+} from './skills.ts';
 import { keptName, moved as carried, present as found, removeFolder, rerooted, within } from './workspace.ts';
 
 const ROOMS = 'rooms/';
@@ -48,6 +58,7 @@ const KIT_FILES = ['AGENTS.md', 'CLAUDE.md'];
 const IMPORTED = '@AGENTS.md\n';
 const FOLDERS = 'folders.json';
 const PRIVATE = 'private';
+const UNWRITTEN = 'unwritten';
 const NOTHING_NEW = 'Nothing new from House.';
 
 interface RoomFolder {
@@ -291,7 +302,7 @@ export interface Caller {
   ): Promise<Submitted>;
   finish(upload: string, path: string, partSha256: string[]): Promise<Finished<Staged>>;
   info(path: string, revision?: string): Promise<FileInfo | null>;
-  instructions(root: string): Promise<string>;
+  instructions(root: string): Promise<RoomInstructions>;
 }
 
 export interface Answered {
@@ -317,6 +328,10 @@ function houseCause(error: unknown): string {
 
 function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
+}
+
+function skillsKept(root: string, error: unknown): string {
+  return `${root}: its skills kept as they were: ${houseCause(error)}`;
 }
 
 function markdownOnly(paths: string[], maxBytes: number): string {
@@ -447,7 +462,8 @@ function relative(path: string): string {
 }
 
 function kitsOwn(path: string): boolean {
-  return !path.includes('/') && KIT_FILES.some((name) => name.toLowerCase() === path.toLowerCase());
+  const named = path.toLowerCase();
+  return (!path.includes('/') && KIT_FILES.some((name) => name.toLowerCase() === named)) || SKILL_FOLDERS.some((folder) => named.startsWith(`${folder}/`));
 }
 
 async function stillMarked(directory: string, manifest: Manifest, { present, left }: Scan): Promise<string[]> {
@@ -534,6 +550,11 @@ function without(copy: Copy): Copy {
 
 function earlier(copy: Held): copy is EarlierCopy {
   return 'manifests' in copy;
+}
+
+function skillRecord(manifest: Manifest | null): RoomSkillsRecord | typeof UNWRITTEN | null {
+  if (manifest === null) return null;
+  return manifest.skills ?? (manifest.kit === undefined ? null : UNWRITTEN);
 }
 
 function rehandled(copy: Copy, handle: string): Copy {
@@ -834,6 +855,9 @@ export class LocalCopies {
   private turning: ((directory: string) => boolean) | null = null;
   private privateRoom: string | null = null;
   private answering: Promise<unknown> = Promise.resolve();
+  private readonly skillRecords = new Map<string, RoomSkillsRecord | typeof UNWRITTEN | null>();
+  private reskilling: Promise<void> = Promise.resolve();
+  private reskill: Promise<void> | null = null;
 
   constructor(house: House, launched: () => Promise<readonly string[]>) {
     this.house = house;
@@ -862,7 +886,7 @@ export class LocalCopies {
         }
       },
       info: async (path, revision) => fileInfo(await environmentTool('info', { path, ...(revision === undefined ? {} : { ref: revision }) })),
-      instructions: (root) => instructionsText((args) => environmentTool('info', args), root),
+      instructions: (root) => roomInstructions((args) => environmentTool('info', args), root),
     };
   }
 
@@ -889,19 +913,27 @@ export class LocalCopies {
     await sweptIn(roomsFolder());
   }
 
-  connected(turning: (directory: string) => boolean): Promise<void> {
+  async connected(turning: (directory: string) => boolean): Promise<void> {
     this.turning = turning;
     this.owe(null);
-    return this.selected(null);
+    try {
+      await this.selected(null);
+    } finally {
+      await this.reskilled();
+    }
   }
 
   isPrivate(room: string): boolean {
     return room === this.privateRoom;
   }
 
-  noticed(room: string): Promise<void> {
+  async noticed(room: string): Promise<void> {
     this.owe(room);
-    return this.selected(room);
+    try {
+      await this.selected(room);
+    } finally {
+      if (room === this.privateRoom) await this.reskilled();
+    }
   }
 
   async download(caller: Caller, fetching: Fetching, cwd: string): Promise<Answered> {
@@ -1580,16 +1612,96 @@ export class LocalCopies {
 
   private async instructed(directory: string, root: string, caller: Caller, kept: boolean): Promise<string | null> {
     try {
-      await this.written(directory, root, caller, kept);
-      return null;
+      return await this.written(directory, root, caller, kept, roomSkillsReading());
     } catch (error) {
       return `${root}: AGENTS.md kept as it was: ${houseCause(error)}`;
     }
   }
 
-  private async written(folder: string, root: string, caller: Caller, kept: boolean): Promise<void> {
-    const text = await caller.instructions(root);
-    await (kept ? this.kitMarked(folder, text, await readManifest(folder)) : kitFiles(folder, text));
+  private async written(folder: string, root: string, caller: Caller, kept: boolean, reading: RoomSkillsReading): Promise<string | null> {
+    const { text, approved } = await caller.instructions(root);
+    if (!kept) {
+      await kitFiles(folder, text);
+      return null;
+    }
+    const manifest = await readManifest(folder);
+    await this.kitMarked(folder, text, manifest);
+    return this.skilled(folder, root, manifest, approved, reading);
+  }
+
+  private async skilled(folder: string, root: string, manifest: Manifest, approved: number | null, reading: RoomSkillsReading): Promise<string | null> {
+    const held = manifest.skills;
+    if (held !== undefined && held.approved === approved) return null;
+    if (approved === null && skillRecord(manifest) === null) return null;
+    try {
+      await this.reskilledIn(folder, manifest, approved === null ? NO_ROOM_SKILLS : await reading.of(manifest.room_ref), approved);
+      return null;
+    } catch (error) {
+      return skillsKept(root, error);
+    }
+  }
+
+  private async reskilledIn(folder: string, manifest: Manifest, set: RoomSkillSet, approved: number | null | undefined): Promise<void> {
+    const held = manifest.skills;
+    const record = async (names: string[], digest: string) => {
+      manifest.skills = { ...(approved === undefined ? {} : { approved }), listed: set.listed, sources: set.sources, names, digest };
+      await writeManifest(folder, await staging(), manifest);
+      this.skillRecords.set(folder, manifest.skills);
+    };
+    if (held?.digest === set.digest) {
+      if (held.approved !== approved || JSON.stringify([held.listed, held.sources]) !== JSON.stringify([set.listed, set.sources])) await record(held.names, held.digest);
+      return;
+    }
+    if (set.skills.length === 0 && (held?.names ?? []).length === 0) {
+      await record([], set.digest);
+      return;
+    }
+    await record(await placeRoomSkills(folder, set.skills, held?.names ?? [], (names) => record(names, '')), set.digest);
+  }
+
+  reskilled(): Promise<void> {
+    this.reskill ??= this.reskilling.then(() => {
+      this.reskill = null;
+      return this.reskilledWhereChanged();
+    });
+    this.reskilling = this.reskill.catch(() => undefined);
+    return this.reskill;
+  }
+
+  private async skillRecordOf(folder: string): Promise<RoomSkillsRecord | typeof UNWRITTEN | null> {
+    const known = this.skillRecords.get(folder);
+    if (known !== undefined) return known;
+    const record = skillRecord(await readManifest(folder).catch(() => null));
+    this.skillRecords.set(folder, record);
+    return record;
+  }
+
+  private async reskilledWhereChanged(): Promise<void> {
+    const due: { copy: Copy; record: RoomSkillsRecord | typeof UNWRITTEN }[] = [];
+    await eachAtOnce([...this.copies.values()], async (copy) => {
+      if (earlier(copy)) return;
+      const record = await this.skillRecordOf(copy.repository);
+      if (record === UNWRITTEN || (record !== null && record.listed.length > 0)) due.push({ copy, record });
+    });
+    if (due.length === 0) return;
+    const reading = roomSkillsReading();
+    const sources = await reading.sources(due.flatMap(({ record }) => (record === UNWRITTEN ? [] : record.listed))).catch((error: unknown) => {
+      logged(`the Rooms' skills kept as they were: ${houseCause(error)}`);
+      return null;
+    });
+    if (sources === null) return;
+    await eachAtOnce(due, async ({ copy: { key, room_handle: handle }, record }) => {
+      if (record !== UNWRITTEN && record.listed.every((name) => record.sources[name] === sources[name])) return;
+      await this.exclusive(key, () => this.reskilledHeld(key, reading)).catch((error: unknown) => logged(skillsKept(rootOf(handle), error)));
+    });
+  }
+
+  private async reskilledHeld(key: string, reading: RoomSkillsReading): Promise<void> {
+    const copy = this.copies.get(key);
+    if (copy === undefined || earlier(copy)) return;
+    const manifest = await readManifest(copy.repository).catch(() => null);
+    if (manifest === null || skillRecord(manifest) === null) return;
+    await this.reskilledIn(copy.repository, manifest, await reading.of(manifest.room_ref), manifest.skills?.approved);
   }
 
   private unreached(key: string, directory: string): Promise<void> {
@@ -1603,7 +1715,7 @@ export class LocalCopies {
       return;
     }
     const manifest = await readManifest(directory).catch(() => null);
-    if (manifest !== null) await this.kitMarked(directory, '', manifest);
+    if (manifest !== null) await this.left(directory, manifest);
   }
 
   private async forgotten(key: string): Promise<void> {
@@ -1721,7 +1833,7 @@ export class LocalCopies {
     for (const copy of this.roomCopies()) {
       if (reached.has(copy.room_ref) || earlier(copy)) continue;
       const manifest = await readManifest(copy.repository).catch(() => null);
-      if (manifest !== null) await this.kitMarked(copy.repository, '', manifest);
+      if (manifest !== null) await this.left(copy.repository, manifest);
     }
     for (const [conversation, place] of [...this.places]) {
       for (const [room, path] of Object.entries(place.copies)) {
@@ -1762,16 +1874,19 @@ export class LocalCopies {
     }
     await this.savedFolders();
     const unread = new Map<string, string[]>();
+    const unskilled: string[] = [];
+    const reading = roomSkillsReading();
     await eachAtOnce(due, async ({ root, folder, copied }) => {
       try {
-        await this.written(folder, root, caller, copied);
+        const kept = await this.written(folder, root, caller, copied, reading);
+        if (kept !== null) unskilled.push(kept);
       } catch (error) {
         const cause = houseCause(error);
         unread.set(cause, [...(unread.get(cause) ?? []), root]);
       }
     });
     for (const [cause, roots] of unread) lines.push(`${roots.sort().join(', ')}: AGENTS.md kept as it was: ${cause}`);
-    return lines;
+    return [...lines, ...unskilled.sort()];
   }
 
   private async kitMarked(folder: string, text: string, manifest: Manifest): Promise<void> {
@@ -1780,7 +1895,21 @@ export class LocalCopies {
     if (text === '') delete manifest.kit;
     else if (manifest.kit === undefined) manifest.kit = [...KIT_FILES];
     else return;
+    await this.marked(folder, manifest);
+  }
+
+  private async left(folder: string, manifest: Manifest): Promise<void> {
+    if (manifest.kit === undefined && manifest.skills === undefined) return;
+    if (manifest.kit !== undefined) await kitFiles(folder, '');
+    await removeRoomSkills(folder, manifest.skills?.names ?? []);
+    delete manifest.kit;
+    delete manifest.skills;
+    await this.marked(folder, manifest);
+  }
+
+  private async marked(folder: string, manifest: Manifest): Promise<void> {
     await writeManifest(folder, await staging(), manifest);
+    this.skillRecords.set(folder, skillRecord(manifest));
   }
 
   async laidOut(earlier: string, rooms: string, kept: readonly string[]): Promise<{ moved: boolean; kept: string[] }> {

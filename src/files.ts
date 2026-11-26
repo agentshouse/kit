@@ -108,22 +108,29 @@ export function fileInfo(answer: string): FileInfo | null {
 }
 
 interface InstructionsPart {
-  instructions?: { text?: unknown; cut?: unknown };
+  instructions?: { text?: unknown; cut?: unknown; approved_version?: unknown };
   next_cursor?: string;
+}
+
+export interface RoomInstructions {
+  text: string;
+  approved: number | null;
 }
 
 function instructionsPart(answer: string): InstructionsPart {
   return answerDocument<InstructionsPart | null>(answer) ?? {};
 }
 
-export async function instructionsText(info: (args: Record<string, unknown>) => Promise<string>, path: string): Promise<string> {
+export async function roomInstructions(info: (args: Record<string, unknown>) => Promise<string>, path: string): Promise<RoomInstructions> {
   let text = '';
+  let approved: number | null = null;
   for (let args: Record<string, unknown> | null = { path }; args !== null; ) {
     const { instructions, next_cursor: cursor } = instructionsPart(await info(args));
     if (typeof instructions?.text === 'string') text += instructions.text;
+    if (typeof instructions?.approved_version === 'number') approved = instructions.approved_version;
     args = instructions?.cut === undefined ? null : { path, cursor };
   }
-  return text;
+  return { text, approved };
 }
 
 export function paused(milliseconds: number): Promise<void> {

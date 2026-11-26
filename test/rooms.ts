@@ -233,6 +233,13 @@ function packed(entries: readonly object[]): Buffer[] {
   return chunks;
 }
 
+export interface RoomSkill {
+  readonly name: string;
+  readonly own?: true;
+  readonly files: Readonly<Record<string, string>>;
+  readonly attachments?: Readonly<Record<string, string>>;
+}
+
 export class Room {
   readonly ref = `r_${randomBytes(5).toString('hex')}.x`;
   handle: string;
@@ -249,7 +256,10 @@ export class Room {
   readonly log: { position: number; paths: string[] }[] = [];
   readonly batches: EditChange[][] = [];
   models: Record<string, unknown>[] = [];
-  instructions = '';
+  instructions: string | null = null;
+  approved: number | null = 1;
+  skills: RoomSkill[] = [];
+  skillPages: Record<string, unknown>[] | null = null;
   proposing: Omit<Proposal, 'proposal'> | null = null;
   readonly proposals: { readonly proposal: string; readonly content: string; readonly base?: string }[] = [];
   bound = ANSWER_BYTES;
@@ -343,13 +353,19 @@ export class Room {
   }
 
   instructionsFrom(start: number): Record<string, unknown> {
-    if (this.instructions === '') return {};
-    const held = { version: 1, approved_version: 1 };
+    if (this.instructions === null) return {};
+    const held = { version: Math.max(1, this.approved ?? 1), ...(this.approved === null ? {} : { approved_version: this.approved }) };
+    if (this.instructions === '') return { instructions: held };
     const rest = Buffer.from(this.instructions).subarray(start).toString();
     const part = cutOf(rest, this.bound, 'text');
     if (part === null) return { instructions: { ...held, text: rest } };
     const cut = { ...part.cut, total: Buffer.byteLength(this.instructions) };
     return { instructions: { ...held, text: part.text, cut }, next_cursor: String(start + cut.shown) };
+  }
+
+  listing(cursor: unknown): Record<string, unknown> {
+    if (this.skillPages !== null) return this.skillPages[Number(cursor ?? 0)]!;
+    return { skills: this.approved === null ? [] : this.skills };
   }
 
   advance(paths: string[]): void {
@@ -860,6 +876,12 @@ export function serveRooms(hosted: Hosted): Rooms {
     return { body: { ...rest, contents: doorContents(writes) } };
   });
   hosted.tools.upload = uploadTool(hosted.store, STAGED_PART_BYTES).answer;
+  const guide = hosted.tools.guide;
+  hosted.tools.guide = (args, request) => {
+    if (args.room === undefined) return guide === undefined ? { content: [{ type: 'text', text: 'guide answered' }] } : guide(args, request);
+    const room = rooms.find((one) => one.ref === args.room)!;
+    return { content: [{ type: 'text', text: stringify(room.listing(args.cursor)) }] };
+  };
   hosted.tools.info = (args) => {
     const path = String(args.path);
     const room = roomOf(path);
