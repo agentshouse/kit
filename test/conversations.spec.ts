@@ -156,10 +156,14 @@ it("starts Grok approving every tool in a Run's full access, since it offers no 
 
   await hosted.result(lastCall());
   const log = await hosted.adapterLog();
-  expect(log.find((entry) => entry.method === 'initialize')!.argv).toEqual(
+  const launched = (entries: typeof log) => {
+    const pid = entries.find((entry) => entry.method === 'session/new')!.pid;
+    return entries.find((entry) => entry.method === 'initialize' && entry.pid === pid)!.argv;
+  };
+  expect(launched(log)).toEqual(
     expect.arrayContaining(['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio']),
   );
-  expect((await plain.adapterLog()).find((entry) => entry.method === 'initialize')!.argv).not.toContain('--always-approve');
+  expect(launched(await plain.adapterLog())).not.toContain('--always-approve');
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'model', value: 'grok-4.6' }),
     expect.objectContaining({ configId: 'reasoning_effort', value: 'high' }),
