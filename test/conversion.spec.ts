@@ -147,6 +147,62 @@ async function earlierCopy(hosted: Hosted, room: Room, files: Record<string, str
   return record;
 }
 
+it("converts a copy an earlier Kit kept holding a clone with a .git folder, leaving the clone as it was and recording nothing of it", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const room = rooms.room('notes');
+  const plan = room.put('plan.md', 'one\n');
+  const readme = room.put('app/README.md', "House's app\n");
+  room.put('app/notes.md', 'notes\n', 'source: s_mail\n');
+  const position = room.position;
+  rooms.answered = [room];
+  const repository = room.repository;
+  const app = join(repository, 'app');
+  await put(join(repository, 'plan.md'), 'one\n');
+  await put(join(app, 'README.md'), 'my app\n');
+  await put(join(app, '_provenance', 'notes.md'), 'my source\n');
+  git(app, 'init', '-q', '-b', 'main');
+  git(app, 'add', '.');
+  git(app, 'commit', '-q', '-m', 'mine');
+  git(repository, 'init', '-q', '-b', 'main');
+  git(repository, 'add', 'plan.md');
+  git(repository, 'commit', '-q', '-m', 'House /rooms/notes');
+  const held = await gitState(app);
+  const record = join(hosted.home, 'local-copies', 'rooms', `${room.ref}.json`);
+  await put(
+    record,
+    JSON.stringify({
+      key: `rooms/${room.ref}`,
+      room_ref: room.ref,
+      room_handle: 'notes',
+      repository,
+      house: 'b'.repeat(40),
+      position: String(position),
+      log_epoch: room.logEpoch,
+      write: [''],
+      protected: ['capture', 'collaboration'],
+      read_only: ['app/_provenance/notes.md'],
+      manifests: { ['b'.repeat(40)]: { parent: null, files: { 'plan.md': plan, 'app/README.md': readme } } },
+      moves: [],
+    }),
+  );
+  room.put('app/README.md', "House's app, newer\n");
+  await hosted.restart();
+
+  expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0, stderr: '' });
+
+  expect(await readFile(join(app, 'README.md'), 'utf8')).toBe('my app\n');
+  expect(await readFile(join(app, '_provenance', 'notes.md'), 'utf8')).toBe('my source\n');
+  expect(existsSync(join(app, 'notes.md'))).toBe(false);
+  expect(await gitState(app)).toEqual(held);
+  expect(Object.keys((await manifestOf(room)).files)).toEqual(['plan.md']);
+  expect(await upload(hosted, room)).toEqual({
+    status: 0,
+    stdout: 'Nothing to upload: /rooms/notes matches House.\n/rooms/notes/app: not uploaded, as it holds a Git work tree\n',
+    stderr: '',
+  });
+});
+
 it("brings a copy an earlier Kit kept to what House changed that it received but never applied, so its next upload neither deletes House's file nor restores one House deleted", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);

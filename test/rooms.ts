@@ -2,7 +2,7 @@ import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
-import { basename, dirname, join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
 import { stringify } from 'yaml';
@@ -548,9 +548,9 @@ export class Room {
           }
           const destination = (name: string) => (name.includes(' ') ? `(<${name}>)` : `(${name})`);
           for (const [other, file] of next) {
-            const link = destination(basename(path));
-            if (other !== to && dirname(other) === dirname(path) && file.content.includes(link)) {
-              set(other, file.content.replaceAll(link, destination(relative(dirname(path), to!))), { op: 'rewrite' });
+            const link = destination(relative(dirname(other), path));
+            if (other !== to && file.content.includes(link)) {
+              set(other, file.content.replaceAll(link, destination(relative(dirname(other), to!))), { op: 'rewrite' });
             }
           }
         }

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 
 export const MANIFEST = '.house';
 
-const UNREAD = '.git';
+const GIT = '.git';
 
 const MARKER = /^(?:<{7}|={7}|>{7})(?: .*)?$/m;
 
@@ -81,21 +81,45 @@ export async function removed(repository: string, name: string): Promise<void> {
   }
 }
 
-export async function scanned(repository: string): Promise<Map<string, Present>> {
-  const present = new Map<string, Present>();
+export interface Scan {
+  present: Map<string, Present>;
+  left: string[];
+}
+
+export function leaves(left: readonly string[], path: string): boolean {
+  return left.some((folder) => path.startsWith(`${folder}/`));
+}
+
+async function walked(repository: string, file: (name: string) => Promise<void>): Promise<string[]> {
+  const left: string[] = [];
   const walk = async (folder: string): Promise<void> => {
-    for (const entry of await readdir(join(repository, folder), { withFileTypes: true })) {
+    const entries = await readdir(join(repository, folder), { withFileTypes: true });
+    if (folder !== '' && entries.some((entry) => entry.name === GIT)) {
+      left.push(folder.normalize('NFC'));
+      return;
+    }
+    for (const entry of entries) {
       const name = folder === '' ? entry.name : `${folder}/${entry.name}`;
-      if (folder === '' && (entry.name === MANIFEST || entry.name === UNREAD)) continue;
+      if (folder === '' && (entry.name === MANIFEST || entry.name === GIT)) continue;
       if (entry.isDirectory()) await walk(name);
-      else if (entry.isFile()) {
-        const file = await hashed(join(repository, name));
-        if (file !== null) present.set(name.normalize('NFC'), { name, ...file });
-      }
+      else if (entry.isFile()) await file(name);
     }
   };
   await walk('');
-  return present;
+  return left.sort();
+}
+
+export async function scanned(repository: string): Promise<Scan> {
+  const present = new Map<string, Present>();
+  const left = await walked(repository, async (name) => {
+    const file = await hashed(join(repository, name));
+    if (file !== null) present.set(name.normalize('NFC'), { name, ...file });
+  });
+  return { present, left };
+}
+
+export function leftIn(repository: string): Promise<string[]> {
+  return walked(repository, async () => undefined);
 }
 
 export async function marked(repository: string, name: string): Promise<boolean> {
