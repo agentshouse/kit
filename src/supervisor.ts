@@ -13,7 +13,7 @@ const UNIT = `${SERVICE}.service`;
 const MANAGER_MS = 10_000;
 // The service manager lingering starts answers within a second, so a check every tenth of a second starts Kit as soon as it does.
 const MANAGER_CHECK_MS = 100;
-// A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
+// A Kit that ended any way but by its own exit 0, a signal included, restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
 const RESTART_SECONDS = 5;
 // A Mac's LaunchAgent is reloaded by a process of its own, which ends this one within moments; a minute bounds a reload that never comes.
 const RELOAD_MS = 60_000;
@@ -64,7 +64,8 @@ Description=Kit
 
 [Service]
 ExecStart=${unitWord(launcher())} resident
-Restart=on-failure
+Restart=always
+RestartPreventExitStatus=0
 RestartSec=${RESTART_SECONDS}
 OOMPolicy=continue
 

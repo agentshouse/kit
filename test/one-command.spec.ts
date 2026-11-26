@@ -77,6 +77,72 @@ it("names house in a Linux home's unit and Git helper that named kit and deletes
   expect(helpers(home)).toBe('\n!house git-credential\n');
 });
 
+it("rewrites a Linux home's unit an earlier release wrote, under which a Kit a signal ended stays stopped, at the release's first start, reloads systemd once, and keeps it at the start that follows", async () => {
+  const tools = await supervision();
+  await tools.systemd();
+  const home = await temporaryHome();
+  const unit = join(accountOf(home), '.config', 'systemd', 'user', 'house-kit.service');
+  const hosted = await hostKit([], {
+    home,
+    skills: [],
+    node: ROOTED,
+    environment: { ...tools.environment, XDG_CONFIG_HOME: join(accountOf(home), '.config') },
+    prepare: () =>
+      put(unit, `[Unit]\nDescription=Kit\n\n[Service]\nExecStart="${join(home, 'bin', 'house')}" resident\nRestart=on-failure\nRestartSec=5\nDelegate=yes\nOOMPolicy=continue\n\n[Install]\nWantedBy=default.target\n`),
+  });
+
+  expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
+  expect((await readFile(unit, 'utf8')).split('\n')).toEqual([
+    '[Unit]',
+    'Description=Kit',
+    '',
+    '[Service]',
+    `ExecStart="${join(home, 'bin', 'house')}" resident`,
+    'Restart=always',
+    'RestartPreventExitStatus=0',
+    'RestartSec=5',
+    'OOMPolicy=continue',
+    '',
+    '[Install]',
+    'WantedBy=default.target',
+    '',
+  ]);
+  expect(tools.calls('systemctl')).toEqual(['--user daemon-reload']);
+  const written = await stat(unit);
+
+  await hosted.restart();
+
+  expect(tools.calls('systemctl')).toEqual(['--user daemon-reload']);
+  expect((await stat(unit)).mtimeMs).toBe(written.mtimeMs);
+});
+
+it("reloads a Mac's LaunchAgent an earlier release wrote otherwise at the release's first start, and keeps it at the start that follows", async () => {
+  const tools = await supervision();
+  const home = await temporaryHome();
+  const agent = join(accountOf(home), 'Library', 'LaunchAgents', 'house-kit.plist');
+  await put(agent, agentNaming(home, 'house'));
+  await put(join(home, 'credential.json'), JSON.stringify({ house: 'https://agents.house', environment: 'environment-one', credential: 'ahk_held' }));
+  const launchd = join(tools.fake, 'launchd');
+  await put(join(launchd, 'launchctl'), '#!/bin/sh\nprintf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n[ "$1" != bootout ] || kill -TERM "$(cut -d" " -f4 "/proc/$PPID/stat")"\n');
+  await chmod(join(launchd, 'launchctl'), 0o755);
+  const mac = await macOS(home);
+  const environment = { ...mac, PATH: `${launchd}:${mac.PATH}`, FAKE: tools.fake };
+
+  const first = runKit(['resident'], { HOME: accountOf(home), ...environment });
+
+  expect(await first.exited).toBe(null);
+  const target = `gui/${process.getuid!()}`;
+  expect(await until(() => tools.calls('launchctl').length === 2 && tools.calls('launchctl'))).toEqual([`bootout ${target}/house-kit`, `bootstrap ${target} ${agent}`]);
+  expect(await readFile(agent, 'utf8')).toMatch(/<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/);
+  const written = await stat(agent);
+
+  const hosted = await hostKit([], { home, skills: [], environment });
+
+  expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
+  expect(tools.calls('launchctl')).toHaveLength(2);
+  expect((await stat(agent)).mtimeMs).toBe(written.mtimeMs);
+});
+
 it('removes the kit links its installer placed in /usr/local/bin and ~/.local/bin as it drops kit, and no other link or file', async () => {
   const tools = await supervision();
   const home = await temporaryHome();

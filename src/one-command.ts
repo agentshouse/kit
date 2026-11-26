@@ -29,18 +29,18 @@ async function renameHelpers(): Promise<void> {
 
 async function rewritten(): Promise<boolean> {
   if (!existsSync(process.platform === 'darwin' ? launchAgent() : userUnit())) return false;
-  if ((await defineSupervisor()) && process.platform !== 'darwin') {
-    required('systemctl', ['--user', 'daemon-reload'], 'systemd could not read the Kit service');
-  }
+  if (!(await defineSupervisor())) return true;
+  if (process.platform === 'darwin') await reloadLaunchAgent('the LaunchAgent was not reloaded; its next start runs house resident');
+  required('systemctl', ['--user', 'daemon-reload'], 'systemd could not read the Kit service');
   return true;
 }
 
 async function folded(asKit: boolean): Promise<void> {
   await rm(join(kitHome(), OWN_AGENT), { force: true });
   await renameHelpers();
-  if (!existsSync(kitLauncher())) return;
   const sandbox = process.env.HOUSE_KIT_SANDBOX === '1';
   const supervised = !sandbox && (process.platform === 'darwin' || systemd()) && (await rewritten());
+  if (!existsSync(kitLauncher())) return;
   if (supervised && asKit && process.platform === 'darwin') {
     await reloadLaunchAgent('the LaunchAgent was not reloaded; its next start runs house resident');
   }
