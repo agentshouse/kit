@@ -222,6 +222,7 @@ export interface Hosted {
   images: Received[];
   finishes: Received[];
   transcripts: Received[];
+  unsaved: Received[];
   store: Store;
   idles: Received[];
   mcp: Received[];
@@ -296,6 +297,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const images: Received[] = [];
   const finishes: Received[] = [];
   const transcripts: Received[] = [];
+  const unsaved: Received[] = [];
   const store = await startStore(hosting.tls ? certificate() : undefined);
   const idles: Received[] = [];
   const mcp: Received[] = [];
@@ -363,6 +365,16 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     transcripts.push(request);
     return { body: {} };
   });
+  house.route('POST', '/kit/turns/not-saved/report', (request) => {
+    unsaved.push(request);
+    const { files } = request.body as { files: { path: string; refused?: string }[] };
+    const lines = files.map((file) => `- ${file.path}: ${file.refused ?? 'it holds conflict markers'}`);
+    return { body: { text: ['Not saved:', ...lines].join('\n') } };
+  });
+  house.route('POST', '/kit/local-copies/not-saved/report', (request) => {
+    unsaved.push(request);
+    return { body: {} };
+  });
   house.route('POST', '/kit/kits/report-idle', (request) => {
     idles.push(request);
     return { body: {} };
@@ -393,6 +405,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     images,
     finishes,
     transcripts,
+    unsaved,
     store,
     idles,
     mcp,

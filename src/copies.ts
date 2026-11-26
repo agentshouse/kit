@@ -1,4 +1,4 @@
-import type { KitBinaryChange, KitRun, LocalCopyRoom } from '@agentshouse/kit-wire';
+import type { KitBinaryChange, KitNotSavedFile, KitRun, LocalCopyRoom } from '@agentshouse/kit-wire';
 import { isUtf8 } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
@@ -181,6 +181,8 @@ interface Copied {
 
 interface Copy extends Copied {
   pending?: Pending;
+  refused?: Record<string, string>;
+  reported?: Record<string, string>;
 }
 
 interface Recorded {
@@ -308,13 +310,31 @@ export interface Caller {
 export interface Answered {
   refused: boolean;
   text: string;
-  kept?: true;
-  conflicted?: true;
 }
 
-type Settled = { refused: true; text: string } | { refused: false; files: number; lines: string[] };
+interface Batch {
+  changes: Change[];
+  read: Record<string, Read>;
+}
 
-type Built = { changes: Change[]; read: Record<string, Read> } | Answered;
+type Settled = { refused: true; text: string; refusal?: Refusal; batch?: Batch; lines?: string[] } | { refused: false; files: number; lines: string[] };
+
+type Stopped = Extract<Settled, { refused: true }>;
+
+interface Sending {
+  files: number;
+  landed: number;
+  lines: string[];
+  conflicted: boolean;
+  stopped?: Stopped;
+}
+
+type Built = Batch & { unsendable: Map<string, string> };
+
+interface Unsaved {
+  path: string;
+  refused?: string;
+}
 
 const HELD: Fetching = { attachments: false, maxSize: DEFAULT_MAX_SIZE };
 
@@ -334,9 +354,34 @@ function skillsKept(root: string, error: unknown): string {
   return `${root}: its skills kept as they were: ${houseCause(error)}`;
 }
 
-function markdownOnly(paths: string[], maxBytes: number): string {
-  const [named, them] = paths.length === 1 ? [`${paths[0]} is`, 'it'] : [`${paths.join(', ')} are`, 'them'];
-  return `${named} Markdown, which holds text only: UTF-8 without NUL, at most ${maxBytes} bytes; save ${them} as text and run house upload again`;
+function markdownOnly(maxBytes: number): string {
+  return `it is Markdown, which holds text only: UTF-8 without NUL, at most ${maxBytes} bytes`;
+}
+
+const SETTLED_IN_PLACE = new Set(['handle_changed', 'files_unstaged', 'upload_unavailable']);
+
+function names(change: Change, path: string): boolean {
+  const named = relative(path);
+  return relative(change.path) === named || (change.op === 'move' && relative(change.to) === named);
+}
+
+function refusedChanges(refusal: Refusal, changes: readonly Change[]): Change[] {
+  const paths =
+    refusal.code === 'edit_conflict'
+      ? refusal.conflicts.map((conflict) => conflict.path)
+      : typeof refusal.detail.path === 'string' && !SETTLED_IN_PLACE.has(refusal.code)
+        ? [refusal.detail.path]
+        : [];
+  return changes.filter((change) => paths.some((path) => names(change, path)));
+}
+
+function notSaved(root: string, refused: ReadonlyMap<string, string>): string[] {
+  return [...refused].sort(([left], [right]) => (left < right ? -1 : 1)).map(([path, reason]) => `${root}/${path}: not saved: ${reason}`);
+}
+
+function notSavedFile(root: string, file: Unsaved): KitNotSavedFile {
+  const path = `${root}/${file.path}`;
+  return file.refused === undefined ? { path, markers: true } : { path, refused: file.refused };
 }
 
 async function stopping<T>(sent: Promise<T>): Promise<T | { refused: Refusal }> {
@@ -1098,7 +1143,60 @@ export class LocalCopies {
   }
 
   upload(cwd: string, caller: Caller): Promise<Answered> {
-    return this.keyAt(cwd).then((key) => (key === undefined ? outside(cwd) : this.exclusive(key, () => this.uploaded(key, caller))));
+    return this.keyAt(cwd).then((key) =>
+      key === undefined
+        ? outside(cwd)
+        : this.exclusive(key, async () => {
+            const answer = await this.uploaded(key, caller, true);
+            if (!this.livePlaceHolds(key)) await this.reportedOutside(key);
+            return answer;
+          }),
+    );
+  }
+
+  private livePlaceHolds(key: string): boolean {
+    return [...this.places].some(([conversation, place]) => place.deleted !== true && Object.keys(place.copies).some((room) => copyKey(conversation, room) === key));
+  }
+
+  private async reportedOutside(key: string): Promise<void> {
+    const copy = this.copies.get(key)!;
+    if (earlier(copy)) return;
+    const root = rootOf(copy.room_handle);
+    const held = copy.reported ?? {};
+    const reported: Record<string, string> = {};
+    for (const file of await this.unsavedIn(copy)) {
+      const reason = file.refused ?? '';
+      if (held[file.path] !== reason) {
+        try {
+          await this.house.act('local-copies/not-saved/report', { room_ref: copy.room_ref, ...notSavedFile(root, file) });
+        } catch (error) {
+          logged(error);
+          continue;
+        }
+      }
+      reported[file.path] = reason;
+    }
+    const { reported: _held, ...rest } = this.copies.get(key) as Copy;
+    await this.save(Object.keys(reported).length === 0 ? rest : { ...rest, reported });
+  }
+
+  private async unsavedIn(copy: Copy): Promise<Unsaved[]> {
+    const manifest = await readManifest(copy.repository).catch(() => null);
+    if (manifest === null) return [];
+    const scan = await scanned(copy.repository);
+    const marked = await stillMarked(copy.repository, manifest, scan);
+    const { added, changed, gone } = changeSet(manifest, scan);
+    const unsent = new Set([...added, ...changed, ...gone]);
+    const refused = Object.entries(copy.refused ?? {}).flatMap(([path, reason]) => (unsent.has(path) && !marked.includes(path) ? [{ path, refused: reason }] : []));
+    return [...refused, ...marked.map((path) => ({ path }))].sort((left, right) => (left.path < right.path ? -1 : 1));
+  }
+
+  private async unsentPaths(copy: Copy): Promise<string[]> {
+    const manifest = await readManifest(copy.repository);
+    const scan = await scanned(copy.repository);
+    const marked = await stillMarked(copy.repository, manifest, scan);
+    const { added, changed, gone } = changeSet(manifest, scan);
+    return [...new Set([...added, ...changed, ...gone])].filter((path) => !marked.includes(path));
   }
 
   async updated(conversation: string | null, cwd: string, changes: readonly Sent[], forwarded: Forwarded): Promise<Forwarded> {
@@ -1503,19 +1601,27 @@ export class LocalCopies {
     return { refused: false, text: unwritten ?? NOTHING_NEW };
   }
 
-  async ended(directory: string, caller: Caller): Promise<Answered | null> {
+  async ended(directory: string, caller: Caller): Promise<KitNotSavedFile[] | null> {
     const held = this.conversationCopyAt(directory);
     if (held === null || !this.copies.has(held.key)) return null;
-    const answer = await this.exclusive(held.key, () => this.uploaded(held.key, caller));
-    if (!answer.refused) return answer;
-    if ((this.copies.get(held.key) as Copy).pending !== undefined) return { ...answer, kept: true };
-    return (await this.markedIn(directory)).length > 0 ? { ...answer, conflicted: true } : answer;
+    return this.exclusive(held.key, async () => {
+      const answer = await this.uploaded(held.key, caller, false);
+      if (answer.refused) logged(`${directory}: ${answer.text}`);
+      return this.unsavedAt(held.key);
+    });
   }
 
-  async markedIn(directory: string): Promise<string[]> {
-    const manifest = await readManifest(directory).catch(() => null);
-    if (manifest === null) return [];
-    return (await stillMarked(directory, manifest, await scanned(directory))).sort();
+  async unsaved(directory: string): Promise<string[]> {
+    const held = this.conversationCopyAt(directory);
+    if (held === null || !this.copies.has(held.key)) return [];
+    return this.exclusive(held.key, async () => (await this.unsavedAt(held.key)).map((file) => file.path));
+  }
+
+  private async unsavedAt(key: string): Promise<KitNotSavedFile[]> {
+    const copy = this.copies.get(key)!;
+    if (earlier(copy)) return [];
+    const root = rootOf(copy.room_handle);
+    return (await this.unsavedIn(copy)).map((file) => notSavedFile(root, file));
   }
 
   private roomCopies(): Held[] {
@@ -2343,61 +2449,103 @@ export class LocalCopies {
     return this.save(copy);
   }
 
-  private async uploaded(key: string, caller: Caller): Promise<Answered> {
+  private async uploaded(key: string, caller: Caller, byHand: boolean): Promise<Answered> {
     let copy: Copy;
     try {
       copy = await this.converted(this.copies.get(key)!);
     } catch (error) {
       return { refused: true, text: error instanceof NotReady ? `${rootOf(this.copies.get(key)!.room_handle)}: ${NOT_READY}` : causeOf(error) };
     }
-    const lines: string[] = [];
-    let files = 0;
-    let landed = 0;
+    const refused = new Map<string, string>();
+    const sending: Sending = { files: 0, landed: 0, lines: [], conflicted: false };
     if (copy.pending !== undefined) {
-      const settled = await this.settle(copy, caller);
-      if (settled.refused) return settled;
-      files += settled.files;
-      landed++;
-      lines.push(...settled.lines);
+      await this.sentBatch(copy, caller, refused, sending);
+      if (sending.stopped !== undefined) return this.stoppedUpload(key, refused, sending, 0);
       copy = this.copies.get(key) as Copy;
     }
     const root = rootOf(copy.room_handle);
     const manifest = await readManifest(copy.repository);
     const scan = await scanned(copy.repository);
-    const unresolved = (await stillMarked(copy.repository, manifest, scan)).map((path) => `${root}/${path}`);
-    if (unresolved.length > 0) {
+    const marked = await stillMarked(copy.repository, manifest, scan);
+    if (byHand && marked.length > 0) {
+      await this.keptRefused(key, refused, true);
+      const unresolved = marked.map((path) => `${root}/${path}`);
       const [named, they] = unresolved.length === 1 ? [`${unresolved[0]} still holds`, 'it'] : [`${unresolved.join(', ')} still hold`, 'each'];
       return { refused: true, text: `${named} conflict markers; resolve ${they}, then run house upload again` };
     }
     let built: Built;
     try {
-      built = await this.built(copy, manifest, scan);
+      built = await this.built(copy, manifest, scan, marked);
     } catch (error) {
       return { refused: true, text: houseCause(error) };
     }
-    if ('refused' in built) return built;
+    for (const [path, reason] of built.unsendable) refused.set(path, reason);
     const batches = batched(built.changes);
     for (const [index, changes] of batches.entries()) {
       const read = Object.fromEntries(changedPaths(changes).flatMap((path) => (built.read[relative(path)] === undefined ? [] : [[relative(path), built.read[relative(path)]!]])));
       copy = await this.save({ ...(this.copies.get(key) as Copy), pending: { operation_id: operationId(), caller: caller.key, changes, read } });
-      const settled = await this.settle(copy, caller);
-      if (settled.refused) {
-        const done = landed === 0 ? [] : [`House accepted ${counted(landed, 'batch', 'batches')} of ${rootOf(copy.room_handle)} before this one.`];
-        return { refused: true, text: [...done, ...lines, settled.text, ...(index + 1 < batches.length ? [`${counted(batches.length - index - 1, 'batch', 'batches')} after it ${batches.length - index - 1 === 1 ? 'was' : 'were'} not sent`] : [])].join('\n') };
-      }
-      files += settled.files;
-      landed++;
-      lines.push(...settled.lines);
+      await this.sentBatch(copy, caller, refused, sending);
+      if (sending.stopped !== undefined) return this.stoppedUpload(key, refused, sending, batches.length - index - 1);
     }
+    await this.keptRefused(key, refused, false);
     const now = rootOf((this.copies.get(key) as Copy).room_handle);
-    if (landed === 0) return { refused: false, text: [`Nothing to upload: ${root} matches House.`, ...leftOut(root, scan.left)].join('\n') };
+    if (sending.landed === 0 && refused.size === 0 && !sending.conflicted) return { refused: false, text: [`Nothing to upload: ${root} matches House.`, ...leftOut(root, scan.left)].join('\n') };
+    const accepted = sending.landed === 0 ? [] : [`House accepted ${counted(sending.files, 'file')} of ${now}${sending.landed > 1 ? ` in ${sending.landed} batches` : ''}.`];
     return {
-      refused: false,
-      text: [`House accepted ${counted(files, 'file')} of ${now}${landed > 1 ? ` in ${landed} batches` : ''}.`, ...lines, ...leftOut(now, scan.left)].join('\n'),
+      refused: refused.size > 0 || sending.conflicted,
+      text: [...accepted, ...sending.lines, ...notSaved(now, refused), ...leftOut(now, scan.left)].join('\n'),
     };
   }
 
-  private async built(copy: Copy, manifest: Manifest, scan: Scan): Promise<Built> {
+  private async sentBatch(start: Copy, caller: Caller, refused: Map<string, string>, sending: Sending): Promise<void> {
+    let copy = start;
+    for (;;) {
+      const settled = await this.settle(copy, caller);
+      if (!settled.refused) {
+        sending.files += settled.files;
+        sending.landed++;
+        sending.lines.push(...settled.lines);
+        return;
+      }
+      const { refusal, batch } = settled;
+      const named = refusal === undefined || batch === undefined ? [] : refusedChanges(refusal, batch.changes);
+      if (named.length === 0) {
+        sending.stopped = settled;
+        return;
+      }
+      if (refusal!.code === 'edit_conflict') sending.conflicted = true;
+      else for (const change of named) refused.set(relative(change.path), firstLine(refusal!));
+      sending.lines.push(...(settled.lines ?? []));
+      const rest = batch!.changes.filter((change) => !named.includes(change));
+      if (rest.length === 0) return;
+      const paths = new Set(changedPaths(rest).map(relative));
+      const read = Object.fromEntries(Object.entries(batch!.read).filter(([path]) => paths.has(path)));
+      copy = await this.save({ ...(this.copies.get(start.key) as Copy), pending: { operation_id: operationId(), caller: caller.key, changes: rest, read } });
+    }
+  }
+
+  private async stoppedUpload(key: string, refused: Map<string, string>, sending: Sending, after: number): Promise<Answered> {
+    const stopped = sending.stopped!;
+    const copy = this.copies.get(key) as Copy;
+    const root = rootOf(copy.room_handle);
+    const named = notSaved(root, refused);
+    if (stopped.refusal !== undefined) {
+      const reason = firstLine(stopped.refusal);
+      for (const path of await this.unsentPaths(copy)) if (!refused.has(path)) refused.set(path, reason);
+    }
+    await this.keptRefused(key, refused, stopped.refusal === undefined);
+    const done = sending.landed === 0 ? [] : [`House accepted ${counted(sending.landed, 'batch', 'batches')} of ${root} before this one.`];
+    const unsent = after > 0 ? [`${counted(after, 'batch', 'batches')} after it ${after === 1 ? 'was' : 'were'} not sent`] : [];
+    return { refused: true, text: [...done, ...sending.lines, ...named, stopped.text, ...unsent].join('\n') };
+  }
+
+  private async keptRefused(key: string, refused: ReadonlyMap<string, string>, merged: boolean): Promise<void> {
+    const { refused: held, ...copy } = this.copies.get(key) as Copy;
+    const kept = { ...(merged ? held : {}), ...Object.fromEntries(refused) };
+    await this.save(Object.keys(kept).length === 0 ? copy : { ...copy, refused: kept });
+  }
+
+  private async built(copy: Copy, manifest: Manifest, scan: Scan, marked: readonly string[]): Promise<Built> {
     const root = rootOf(copy.room_handle);
     const { present } = scan;
     const { added, changed, gone, adopted } = changeSet(manifest, scan);
@@ -2416,22 +2564,21 @@ export class LocalCopies {
       if (others.length === 0 && more.length === 0 && to !== undefined && isDocument(from!) === isDocument(to)) moves.set(from!, to);
     }
     const arrived = new Set(moves.values());
-    const documents = [...added.filter((path) => !arrived.has(path)), ...changed].filter(isDocument).sort();
+    const documents = [...added.filter((path) => !arrived.has(path)), ...changed].filter((path) => isDocument(path) && !marked.includes(path)).sort();
     const texts = new Map<string, string>();
+    const unsendable = new Map<string, string>();
     if (documents.length > 0) {
       const { bounds } = await this.house.door<Discovery>('rooms/discover', { prefixes: [root] });
-      const refused: string[] = [];
       for (const path of documents) {
         const bytes = await readFile(join(copy.repository, present.get(path)!.name));
-        if (bytes.length > bounds.max_authored_file_bytes || !isUtf8(bytes) || bytes.includes(0)) refused.push(path);
+        if (bytes.length > bounds.max_authored_file_bytes || !isUtf8(bytes) || bytes.includes(0)) unsendable.set(path, markdownOnly(bounds.max_authored_file_bytes));
         else texts.set(path, bytes.toString('utf8'));
       }
-      if (refused.length > 0) return { refused: true, text: markdownOnly(refused, bounds.max_authored_file_bytes) };
     }
     const changes: Change[] = [];
     const read: Record<string, Read> = {};
     for (const path of [...new Set([...added, ...changed, ...gone])].sort()) {
-      if (arrived.has(path)) continue;
+      if (arrived.has(path) || marked.includes(path) || unsendable.has(path)) continue;
       const named = `${root}/${path}`;
       const entry = manifest.files[path];
       const to = moves.get(path);
@@ -2455,7 +2602,7 @@ export class LocalCopies {
         read[path] = { name: file.name, sha256: file.sha256 };
       }
     }
-    return { changes, read };
+    return { changes, read, unsendable };
   }
 
   private async settle(start: Copy, caller: Caller, restaged = false): Promise<Settled> {
@@ -2493,15 +2640,16 @@ export class LocalCopies {
       copy = await this.save(rehandled(copy, handle));
     }
     if ('refused' in outcome) {
-      if (stopsPush(outcome.refused)) return this.stopped(copy, firstLine(outcome.refused));
+      if (stopsPush(outcome.refused)) return { ...(await this.stopped(copy, firstLine(outcome.refused))), refusal: outcome.refused };
       if (outcome.refused.code === 'upload_unavailable' && copy.pending!.upload !== undefined && !restaged) {
         const { upload: _upload, ...unstaged } = copy.pending!;
         return this.settle(await this.save({ ...copy, pending: unstaged }), caller, true);
       }
       const settled = await this.save(without(copy));
-      if (outcome.refused.code !== 'edit_conflict') return { refused: true, text: outcome.refused.text };
+      const sent = { refusal: outcome.refused, batch: { changes: copy.pending!.changes, read: copy.pending!.read } };
+      if (outcome.refused.code !== 'edit_conflict') return { refused: true, text: outcome.refused.text, ...sent };
       const lines = await this.conflicted(settled, copy.pending!, outcome.refused, caller);
-      return { refused: true, text: [outcome.refused.text, ...lines].join('\n') };
+      return { refused: true, text: [outcome.refused.text, ...lines].join('\n'), ...sent, lines };
     }
     return this.integrated(copy, outcome.accepted);
   }
@@ -2534,7 +2682,7 @@ export class LocalCopies {
     return failed;
   }
 
-  private async stopped(copy: Copy, reasons: ReadonlyMap<string, string | Changed> | string): Promise<Settled> {
+  private async stopped(copy: Copy, reasons: ReadonlyMap<string, string | Changed> | string): Promise<Stopped> {
     const pending = copy.pending!;
     const root = rootOf(copy.room_handle);
     const unchanged = `House holds nothing of this upload yet, so ${root} is unchanged`;

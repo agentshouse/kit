@@ -172,13 +172,16 @@ it('overwrites a file House changed only while it is unchanged here, keeps one c
   expect(files['gone.md']).toBeUndefined();
 
   const refused = await upload(hosted, room);
-  expect(refused.status).toBe(1);
-  expect(refused.stderr).toContain('code: path_exists');
-  expect(refused.stderr.endsWith('/rooms/notes/c.md: conflict markers written; resolve them, then run house upload again\n')).toBe(true);
+  expect(refused).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: 'house: House accepted 1 file of /rooms/notes.\n/rooms/notes/c.md: conflict markers written; resolve them, then run house upload again\n',
+  });
+  expect(room.files.get('b.md')!.content).toBe('ONE\ntwo\nTHREE\n');
   expect(await text(room, 'c.md')).toBe('<<<<<<< current\nc, theirs\n=======\nc, mine\n>>>>>>> yours\n');
   await writeFile(join(room.repository, 'c.md'), 'c, theirs and mine\n');
 
-  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n' });
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
   expect(room.files.get('b.md')!.content).toBe('ONE\ntwo\nTHREE\n');
   expect(room.files.get('c.md')!.content).toBe('c, theirs and mine\n');
   expect(await text(room, 'b.md')).toBe('ONE\ntwo\nTHREE\n');
@@ -346,10 +349,10 @@ it("renames a copy's folder with the handle House names, every file in it, unupl
   room.put('c.md', 'c\n');
   await rooms.download([room]);
   const earlier = room.repository;
-  await writeFile(join(earlier, 'draft.md'), 'draft, not uploaded\n');
   await writeFile(join(earlier, 'c.md'), 'c, mine\n');
   room.put('c.md', 'c, from House\n');
   expect(await upload(hosted, room)).toMatchObject({ status: 1 });
+  await writeFile(join(earlier, 'draft.md'), 'draft, not uploaded\n');
   const conflicted = await text(room, 'c.md');
 
   room.rehandle('renamed-notes');
