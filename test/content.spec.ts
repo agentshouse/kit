@@ -43,7 +43,7 @@ function endedOf(received: Received): Ended {
 async function replayed(fixture: string, count = 1, recording: Recording = {}): Promise<Replayed> {
   const hosted = await hostKit([{ kind: KINDS[fixture.split('-')[0]!]!, ...recording.route }]);
   if (recording.collaboration !== undefined) await writeFile(join(hosted.home, 'collaboration'), recording.collaboration);
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
   await hosted.result(lastCall());
   hosted.watch(true);
   hosted.call({ kind: 'message', text: `@gate admitted\n@replay ${fixture}`, first: false });
@@ -131,7 +131,7 @@ function update(update: Record<string, unknown>): string {
 
 async function said(kind: string, text: string): Promise<Ended> {
   const hosted = await hostKit([{ kind }]);
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
   await hosted.result(lastCall());
   hosted.watch(true);
   hosted.call({ kind: 'message', text, first: false });
@@ -173,7 +173,7 @@ function emitted(fixture: string, lines: readonly Record<string, any>[]): string
 
 async function composed(kind: string, script: (hosted: Hosted) => Promise<string[]>, hosting: Hosting = {}): Promise<{ hosted: Hosted; ended: Ended }> {
   const hosted = await hostKit([{ kind }], hosting);
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
   await hosted.result(lastCall());
   hosted.watch(true);
   hosted.call({ kind: 'message', text: (await script(hosted)).join('\n'), first: false });
@@ -430,7 +430,7 @@ it.each([
   "counts in the session's state the two files a turn %s recorded edits with their lines, and the background shell and sub-agent it leaves running by kind, with no path or label",
   async (kind, files) => {
     const hosted = await hostKit([{ kind }]);
-    hosted.call({ kind: 'open' });
+    hosted.call({ kind: 'open', mode: null });
     await hosted.result(lastCall());
     hosted.watch(true);
     hosted.call({ kind: 'message', text: (await COMPOSED[kind]!(hosted)).join('\n'), first: false });
@@ -650,7 +650,7 @@ it("marks an image House did not save with House's refusal as an error notice", 
     status: 410,
     body: { error: { code: 'upload_expired', message: 'upload_expired: this upload is gone; run the same command again to start a new one', retryable: false } },
   }));
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
   await hosted.result(lastCall());
 
   hosted.call({ kind: 'message', text: emittedImage(), first: false });
@@ -677,7 +677,7 @@ it('streams the text after an image and declares the next image while the first 
     else await until(() => streamed(hosted, 'image', 'version-1'));
     return { body: await hosted.store.finish(upload, part_sha256) };
   });
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
   await hosted.result(lastCall());
   hosted.watch(true);
 
@@ -700,7 +700,7 @@ it('keeps writing the text an image was saved in the middle of', async () => {
     const { upload, part_sha256 } = request.body as { upload: string; part_sha256: unknown };
     return { body: await hosted.store.finish(upload, part_sha256) };
   });
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
   await hosted.result(lastCall());
   hosted.watch(true);
 
@@ -731,7 +731,7 @@ function switched(value: string): string {
 
 it("marks every model switch Claude Code makes after the Kit asked for a model, a switch back to that model included, and carries the model in the session's state", async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
   await hosted.result(lastCall());
   hosted.call({ kind: 'option', model: 'sonnet' });
   await hosted.result(lastCall());
@@ -748,7 +748,7 @@ it("marks every model switch Claude Code makes after the Kit asked for a model, 
 
 it('marks a model switch Claude Code makes to a model the Kit asked for and the CLI refused', async () => {
   const hosted = await hostKit([{ kind: 'claude-agent-acp' }]);
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
   await hosted.result(lastCall());
   await writeFile(join(hosted.home, 'refuse-model'), 'opus');
   hosted.call({ kind: 'option', model: 'opus' });

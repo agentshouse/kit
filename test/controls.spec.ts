@@ -197,9 +197,10 @@ it('sets an option on the running process and relays the commands and options th
 it.each([
   ['codex-acp', 'agent-full-access', 'gpt-5.5', 'reasoning_effort', ['collaboration_mode', 'model', 'reasoning_effort']],
   ['claude-agent-acp', 'bypassPermissions', 'opus', 'effort', ['model', 'effort']],
-])("relays every option %s offers but its permission mode, which stays as the session launched", async (kind, launched, model, effort, relayed) => {
+])("relays every option %s offers but its permission mode, which stays as a Run's session launched", async (kind, launched, model, effort, relayed) => {
   const hosted = await hostKit([{ kind, model, effort: 'high' }]);
-  await opened(hosted);
+  hosted.call({ kind: 'open', mode: null });
+  await hosted.result(lastCall());
   const options = (oneWayCall: Record<string, unknown>) => oneWayCall.type === 'options';
   await until(() => hosted.connection.oneWayCalls.find(options));
 

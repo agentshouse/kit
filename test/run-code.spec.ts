@@ -103,7 +103,7 @@ async function opened(
   repository: { url: string; code: Code } | null,
   copy: Copy = { kind: 'new' },
 ): Promise<{ provider_session_id?: string; refused?: string }> {
-  hosted.call({ kind: 'open', conversation_id: `conversation-${index}`, agent_id: `agent-${index}`, room_ref: room.ref, name, run: { name, copy, repository } });
+  hosted.call({ kind: 'open', conversation_id: `conversation-${index}`, agent_id: `agent-${index}`, room_ref: room.ref, name, run: { name, copy, repository }, mode: null });
   return (await hosted.result(lastCall())) as { provider_session_id?: string; refused?: string };
 }
 

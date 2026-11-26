@@ -4,8 +4,6 @@ import { expect, it } from 'vitest';
 import { until } from './double.ts';
 import { hostKit, lastCall, outcome, type Hosted } from './environment.ts';
 
-const NOBODY_THERE = 'Nobody is there to answer. Decide for yourself and go on.';
-
 const ended = (hosted: Hosted) => hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
 
 async function opened(kind: string, afk = true): Promise<Hosted> {
@@ -32,24 +30,39 @@ function reachedHouse(hosted: Hosted): string[] {
 }
 
 it.each([
-  ['claude-agent-acp', 'claude-question', { action: 'accept', content: { question_0_custom: NOBODY_THERE, question_1_custom: NOBODY_THERE } }],
-  ['codex-acp', 'codex-question', { action: 'accept', content: { colour: NOBODY_THERE, size: NOBODY_THERE } }],
-  [
-    'grok-build',
-    'grok-question',
-    { outcome: 'accepted', answers: { 'Which colour?': NOBODY_THERE, 'Which size?': NOBODY_THERE } },
-  ],
-])('tells a question on %s that nobody is there, and the turn goes on with nothing reported to House', async (kind, fixture, told) => {
+  ['claude-agent-acp', { claudeCode: { options: { disallowedTools: ['AskUserQuestion'] } } }],
+  ['grok-build', { askUserQuestion: false }],
+])('starts %s with its question tool off', async (kind, off) => {
+  const hosted = await opened(kind);
+  const plain = await opened(kind, false);
+
+  const meta = async (of: Hosted) => ((await of.adapterLog()).find((entry) => entry.method === 'session/new')!.params as { _meta: unknown })._meta;
+  expect(await meta(hosted)).toMatchObject(off);
+  expect(JSON.stringify(await meta(plain))).not.toMatch(/AskUserQuestion|askUserQuestion/);
+});
+
+it('starts Codex as its own settings give it, whose question tool is off outside plan mode', async () => {
+  const hosted = await opened('codex-acp');
+
+  const opening = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!;
+  expect((opening.params as { _meta?: unknown })._meta).toEqual({});
+});
+
+it.each([
+  ['claude-agent-acp', 'claude-question', { action: 'decline' }],
+  ['codex-acp', 'codex-question', { action: 'decline' }],
+  ['grok-build', 'grok-question', { outcome: 'cancelled' }],
+])('answers no question %s raises anyway, declining it, and the turn goes on with nothing reported to House', async (kind, fixture, declined) => {
   const { hosted, answer } = await asked(kind, fixture);
 
-  expect(answer).toEqual(told);
+  expect(answer).toEqual(declined);
   expect(reachedHouse(hosted)).toEqual([]);
 });
 
-it('tells a secret prompt that nobody is there and neither holds nor fetches a secret', async () => {
+it('declines a secret prompt and neither holds nor fetches a secret', async () => {
   const { hosted, answer } = await asked('codex-acp', 'codex-secret');
 
-  expect(answer).toEqual({ action: 'accept', content: { token: NOBODY_THERE } });
+  expect(answer).toEqual({ action: 'decline' });
   expect(reachedHouse(hosted)).toEqual([]);
 });
 

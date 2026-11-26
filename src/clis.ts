@@ -1,4 +1,3 @@
-import type { CreateElicitationRequest } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants, readFileSync } from 'node:fs';
@@ -16,14 +15,13 @@ export interface Cli {
   install: string;
   update: string;
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
-  args: string[];
+  args(fullAccess: boolean): string[];
   reads: 'AGENTS.md' | 'CLAUDE.md' | null;
   compactWords: boolean;
   fullAccess: string | null;
-  sessionMeta(bridge: string, name: string | null, code: string | null): Record<string, unknown>;
+  sessionMeta(bridge: string, name: string | null, code: string | null, afk: boolean): Record<string, unknown>;
   unknownSession(error: unknown): boolean;
   allowHouse(path: string): Promise<void>;
-  questionFields(request: CreateElicitationRequest): string[];
   signedIn: { command: string[] } | { initializeMeta: string; apiKey: string };
   login: { args: string[]; code: 'show' } | { args: string[]; code: 'collect'; rejected: string };
   key: KeySettings;
@@ -92,24 +90,6 @@ export async function allowHouseInCodex(path: string): Promise<void> {
 
 async function nothing(): Promise<void> {}
 
-interface Form {
-  _meta?: { codex?: unknown } | null;
-  requestedSchema?: {
-    properties?: Record<string, { _meta?: { jetbrains?: { air?: { customAnswer?: unknown } } } }>;
-    required?: string[] | null;
-  };
-}
-
-function claudeQuestionFields(request: CreateElicitationRequest): string[] {
-  const properties = (request as Form).requestedSchema?.properties ?? {};
-  return Object.keys(properties).filter((name) => properties[name]!._meta?.jetbrains?.air?.customAnswer !== undefined);
-}
-
-function codexQuestionFields(request: CreateElicitationRequest): string[] {
-  const { _meta, requestedSchema } = request as Form;
-  return _meta?.codex === undefined ? [] : (requestedSchema?.required ?? []);
-}
-
 interface Answered {
   code?: unknown;
   data?: { details?: unknown; code?: unknown } | null;
@@ -136,7 +116,7 @@ export const CLIS: Record<string, Cli> = {
       executable: 'CODEX_PATH',
       env: { CODEX_CONFIG: JSON.stringify({ features: { shell_zsh_fork: true } }) },
     },
-    args: [],
+    args: () => [],
     reads: 'AGENTS.md',
     compactWords: false,
     fullAccess: 'agent-full-access',
@@ -146,7 +126,6 @@ export const CLIS: Record<string, Cli> = {
       return code === -32603 && typeof data?.details === 'string' && data.details.startsWith('no rollout found');
     },
     allowHouse: allowHouseInCodex,
-    questionFields: codexQuestionFields,
     signedIn: { command: ['login', 'status'] },
     login: { args: ['login', '--device-auth'], code: 'show' },
     key: CODEX_KEY,
@@ -164,14 +143,15 @@ export const CLIS: Record<string, Cli> = {
       executable: 'CLAUDE_CODE_EXECUTABLE',
       env: { CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1' },
     },
-    args: [],
+    args: () => [],
     reads: 'CLAUDE.md',
     compactWords: true,
     fullAccess: 'bypassPermissions',
-    sessionMeta: (bridge, name, code) => ({
+    sessionMeta: (bridge, name, code, afk) => ({
       claudeCode: {
         options: {
           allowedTools: ['Bash(house:*)'],
+          ...(afk ? { disallowedTools: ['AskUserQuestion'] } : {}),
           includeHookEvents: true,
           settings: {
             sandbox: { network: bridgeInClaudeSandbox(bridge) },
@@ -184,7 +164,6 @@ export const CLIS: Record<string, Cli> = {
     }),
     unknownSession: (error) => answered(error).code === -32002,
     allowHouse: nothing,
-    questionFields: claudeQuestionFields,
     signedIn: { command: ['auth', 'status'] },
     login: { args: ['auth', 'login', '--claudeai'], code: 'collect', rejected: 'Invalid code' },
     key: CLAUDE_KEY,
@@ -197,14 +176,13 @@ export const CLIS: Record<string, Cli> = {
     install: 'curl -fsSL https://x.ai/cli/install.sh | bash',
     update: 'grok update',
     adapter: null,
-    args: ['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio'],
+    args: (fullAccess) => ['--sandbox', 'off', 'agent', ...(fullAccess ? ['--always-approve'] : []), '--no-leader', 'stdio'],
     reads: null,
     compactWords: false,
     fullAccess: null,
-    sessionMeta: () => ({}),
+    sessionMeta: (_bridge, _name, _code, afk) => (afk ? { askUserQuestion: false } : {}),
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
     allowHouse: nothing,
-    questionFields: () => [],
     signedIn: { initializeMeta: 'defaultAuthMethodId', apiKey: 'xai.api_key' },
     login: { args: ['login', '--device-auth'], code: 'show' },
     key: GROK_KEY,
