@@ -1162,6 +1162,99 @@ it('sends an at-once message that arrives with no turn running as any message', 
   expect(log.filter((entry) => entry.method === '_session/steering' || entry.method === 'session/cancel')).toEqual([]);
 });
 
+it.each(['codex-acp', 'claude-agent-acp'])('steers a queued message into the turn %s runs on its steer, which goes on with it, and the message starts', async (kind) => {
+  const hosted = await opened(kind);
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
+  hosted.call({ kind: 'message', text: '@say steered', first: false });
+  const queued = lastCall();
+  const message = lastMessage();
+
+  hosted.call({ kind: 'steer', message_id: message });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(await hosted.result(queued)).toEqual({});
+  await release();
+  expect(await ends(hosted, 1)).toEqual([{ text: 'steeredfirst' }]);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === '_session/steering').map((entry) => entry.text)).toEqual(['@say steered']);
+  expect(log.filter((entry) => entry.method === 'session/cancel')).toEqual([]);
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first']);
+  await settle();
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toHaveLength(1);
+});
+
+it('leaves a message steered while no turn runs first in its queue, where it goes as the next prompt and starts', async () => {
+  const hosted = await hostKit();
+  await writeFile(join(hosted.home, 'hold-new'), '');
+  onTestFinished(() => rm(join(hosted.home, 'hold-new'), { force: true }));
+  hosted.call({ kind: 'message', text: '@say first', first: true });
+  await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/new'));
+  hosted.call({ kind: 'message', text: '@say waited', first: false });
+  hosted.call({ kind: 'message', text: '@say steered', first: false });
+  const queued = lastCall();
+  const message = lastMessage();
+
+  hosted.call({ kind: 'steer', message_id: message });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(hosted.turns.filter((turn) => turn.path === '/kit/turns/start')).toEqual([]);
+  await rm(join(hosted.home, 'hold-new'));
+  expect(await ends(hosted, 3)).toEqual([{ text: 'first' }, { text: 'steered' }, { text: 'waited' }]);
+  expect((await prompts(hosted)).slice(1)).toEqual(['@say steered', '@say waited']);
+  expect(await hosted.result(queued)).toEqual({});
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === '_session/steering' || entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('answers a steer naming a message its queue no longer holds, one started or one taken out, that it started, and changes nothing', async () => {
+  const hosted = await opened();
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  const started = lastMessage();
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
+  hosted.call({ kind: 'message', text: '@say second', first: false });
+  const taken = lastMessage();
+  hosted.call({ kind: 'message', text: '@say third', first: false });
+  hosted.call({ kind: 'take_out', message_id: taken });
+  expect(await hosted.result(lastCall())).toEqual({});
+
+  hosted.call({ kind: 'steer', message_id: started });
+  expect(await hosted.result(lastCall())).toEqual({ started: true });
+  hosted.call({ kind: 'steer', message_id: taken });
+  expect(await hosted.result(lastCall())).toEqual({ started: true });
+
+  await release();
+  expect(await ends(hosted, 2)).toEqual([{ text: 'first' }, { text: 'third' }]);
+  expect(await prompts(hosted)).toEqual(['@gate first\n@say first', '@say third']);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === '_session/steering' || entry.method === 'session/cancel')).toEqual([]);
+});
+
+it('interrupts the turn of a CLI that takes no message during a turn for steered messages, which run in the order they were steered as the next turns before the message that waited', async () => {
+  const hosted = await opened('grok-build');
+  hosted.call({ kind: 'message', text: '@wait 1500', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
+  hosted.call({ kind: 'message', text: '@say waited', first: false });
+  const waited = lastCall();
+  hosted.call({ kind: 'message', text: '@say first', first: false });
+  const first = [lastCall(), lastMessage()] as const;
+  hosted.call({ kind: 'message', text: '@say second', first: false });
+  const second = [lastCall(), lastMessage()] as const;
+
+  hosted.call({ kind: 'steer', message_id: first[1] });
+  hosted.call({ kind: 'steer', message_id: second[1] });
+
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(await ends(hosted, 4)).toEqual([{ text: '' }, { text: 'first' }, { text: 'second' }, { text: 'waited' }]);
+  expect(await prompts(hosted)).toEqual(['@wait 1500', '@say first', '@say second', '@say waited']);
+  const log = await hosted.adapterLog();
+  expect(log.filter((entry) => entry.method === 'session/cancel').length).toBeGreaterThan(0);
+  expect(log.filter((entry) => entry.method === '_session/steering')).toEqual([]);
+  for (const call of [first[0], second[0], waited]) expect(await hosted.result(call)).toEqual({});
+});
+
 const HELD = fileURLToPath(new URL('./fixtures/events/claude-held.jsonl', import.meta.url));
 const HELD_LINES = readFileSync(HELD, 'utf8')
   .trim()
