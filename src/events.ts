@@ -351,11 +351,7 @@ abstract class Reader {
 
   private info(update: Fields): Event[] {
     const suggestion = update._meta?.promptSuggestions?.suggestions?.[0]?.text;
-    const state: Partial<SessionState> = {
-      ...(typeof update.title === 'string' ? { title: update.title } : {}),
-      ...(typeof suggestion === 'string' ? { suggestion } : {}),
-    };
-    return Object.keys(state).length === 0 ? [] : [{ kind: 'state', state }];
+    return typeof suggestion === 'string' ? [{ kind: 'state', state: { suggestion } }] : [];
   }
 
   protected handedOff(id: string | undefined): void {
@@ -513,11 +509,7 @@ class ClaudeReader extends Reader {
   }
 
   protected override used(update: Fields): Partial<SessionState> {
-    const cost = update.cost as Fields | undefined;
-    return {
-      context: { used: update.used, window: update.size, breakdown: this.breakdown },
-      ...(typeof cost?.amount === 'number' ? { cost: { amount: cost.amount, currency: cost.currency } } : {}),
-    };
+    return { context: { used: update.used, window: update.size, breakdown: this.breakdown } };
   }
 
   protected override update(update: Fields, parent: string | null): Event[] {

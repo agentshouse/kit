@@ -115,10 +115,8 @@ const UNSTEERED = "the Agent's CLI did not take the message into its running tur
 const TAKEN_OUT = 'the message was taken out before it started';
 
 const QUIET: SessionState = {
-  title: null,
   context: null,
   limits: [],
-  cost: null,
   tokens: null,
   duration: null,
   files: { count: 0, added: 0, removed: 0 },
