@@ -279,6 +279,25 @@ it('downloads every folder at each connection and then saves what differs, sends
   expect(rooms.edits()).toEqual([]);
 });
 
+it('watches and saves every followed folder after a connection whose downloads House refused', { timeout: 60_000 }, async () => {
+  const { hosted, rooms, notes } = await staged();
+  stop(hosted.kit.pid);
+  await hosted.kit.exited;
+  let refusing = true;
+  hosted.house.route('POST', '/kit/local-copies/selection/read', () => {
+    if (!refusing) return { body: { local_copy: { rooms: rooms.answered.map((room) => ({ room_ref: room.ref, room_handle: room.handle, level: 'keep' })) } } };
+    refusing = false;
+    return { status: 503, body: { error: { code: 'house_unavailable', message: 'house_unavailable: House is unavailable; call again shortly', retryable: true } } };
+  });
+  await writeFile(join(notes.repository, 'a.md'), 'one\ntwo\nthree, while the Kit was down\n');
+  await hosted.restart();
+
+  await until(() => notes.files.get('a.md')?.content === 'one\ntwo\nthree, while the Kit was down\n', SAVED_MS);
+  await writeFile(join(notes.repository, 'b.md'), 'b\n');
+  await until(() => notes.files.get('b.md'), SAVED_MS);
+  expect(refusing).toBe(false);
+});
+
 it("holds an update's end and the Sandbox idle report while a save of the folder a process works in is due or runs, and not for a refused file alone", { timeout: 60_000 }, async () => {
   const { hosted, rooms, notes } = await staged();
   await serveRelease(hosted, await released(PLACED));
