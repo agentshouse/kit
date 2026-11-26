@@ -6,7 +6,7 @@ import { restart } from './end.ts';
 import { earlierPrefix, kitHome, oneFolder } from './home.ts';
 import { removePlacedLinks } from './placement.ts';
 import { quoted } from './shell.ts';
-import { defineSupervisor, launchAgent, launcher, reloadLaunchAgent, required, systemd, userUnit } from './supervisor.ts';
+import { keepSupervisor, launcher, reloadLaunchAgent } from './supervisor.ts';
 
 const STARTED_AS = 'HOUSE_KIT_COMMAND';
 const KIT_HELPER = '!kit git-credential';
@@ -27,20 +27,12 @@ async function renameHelpers(): Promise<void> {
   }
 }
 
-async function rewritten(): Promise<boolean> {
-  if (!existsSync(process.platform === 'darwin' ? launchAgent() : userUnit())) return false;
-  if (!(await defineSupervisor())) return true;
-  if (process.platform === 'darwin') await reloadLaunchAgent('the LaunchAgent was not reloaded; its next start runs house resident');
-  required('systemctl', ['--user', 'daemon-reload'], 'systemd could not read the Kit service');
-  return true;
-}
-
 async function folded(asKit: boolean): Promise<void> {
   await rm(join(kitHome(), OWN_AGENT), { force: true });
   await renameHelpers();
-  const sandbox = process.env.HOUSE_KIT_SANDBOX === '1';
-  const supervised = !sandbox && (process.platform === 'darwin' || systemd()) && (await rewritten());
   if (!existsSync(kitLauncher())) return;
+  const sandbox = process.env.HOUSE_KIT_SANDBOX === '1';
+  const supervised = await keepSupervisor();
   if (supervised && asKit && process.platform === 'darwin') {
     await reloadLaunchAgent('the LaunchAgent was not reloaded; its next start runs house resident');
   }

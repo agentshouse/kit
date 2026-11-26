@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { restart } from './end.ts';
-import { oneFolder } from './home.ts';
+import { earlierPrefix, oneFolder } from './home.ts';
 
 const SERVICE = 'house-kit';
 const UNIT = `${SERVICE}.service`;
@@ -134,6 +134,22 @@ export async function reloadLaunchAgent(unreloaded: string): Promise<never> {
   }).unref();
   await delay(RELOAD_MS);
   restart(unreloaded);
+}
+
+function unread(): boolean {
+  return manage('systemctl', ['--user', 'show', '--property=NeedDaemonReload', '--value', UNIT]).stdout.trim() === 'yes';
+}
+
+export async function keepSupervisor(): Promise<boolean> {
+  if (earlierPrefix() !== null || process.env.HOUSE_KIT_SANDBOX === '1' || !(process.platform === 'darwin' || systemd())) return false;
+  if (!existsSync(process.platform === 'darwin' ? launchAgent() : userUnit())) return false;
+  const changed = await defineSupervisor();
+  if (process.platform === 'darwin') {
+    if (changed) await reloadLaunchAgent('the LaunchAgent was not reloaded; its next start runs house resident');
+  } else if (changed || unread()) {
+    required('systemctl', ['--user', 'daemon-reload'], 'systemd could not read the Kit service');
+  }
+  return true;
 }
 
 function macos(): { target: string; service: string } {

@@ -20,6 +20,8 @@ const TOOLS: Record<string, string> = {
   *--user*) [ ! -e "$FAKE/starting" ] || { echo 'Failed to connect to user scope bus via local transport: No such file or directory' >&2; exit 1; } ;;
 esac
 case "$*" in
+  *NeedDaemonReload*) if [ -e "$FAKE/unread" ]; then echo yes; else echo no; fi ;;
+  *daemon-reload) rm -f "$FAKE/unread" ;;
   *is-active*) [ -e "$FAKE/active" ] ;;
   *is-enabled*) [ -e "$FAKE/enabled" ] ;;
   *'--no-block stop house-kit.service'*) kill -TERM "$PPID" ;;
@@ -63,6 +65,7 @@ export interface Supervision {
   calls(tool: string): string[];
   mark(name: string): Promise<void>;
   systemd(): Promise<void>;
+  bootingOut(): Promise<string>;
 }
 
 export async function supervision(): Promise<Supervision> {
@@ -88,6 +91,13 @@ export async function supervision(): Promise<Supervision> {
     mark: (name) => writeFile(join(fake, name), ''),
     systemd: async () => {
       await mkdir(join(root, 'run', 'systemd', 'system'), { recursive: true });
+    },
+    bootingOut: async () => {
+      const launchd = join(fake, 'launchd');
+      await mkdir(launchd);
+      await writeFile(join(launchd, 'launchctl'), `#!/bin/sh\n${LOGGED}[ "$1" != bootout ] || kill -TERM "$(cut -d" " -f4 "/proc/$PPID/stat")"\n`);
+      await chmod(join(launchd, 'launchctl'), 0o755);
+      return launchd;
     },
   };
 }
