@@ -6,11 +6,24 @@ import { hostKit, type Hosted } from './environment.ts';
 import { digest, house, manifestOf, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
+const TYPES = '---\nfolders:\n  tasks/: task\ntask:\n  properties:\n    name: { type: string }\n    status: { type: string, title: Status }\n    owner: { type: string, title: Owner }\n---\n';
+const TASK = '# Ship\n\n- **Status**: open\n- **Owner**: Ada\n\nFirst step.\nSecond step.\n';
 
 function batches(hosted: Hosted): { operation_id: string; changes: Record<string, unknown>[] }[] {
   return hosted.house.requests
     .filter((request) => request.path === '/kit/door/update')
     .map((request) => request.body as { operation_id: string; changes: Record<string, unknown>[] });
+}
+
+function revisionsRead(hosted: Hosted): string[] {
+  return hosted.house.requests
+    .filter((request) => request.path === '/kit/door/files/revisions/list')
+    .map((request) => (request.body as { revision: string }).revision);
+}
+
+function typed(room: Room): void {
+  room.put('settings/schema.md', TYPES);
+  room.put('tasks/ship.md', TASK);
 }
 
 async function copied(setup: (room: Room) => void = () => {}): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
@@ -140,6 +153,73 @@ it('writes the conflict markers House answers, lands the rest under a new operat
   expect(batches(hosted)[2]!.changes).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'one\nTWO, both\nthree\n', base: current }]);
   expect(room.files.get('plan.md')!.content).toBe('one\nTWO, both\nthree\n');
   expect((await manifestOf(room)).files['plan.md']!.conflicted).toBeUndefined();
+});
+
+it('refuses house upload naming a document that holds a marker line the Kit never wrote, sending nothing, and uploads it once its marker goes', async () => {
+  const { hosted, room } = await copied();
+  await writeFile(join(room.repository, 'plan.md'), 'one\n<<<<<<< mine\ntwo\nthree\n');
+
+  expect(await upload(hosted, room)).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: 'house: /rooms/notes/plan.md still holds conflict markers; the next save sends it once its markers go\n',
+  });
+  expect(batches(hosted)).toHaveLength(0);
+
+  await writeFile(join(room.repository, 'plan.md'), 'one\ntwo, mine\nthree\n');
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(room.files.get('plan.md')!.content).toBe('one\ntwo, mine\nthree\n');
+});
+
+it("merges two writers who changed different fields of one document with no conflict, reading its base from House's versions, and sends it again on House's current revision", async () => {
+  const { hosted, room } = await copied(typed);
+  const base = room.revision('tasks/ship.md');
+  const current = room.put('tasks/ship.md', TASK.replace('open', 'done'));
+  const mine = TASK.replace('Ada', 'Bea');
+  const merged = TASK.replace('open', 'done').replace('Ada', 'Bea');
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), mine);
+
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+
+  expect(batches(hosted).map((batch) => batch.changes)).toEqual([
+    [{ op: 'write', path: '/rooms/notes/tasks/ship.md', content: mine, base }],
+    [{ op: 'write', path: '/rooms/notes/tasks/ship.md', content: merged, base: current }],
+  ]);
+  expect(revisionsRead(hosted)).toContain(base);
+  expect(room.files.get('tasks/ship.md')!.content).toBe(merged);
+  expect(await readFile(join(room.repository, 'tasks', 'ship.md'), 'utf8')).toBe(merged);
+  expect((await manifestOf(room)).files['tasks/ship.md']).toEqual({ revision: room.revision('tasks/ship.md'), sha256: digest(merged), bytes: Buffer.byteLength(merged) });
+});
+
+it('marks one field both writers changed to different values, keeping the rest merged, on the current revision with the conflicted mark', async () => {
+  const { hosted, room } = await copied(typed);
+  const current = room.put('tasks/ship.md', TASK.replace('open', 'done'));
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), TASK.replace('open', 'blocked').replace('Ada', 'Bea'));
+  const marked = '# Ship\n\n<<<<<<< current\n- **Status**: done\n=======\n- **Status**: blocked\n>>>>>>> yours\n- **Owner**: Bea\n\nFirst step.\nSecond step.\n';
+
+  expect(await upload(hosted, room)).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: 'house: /rooms/notes/tasks/ship.md: conflict markers written; the next save sends it once its markers go\n',
+  });
+
+  expect(await readFile(join(room.repository, 'tasks', 'ship.md'), 'utf8')).toBe(marked);
+  expect((await manifestOf(room)).files['tasks/ship.md']).toEqual({ revision: current, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
+  expect(batches(hosted)).toHaveLength(1);
+  expect(room.files.get('tasks/ship.md')!.content).toBe(TASK.replace('open', 'done'));
+});
+
+it("keeps House's merge of a text clash below the fields, with the fields merged, on the current revision with the conflicted mark", async () => {
+  const { hosted, room } = await copied(typed);
+  const current = room.put('tasks/ship.md', TASK.replace('open', 'done').replace('First step.', 'First step, theirs.'));
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), TASK.replace('Ada', 'Bea').replace('First step.', 'First step, mine.'));
+  const marked = '# Ship\n\n- **Status**: done\n- **Owner**: Bea\n\n<<<<<<< current\nFirst step, theirs.\n=======\nFirst step, mine.\n>>>>>>> yours\nSecond step.\n';
+
+  expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/tasks/ship.md: conflict markers written; the next save sends it once its markers go\n');
+
+  expect(await readFile(join(room.repository, 'tasks', 'ship.md'), 'utf8')).toBe(marked);
+  expect((await manifestOf(room)).files['tasks/ship.md']).toEqual({ revision: current, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
+  expect(batches(hosted)).toHaveLength(1);
 });
 
 it('uploads a renamed file holding the same bytes as one move, and brings the links House rewrote into the working files', async () => {

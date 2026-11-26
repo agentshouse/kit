@@ -8,7 +8,7 @@ export const MANIFEST = '.house';
 
 const GIT = '.git';
 
-const MARKER = /^(?:<{7}|={7}|>{7})(?: .*)?$/m;
+const MARKER = /^(?:<{7}|>{7})(?: .*)?$/m;
 
 export interface Entry {
   revision: string;
