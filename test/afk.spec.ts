@@ -91,18 +91,26 @@ it.each([
   expect(hosted.interactions).toEqual([]);
 });
 
-it('holds AFK for the provider session from the call that launched it, so a later message without it asks nothing', async () => {
-  const hosted = await opened(CLAUDE, true, ASKS_ANYWAY);
+it.each([
+  ['Claude Code', CLAUDE, 'claude-permission', { code: -32603 }],
+  ['Codex', 'codex-acp', 'codex-permission', { outcome: { outcome: 'selected', optionId: 'allow_once' } }],
+  ['Grok Build', 'grok-build', 'codex-permission', { outcome: { outcome: 'selected', optionId: 'allow_once' } }],
+])('holds AFK for a %s session from the call that launched it, so a later message without it asks House nothing', async (_, kind, fixture, answer) => {
+  const hosted = await opened(kind, true, ASKS_ANYWAY);
 
-  hosted.call({ kind: 'message', text: '@asked claude-permission\n@say went on', first: true });
+  hosted.call({ kind: 'message', text: `@asked ${fixture}\n@say went on`, first: true });
 
   expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'went on' });
-  expect(await answersOf(hosted)).toEqual([{ code: -32603 }]);
+  expect(await answersOf(hosted)).toEqual([answer]);
   expect(reachedHouse(hosted)).toEqual([]);
 });
 
-it('holds a session launched without AFK able to ask, so a later message marking it still asks and waits', async () => {
-  const hosted = await opened(CLAUDE, false);
+it.each([
+  ['Claude Code', CLAUDE],
+  ['Codex', 'codex-acp'],
+  ['Grok Build', 'grok-build'],
+])('holds a %s session launched without AFK able to ask, so a later message marking it still asks and waits', async (_, kind) => {
+  const hosted = await opened(kind, false);
 
   hosted.call({ kind: 'message', text: '@ask', first: true, afk: true });
 
