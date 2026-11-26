@@ -18,6 +18,7 @@ const HOUR = 60 * 60_000;
 const HALTED_REMOVAL = ['--import', fileURLToPath(new URL('./halted-removal.ts', import.meta.url))];
 const REFUSED_LINKS = ['--import', fileURLToPath(new URL('./refused-links.ts', import.meta.url))];
 const MEGABYTE_AND_ONE = 1_000_001;
+const LIMITED = "limit_reached: you reached today's Write limit; try again at 2026-11-17T00:00:00.000Z";
 const PAST_DEFAULT_SIZE = 10_000_001;
 
 function copyOf(hosted: Hosted, handle: string, name: string): string {
@@ -119,10 +120,6 @@ async function pending(hosted: Hosted, rooms: Rooms, index: number): Promise<voi
   await settle();
   rooms.writeUnits = Infinity;
   await writeFile(join(copy, 'plan.md'), 'Plant beans\n');
-}
-
-function lineOf(text: string): string {
-  return text.split('\n').at(-1)!;
 }
 
 function bytes(text: string): Buffer {
@@ -365,7 +362,7 @@ it("sends a batch left pending in a conversation's copy only by the next upload 
   expect(sent!.headers.authorization).toBe('Bearer ahk_held');
   expect(changesOf(sent!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\ntwo\n', base: expect.any(String) }]);
   expect(notes.files.get('plan.md')!.content).toBe('Plant beans\ntwo\n');
-  expect(lineOf(await prompt(hosted, 2))).toBe('@say again');
+  expect(await prompt(hosted, 2)).toBe(`@say again\nNot saved:\n- /rooms/notes/plan.md: ${LIMITED}`);
   expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans\ntwo\n');
 });
 
@@ -450,48 +447,134 @@ it("brings back the whole text House merged where its update answer cuts that te
   expect(files['a.md']).toMatchObject({ bytes: 14 });
 });
 
-it("ends the next prompt with the Kit's line after a refused upload, naming each file still holding conflict markers or giving the upload's answer, and skips a /command and a prompt after an upload that landed", async () => {
+function reports(hosted: Hosted): Received[] {
+  return hosted.unsaved.filter((received) => received.path === '/kit/turns/not-saved/report');
+}
+
+async function reported(hosted: Hosted, count: number): Promise<Record<string, unknown>[]> {
+  return until(() => (reports(hosted).length >= count ? reports(hosted).map((received) => received.body as Record<string, unknown>) : undefined));
+}
+
+function endedTurn(hosted: Hosted, index: number): string {
+  return (ended(hosted)[index]!.body as { turn: string }).turn;
+}
+
+function operationOf(received: Received): string {
+  return (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation']!;
+}
+
+const MARKED = { path: '/rooms/notes/plan.md', markers: true };
+const MARKED_TEXT = 'Not saved:\n- /rooms/notes/plan.md: it holds conflict markers';
+
+it("lands the rest of a turn's upload around a file House answers in conflict, leaves the marked file out of the Kit's own uploads until its markers go, reports each turn's end that leaves a file unsaved, and ends the next prompt with House's text, a /command taking none", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}]);
   const copy = copyOf(hosted, 'notes', 'Plan');
   await opened(hosted, notes, 'Plan');
   await opened(hosted, notes, 'Other', 'conversation-2', 'agent-2');
-  const conflict = "Kit: plan.md still holds conflict markers from the upload at your last turn's end; resolve them, and this turn's end uploads again.";
+  const alpha = notes.revision('a.md');
 
-  said(hosted, "@sh sed -i 's/beans/corn/' plan.md\n@gate other-landed");
+  said(hosted, "@sh sed -i 's/beans/corn/' plan.md && echo four >> a.md\n@gate other-landed");
   await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')) === 'Plant corn\n' ? true : undefined));
   hosted.call({ kind: 'message', conversation_id: 'conversation-2', agent_id: 'agent-2', text: "@sh sed -i 's/beans/peas/' plan.md", first: false });
   await edited(rooms, 1);
   await writeFile(join(hosted.home, 'other-landed'), '');
-  await edited(rooms, 2);
+  const edits = await edited(rooms, 3);
   await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')).includes('<<<<<<<') ? true : undefined));
-  await turned(hosted, 2);
+  const peas = notes.revision('plan.md');
+
+  expect(changesOf(edits[1]!)).toEqual([
+    { op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: alpha },
+    { op: 'write', path: '/rooms/notes/plan.md', content: 'Plant corn\n', base: expect.any(String) },
+  ]);
+  expect(changesOf(edits[2]!)).toEqual([{ op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: alpha }]);
+  expect(operationOf(edits[2]!)).not.toBe(operationOf(edits[1]!));
+  expect(notes.files.get('a.md')!.content).toBe('one\ntwo\nthree\nfour\n');
   expect(notes.files.get('plan.md')!.content).toBe('Plant peas\n');
+  await turned(hosted, 2);
+  expect(await reported(hosted, 1)).toEqual([{ conversation: 'conversation-1', turn: endedTurn(hosted, 1), files: [MARKED] }]);
 
   said(hosted, 'carry on', { recent: 'Earlier: the plan' });
   const second = await prompt(hosted, 2);
-  expect(second.split('\n').slice(-3)).toEqual(['Earlier: the plan', 'carry on', conflict]);
+  expect(second.split('\n').slice(-4)).toEqual(['Earlier: the plan', 'carry on', ...MARKED_TEXT.split('\n')]);
   await turned(hosted, 3);
+  expect((await reported(hosted, 2))[1]).toEqual({ conversation: 'conversation-1', turn: endedTurn(hosted, 2), files: [MARKED] });
 
   said(hosted, '/compact');
   expect(await prompt(hosted, 3)).toBe('/compact');
   await turned(hosted, 4);
-  said(hosted, 'still there');
-  expect(lineOf(await prompt(hosted, 4))).toBe(conflict);
+  await reported(hosted, 3);
+  said(hosted, "@sh echo five >> a.md && sed -i 's/corn/maize/' plan.md");
+  expect((await prompt(hosted, 4)).endsWith(`\n${MARKED_TEXT}`)).toBe(true);
+  const marking = await edited(rooms, 4);
+  expect(changesOf(marking[3]!)).toEqual([{ op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\nfive\n', base: expect.any(String) }]);
   await turned(hosted, 5);
+  await reported(hosted, 4);
 
   said(hosted, "@sh printf 'Plant peas and corn\\n' > plan.md");
-  await edited(rooms, 3);
+  const resolved = await edited(rooms, 5);
+  expect(changesOf(resolved[4]!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant peas and corn\n', base: peas }]);
   await turned(hosted, 6);
   said(hosted, 'landed');
   expect(await prompt(hosted, 6)).toBe('landed');
   expect(notes.files.get('plan.md')!.content).toBe('Plant peas and corn\n');
   await turned(hosted, 7);
+  await settle();
+  expect(reports(hosted)).toHaveLength(4);
+});
 
-  said(hosted, '@sh mkdir -p capture && echo held > capture/x.md');
-  await edited(rooms, 4);
-  await turned(hosted, 8);
-  said(hosted, 'refused');
-  expect(lineOf(await prompt(hosted, 8))).toBe("Kit: the upload at your last turn's end was refused: protected_path: /rooms/notes/capture/x.md is not writable");
+it("reports a turn's end that leaves a file House refused, which the next prompt names unless it was saved meanwhile, drops the text once no file is left, and reports nothing for a turn's end that leaves none", async () => {
+  const { hosted, rooms, notes } = await staged();
+  const copy = copyOf(hosted, 'notes', 'Plan');
+  await opened(hosted, notes, 'Plan');
+  const x = 'protected_path: /rooms/notes/capture/x.md is not writable';
+  const y = 'protected_path: /rooms/notes/capture/y.md is not writable';
+
+  said(hosted, '@sh mkdir -p capture && echo held > capture/x.md && echo held > capture/y.md && echo four >> a.md');
+  const edits = await edited(rooms, 3);
+  await turned(hosted, 1);
+
+  expect(edits.map(changesOf)).toEqual([
+    [
+      { op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) },
+      { op: 'write', path: '/rooms/notes/capture/x.md', content: 'held\n' },
+      { op: 'write', path: '/rooms/notes/capture/y.md', content: 'held\n' },
+    ],
+    [
+      { op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) },
+      { op: 'write', path: '/rooms/notes/capture/y.md', content: 'held\n' },
+    ],
+    [{ op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) }],
+  ]);
+  expect(new Set(edits.map(operationOf)).size).toBe(3);
+  expect(notes.files.get('a.md')!.content).toBe('one\ntwo\nthree\nfour\n');
+  expect(await reported(hosted, 1)).toEqual([
+    {
+      conversation: 'conversation-1',
+      turn: endedTurn(hosted, 0),
+      files: [
+        { path: '/rooms/notes/capture/x.md', refused: x },
+        { path: '/rooms/notes/capture/y.md', refused: y },
+      ],
+    },
+  ]);
+  expect(JSON.parse(await readFile(join(hosted.home, 'local-copies', 'conversations', `conversation-1.${notes.ref}.json`), 'utf8'))).toMatchObject({
+    refused: { 'capture/x.md': x, 'capture/y.md': y },
+  });
+
+  await rm(join(copy, 'capture', 'y.md'));
+  said(hosted, 'and then');
+  expect((await prompt(hosted, 1)).split('\n').slice(-3)).toEqual(['and then', 'Not saved:', `- /rooms/notes/capture/x.md: ${x}`]);
+  await turned(hosted, 2);
+  expect((await reported(hosted, 2))[1]).toEqual({ conversation: 'conversation-1', turn: endedTurn(hosted, 1), files: [{ path: '/rooms/notes/capture/x.md', refused: x }] });
+
+  await rm(join(copy, 'capture', 'x.md'));
+  said(hosted, 'saved meanwhile');
+  expect(await prompt(hosted, 2)).toBe('saved meanwhile');
+  await turned(hosted, 3);
+  said(hosted, '@say nothing left');
+  await turned(hosted, 4);
+  await settle();
+  expect(reports(hosted)).toHaveLength(2);
 });
 
 it("resumes a warm conversation moved since its session opened in the old Room's copy after a Kit restart, and runs the next open in the new Room's copy", async () => {

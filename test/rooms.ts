@@ -132,6 +132,11 @@ export function said(refusal: Refused): string {
   return `edit_conflict: nothing was written; fix each conflict listed, then send it again\n${conflicts}`;
 }
 
+function spokenRefusal(refusal: Refused): string {
+  const named = refusal.path !== undefined && refusal.code !== 'handle_changed' ? stringify({ path: refusal.path }) : '';
+  return `${said(refusal)}\n${named}`;
+}
+
 export interface EditChange {
   op: string;
   path: string;
@@ -949,7 +954,7 @@ export function serveRooms(hosted: Hosted): Rooms {
     const operation = meta['agents.house/agent-operation']!;
     const outcome = edited(changes, operation);
     if ('stopped' in outcome) throw toolStopped(outcome.stopped);
-    if ('refusal' in outcome) return { isError: true, content: [{ type: 'text', text: `${said(outcome.refusal)}\n` }] } satisfies ToolResult;
+    if ('refusal' in outcome) return { isError: true, content: [{ type: 'text', text: spokenRefusal(outcome.refusal) }] } satisfies ToolResult;
     if (state.dropsEdits > 0) {
       state.dropsEdits--;
       return null;

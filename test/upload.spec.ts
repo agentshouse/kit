@@ -104,37 +104,40 @@ it('writes a merged text that ends like the cut notice House no longer writes as
   expect(hosted.house.requests.slice(before).map((received) => received.path)).not.toContain('/kit/door/files/revisions/list');
 });
 
-it('writes the conflict markers House answers, refuses the next upload naming the file while a marker remains, and uploads the resolution on the current revision', async () => {
+it('writes the conflict markers House answers, lands the rest under a new operation, refuses the next upload naming the file while a marker remains, and uploads the resolution on the current revision', async () => {
   const { hosted, room } = await copied();
+  const base = room.revision('plan.md');
   room.put('plan.md', 'one\nTWO, theirs\nthree\n');
   const current = room.revision('plan.md');
   await writeFile(join(room.repository, 'plan.md'), 'one\ntwo, mine\nthree\n');
   await writeFile(join(room.repository, 'other.md'), 'other\n');
   const marked = 'one\n<<<<<<< current\nTWO, theirs\n=======\ntwo, mine\n>>>>>>> yours\nthree\n';
+  const other = { op: 'write', path: '/rooms/notes/other.md', content: 'other\n' };
 
-  const refused = await upload(hosted, room);
+  expect(await upload(hosted, room)).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: 'house: House accepted 1 file of /rooms/notes.\n/rooms/notes/plan.md: conflict markers written; resolve them, then run house upload again\n',
+  });
 
-  expect(refused.status).toBe(1);
-  expect(refused.stderr).toMatch(/^house: edit_conflict: nothing was written/);
-  expect(refused.stderr).toContain('code: merge_conflict');
-  expect(refused.stderr.endsWith('/rooms/notes/plan.md: conflict markers written; resolve them, then run house upload again\n')).toBe(true);
   expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe(marked);
   expect((await manifestOf(room)).files['plan.md']).toEqual({ revision: current, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
-  expect(room.files.has('other.md')).toBe(false);
+  const [conflicted, rest] = batches(hosted);
+  expect(conflicted!.changes).toEqual([other, { op: 'write', path: '/rooms/notes/plan.md', content: 'one\ntwo, mine\nthree\n', base }]);
+  expect(rest!.changes).toEqual([other]);
+  expect(rest!.operation_id).not.toBe(conflicted!.operation_id);
+  expect(room.files.get('other.md')!.content).toBe('other\n');
 
   expect(await upload(hosted, room)).toEqual({
     status: 1,
     stdout: '',
     stderr: 'house: /rooms/notes/plan.md still holds conflict markers; resolve it, then run house upload again\n',
   });
-  expect(batches(hosted)).toHaveLength(1);
+  expect(batches(hosted)).toHaveLength(2);
 
   await writeFile(join(room.repository, 'plan.md'), 'one\nTWO, both\nthree\n');
-  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n' });
-  expect(batches(hosted)[1]!.changes).toEqual([
-    { op: 'write', path: '/rooms/notes/other.md', content: 'other\n' },
-    { op: 'write', path: '/rooms/notes/plan.md', content: 'one\nTWO, both\nthree\n', base: current },
-  ]);
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(batches(hosted)[2]!.changes).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'one\nTWO, both\nthree\n', base: current }]);
   expect(room.files.get('plan.md')!.content).toBe('one\nTWO, both\nthree\n');
   expect((await manifestOf(room)).files['plan.md']!.conflicted).toBeUndefined();
 });
@@ -269,7 +272,7 @@ it("carries any file name through the copy, reads a decomposed form of a held na
     status: 1,
     stdout: '',
     stderr:
-      'house: invalid_authored_path: /rooms/notes/Readme.md differs from /rooms/notes/README.md only in letter case, and a folder holds one name in any case; write to /rooms/notes/README.md or choose another name\n',
+      'house: /rooms/notes/Readme.md: not saved: invalid_authored_path: /rooms/notes/Readme.md differs from /rooms/notes/README.md only in letter case, and a folder holds one name in any case; write to /rooms/notes/README.md or choose another name\n',
   });
   expect([...room.files.keys()].filter((path) => path.toLowerCase() === 'readme.md')).toEqual(['README.md']);
   expect(existsSync(join(room.repository, 'Readme.md'))).toBe(true);
@@ -306,7 +309,6 @@ it("brings House's newer version back where a stale deletion removed it, says wh
   const refused = await upload(hosted, room);
 
   expect(refused.status).toBe(1);
-  expect(refused.stderr).toContain('code: base_revision_stale');
   expect(refused.stderr.endsWith(`/rooms/notes/old.md: House changed it since this copy read it and now holds ${theirs}; that version is back here, so delete it again if you still mean to\n`)).toBe(true);
   expect(await readFile(join(room.repository, 'old.md'), 'utf8')).toBe('old, theirs\n');
   expect((await manifestOf(room)).files['old.md']).toEqual({ revision: theirs, sha256: digest('old, theirs\n'), bytes: 12 });

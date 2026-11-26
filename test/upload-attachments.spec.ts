@@ -209,13 +209,15 @@ it('uploads each .md file as document text and every other file as an attachment
 
   const sent = batches(hosted).length;
   await placed(room, { 'log.md': `${'ü'.repeat(32)}!`, 'notes.md': 'valid UTF-8 \0 with a NUL\n', 'photo.jpg': JPEG });
+  const markdown = 'not saved: it is Markdown, which holds text only: UTF-8 without NUL, at most 64 bytes';
   expect(await upload(hosted, room)).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'house: log.md, notes.md are Markdown, which holds text only: UTF-8 without NUL, at most 64 bytes; save them as text and run house upload again\n',
+    stderr: `house: House accepted 1 file of /rooms/notes.\n/rooms/notes/log.md: ${markdown}\n/rooms/notes/notes.md: ${markdown}\n`,
   });
-  expect(batches(hosted)).toHaveLength(sent);
-  expect(room.binaries.has('photo.jpg')).toBe(false);
+  expect(batches(hosted).slice(sent).map((batch) => batch.changes)).toEqual([[part('photo.jpg', JPEG, 'image/jpeg')], [part('photo.jpg', JPEG, 'image/jpeg')]]);
+  expect(room.binaries.has('photo.jpg')).toBe(true);
+  expect(room.files.has('notes.md')).toBe(false);
 });
 
 it('stops an upload the Write limit refuses, naming each attachment it has not sent with its reason, and house upload again from a conversation sends only those and lands once', async () => {
@@ -404,7 +406,6 @@ it("takes House's current revision as the base of an attachment another writer r
   const refused = await upload(hosted, room);
 
   expect(refused.status).toBe(1);
-  expect(refused.stderr).toContain('code: base_revision_stale');
   expect(refused.stderr.endsWith(`${advice('cover.jpg', taken)}\n${advice('photo.jpg', theirs)}\n`)).toBe(true);
   const { files } = await manifestOf(room);
   expect(files['photo.jpg']).toEqual({ revision: theirs, sha256: digest(RECORDING), bytes: RECORDING.length });

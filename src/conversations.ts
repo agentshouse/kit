@@ -8,6 +8,7 @@ import {
   type ResumeSessionRequest,
   type SessionConfigOption,
 } from '@agentclientprotocol/sdk';
+import { KIT_NOT_SAVED_FILES_MAX } from '@agentshouse/kit-wire';
 import type {
   DesiredAgentRoute,
   KitActAnswer,
@@ -31,7 +32,7 @@ import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { CLIS } from './clis.ts';
-import type { Answered, LocalCopies, Opening, Place } from './copies.ts';
+import type { LocalCopies, Opening, Place } from './copies.ts';
 import { Content } from './content.ts';
 import { answeredFailure, readerFor, type CallEvent, type Event, type Message, type Reader, type Spent, type Stop } from './events.ts';
 import { fileInfo, linkedPaths, storeRefusal, uploaded, type Address, type Finished, type UploadParts } from './files.ts';
@@ -100,8 +101,6 @@ const NO_START = "the Agent's CLI did not start";
 
 const NO_COPY = "the Agent's computer could not copy this conversation's Room; try again";
 
-const KIT_LINE = 'Kit: ';
-
 const NO_SESSION = "the Agent's CLI did not open a session";
 
 const NO_RESUME = "the Agent's CLI could not resume this conversation";
@@ -155,7 +154,7 @@ function unopened(reason: string): (error: unknown) => string {
 
 type Starting = NonNullable<KitOneWayCallOf<'starting'>['step']>;
 
-type TurnAct = 'turns/start' | 'turns/activity/report' | 'turns/end' | 'turns/images/declare' | 'agent_update.conversation_ask';
+type TurnAct = 'turns/start' | 'turns/activity/report' | 'turns/end' | 'turns/images/declare' | 'turns/not-saved/report' | 'agent_update.conversation_ask';
 
 // A start-up step is shown only once it has lasted a second, so a quick start shows none of them.
 const STARTING_SHOWN_AFTER_MS = 1_000;
@@ -352,7 +351,7 @@ class Conversation {
   shown: ReturnType<typeof setTimeout> | null = null;
   place: Place | null = null;
   uploading: Promise<void> = Promise.resolve();
-  refused: { directory: string; answer: Answered } | null = null;
+  unsaved: { directory: string; text: string; paths: string[] } | null = null;
   activity: Activity = IDLE;
   reported: string | null = JSON.stringify(IDLE);
 
@@ -712,7 +711,7 @@ export class Conversations {
       return;
     }
     this.starts(conversation, null);
-    const line = call.text.startsWith('/') ? null : await this.line(conversation);
+    const line = call.text.startsWith('/') ? null : await this.unsavedText(conversation);
     const said: ContentBlock[] = line === null ? [] : [{ type: 'text', text: line }];
     this.prompt(conversation, [...prompt, ...waiting.content, ...said], () => this.kit.calls.keepResult(call.input_id, result));
     waiting.settle(result);
@@ -725,30 +724,34 @@ export class Conversations {
     if (answer.refused) logged(new Error(`conversation ${conversation.id} runs its turn on its copy as it stands: ${answer.text}`));
   }
 
-  private async line(conversation: Conversation): Promise<string | null> {
-    const refused = conversation.refused;
-    conversation.refused = null;
-    if (refused === null) return null;
-    if (refused.answer.conflicted !== true) return `${KIT_LINE}the upload at your last turn's end was refused: ${refused.answer.text.split('\n').join(' ')}`;
-    const marked = await this.kit.copies.markedIn(refused.directory);
-    if (marked.length === 0) return null;
-    const [named, hold] = marked.length === 1 ? [marked[0]!, 'still holds'] : [`${marked.slice(0, -1).join(', ')} and ${marked.at(-1)!}`, 'still hold'];
-    return `${KIT_LINE}${named} ${hold} conflict markers from the upload at your last turn's end; resolve them, and this turn's end uploads again.`;
+  private async unsavedText(conversation: Conversation): Promise<string | null> {
+    const unsaved = conversation.unsaved;
+    conversation.unsaved = null;
+    if (unsaved === null) return null;
+    const still = new Set(await this.kit.copies.unsaved(unsaved.directory));
+    const [said, ...lines] = unsaved.text.split('\n');
+    const kept = unsaved.paths.flatMap((path, index) => (still.has(path) && lines[index] !== undefined ? [lines[index]] : []));
+    return kept.length === 0 ? null : [said, ...kept].join('\n');
   }
 
-  private uploaded(conversation: Conversation): void {
+  private uploaded(conversation: Conversation, turn: Turn): void {
     const running = conversation.running;
     const place = conversation.place;
     if (running === null || running.killed || running.adapter.connection.signal.aborted || place === null || !place.copy || !place.synced) return;
     this.uploads++;
     conversation.uploading = this.kit.copies
       .ended(place.directory, running.bridge.caller)
-      .then(
-        (answer) => {
-          conversation.refused = answer === null || !answer.refused || answer.kept === true ? null : { directory: place.directory, answer };
-        },
-        logged,
-      )
+      .then(async (files) => {
+        if (files === null) return;
+        if (files.length === 0) {
+          conversation.unsaved = null;
+          return;
+        }
+        const reported = files.slice(0, KIT_NOT_SAVED_FILES_MAX);
+        const { text } = await this.deliver(conversation, 'turns/not-saved/report', { ...turnOf(conversation, turn), files: reported });
+        conversation.unsaved = { directory: place.directory, text, paths: reported.map((file) => file.path) };
+      })
+      .catch(logged)
       .finally(() => {
         this.uploads--;
         this.changed(conversation);
@@ -1178,7 +1181,7 @@ export class Conversations {
     void this.deliver(conversation, 'turns/end', body).catch(logged);
     const stamped = conversation.place?.copy === true ? this.kit.copies.turnEnded(conversation.place.directory) : Promise.resolve();
     this.kit.turnEnded(stamped.catch(logged));
-    this.uploaded(conversation);
+    this.uploaded(conversation, turn);
     this.next(conversation);
     this.changed(conversation);
   }
