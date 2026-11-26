@@ -621,6 +621,7 @@ it("runs a conversation in a Room held at the Open level in a copy holding the t
   said(hosted, '@say unreached');
   await turned(hosted, 2);
 
+  await until(async () => (await held(copy)).length === 3 && !('kit' in (await manifestAt(copy))));
   expect(await held(copy)).toEqual(['.house', 'a.md', 'plan.md']);
   expect(await manifestAt(copy)).not.toHaveProperty('kit');
   await rooms.download([]);
