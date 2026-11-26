@@ -455,15 +455,39 @@ it.each(['claude-retry', 'codex-web', 'grok-edit'])("clears the last turn's file
   expect(endedOf(next).content.state.files).toEqual({ count: 0, added: 0, removed: 0 });
 });
 
-it("reads a recorded Claude Code session's title, limits, cost and turn duration into its state, and the context breakdown of its /context", async () => {
+function reported(fixture: string, field: 'title' | 'cost'): boolean {
+  const kind = field === 'title' ? 'session_info_update' : 'usage_update';
+  return recorded(fixture).some((event) => event.params.update?.sessionUpdate === kind && event.params.update[field] !== undefined);
+}
+
+it.each([
+  ['claude-tools', 2, ['title', 'cost']],
+  ['codex-web', 1, ['title']],
+  ['grok-tools', 1, ['title']],
+] as [string, number, ('title' | 'cost')[]][])(
+  "sends neither the title nor the cost the CLI of %s reports in the session's state, and every turn it ends is Session content",
+  async (fixture, count, fields) => {
+    const { hosted, turns } = await replayed(fixture, count);
+    await settle();
+
+    for (const field of fields) expect(reported(fixture, field), field).toBe(true);
+    const sent = [...states(hosted), ...turns.map((turn) => turn.content.state)];
+    for (const state of sent) {
+      expect(state).not.toHaveProperty('title');
+      expect(state).not.toHaveProperty('cost');
+      expect(isState(state)).toBe(true);
+    }
+    for (const turn of turns) expect(isTurn(turn.content)).toBe(true);
+  },
+);
+
+it("reads a recorded Claude Code session's limits and turn duration into its state, and the context breakdown of its /context", async () => {
   const { hosted, turns } = await replayed('claude-tools', 2);
   const context = await replayed('claude-context');
 
   expect(turns[0]!.content.state).toEqual(
     expect.objectContaining({
-      title: 'Sequential tool steps and background sub-agent',
       limits: [{ name: null, minutes: 10_080, percent: 63, resets: '2026-11-07T11:00:00.000Z' }],
-      cost: { amount: 0.16141699999999998, currency: 'USD' },
       duration: 18_282,
       model: 'route-model',
       effort: 'route-effort',
@@ -503,7 +527,6 @@ it("reads a recorded Codex session's limits, its turn's duration and diff and it
     }),
   );
   await until(() => states(hosted).at(-1)?.suggestion === 'Show me the updated contents of notes.txt.');
-  expect(states(hosted).at(-1)!.title).toBe('Agent Client Protocol request');
 });
 
 it.each(['claude-tools', 'grok-tools'])(
@@ -602,7 +625,6 @@ it("keeps a Claude Code image block where its upload ends and the hook's notice,
     text('Done.'),
     { type: 'image', file: 'version-1', name: 'image-1.png', media_type: 'image/png' },
   ]);
-  expect(turns[0]!.content.state).toEqual(expect.objectContaining({ title: 'A title the CLI made', cost: { amount: 0.5, currency: 'USD' } }));
   expect(hosted.finishes).toHaveLength(2);
 });
 
