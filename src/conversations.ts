@@ -301,6 +301,7 @@ interface Running {
 
 interface Waiting {
   call: Said;
+  atOnce: boolean;
   route: DesiredAgentRoute;
   content: ContentBlock[];
   instructing: Promise<string> | null;
@@ -477,6 +478,7 @@ export class Conversations {
     if (call.kind === 'open') return this.open(conversation, call);
     if (call.kind === 'message') return this.message(conversation, call);
     if (call.kind === 'take_out') return { result: Promise.resolve(this.takeOut(conversation, call.message_id)) };
+    if (call.kind === 'steer') return { result: Promise.resolve(await this.steered(conversation, call.message_id)) };
     await this.launched(conversation);
     if (call.kind === 'interrupt') {
       if (--conversation.interrupts === 0) conversation.interrupted = new AbortController();
@@ -509,6 +511,17 @@ export class Conversations {
     if (index === -1) return { started: true };
     const [waiting] = conversation.waiting.splice(index, 1);
     waiting!.settle({ refused: TAKEN_OUT });
+    return {};
+  }
+
+  private async steered(conversation: Conversation, messageId: string): Promise<KitCallResult> {
+    const index = conversation.waiting.findIndex((waiting) => waiting.call.message_id === messageId);
+    if (index === -1) return { started: true };
+    const [waiting] = conversation.waiting.splice(index, 1);
+    waiting!.atOnce = true;
+    if (conversation.turns.size > 0) await this.atOnce(conversation, waiting!);
+    else this.ahead(conversation, waiting!);
+    this.next(conversation);
     return {};
   }
 
@@ -592,7 +605,7 @@ export class Conversations {
     }
     conversation.preparing = null;
     const { promise, resolve: settle } = Promise.withResolvers<KitCallResult>();
-    const waiting: Waiting = { call, route, content, instructing, settle };
+    const waiting: Waiting = { call, atOnce: call.at_once === true, route, content, instructing, settle };
     if (call.at_once === true && conversation.turns.size > 0) await this.atOnce(conversation, waiting);
     else conversation.waiting.push(waiting);
     this.next(conversation);
@@ -613,7 +626,7 @@ export class Conversations {
   }
 
   private ahead(conversation: Conversation, waiting: Waiting): void {
-    const behind = conversation.waiting.findIndex((held) => held.call.at_once !== true);
+    const behind = conversation.waiting.findIndex((held) => !held.atOnce);
     conversation.waiting.splice(behind === -1 ? conversation.waiting.length : behind, 0, waiting);
   }
 
