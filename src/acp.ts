@@ -37,9 +37,10 @@ export async function startAdapter(
   events: (message: Message) => Promise<void> | null = () => null,
   added: Record<string, string> = {},
   signal?: AbortSignal,
+  fullAccess = false,
 ): Promise<Adapter> {
   const adapter = CLIS[kind]!.adapter;
-  const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args, {
+  const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args(fullAccess), {
     cwd,
     env: { ...(await cliEnvironment(kind)), ...(adapter === null ? {} : { ...adapter.env, [adapter.executable]: cli }), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],

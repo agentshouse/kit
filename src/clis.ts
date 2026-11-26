@@ -15,7 +15,7 @@ export interface Cli {
   install: string;
   update: string;
   adapter: { package: string; bin: string; executable: string; env: Record<string, string> } | null;
-  args: string[];
+  args(fullAccess: boolean): string[];
   reads: 'AGENTS.md' | 'CLAUDE.md' | null;
   compactWords: boolean;
   fullAccess: string | null;
@@ -116,7 +116,7 @@ export const CLIS: Record<string, Cli> = {
       executable: 'CODEX_PATH',
       env: { CODEX_CONFIG: JSON.stringify({ features: { shell_zsh_fork: true } }) },
     },
-    args: [],
+    args: () => [],
     reads: 'AGENTS.md',
     compactWords: false,
     fullAccess: 'agent-full-access',
@@ -143,7 +143,7 @@ export const CLIS: Record<string, Cli> = {
       executable: 'CLAUDE_CODE_EXECUTABLE',
       env: { CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1' },
     },
-    args: [],
+    args: () => [],
     reads: 'CLAUDE.md',
     compactWords: true,
     fullAccess: 'bypassPermissions',
@@ -176,7 +176,7 @@ export const CLIS: Record<string, Cli> = {
     install: 'curl -fsSL https://x.ai/cli/install.sh | bash',
     update: 'grok update',
     adapter: null,
-    args: ['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio'],
+    args: (fullAccess) => ['--sandbox', 'off', 'agent', ...(fullAccess ? ['--always-approve'] : []), '--no-leader', 'stdio'],
     reads: null,
     compactWords: false,
     fullAccess: null,

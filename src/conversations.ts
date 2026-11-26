@@ -27,7 +27,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
-import { GROK_QUESTION_CANCELLED, permissionAllowed, PLAN_APPROVED, QUESTION_DECLINED } from './afk.ts';
+import { permissionAllowed, PLAN_APPROVED, QUESTION_DECLINED } from './afk.ts';
 import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
@@ -938,7 +938,7 @@ export class Conversations {
         conversation.afk ? PLAN_APPROVED : grokPlanAnswer(await this.askForm(conversation, grokPlanForm(params), signal)),
       )
       .onRequest('_x.ai/ask_user_question', GROK_QUESTION, async ({ params, signal }) =>
-        conversation.afk ? GROK_QUESTION_CANCELLED : grokQuestionAnswer(await this.askForm(conversation, grokQuestionForm(params), signal)),
+        grokQuestionAnswer(conversation.afk ? QUESTION_DECLINED : await this.askForm(conversation, grokQuestionForm(params), signal)),
       );
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridging = this.bridged(conversation);
@@ -981,6 +981,8 @@ export class Conversations {
             return this.read(conversation, reader, work, message);
           },
           { ...bridge.env, ...streamed },
+          undefined,
+          route.mode === null,
         ),
       );
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));

@@ -146,16 +146,20 @@ it.each([
   expect(clientCapabilities._meta).toEqual({ jetbrains: { air: { version: 1, capabilities: air } } });
 });
 
-it('starts Grok approving every tool, since it offers no mode', async () => {
+it("starts Grok approving every tool in a Run's full access, since it offers no mode, and a plain chat's Grok as its own settings give it", async () => {
+  const plain = await hostKit([{ kind: 'grok-build', model: 'grok-4.6', effort: 'high' }]);
+  plain.call({ kind: 'open' });
+  await plain.result(lastCall());
   const hosted = await hostKit([{ kind: 'grok-build', model: 'grok-4.6', effort: 'high' }]);
 
-  hosted.call({ kind: 'open' });
+  hosted.call({ kind: 'open', mode: null });
 
   await hosted.result(lastCall());
   const log = await hosted.adapterLog();
   expect(log.find((entry) => entry.method === 'initialize')!.argv).toEqual(
     expect.arrayContaining(['--sandbox', 'off', 'agent', '--always-approve', '--no-leader', 'stdio']),
   );
+  expect((await plain.adapterLog()).find((entry) => entry.method === 'initialize')!.argv).not.toContain('--always-approve');
   expect(log.filter((entry) => entry.method === 'session/set_config_option').map((entry) => entry.params)).toEqual([
     expect.objectContaining({ configId: 'model', value: 'grok-4.6' }),
     expect.objectContaining({ configId: 'reasoning_effort', value: 'high' }),
