@@ -15,8 +15,6 @@ import {
   type VerifiedModel,
 } from '@agentshouse/mdmodel';
 
-export const SCHEMA = 'settings/schema.md';
-
 const OPENING = '<<<<<<< current\n';
 const BETWEEN = '=======\n';
 const CLOSING = '>>>>>>> yours\n';
@@ -133,14 +131,16 @@ function fieldsMerged(was: Document, now: Document, mine: Document, definition: 
   return { text, settled: clashing.length === 0 };
 }
 
-export function roomTypes(schema: string | null): VerifiedModel | null {
+function roomTypes(schema: string | null): VerifiedModel | null {
   if (schema === null) return HOUSE_ROOM_TYPES;
   const verified = verifySchemaDocument(schema, HOUSE_ROOM_TYPES);
   return verified.verdict === 'accept' ? verified.model : null;
 }
 
-export function fieldMerged(file: string, types: VerifiedModel, base: string, current: string, yours: string, answer: string): Merged {
+export function fieldMerged(file: string, schema: string | null, base: string, current: string, yours: string, answer: string): Merged {
   const kept = { text: answer, settled: false };
+  const types = roomTypes(schema);
+  if (types === null) return kept;
   const definitions = definitionAt(types, file, HOUSE_TYPED_PATHS);
   const read = (text: string): Document | null => {
     const parsed = parse(text, file, definitions);

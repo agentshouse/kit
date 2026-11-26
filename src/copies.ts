@@ -1,5 +1,4 @@
 import type { KitBinaryChange, KitNotSavedFile, KitRun, LocalCopyRoom } from '@agentshouse/kit-wire';
-import type { VerifiedModel } from '@agentshouse/mdmodel';
 import { isUtf8 } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
@@ -31,7 +30,6 @@ import {
   type Scan,
 } from './manifest.ts';
 import { answerDocument, environmentTool, toolAnswer, Unsettled, type Forwarded, type Message, type ToolResult } from './mcp.ts';
-import { fieldMerged, roomTypes, SCHEMA, whole } from './merge.ts';
 import { operationId } from './operation.ts';
 import { firstLine, namedWait, PlaceRefused, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { codeFolder, listedRef, REPOSITORIES } from './repositories.ts';
@@ -66,6 +64,7 @@ const FOLDERS = 'folders.json';
 const PRIVATE = 'private';
 const UNWRITTEN = 'unwritten';
 const NOTHING_NEW = 'Nothing new from House.';
+const SCHEMA = 'settings/schema.md';
 
 interface RoomFolder {
   name: string;
@@ -3043,7 +3042,7 @@ export class LocalCopies {
     const followed = this.follows(copy.key);
     const nameOf = (path: string) => present.get(path)?.name ?? path;
     const holds = async (path: string, sha256: string) => present.has(path) && (await holding(copy.repository, nameOf(path), sha256));
-    const types = roomTypes(await readFile(join(copy.repository, nameOf(SCHEMA)), 'utf8').catch(() => null));
+    const schema = await readFile(join(copy.repository, nameOf(SCHEMA)), 'utf8').catch(() => null);
     const brought = async (path: string, revision: string): Promise<boolean> => {
       const named = `${root}/${path}`;
       const target = join(copy.repository, nameOf(path));
@@ -3084,7 +3083,7 @@ export class LocalCopies {
           lines.push(busy);
           continue;
         }
-        const { text, current } = await this.merged(named, path, types, change, conflict.revision, conflict.content);
+        const { text, current } = await this.merged(named, path, schema, change, conflict.revision, conflict.content);
         await placed(work, join(copy.repository, nameOf(path)), text);
         if (current !== undefined) {
           manifest.files[path] = { revision: conflict.revision, sha256: digest(current), bytes: Buffer.byteLength(current) };
@@ -3136,15 +3135,16 @@ export class LocalCopies {
   private async merged(
     named: string,
     path: string,
-    types: VerifiedModel | null,
+    schema: string | null,
     change: Extract<Change, { op: 'write' }>,
     revision: string,
     answer: string | undefined,
   ): Promise<{ text: string; current?: string }> {
+    const { fieldMerged, whole } = await import('./merge.ts');
     if (answer === undefined) return { text: whole(await this.revisionText(named, revision), change.content) };
-    if (change.base === undefined || types === null) return { text: answer };
+    if (change.base === undefined) return { text: answer };
     const current = await this.revisionText(named, revision);
-    const merged = fieldMerged(path, types, await this.revisionText(named, change.base), current, change.content, answer);
+    const merged = fieldMerged(path, schema, await this.revisionText(named, change.base), current, change.content, answer);
     return merged.settled ? { text: merged.text, current } : { text: merged.text };
   }
 
