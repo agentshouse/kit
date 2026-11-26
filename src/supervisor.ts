@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { restart } from './end.ts';
-import { oneFolder } from './home.ts';
+import { earlierPrefix, oneFolder } from './home.ts';
 
 const SERVICE = 'house-kit';
 const UNIT = `${SERVICE}.service`;
@@ -13,7 +13,7 @@ const UNIT = `${SERVICE}.service`;
 const MANAGER_MS = 10_000;
 // The service manager lingering starts answers within a second, so a check every tenth of a second starts Kit as soon as it does.
 const MANAGER_CHECK_MS = 100;
-// A Kit that failed restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
+// A Kit that ended any way but by its own exit 0, a signal included, restarts after five seconds, back soon without spinning on a failure that repeats; a Kit that ended itself stays stopped.
 const RESTART_SECONDS = 5;
 // A Mac's LaunchAgent is reloaded by a process of its own, which ends this one within moments; a minute bounds a reload that never comes.
 const RELOAD_MS = 60_000;
@@ -64,7 +64,8 @@ Description=Kit
 
 [Service]
 ExecStart=${unitWord(launcher())} resident
-Restart=on-failure
+Restart=always
+RestartPreventExitStatus=0
 RestartSec=${RESTART_SECONDS}
 OOMPolicy=continue
 
@@ -133,6 +134,22 @@ export async function reloadLaunchAgent(unreloaded: string): Promise<never> {
   }).unref();
   await delay(RELOAD_MS);
   restart(unreloaded);
+}
+
+function unread(): boolean {
+  return manage('systemctl', ['--user', 'show', '--property=NeedDaemonReload', '--value', UNIT]).stdout.trim() === 'yes';
+}
+
+export async function keepSupervisor(): Promise<boolean> {
+  if (earlierPrefix() !== null || process.env.HOUSE_KIT_SANDBOX === '1' || !(process.platform === 'darwin' || systemd())) return false;
+  if (!existsSync(process.platform === 'darwin' ? launchAgent() : userUnit())) return false;
+  const changed = await defineSupervisor();
+  if (process.platform === 'darwin') {
+    if (changed) await reloadLaunchAgent('the LaunchAgent was not reloaded; its next start runs house resident');
+  } else if (changed || unread()) {
+    required('systemctl', ['--user', 'daemon-reload'], 'systemd could not read the Kit service');
+  }
+  return true;
 }
 
 function macos(): { target: string; service: string } {

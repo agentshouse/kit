@@ -6,7 +6,7 @@ import { KIT_RELEASE } from '../src/clis.ts';
 import { startHouse, until } from './double.ts';
 import { hostKit, macOS } from './environment.ts';
 import { accountOf, runKit, temporaryHome } from './kit.ts';
-import { ROOTED, supervision } from './supervision.ts';
+import { ROOTED, supervision, type Supervision } from './supervision.ts';
 
 const STARTED_AS_KIT = { HOUSE_KIT_COMMAND: 'kit' };
 const OWN_AGENT = JSON.stringify({ house: 'https://agents.house', user: 'user-one', credential: 'ahp_own' });
@@ -43,6 +43,10 @@ function unitNaming(home: string, command: string): string {
   return `[Unit]\nDescription=Kit\n\n[Service]\nExecStart="${join(home, 'bin', command)}" resident\nRestart=on-failure\nRestartSec=5\nOOMPolicy=continue\n\n[Install]\nWantedBy=default.target\n`;
 }
 
+function managed(tools: Supervision): string[] {
+  return tools.calls('systemctl').filter((call) => !call.includes('NeedDaemonReload'));
+}
+
 function agentNaming(home: string, command: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>house-kit</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>${join(home, 'bin', command)}</string>\n\t\t<string>resident</string>\n\t</array>\n</dict>\n</plist>\n`;
 }
@@ -65,14 +69,14 @@ it("names house in a Linux home's unit and Git helper that named kit and deletes
 
   expect(await until(() => hosted.reports[0])).toMatchObject({ kit_release: KIT_RELEASE });
   expect(await readFile(unit, 'utf8')).toContain(`\nExecStart="${join(home, 'bin', 'house')}" resident\n`);
-  expect(tools.calls('systemctl')).toEqual(['--user daemon-reload']);
+  expect(managed(tools)).toEqual(['--user daemon-reload']);
   await folded(home);
   await absent(join(home, 'bin', 'kit'));
   const written = await stat(unit);
 
   await hosted.restart();
 
-  expect(tools.calls('systemctl')).toEqual(['--user daemon-reload']);
+  expect(managed(tools)).toEqual(['--user daemon-reload']);
   expect((await stat(unit)).mtimeMs).toBe(written.mtimeMs);
   expect(helpers(home)).toBe('\n!house git-credential\n');
 });
@@ -114,9 +118,7 @@ it("names house in a Mac's LaunchAgent and Git helper that named kit at its firs
   await namingKit(home);
   await put(agent, agentNaming(home, 'kit'));
   await put(join(home, 'credential.json'), JSON.stringify({ house: 'https://agents.house', environment: 'environment-one', credential: 'ahk_held' }));
-  const launchd = join(tools.fake, 'launchd');
-  await put(join(launchd, 'launchctl'), '#!/bin/sh\nprintf \'%s %s\\n\' "${0##*/}" "$*" >> "$FAKE/log"\n[ "$1" != bootout ] || kill -TERM "$(cut -d" " -f4 "/proc/$PPID/stat")"\n');
-  await chmod(join(launchd, 'launchctl'), 0o755);
+  const launchd = await tools.bootingOut();
   const mac = await macOS(home);
   const environment = { ...mac, PATH: `${launchd}:${mac.PATH}`, FAKE: tools.fake };
 

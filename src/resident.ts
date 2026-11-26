@@ -25,6 +25,7 @@ import { applySettings, enrolledRoutes, launchDirectories, moveIntoHouse, resume
 import { quoted } from './shell.ts';
 import { SignIns } from './sign-in.ts';
 import { placeSkills } from './skills.ts';
+import { keepSupervisor } from './supervisor.ts';
 import { holdConnection, type Connection } from './connection.ts';
 import { environmentCall } from './mcp.ts';
 import { KitUpdate } from './update.ts';
@@ -124,6 +125,7 @@ export async function resident(): Promise<void> {
   await mkdir(kitHome(), { recursive: true, mode: 0o700 });
   const lock = await holdOwner();
   await foldKitIntoHouse();
+  await keepSupervisor();
   const forgotten = await forgetRecordedRelay();
   if (forgotten !== null) process.stderr.write(`kit: Kit forgot the relay ${forgotten} an earlier install recorded; it takes a relay only from HOUSE_KIT_RELAY\n`);
   await resumeWorkspaceMove();
