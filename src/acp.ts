@@ -38,6 +38,7 @@ export async function startAdapter(
   added: Record<string, string> = {},
   signal?: AbortSignal,
   fullAccess = false,
+  forms = true,
 ): Promise<Adapter> {
   const adapter = CLIS[kind]!.adapter;
   const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args(fullAccess), {
@@ -106,7 +107,7 @@ export async function startAdapter(
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
-        elicitation: { form: {} },
+        ...(forms ? { elicitation: { form: {} } } : {}),
         session: { compaction: {}, notices: {} },
         _meta: { jetbrains: { air: { version: 1, capabilities: CLIS[kind]!.air } } },
       },
