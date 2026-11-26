@@ -344,7 +344,7 @@ it("keeps waiting for a Room answered not ready when another Room's read fails i
   await until(async () => JSON.parse(await readFile(record(hosted, regranted), 'utf8')).protected.includes('archive'));
 });
 
-it('reads nothing at a notice for a Room it does not wait for, one that left the selection while it waited among them', async () => {
+it('reads nothing of a Room at its notice once it left the selection while the Kit waited for it, and downloads a Room it follows at its notice', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -362,7 +362,12 @@ it('reads nothing at a notice for a Room it does not wait for, one that left the
   noticed(hosted, held);
   await unasked();
 
-  expect(copyReads(hosted).slice(read)).toEqual([]);
+  expect(copyReads(hosted).slice(read)).toEqual([
+    '/kit/local-copies/selection/read',
+    '/kit/local-copies/selection/read',
+    '/kit/door/rooms/discover',
+    '/kit/door/changes/enumerate',
+  ]);
   expect(existsSync(room.repository)).toBe(false);
 });
 

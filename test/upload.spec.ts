@@ -117,7 +117,7 @@ it('writes the conflict markers House answers, lands the rest under a new operat
   expect(await upload(hosted, room)).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'house: House accepted 1 file of /rooms/notes.\n/rooms/notes/plan.md: conflict markers written; resolve them, then run house upload again\n',
+    stderr: 'house: House accepted 1 file of /rooms/notes.\n/rooms/notes/plan.md: conflict markers written; the next save sends it once its markers go\n',
   });
 
   expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe(marked);
@@ -131,7 +131,7 @@ it('writes the conflict markers House answers, lands the rest under a new operat
   expect(await upload(hosted, room)).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'house: /rooms/notes/plan.md still holds conflict markers; resolve it, then run house upload again\n',
+    stderr: 'house: /rooms/notes/plan.md still holds conflict markers; the next save sends it once its markers go\n',
   });
   expect(batches(hosted)).toHaveLength(2);
 
@@ -182,7 +182,7 @@ it('keeps a batch whose answer did not arrive and sends it first, unchanged unde
   expect(await upload(hosted, room)).toEqual({
     status: 1,
     stdout: '',
-    stderr: "house: House's answer to this upload did not arrive; run house upload again\n",
+    stderr: "house: House's answer to this upload did not arrive; Kit sends it again with the next change\n",
   });
   expect(room.batches).toHaveLength(1);
   await writeFile(join(room.repository, 'later.md'), 'later\n');
@@ -211,7 +211,7 @@ it('keeps the bytes of a file changed while it uploaded and its former entry, sa
   expect(await upload(hosted, room)).toMatchObject({
     status: 0,
     stdout:
-      'House accepted 1 file of /rooms/notes.\n/rooms/notes/long.md: changed while it uploaded; House accepted it and local integration is pending, so the next house upload merges it\n',
+      'House accepted 1 file of /rooms/notes.\n/rooms/notes/long.md: changed while it uploaded; House accepted it and local integration is pending, so the next save merges it\n',
   });
 
   expect(room.files.get('long.md')!.content).toBe(lines('l1', 'l5'));
@@ -355,10 +355,10 @@ it.each([
   const refused = await upload(hosted, room);
 
   expect(refused.status).toBe(1);
-  expect(refused.stderr.endsWith('/rooms/notes/plan.md: conflict markers written; resolve them, then run house upload again\n')).toBe(true);
+  expect(refused.stderr.endsWith('/rooms/notes/plan.md: conflict markers written; the next save sends it once its markers go\n')).toBe(true);
   expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe(marked);
   expect((await manifestOf(room)).files['plan.md']).toEqual({ revision: current, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
-  expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/plan.md still holds conflict markers; resolve it, then run house upload again\n');
+  expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/plan.md still holds conflict markers; the next save sends it once its markers go\n');
 
   await writeFile(join(room.repository, 'plan.md'), 'one\nTWO, both\nthree\n');
   expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
@@ -380,7 +380,7 @@ it('refuses an upload while a file it marked under a decomposed name still holds
   expect(await upload(hosted, room)).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'house: /rooms/notes/Café.md still holds conflict markers; resolve it, then run house upload again\n',
+    stderr: 'house: /rooms/notes/Café.md still holds conflict markers; the next save sends it once its markers go\n',
   });
   expect(batches(hosted)).toHaveLength(1);
   expect(room.files.get('Café.md')!.content).toBe('one\nTWO, theirs\nthree\nfour\nfive\n');

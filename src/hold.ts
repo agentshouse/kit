@@ -60,7 +60,7 @@ function holdUntil(at: number): void {
   ended();
 }
 
-function retryAt(value: string | null): number | null {
+export function retryAt(value: string | null): number | null {
   if (value === null) return null;
   const at = /^\s*\d+\s*$/u.test(value) ? Date.now() + Number(value) * 1000 : Date.parse(value);
   return Number.isNaN(at) ? null : at;

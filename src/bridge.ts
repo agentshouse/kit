@@ -95,39 +95,50 @@ function resendAfter(forwarded: Forwarded | null, attempt: number, pushing: bool
   return seconds === null ? null : seconds * 1000;
 }
 
-export async function openBridge(copies: LocalCopies, waits: RunWaits, conversationId: string): Promise<Bridge> {
-  return bridgeFor(copies, waits, {
+function conversationHolder(conversationId: string, path: string | null): Holder {
+  return {
     key: `conversation:${conversationId}`,
     conversation: conversationId,
     named: { [CONVERSATION_META_KEY]: conversationId },
     git: { [CONVERSATION_GIT_HEADER]: conversationId },
-    path: [dirname(process.execPath), await loginPath()].join(delimiter),
-  });
+    path,
+  };
+}
+
+export async function openBridge(copies: LocalCopies, waits: RunWaits, conversationId: string): Promise<Bridge> {
+  return bridgeFor(copies, waits, conversationHolder(conversationId, [dirname(process.execPath), await loginPath()].join(delimiter)));
 }
 
 export function openRunBridge(copies: LocalCopies, waits: RunWaits, run: string): Promise<Bridge> {
   return bridgeFor(copies, waits, { key: `function-run:${run}`, conversation: null, named: { [FUNCTION_RUN_META_KEY]: run }, git: {}, path: null });
 }
 
-async function bridgeFor(copies: LocalCopies, waits: RunWaits, holder: Holder): Promise<Bridge> {
-  const { named, path } = holder;
+export async function conversationCaller(conversationId: string): Promise<Caller> {
   const { house: origin, credential } = (await readEnrolment())!;
+  return labelled(conversationHolder(conversationId, null), origin, credential, null).caller;
+}
 
-  const closed = new AbortController();
+interface Labelled {
+  caller: Caller;
+  forward(text: string): Promise<Forwarded>;
+}
+
+function labelled(holder: Holder, origin: string, credential: string, closed: AbortSignal | null): Labelled {
+  const { named } = holder;
   const sent = (message: Message, operation: string | null): Promise<Forwarded> =>
-    callHouse(origin, credential, message, { operation, named, signal: closed.signal });
+    callHouse(origin, credential, message, { operation, named, ...(closed === null ? {} : { signal: closed }) });
 
   const send = async (message: Message, operation: string | null, pushing = false): Promise<Forwarded> => {
     if (operation === null) return sent(message, null);
     for (let attempt = 0; ; attempt++) {
       const forwarded = await sent(message, operation).catch((error: unknown) => {
-        if (closed.signal.aborted) throw error;
+        if (closed === null || closed.aborted) throw error;
         return null;
       });
       const after = resendAfter(forwarded, attempt, pushing);
       if (after === null) return forwarded!;
       // A Tool call House did not settle is sent again after the wait House names for a refused or a pending one, else on the jittered curve.
-      await delay(after, undefined, { signal: closed.signal });
+      await delay(after, undefined, closed === null ? undefined : { signal: closed });
     }
   };
 
@@ -151,12 +162,12 @@ async function bridgeFor(copies: LocalCopies, waits: RunWaits, holder: Holder): 
           method: 'POST',
           headers: { 'content-type': 'text/plain; charset=utf-8' },
           body: Buffer.concat([Buffer.from(`${transfer.operation}\n`), bytes]),
-          signal: closed.signal,
+          ...(closed === null ? {} : { signal: closed }),
         });
         const answer = await posted.text();
         if (!posted.ok) throw new HouseRefusal('/', posted.status, answer);
         return answer;
-      }, closed.signal);
+      }, closed ?? undefined);
     } catch (error) {
       if (!finalRefusal(error)) throw error;
       return { refused: refusalIn(error.text, error.status) };
@@ -201,6 +212,15 @@ async function bridgeFor(copies: LocalCopies, waits: RunWaits, holder: Holder): 
     info: async (path, revision) => fileInfo(await info({ path, ...(revision === undefined ? {} : { ref: revision }) })),
     instructions: (root) => roomInstructions(info, root),
   };
+  return { caller, forward };
+}
+
+async function bridgeFor(copies: LocalCopies, waits: RunWaits, holder: Holder): Promise<Bridge> {
+  const { path } = holder;
+  const { house: origin, credential } = (await readEnrolment())!;
+
+  const closed = new AbortController();
+  const { caller, forward } = labelled(holder, origin, credential, closed.signal);
 
   const local = async (path: string, text: string): Promise<Forwarded> => {
     if (path === '/copy/upload') {
@@ -271,7 +291,7 @@ async function bridgeFor(copies: LocalCopies, waits: RunWaits, holder: Holder): 
     },
     caller,
     tool: async (name, args) => {
-      const forwarded = await forward(JSON.stringify(call(name, args)));
+      const forwarded = await forward(JSON.stringify(rpc('tools/call', { name, arguments: args })));
       if (forwarded.status !== 200) throw new Error(`House refused ${name} with ${forwarded.status}: ${forwarded.text}`);
       const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
       if (answer.error !== undefined) throw new Error(`House refused ${name}: ${answer.error.message}`);

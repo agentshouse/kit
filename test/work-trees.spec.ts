@@ -19,9 +19,12 @@ function leftOut(folder: string): string {
 }
 
 function batches(hosted: Hosted): Record<string, unknown>[][] {
-  return hosted.house.requests
-    .filter((request) => request.path === '/kit/door/update')
-    .map((request) => (request.body as { changes: Record<string, unknown>[] }).changes);
+  const door = hosted.house.requests.filter((request) => request.path === '/kit/door/update').map((request) => (request.body as { changes: Record<string, unknown>[] }).changes);
+  const conversations = hosted.mcp
+    .map((received) => (received.body as { params: { name?: string; arguments?: { op?: unknown; changes?: Record<string, unknown>[] } } }).params)
+    .filter((params) => params.name === 'update' && params.arguments?.op !== 'stage')
+    .map((params) => params.arguments!.changes!);
+  return [...door, ...conversations];
 }
 
 async function tree(folder: string): Promise<Record<string, string>> {

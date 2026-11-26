@@ -52,11 +52,13 @@ export interface ToolResult {
 export class ProtocolRefusal extends Error {
   readonly status: number;
   readonly error: { code: number; message: string; data: { code: string; retryable: boolean } };
+  readonly headers: Record<string, string>;
 
-  constructor(status: number, error: ProtocolRefusal['error']) {
+  constructor(status: number, error: ProtocolRefusal['error'], headers: Record<string, string> = {}) {
     super(error.message);
     this.status = status;
     this.error = error;
+    this.headers = headers;
   }
 }
 
@@ -315,7 +317,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
       result = message.method === 'tools/list' ? { tools: LISTING } : await answer(message.params.arguments ?? {}, request);
     } catch (error) {
       if (!(error instanceof ProtocolRefusal)) throw error;
-      return { status: error.status, body: { jsonrpc: '2.0', id: message.id, error: error.error } };
+      return { status: error.status, headers: error.headers, body: { jsonrpc: '2.0', id: message.id, error: error.error } };
     }
     return result === null ? { drop: true } : { body: { jsonrpc: '2.0', id: message.id, result } };
   });

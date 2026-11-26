@@ -350,7 +350,6 @@ class Conversation {
   untold = false;
   shown: ReturnType<typeof setTimeout> | null = null;
   place: Place | null = null;
-  uploading: Promise<void> = Promise.resolve();
   unsaved: { directory: string; text: string; paths: string[] } | null = null;
   activity: Activity = IDLE;
   reported: string | null = JSON.stringify(IDLE);
@@ -384,7 +383,6 @@ export class Conversations {
   private readonly conversations = new Map<string, Conversation>();
   private readonly questions = new Map<string, Question>();
   private reporting = 0;
-  private uploads = 0;
   private watched = false;
   private stopping = false;
 
@@ -413,7 +411,7 @@ export class Conversations {
   }
 
   stoppable(): boolean {
-    return this.reporting === 0 && this.uploads === 0 && [...this.conversations.values()].every(({ activity }) => stoppable(activity));
+    return this.reporting === 0 && !this.saveHolds() && [...this.conversations.values()].every(({ activity }) => stoppable(activity));
   }
 
   idle(): boolean {
@@ -421,7 +419,7 @@ export class Conversations {
   }
 
   turnRuns(): boolean {
-    return this.uploads > 0 || [...this.conversations.values()].some(({ activity }) => activity.turn !== 'ended');
+    return this.saveHolds() || [...this.conversations.values()].some(({ activity }) => activity.turn !== 'ended');
   }
 
   runsIn(directory: string): boolean {
@@ -430,9 +428,10 @@ export class Conversations {
     );
   }
 
-  turnsIn(directory: string): boolean {
+  private saveHolds(): boolean {
     return [...this.conversations.values()].some(
-      (conversation) => conversation.place?.directory === directory && (conversation.sending !== null || conversation.turns.size > 0),
+      (conversation) =>
+        (conversation.running !== null || conversation.launch !== null) && conversation.place !== null && this.kit.copies.saving(conversation.place.directory),
     );
   }
 
@@ -690,9 +689,7 @@ export class Conversations {
       if (started || (call.first === true && session !== call.provider_session_id)) {
         result = { provider_session_id: session };
       }
-      await conversation.uploading;
       const place = conversation.place!;
-      if (place.copy && place.synced) await this.freshened(conversation, place);
       if (call.first === true) {
         const reads = CLIS[waiting.route.kind]!.reads !== null;
         const block = place.copy ? copyInstructions(waiting.route.base_instructions, place.directory, reads) : (instructing ?? this.instructed(conversation, waiting.route)!);
@@ -717,13 +714,6 @@ export class Conversations {
     waiting.settle(result);
   }
 
-  private async freshened(conversation: Conversation, place: Place): Promise<void> {
-    const answer = await this.kit.copies
-      .beforeTurn(place.directory, conversation.running!.bridge.caller)
-      .catch((error: unknown) => ({ refused: true, text: causeOf(error) }));
-    if (answer.refused) logged(new Error(`conversation ${conversation.id} runs its turn on its copy as it stands: ${answer.text}`));
-  }
-
   private async unsavedText(conversation: Conversation): Promise<string | null> {
     const unsaved = conversation.unsaved;
     conversation.unsaved = null;
@@ -734,13 +724,13 @@ export class Conversations {
     return kept.length === 0 ? null : [said, ...kept].join('\n');
   }
 
-  private uploaded(conversation: Conversation, turn: Turn): void {
+  private notSaved(conversation: Conversation, turn: Turn): void {
     const running = conversation.running;
     const place = conversation.place;
     if (running === null || running.killed || running.adapter.connection.signal.aborted || place === null || !place.copy || !place.synced) return;
-    this.uploads++;
-    conversation.uploading = this.kit.copies
-      .ended(place.directory, running.bridge.caller)
+    this.reporting++;
+    void this.kit.copies
+      .ended(place.directory)
       .then(async (files) => {
         if (files === null) return;
         if (files.length === 0) {
@@ -753,7 +743,7 @@ export class Conversations {
       })
       .catch(logged)
       .finally(() => {
-        this.uploads--;
+        this.reporting--;
         this.changed(conversation);
       });
   }
@@ -1181,7 +1171,7 @@ export class Conversations {
     void this.deliver(conversation, 'turns/end', body).catch(logged);
     const stamped = conversation.place?.copy === true ? this.kit.copies.turnEnded(conversation.place.directory) : Promise.resolve();
     this.kit.turnEnded(stamped.catch(logged));
-    this.uploaded(conversation, turn);
+    this.notSaved(conversation, turn);
     this.next(conversation);
     this.changed(conversation);
   }

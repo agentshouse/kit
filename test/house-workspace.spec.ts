@@ -87,7 +87,7 @@ it('lays out a fresh install in ~/house, its rooms and agents, and reports the A
   await absent(join(hosted.home, 'rooms'));
 });
 
-it("moves an earlier workspace in Kit home to ~/house at its first start, each copy to its Room's handle with its changed, new and conflicted files and manifest, a copy it no longer follows aside, and ends for its supervisor", async () => {
+it("moves an earlier workspace in Kit home to ~/house at its first start, each copy to its Room's handle with its changed, new and conflicted files and manifest, a copy it no longer follows aside, ends for its supervisor and saves the changed and new files at its next connection", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const { notes, design } = await copied(rooms);
@@ -116,11 +116,13 @@ it("moves an earlier workspace in Kit home to ~/house at its first start, each c
 
   expect(await agentBase(hosted)).toBe(join(hosted.workspace, 'agents'));
 
-  expect((await readdir(join(hosted.workspace, 'rooms'))).sort()).toEqual([`${design.ref} (kept)`, 'notes'].sort());
-  expect(await upload(hosted, notes)).toMatchObject({ status: 1, stderr: `house: ${notes.root}/c.md still holds conflict markers; resolve it, then run house upload again\n` });
-  await writeFile(join(notes.repository, 'c.md'), 'c, resolved\n');
-  expect(await upload(hosted, notes)).toMatchObject({ status: 0, stdout: `House accepted 3 files of ${notes.root}.\n` });
+  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual([`${design.ref} (kept)`, 'notes'].sort());
+  expect(await upload(hosted, notes)).toMatchObject({ status: 1, stderr: `house: ${notes.root}/c.md still holds conflict markers; the next save sends it once its markers go\n` });
+  await until(() => notes.files.get('new.md'));
   expect(notes.files.get('new.md')?.content).toBe('new here\n');
+  expect(notes.files.get('a.md')?.content).toBe('a, changed here\n');
+  await writeFile(join(notes.repository, 'c.md'), 'c, resolved\n');
+  expect(await upload(hosted, notes)).toMatchObject({ status: 0, stdout: `House accepted 1 file of ${notes.root}.\n` });
 });
 
 it('keeps a workspace its person set elsewhere at its path and lays its Local copies out there by handle', async () => {
@@ -161,7 +163,7 @@ it("keeps an earlier workspace in Kit home where ~/house holds what is not Kit's
 
   expect(await agentBase(hosted)).toBe(join(hosted.home, 'agents'));
   expect(await readdir(folder)).toEqual(['mine.txt']);
-  expect((await readdir(join(hosted.home, 'rooms'))).sort()).toEqual([`${design.ref} (kept)`, 'notes'].sort());
+  expect((await readdir(join(hosted.home, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual([`${design.ref} (kept)`, 'notes'].sort());
 });
 
 function routed(hosted: Hosted, routes: { agent_id: string; working_directory: string }[]): void {
@@ -205,7 +207,7 @@ it("keeps where they are the folders an Agent's owner chose inside the earlier w
   await hosted.restart();
   expect(await house(hosted, chosenCopy, 'upload')).toMatchObject({
     status: 1,
-    stderr: `house: ${notes.root}/c.md still holds conflict markers; resolve it, then run house upload again\n`,
+    stderr: `house: ${notes.root}/c.md still holds conflict markers; the next save sends it once its markers go\n`,
   });
 });
 

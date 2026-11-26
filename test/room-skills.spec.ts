@@ -221,7 +221,7 @@ it("writes the skills of an approved version whose text compiles to nothing besi
   expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
 });
 
-it("rewrites a conversation's copy's skills at the notice naming the Room once the member follows a new version, a Room's folder's at its next house download, and asks House nothing of them while the approved version stays", async () => {
+it("rewrites a conversation's copy's skills and its Room's folder's at the notice naming the Room once the member follows a new version, and asks House nothing of them while the approved version stays", async () => {
   const { hosted, rooms, notes } = await staged({}, [owned()]);
   await rooms.download([notes]);
   await opened(hosted, 1, notes, 'Chat');
@@ -240,11 +240,9 @@ it("rewrites a conversation's copy's skills at the notice naming the Room once t
   noticed(hosted, notes);
   await until(async () => (await readFile(join(copy, '.agents', 'skills', OWNED, 'steps', 'first.md'), 'utf8').catch(() => null)) === EDITED_FILES['steps/first.md']);
 
+  await until(async () => (await readFile(join(notes.repository, '.agents', 'skills', OWNED, 'steps', 'first.md'), 'utf8').catch(() => null)) === EDITED_FILES['steps/first.md']);
+
   expect(await written(copy, OWNED)).toEqual(EDITED_FILES);
-  expect(await written(notes.repository, OWNED)).toEqual(OWNED_FILES);
-
-  expect(await rooms.download([notes])).toMatchObject({ status: 0 });
-
   expect(await written(notes.repository, OWNED)).toEqual(EDITED_FILES);
   expect(await recorded(notes)).toEqual(record([OWNED], [OWNED], 2));
 });

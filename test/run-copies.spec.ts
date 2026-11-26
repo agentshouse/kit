@@ -4,12 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until, type Received } from './double.ts';
+import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
 import { clocked, hostKit, lastCall, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
+import { stop } from './kit.ts';
 import { house, manifestOf, serveRooms, type Room, type Rooms } from './rooms.ts';
 
 const INSTRUCTIONS = 'Write dates as YYYY-MM-DD.\n';
 const HOUR = 60 * 60_000;
 const MADE = ['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'plan.md'];
+// Four seconds outlast the three a save waits after the last change, so a save nothing started has not come by then.
+const NO_SAVE_MS = 4_000;
 
 type Copy = { kind: 'none' } | { kind: 'new' } | { kind: 'existing'; path: string };
 
@@ -144,41 +148,39 @@ it("starts a Run with no copy in its Agent's launch directory, one with a new co
   expect(await logged(hosted, 'session/new')).toHaveLength(4);
 });
 
-it("downloads into a Run's copy only when it makes it and uploads nothing at a Run's turns, writing no line for it, while a conversation opened with no Run, such as one submitted before this release, still downloads at a notice and uploads at its turn's end", async () => {
+it("makes a Run's new copy follow its Room as every copy, downloading at a notice and saving what its turns write under the Run's label, while a copy made for a Run before this release stays unfollowed and house upload there sends its work", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}, {}]);
   const imp = copyOf(hosted, 'notes', 'imp-1');
-  const earlier = copyOf(hosted, 'notes', 'rev-9');
+  const earlier = copyOf(hosted, 'notes', 'imp-0');
   await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
-  await session(hosted, 2, notes, 'rev-1', { kind: 'existing', path: notes.repository });
-  await session(hosted, 3, notes, 'rev-9');
-  await settle();
-  const fetched = downloads(hosted);
+  await session(hosted, 3, notes, 'imp-0', { kind: 'new' });
+  const place = join(hosted.home, 'local-copies', 'places', 'conversation-3.json');
+  const recorded = JSON.parse(await readFile(place, 'utf8')) as { run: Record<string, unknown> };
+  expect(recorded.run.follows).toBe(true);
+  stop(hosted.kit.pid);
+  await hosted.kit.exited;
+  const { follows: _follows, ...run } = recorded.run;
+  await writeFile(place, JSON.stringify({ ...recorded, run }));
+  await hosted.restart();
 
   notes.put('a.md', 'one\ntwo\nthree, from House\n');
   noticed(hosted, notes);
-  await shows(join(earlier, 'a.md'), 'one\ntwo\nthree, from House\n');
-  await settle();
+  await shows(join(imp, 'a.md'), 'one\ntwo\nthree, from House\n');
   await turn(hosted, 1, '@sh echo mine >> plan.md');
-  await turn(hosted, 2, '@sh echo theirs >> plan.md');
-  await turn(hosted, 1, '@say again');
+  await until(() => (notes.files.get('plan.md')!.content === 'Plant beans\nmine\n' ? true : undefined));
+  await turn(hosted, 3, '@sh echo earlier > b.md');
+  await new Promise((resolve) => setTimeout(resolve, NO_SAVE_MS));
 
-  expect(await readFile(join(imp, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
-  expect(await readFile(join(imp, 'plan.md'), 'utf8')).toBe('Plant beans\nmine\n');
-  expect(await readFile(join(notes.repository, 'plan.md'), 'utf8')).toBe('Plant beans\ntheirs\n');
-  expect(rooms.edits()).toEqual([]);
-  expect(await prompt(hosted, 2)).toBe('@say again');
-  expect(downloads(hosted)).toBe(fetched + 1);
-
-  await turn(hosted, 3, '@sh echo ours >> plan.md');
-
-  await until(() => (rooms.edits().length === 1 ? true : undefined));
-  expect(notes.files.get('plan.md')!.content).toBe('Plant beans\nours\n');
-  expect(await readFile(join(imp, 'plan.md'), 'utf8')).toBe('Plant beans\nmine\n');
+  expect(rooms.edits().map((received) => (received.body as { params: { _meta: Record<string, string> } }).params._meta[CONVERSATION_META_KEY])).toEqual(['conversation-1']);
+  expect(await readFile(join(earlier, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
+  expect(await prompt(hosted, 1)).toBe('@sh echo earlier > b.md');
+  expect(await house(hosted, earlier, 'upload')).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(notes.files.get('b.md')!.content).toBe('earlier\n');
 });
 
-it("keeps a copy a Run given it as existing had a turn in within 24 hours, removes it once no turn ran in it for 24 hours and makes it again from a fresh download at that Run's next turn, never removes a Room's folder, and reckons a Run's copy holding work with no download", async () => {
+it("keeps a copy a Run given it as existing had a turn in within 24 hours, removes it once no turn ran in it for 24 hours and makes it again from a fresh download at that Run's next turn, never removes a Room's folder, and reckons a Run's copy holding work after its download", async () => {
   const clock = await clocked();
-  const { hosted, notes } = await staged([{}, {}, {}, {}], clock.hosting);
+  const { hosted, rooms, notes } = await staged([{}, {}, {}, {}], clock.hosting);
   const imp = copyOf(hosted, 'notes', 'imp-1');
   const worked = copyOf(hosted, 'notes', 'cha-1');
   const sessions = [
@@ -189,6 +191,7 @@ it("keeps a copy a Run given it as existing had a turn in within 24 hours, remov
   ];
   const resumed = (index: number) => ({ provider_session_id: sessions[index - 1] });
   for (const index of [1, 2, 3]) await turn(hosted, index, '@say first');
+  rooms.denied.add('conversation-4');
   await turn(hosted, 4, '@sh echo mine >> plan.md');
   for (const index of [1, 2, 3, 4]) expect(await killed(hosted, index)).toEqual({});
   notes.put('a.md', 'one\ntwo\nthree, from House\n');
@@ -201,9 +204,9 @@ it("keeps a copy a Run given it as existing had a turn in within 24 hours, remov
   await turn(hosted, 3, '@say looking', resumed(3));
 
   expect(await held(imp)).toEqual(MADE);
+  await shows(join(worked, 'a.md'), 'one\ntwo\nthree, from House\n');
   expect(await readFile(join(worked, 'plan.md'), 'utf8')).toBe('Plant beans\nmine\n');
-  expect(await readFile(join(worked, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
-  expect(downloads(hosted)).toBe(fetched);
+  expect(downloads(hosted)).toBeGreaterThan(fetched);
 
   await clock.shift(46 * HOUR);
   await turn(hosted, 3, '@say looking again', resumed(3));
@@ -211,7 +214,6 @@ it("keeps a copy a Run given it as existing had a turn in within 24 hours, remov
 
   expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
   expect(await readFile(join(worked, 'plan.md'), 'utf8')).toBe('Plant beans\nmine\n');
-  expect(downloads(hosted)).toBe(fetched);
 
   await turn(hosted, 2, '@say back', resumed(2));
 
@@ -286,7 +288,7 @@ it("writes each document a house update changed and each attachment write of a f
   const outside = await house(hosted, '/', 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/a.md', content: 'one, outside\n', base: notes.revision('a.md') }] }));
 
   expect(pending).toMatchObject({ status: 0, stderr: '' });
-  expect(pending.stdout).toContain('/rooms/notes/plan.md: changed here, so House accepted the update and local integration is pending; the next house upload sends this file as it is\n');
+  expect(pending.stdout).toContain('/rooms/notes/plan.md: changed here, so House accepted the update and local integration is pending; the next save sends this file as it is\n');
   expect(await readFile(join(notes.repository, 'plan.md'), 'utf8')).toBe('Plant beans there\n');
   expect((await manifestOf(notes)).files['plan.md']).toEqual(plan);
   expect(outside).toMatchObject({ status: 0, stderr: '' });
@@ -322,7 +324,7 @@ it("says House accepted a house update whose write into a Run's copy failed and 
 
   expect(updated).toMatchObject({ status: 0, stderr: '' });
   expect(updated.stdout).toContain(
-    `${imp}: House accepted the update, but Kit could not write it here (house_unavailable: House is unavailable; call again shortly), so local integration is pending; house download here brings House's text\n`,
+    `${imp}: House accepted the update, but Kit could not write it here (house_unavailable: House is unavailable; call again shortly), so local integration is pending; the next notice brings House's text\n`,
   );
   expect(notes.files.get('c.md')!.content).toBe('zero\none\ntwo\nthree\n');
   expect(await readFile(join(imp, 'a.md'), 'utf8')).toBe('one, here\n');
@@ -375,7 +377,7 @@ it("moves and deletes with a house update each file unchanged since its entry, w
   const answered = await house(hosted, notes.repository, 'update', JSON.stringify({ changes }));
 
   expect(answered).toMatchObject({ status: 0, stderr: '' });
-  expect(answered.stdout).toContain('/rooms/notes/b.md: changed here, so House accepted the update and local integration is pending; the next house upload sends this file as it is\n');
+  expect(answered.stdout).toContain('/rooms/notes/b.md: changed here, so House accepted the update and local integration is pending; the next save sends this file as it is\n');
   expect(await held(notes.repository)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'b.md', 'c.md', 'done.md']);
   expect(await readFile(join(notes.repository, 'done.md'), 'utf8')).toBe('Plant beans\n');
   expect(await readFile(join(notes.repository, 'b.md'), 'utf8')).toBe('bee, mine\n');
@@ -414,7 +416,7 @@ it("keeps a Room's folder a Run works in through the Room's handle change, so th
   await absent(folder);
 });
 
-it("counts a linked attachment another folder of the Room wrote in place and uploaded as House's in a Run's copy, which reckoning downloads nothing into, so that copy goes once no turn ran in it for 24 hours", async () => {
+it("counts a linked attachment another folder of the Room wrote in place and uploaded as House's in a Run's copy, which reckoning downloads into first, so that copy goes once no turn ran in it for 24 hours", async () => {
   const clock = await clocked();
   const { hosted, rooms, notes } = await staged([{}, {}], clock.hosting);
   notes.upload('table.csv', Buffer.from('a,b\n'));
@@ -433,6 +435,6 @@ it("counts a linked attachment another folder of the Room wrote in place and upl
   await turn(hosted, 2, '@say looking');
   await until(() => (existsSync(imp) ? undefined : true));
 
-  expect(downloads(hosted)).toBe(fetched);
+  expect(downloads(hosted)).toBeGreaterThan(fetched);
   expect(await readFile(join(notes.repository, 'table.csv'), 'utf8')).toBe('a,b,c\n');
 });

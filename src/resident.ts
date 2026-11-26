@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { Agents } from './agents.ts';
 import { house } from './api.ts';
-import { received } from './bridge.ts';
+import { conversationCaller, received } from './bridge.ts';
 import { Conversations } from './conversations.ts';
 import { DEFAULT_MAX_SIZE, LocalCopies, updateChanges, UPDATE_PATH, type Answered, type Updating } from './copies.ts';
 import { restart, restartPlaced } from './end.ts';
@@ -127,7 +127,7 @@ export async function resident(): Promise<void> {
   const forgotten = await forgetRecordedRelay();
   if (forgotten !== null) process.stderr.write(`kit: Kit forgot the relay ${forgotten} an earlier install recorded; it takes a relay only from HOUSE_KIT_RELAY\n`);
   await resumeWorkspaceMove();
-  const copies = new LocalCopies(house, launchDirectories);
+  const copies = new LocalCopies(house, launchDirectories, { caller: conversationCaller, changed: () => changed() });
   await copies.load();
   const moved = await moveIntoHouse(copies);
   if (moved !== null) restart(moved);
@@ -251,7 +251,7 @@ export async function resident(): Promise<void> {
       waits.opened();
       scripts.connected();
       changed();
-      logged(copies.connected((directory) => conversations.turnsIn(directory)));
+      logged(copies.connected());
       void placeSkills();
     },
     closed: () => scripts.disconnected(),

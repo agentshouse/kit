@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { until, type Received } from './double.ts';
-import { hostKit, lastCall, opened, type Hosted, type McpCall } from './environment.ts';
+import { hostKit, lastCall, type Hosted, type McpCall } from './environment.ts';
+import { temporaryDirectory } from './kit.ts';
 import { digest, fileCalls, house, manifestOf, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
@@ -15,7 +16,7 @@ const REDRAWN = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0, 8, 0x45, 0x78, 0x69, 0x6
 const PDF = Buffer.from('%PDF-1.7\n%\xe2\xe3\xcf\xd3\n', 'latin1');
 const RECORDING = Buffer.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0]);
 
-const UNSENT = 'house upload again resumes this upload and sends only what it has not sent';
+const UNSENT = 'Kit sends it again with the next change, resuming this upload and sending only what it has not sent';
 const STORED = 'limit_reached: this file would pass your storage limit';
 const STORAGE = {
   status: 429,
@@ -38,6 +39,12 @@ function batches(hosted: Hosted): { operation_id: string; changes: Record<string
     .map((request) => request.body as { operation_id: string; changes: Record<string, unknown>[] });
 }
 
+function edits(hosted: Hosted): Record<string, unknown>[][] {
+  return hosted.mcp
+    .filter((received) => called(received).name === 'update' && called(received).arguments?.op !== 'stage')
+    .map((received) => called(received).arguments!.changes as Record<string, unknown>[]);
+}
+
 function called(received: Received): McpCall['params'] {
   return (received.body as McpCall).params;
 }
@@ -50,11 +57,15 @@ function puts(hosted: Hosted): [number | null, number][] {
   return hosted.store.requests.filter((request) => request.method === 'PUT').map((request) => [request.part, request.status]);
 }
 
-async function placed(room: Room, files: { [path: string]: Buffer | string }): Promise<void> {
+async function placedIn(folder: string, files: { [path: string]: Buffer | string }): Promise<void> {
   for (const [path, content] of Object.entries(files)) {
-    await mkdir(join(room.repository, path, '..'), { recursive: true });
-    await writeFile(join(room.repository, path), content);
+    await mkdir(join(folder, path, '..'), { recursive: true });
+    await writeFile(join(folder, path), content);
   }
+}
+
+function placed(room: Room, files: { [path: string]: Buffer | string }): Promise<void> {
+  return placedIn(room.repository, files);
 }
 
 async function ran(hosted: Hosted, line: string): Promise<Shelled> {
@@ -114,10 +125,11 @@ it('uploads documents and attachments once as the owner, each attachment staged 
 
 it("uploads a document and an attachment under the Kit credential naming the conversation, finishing each staged upload through upload by its path, and a download there brings the attachment's new revision through info naming the conversation", async () => {
   const { hosted, room } = await copied();
-  await opened(hosted);
-  await placed(room, { 'photo.jpg': JPEG, 'plan.md': 'one\ntwo\n' });
+  const copy = await openedIn(hosted, room, 'Plan');
+  const staged = await temporaryDirectory();
+  await placedIn(staged, { 'photo.jpg': JPEG, 'plan.md': 'one\ntwo\n' });
 
-  const uploaded = await ran(hosted, `@sh cd ${room.repository} && house upload`);
+  const uploaded = await ran(hosted, `@sh cp -a ${staged}/. . && house upload`);
   room.upload('photo.jpg', REDRAWN);
   const downloaded = await ran(hosted, '@sh house download');
 
@@ -142,9 +154,14 @@ it("uploads a document and an attachment under the Kit credential naming the con
   ).toEqual([
     [credential, undefined],
     [credential, 'conversation-1'],
+    [credential, 'conversation-1'],
   ]);
-  expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(REDRAWN);
-  expect((await manifestOf(room)).files['photo.jpg']).toEqual({ revision: room.binaries.get('photo.jpg')!.revision, sha256: digest(REDRAWN), bytes: REDRAWN.length });
+  expect(await readFile(join(copy, 'photo.jpg'))).toEqual(REDRAWN);
+  expect(JSON.parse(await readFile(join(copy, '.house'), 'utf8')).files['photo.jpg']).toEqual({
+    revision: room.binaries.get('photo.jpg')!.revision,
+    sha256: digest(REDRAWN),
+    bytes: REDRAWN.length,
+  });
 });
 
 it("uploads nothing, no delete and no bytes, from a conversation's copy holding one attachment as its manifest entry alone and one linked from the Room's folder, holds a file written at an entry's path with exactly its bytes, sending nothing, and uploads one with other bytes as a change on the entry's revision", async () => {
@@ -155,17 +172,17 @@ it("uploads nothing, no delete and no bytes, from a conversation's copy holding 
   const copy = await openedIn(hosted, room, 'Plan');
   expect((await stat(join(copy, 'linked.jpg'))).ino).toBe((await stat(join(room.repository, 'linked.jpg'))).ino);
   const kept = Object.fromEntries(['linked.jpg', 'entry.pdf', 'other.bin'].map((path) => [path, { ...room.binaries.get(path)! }]));
-  const sent = batches(hosted).length;
+  const sent = edits(hosted).length;
 
   expect(await house(hosted, copy, 'upload')).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
-  expect(batches(hosted)).toHaveLength(sent);
+  expect(edits(hosted)).toHaveLength(sent);
   expect(Object.fromEntries([...room.binaries].filter(([path]) => path in kept))).toEqual(kept);
 
   await writeFile(join(copy, 'entry.pdf'), PDF);
   await writeFile(join(copy, 'other.bin'), REDRAWN);
   expect(await house(hosted, copy, 'upload')).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
 
-  expect(batches(hosted).at(-1)!.changes).toEqual([part('other.bin', REDRAWN, 'application/octet-stream', kept['other.bin']!.revision)]);
+  expect(edits(hosted).at(-1)).toEqual([part('other.bin', REDRAWN, 'application/octet-stream', kept['other.bin']!.revision)]);
   expect(room.binaries.get('entry.pdf')).toEqual(kept['entry.pdf']);
   const { files } = JSON.parse(await readFile(join(copy, '.house'), 'utf8')) as { files: Record<string, unknown> };
   expect(files['entry.pdf']).toEqual({ revision: kept['entry.pdf']!.revision, sha256: digest(PDF), bytes: PDF.length });
@@ -220,9 +237,8 @@ it('uploads each .md file as document text and every other file as an attachment
   expect(room.files.has('notes.md')).toBe(false);
 });
 
-it('stops an upload the Write limit refuses, naming each attachment it has not sent with its reason, and house upload again from a conversation sends only those and lands once', async () => {
+it('stops an upload the Write limit refuses, naming each attachment it has not sent with its reason, and house upload again sends only those and lands once', async () => {
   const { hosted, rooms, room } = await copied();
-  await opened(hosted);
   rooms.writeUnits = 2;
   await placed(room, { 'a.jpg': JPEG, 'b.pdf': PDF, 'c.bin': RECORDING, 'plan.md': 'one\ntwo\n' });
 
@@ -230,7 +246,7 @@ it('stops an upload the Write limit refuses, naming each attachment it has not s
   const stoppedPuts = puts(hosted).length;
   const unchanged = [room.batches.length, room.files.get('plan.md')!.content, room.binaries.size];
   rooms.writeUnits = 2;
-  const resumed = await ran(hosted, `@sh cd ${room.repository} && house upload`);
+  const resumed = await upload(hosted, room);
 
   expect(stopped).toEqual({
     status: 1,
@@ -244,8 +260,7 @@ it('stops an upload the Write limit refuses, naming each attachment it has not s
   });
   expect(unchanged).toEqual([0, 'one\n', 0]);
   expect(resumed).toMatchObject({ status: 0, stdout: 'House accepted 4 files of /rooms/notes.\n' });
-  const operations = [...batches(hosted).map((batch) => batch.operation_id), ...rooms.edits().map(operationOf)];
-  expect(new Set(operations).size).toBe(1);
+  expect(new Set(batches(hosted).map((batch) => batch.operation_id)).size).toBe(1);
   expect(puts(hosted).slice(stoppedPuts)).toEqual([[1, 200]]);
   expect(room.batches).toHaveLength(1);
   for (const [path, bytes] of [['a.jpg', JPEG], ['b.pdf', PDF], ['c.bin', RECORDING]] as const) expect(digest(room.binaries.get(path)!.bytes)).toBe(digest(bytes));
@@ -253,14 +268,15 @@ it('stops an upload the Write limit refuses, naming each attachment it has not s
 
 it("stops a conversation's upload the open-uploads cap refuses without sending it again, and the next upload lands it under the same operation", async () => {
   const { hosted, rooms, room } = await copied();
-  await opened(hosted);
+  await openedIn(hosted, room, 'Plan');
   rooms.openUploads = 0;
-  await placed(room, { 'photo.jpg': JPEG });
+  const staged = await temporaryDirectory();
+  await placedIn(staged, { 'photo.jpg': JPEG });
 
-  const stopped = await ran(hosted, `@sh cd ${room.repository} && house upload`);
+  const stopped = await ran(hosted, `@sh cp -a ${staged}/. . && house upload`);
   const sent = rooms.edits().length;
   rooms.openUploads = 10;
-  const landed = await ran(hosted, `@sh cd ${room.repository} && house upload`);
+  const landed = await ran(hosted, '@sh house upload');
 
   expect(stopped).toMatchObject({
     status: 1,
@@ -317,7 +333,7 @@ it('lands more attachments than House opens at once in turns under one operation
   expect(room.binaries.size).toBe(15);
 });
 
-it('keeps an upload a failed transfer stops and resumes it after the Kit restarts under its operation, sending only the part the store lacks', async () => {
+it('keeps an upload a failed transfer stops and resumes it at the connection after the Kit restarts under its operation, sending only the part the store lacks', async () => {
   const { hosted, room } = await copied(undefined, ['--import', FAST_TIMEOUTS]);
   hosted.store.failing.add(2);
   await placed(room, { 'photo.jpg': JPEG });
@@ -325,6 +341,7 @@ it('keeps an upload a failed transfer stops and resumes it after the Kit restart
   const stopped = await upload(hosted, room);
   hosted.store.failing.clear();
   await hosted.restart();
+  await until(() => room.binaries.get('photo.jpg'));
   const resumed = await upload(hosted, room);
 
   expect(stopped).toEqual({
@@ -337,7 +354,7 @@ it('keeps an upload a failed transfer stops and resumes it after the Kit restart
       '',
     ].join('\n'),
   });
-  expect(resumed).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+  expect(resumed).toEqual({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n', stderr: '' });
   expect(new Set(batches(hosted).map((batch) => batch.operation_id)).size).toBe(1);
   const sent = puts(hosted);
   expect(sent.filter(([index]) => index === 1)).toEqual([[1, 200]]);
@@ -362,7 +379,7 @@ it('drops an upload whose attachment changed after it read it, before House hold
   expect(stopped).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'house: House holds nothing of this upload yet, so /rooms/notes is unchanged: photo.jpg changed since house upload read it; run house upload again to send the copy as it is now\n',
+    stderr: 'house: House holds nothing of this upload yet, so /rooms/notes is unchanged: photo.jpg changed since house upload read it; the next save sends the copy as it is now\n',
   });
   expect(uploaded).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
   expect(batches(hosted).at(-1)!.changes).toEqual([part('photo.jpg', REDRAWN, 'image/jpeg')]);
@@ -401,7 +418,7 @@ it("takes House's current revision as the base of an attachment another writer r
   const taken = room.upload('cover.jpg', PDF);
   await placed(room, { 'photo.jpg': REDRAWN, 'cover.jpg': JPEG });
   const advice = (path: string, revision: string) =>
-    `/rooms/notes/${path}: House holds ${revision}, a version this copy never held; the next house upload replaces it with this file, and house download '${JSON.stringify({ path: `/rooms/notes/${path}`, file: join(room.repository, path) })}' brings House's instead`;
+    `/rooms/notes/${path}: House holds ${revision}, a version this copy never held; the next save replaces it with this file`;
 
   const refused = await upload(hosted, room);
 

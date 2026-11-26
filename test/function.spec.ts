@@ -354,7 +354,7 @@ it("answers a run's house call House refuses for its Kit credential at once by s
   expect(hosted.house.requests.filter((received) => received.path === '/' && (received.body as McpCall).params.name === 'search')).toHaveLength(1);
 });
 
-it("uploads a run's Local copy with house upload through the run's bridge, naming the run, and takes no --owner", async () => {
+it("saves a Room's folder by a run's house upload as the Environment's own upload, naming no run, and takes no --owner", async () => {
   const hosted = await hostKit([]);
   const rooms = serveRooms(hosted);
   const room = rooms.room('notes');
@@ -365,7 +365,9 @@ it("uploads a run's Local copy with house upload through the run's bridge, namin
   const { output } = await ended(hosted, id);
 
   expect(output).toMatch(/^House accepted 1 file of \/rooms\/notes\.\nexit 0\nhouse: unexpected argument --owner; usage: house upload, .*\nexit 1\n$/);
-  expect(hosted.house.requests.filter((received) => received.path === '/kit/door/update')).toEqual([]);
-  expect(rooms.edits().map((received) => [received.headers.authorization, metaOf(received)[FUNCTION_RUN_META_KEY]])).toEqual([['Bearer ahk_held', id]]);
+  expect(hosted.house.requests.filter((received) => received.path === '/kit/door/update').map((received) => [received.headers.authorization, received.body])).toEqual([
+    ['Bearer ahk_held', { operation_id: expect.any(String), changes: [{ op: 'write', path: '/rooms/notes/added.md', content: 'added\n' }] }],
+  ]);
+  expect(rooms.edits()).toEqual([]);
 });
 
