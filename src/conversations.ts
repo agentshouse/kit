@@ -69,16 +69,18 @@ type Chosen = Pick<KitCallOf<'open'>, 'model' | 'effort' | 'mode'>;
 
 interface LaunchRoute extends DesiredAgentRoute {
   mode?: string | null;
+  afk: boolean;
 }
 
 const EFFORT = 'thought_level';
 
-function conversationRoute(route: DesiredAgentRoute, chosen: Chosen): LaunchRoute {
+function conversationRoute(route: DesiredAgentRoute, chosen: Chosen & Pick<KitCallOf<'open'>, 'afk'>): LaunchRoute {
   return {
     ...route,
     model: chosen.model ?? route.model,
     effort: chosen.effort ?? route.effort,
     ...(chosen.mode === undefined ? {} : { mode: chosen.mode }),
+    afk: chosen.afk === true,
   };
 }
 
@@ -254,6 +256,11 @@ function logged(error: unknown): void {
   process.stderr.write(`kit: ${causeOf(error)}\n`);
 }
 
+function faulted(error: Error): Error {
+  logged(error);
+  return error;
+}
+
 function refusal(conversation: Conversation, error: unknown): string {
   if (conversation.kills > 0) return KILLED;
   const cause = error instanceof Error && error.cause !== undefined ? `${error.message}: ${causeOf(error.cause)}` : causeOf(error);
@@ -334,7 +341,6 @@ class Conversation {
   commands: AvailableCommand[] | null = null;
   options: SessionConfigOption[] | null = null;
   exitUntold = false;
-  afk = false;
   reader: Reader | null = null;
   state: SessionState = QUIET;
   sentState: string | null = null;
@@ -402,7 +408,6 @@ export class Conversations {
   call(call: ConversationCall): void {
     void this.kit.calls.carry(call.input_id, () => {
       const conversation = this.conversation(call.conversation_id);
-      if (call.kind === 'open' || call.kind === 'message') conversation.afk = call.afk === true;
       if (call.kind === 'kill') {
         conversation.kills++;
         conversation.killed.abort(new Error(KILLED));
@@ -924,22 +929,30 @@ export class Conversations {
     opening: Opening | null,
   ): Promise<string> {
     const route = await routed;
+    const { afk } = route;
+    const unable = afk && CLIS[route.kind]!.unableToAsk;
+    const unanswered = (method: string) =>
+      faulted(new Error(`conversation ${conversation.id}: ${CLIS[route.kind]!.name} sent ${method} from an AFK session, which starts unable to ask`));
     const reader = readerFor(route.kind);
     reader.session = sessionId;
     conversation.reader = reader;
     const app = client({ name: '@agentshouse/kit' })
-      .onRequest('session/request_permission', ({ params, signal }) =>
-        conversation.afk ? permissionAllowed(params) : this.ask(conversation, 'session/request_permission', params, false, signal),
-      )
-      .onRequest('elicitation/create', ({ params, signal }) =>
-        conversation.afk ? QUESTION_DECLINED : this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal),
-      )
-      .onRequest('_x.ai/exit_plan_mode', GROK_PLAN, async ({ params, signal }) =>
-        conversation.afk ? PLAN_APPROVED : grokPlanAnswer(await this.askForm(conversation, grokPlanForm(params), signal)),
-      )
-      .onRequest('_x.ai/ask_user_question', GROK_QUESTION, async ({ params, signal }) =>
-        grokQuestionAnswer(conversation.afk ? QUESTION_DECLINED : await this.askForm(conversation, grokQuestionForm(params), signal)),
-      );
+      .onRequest('session/request_permission', ({ params, signal }) => {
+        if (unable) throw unanswered('session/request_permission');
+        return afk ? permissionAllowed(params) : this.ask(conversation, 'session/request_permission', params, false, signal);
+      })
+      .onRequest('elicitation/create', ({ params, signal }) => {
+        if (unable) throw unanswered('elicitation/create');
+        return afk ? QUESTION_DECLINED : this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal);
+      })
+      .onRequest('_x.ai/exit_plan_mode', GROK_PLAN, async ({ params, signal }) => {
+        if (unable) throw unanswered('_x.ai/exit_plan_mode');
+        return afk ? PLAN_APPROVED : grokPlanAnswer(await this.askForm(conversation, grokPlanForm(params), signal));
+      })
+      .onRequest('_x.ai/ask_user_question', GROK_QUESTION, async ({ params, signal }) => {
+        if (unable) throw unanswered('_x.ai/ask_user_question');
+        return grokQuestionAnswer(afk ? QUESTION_DECLINED : await this.askForm(conversation, grokQuestionForm(params), signal));
+      });
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridging = this.bridged(conversation);
     const bridge = await step(unbridged, bridging);
@@ -983,12 +996,13 @@ export class Conversations {
           { ...bridge.env, ...streamed },
           undefined,
           route.mode === null,
+          !unable,
         ),
       );
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
       const agent = adapter.connection.agent;
       const cwd = place.directory;
-      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name, place.code, conversation.afk);
+      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name, place.code, afk);
       const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
       const opened =
         resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));

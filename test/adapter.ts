@@ -63,6 +63,19 @@ const prompting = new Set<string>();
 const turning = new Set<string>();
 let spent: Record<string, unknown> = {};
 const steers = kind !== 'grok-build';
+let forms = true;
+const unprompted = new Set<string>();
+
+function launched(sessionId: string, meta: unknown): void {
+  const options = (meta as { claudeCode?: { options?: { permissionPrompts?: unknown } } } | null | undefined)?.claudeCode?.options;
+  if (options?.permissionPrompts === 'none') unprompted.add(sessionId);
+}
+
+function asks(sessionId: string, method: string): boolean {
+  if (existsSync(join(home, 'asks-anyway'))) return true;
+  if (method === 'elicitation/create') return forms;
+  return method !== 'session/request_permission' || !unprompted.has(sessionId);
+}
 
 // A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.
 const JOB =
@@ -326,7 +339,8 @@ async function directive(
       await turnEnded(client, sessionId);
     }, Number(delay));
   }
-  if (name === 'ask') {
+  if (name === 'ask' && !asks(sessionId, 'session/request_permission')) log({ unasked: 'session/request_permission' });
+  else if (name === 'ask') {
     const response = await client.request('session/request_permission', {
       sessionId,
       toolCall: { toolCallId: 'tool-1', title: 'Run a command' },
@@ -337,7 +351,8 @@ async function directive(
     });
     await say(client, sessionId, JSON.stringify(response));
   }
-  if (name === 'abandon') {
+  if (name === 'abandon' && !asks(sessionId, 'session/request_permission')) log({ unasked: 'session/request_permission' });
+  else if (name === 'abandon') {
     const abandon = new AbortController();
     // The CLI stops waiting on its question after the milliseconds its spec names.
     setTimeout(() => abandon.abort(), Number(argument));
@@ -357,7 +372,8 @@ async function directive(
       );
     log({ abandoned: outcome });
   }
-  if (name === 'question') {
+  if (name === 'question' && !asks(sessionId, 'elicitation/create')) log({ unasked: 'elicitation/create' });
+  else if (name === 'question') {
     const response = await client.request('elicitation/create', {
       sessionId,
       mode: 'form',
@@ -366,7 +382,8 @@ async function directive(
     });
     await say(client, sessionId, JSON.stringify(response));
   }
-  if (name === 'secret') {
+  if (name === 'secret' && !asks(sessionId, 'elicitation/create')) log({ unasked: 'elicitation/create' });
+  else if (name === 'secret') {
     const response = await client.request('elicitation/create', {
       sessionId,
       mode: 'form',
@@ -489,9 +506,10 @@ interface Recorded {
   tap?: unknown;
 }
 
-async function sent(client: AgentContext, entries: Recorded[]): Promise<void> {
+async function sent(client: AgentContext, sessionId: string, entries: Recorded[]): Promise<void> {
   for (const { request, method, params, tap } of entries) {
     if (tap !== undefined) await codex({ messages: [tap] });
+    else if (request && !asks(sessionId, method!)) log({ unasked: method });
     else if (request) {
       const answered = await client.request(method as 'session/request_permission', params as never).catch((error: RequestError) => ({ code: error.code }));
       log({ replayed: method, answered });
@@ -507,11 +525,11 @@ async function replay(client: AgentContext, sessionId: string, fixture: string):
   const entries = lines.map((line) => JSON.parse(line.split(recorded.params!.sessionId as string).join(sessionId)) as Recorded);
   const answer = entries.findIndex((entry) => entry.result !== undefined);
   if (answer === -1) {
-    await sent(client, entries);
+    await sent(client, sessionId, entries);
     return undefined;
   }
-  await sent(client, entries.slice(0, answer));
-  replaying = new Promise<void>((resolve) => setImmediate(() => resolve(sent(client, entries.slice(answer + 1)))));
+  await sent(client, sessionId, entries.slice(0, answer));
+  replaying = new Promise<void>((resolve) => setImmediate(() => resolve(sent(client, sessionId, entries.slice(answer + 1)))));
   return entries[answer]!.result;
 }
 
@@ -523,6 +541,7 @@ function authMethod(): { defaultAuthMethodId?: string } {
 const app = agent({ name: 'adapter-double' })
   .onRequest('initialize', ({ params }) => {
     log({ method: 'initialize', params, env: process.env, argv: process.argv, cli });
+    forms = params.clientCapabilities?.elicitation?.form !== undefined;
     if (existsSync(join(home, 'refuse-initialize'))) throw new RequestError(-32603, 'the CLI did not initialize');
     return {
       protocolVersion: params.protocolVersion,
@@ -535,6 +554,7 @@ const app = agent({ name: 'adapter-double' })
     await configured;
     const sessionId = `session-${process.pid}-${Date.now()}`;
     log({ method: 'session/new', params, sessionId });
+    launched(sessionId, params._meta);
     // The CLI asks a fifth of a second after it opens, with no prompt, once the Kit has taken the session.
     if (existsSync(join(home, 'ask-unprompted'))) setTimeout(() => void directive(client, sessionId, '@asked codex-permission'), 200);
     if (existsSync(join(home, 'refuse-new'))) throw new RequestError(-32603, 'the session did not open');
@@ -565,6 +585,7 @@ const app = agent({ name: 'adapter-double' })
   .onRequest('session/resume', async ({ params }) => {
     await configured;
     log({ method: 'session/resume', params });
+    launched(params.sessionId, params._meta);
     if (existsSync(join(home, 'refuse-resume'))) {
       throw new RequestError(-32002, 'the session cannot be resumed');
     }
