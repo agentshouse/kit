@@ -27,7 +27,7 @@
     "@agentshouse/kit-wire": "0.1.0-c97ffe603aa64",
     "@agentshouse/mdmodel": "0.1.0-c10742c13923b",
     "@agentshouse/session-content": "0.1.0-c4fbf3096f963",
-    "@agentshouse/skills": "0.1.0-ca548b8e773bd",
+    "@agentshouse/skills": "0.1.0-ca8070379c308",
     "@lydell/node-pty": "1.2.0-beta.15",
     "micromark": "4.0.2",
     "smol-toml": "1.9.1",
