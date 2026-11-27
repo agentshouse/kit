@@ -17,9 +17,17 @@ const GROK = 'grok-build';
 const TOKENS = 150_000;
 
 const HANDED: Record<string, (setting: Setting) => Record<string, unknown>> = {
-  [CLAUDE]: (setting) => (setting === 'off' ? { DISABLE_AUTO_COMPACT: '1' } : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(setting) }),
-  [CODEX]: (setting) => ({ model_auto_compact_token_limit: setting === 'off' ? Number.MAX_SAFE_INTEGER : setting }),
+  [CLAUDE]: (setting) =>
+    setting === 'off' ? { DISABLE_AUTO_COMPACT: '1' } : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(setting), autoCompactEnabled: true },
+  [CODEX]: (setting) => ({ model_auto_compact_token_limit: setting }),
 };
+
+const OWN_SETTINGS: Record<string, Setting[]> = {
+  [CLAUDE]: [TOKENS, 'off', 90_000],
+  [CODEX]: [TOKENS, 120_000, 90_000],
+};
+
+const CHANGED: Record<string, Setting> = { [CLAUDE]: 'off', [CODEX]: 90_000 };
 
 const SHARED_FILES = [join('.claude', 'settings.json'), join('.codex', 'config.toml')];
 
@@ -28,11 +36,17 @@ const USER_SETTINGS: Record<string, string> = {
   [join('.codex', 'config.toml')]: 'model = "gpt-5.5"\n',
 };
 
-function handed(env: Record<string, string | undefined>): Record<string, unknown> {
+interface SessionParams {
+  cwd: string;
+  _meta?: { claudeCode?: { options?: { settings?: { autoCompactEnabled?: unknown } } } };
+}
+
+function handed(env: Record<string, string | undefined>, session: SessionParams): Record<string, unknown> {
   const config = env.CODEX_CONFIG === undefined ? {} : (JSON.parse(env.CODEX_CONFIG) as Record<string, unknown>);
   const values = {
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,
     DISABLE_AUTO_COMPACT: env.DISABLE_AUTO_COMPACT,
+    autoCompactEnabled: session._meta?.claudeCode?.options?.settings?.autoCompactEnabled,
     model_auto_compact_token_limit: config.model_auto_compact_token_limit,
   };
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
@@ -42,10 +56,10 @@ async function processes(hosted: Hosted): Promise<Record<string, unknown>[]> {
   const log = await hosted.adapterLog();
   return log
     .filter((entry) => ['session/new', 'session/resume'].includes(entry.method as string))
-    .filter((entry) => (entry.params as { cwd: string }).cwd === hosted.workingDirectory)
+    .filter((entry) => (entry.params as SessionParams).cwd === hosted.workingDirectory)
     .map((started) => {
       const initialized = log.find((entry) => entry.method === 'initialize' && entry.pid === started.pid)!;
-      return handed(initialized.env as Record<string, string | undefined>);
+      return handed(initialized.env as Record<string, string | undefined>, started.params as SessionParams);
     });
 }
 
@@ -68,8 +82,7 @@ it.each([
   [CLAUDE, TOKENS],
   [CLAUDE, 'off'],
   [CODEX, TOKENS],
-  [CODEX, 'off'],
-] as const)("hands the %s process of an Agent's conversation its auto-compact setting %s as the CLI's own auto-compact", async (kind, setting) => {
+] as const)("hands the %s process of an Agent's conversation its auto-compact setting %s as the CLI's own auto-compact, a number's on above the user's own", async (kind, setting) => {
   const hosted = await hostKit([{ kind, auto_compact: setting }]);
 
   hosted.call({ kind: 'open' });
@@ -91,7 +104,8 @@ it.each([CLAUDE, CODEX])("hands the %s process of an Agent whose auto-compact se
 it.each([CLAUDE, CODEX])(
   "runs each of an Environment's %s Agents on its own setting and an unset one on the CLI's own, writing none into settings.json or config.toml",
   async (kind) => {
-    const hosted = await hostKit([{ kind, auto_compact: TOKENS }, { kind, auto_compact: 'off' }, { kind, auto_compact: 90_000 }, { kind }], {
+    const own = OWN_SETTINGS[kind]!;
+    const hosted = await hostKit([...own.map((auto_compact) => ({ kind, auto_compact })), { kind }], {
       prepare: async (home) => {
         for (const [file, text] of Object.entries(USER_SETTINGS)) {
           await mkdir(dirname(join(accountOf(home), file)), { recursive: true });
@@ -102,7 +116,7 @@ it.each([CLAUDE, CODEX])(
 
     await openEach(hosted, 4);
 
-    expect(await processes(hosted)).toEqual([HANDED[kind]!(TOKENS), HANDED[kind]!('off'), HANDED[kind]!(90_000), {}]);
+    expect(await processes(hosted)).toEqual([...own.map((setting) => HANDED[kind]!(setting)), {}]);
     for (const file of SHARED_FILES) {
       expect(await readFile(join(accountOf(hosted.home), file), 'utf8')).not.toMatch(/auto.?compact/i);
     }
@@ -123,7 +137,7 @@ it.each([CLAUDE, CODEX])("starts the next %s process of an Agent's conversation 
     working_directory: hosted.workingDirectory,
     model: 'route-model',
     effort: 'route-effort',
-    auto_compact: 'off',
+    auto_compact: CHANGED[kind],
   };
   hosted.house.route('POST', '/kit/agents/desired/list', () => ({ body: { agents: [kind], routes: [changed], transcribe: false } }));
   hosted.connection.send({ type: 'work_available', subject: 'agents' });
@@ -135,7 +149,7 @@ it.each([CLAUDE, CODEX])("starts the next %s process of an Agent's conversation 
   hosted.call({ kind: 'message', text: '@say back', first: false, provider_session_id: session });
 
   await turnsEnded(hosted, 2);
-  expect(await processes(hosted)).toEqual([HANDED[kind]!(TOKENS), HANDED[kind]!('off')]);
+  expect(await processes(hosted)).toEqual([HANDED[kind]!(TOKENS), HANDED[kind]!(CHANGED[kind]!)]);
 });
 
 it("hands a Grok Build process nothing of its Agent's setting", async () => {

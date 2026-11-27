@@ -27,7 +27,7 @@ export interface Cli {
   reads: 'AGENTS.md' | 'CLAUDE.md' | null;
   compactWords: boolean;
   fullAccess: string | null;
-  sessionMeta(bridge: string, name: string | null, code: string | null, afk: boolean): Record<string, unknown>;
+  sessionMeta(bridge: string, name: string | null, code: string | null, launch: Launch): Record<string, unknown>;
   renames: string | null;
   unknownSession(error: unknown): boolean;
   allowHouse(path: string): Promise<void>;
@@ -108,11 +108,10 @@ function answered(error: unknown): Answered {
   return typeof error === 'object' && error !== null ? (error as Answered) : {};
 }
 
-const CODEX_LARGEST_LIMIT = Number.MAX_SAFE_INTEGER;
-
 function codexAutoCompact(autoCompact: Launch['autoCompact']): Record<string, number> {
   if (autoCompact === undefined) return {};
-  return { model_auto_compact_token_limit: autoCompact === 'off' ? CODEX_LARGEST_LIMIT : autoCompact };
+  if (autoCompact === 'off') throw new Error('Codex has no auto-compact off');
+  return { model_auto_compact_token_limit: autoCompact };
 }
 
 function claudeAutoCompact(autoCompact: Launch['autoCompact']): Record<string, string> {
@@ -176,15 +175,16 @@ export const CLIS: Record<string, Cli> = {
     reads: 'CLAUDE.md',
     compactWords: true,
     fullAccess: 'bypassPermissions',
-    sessionMeta: (bridge, name, code, afk) => ({
+    sessionMeta: (bridge, name, code, { unable, autoCompact }) => ({
       claudeCode: {
         options: {
           allowedTools: ['Bash(house:*)'],
-          ...(afk ? { disallowedTools: ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'], permissionPrompts: 'none' } : {}),
+          ...(unable ? { disallowedTools: ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'], permissionPrompts: 'none' } : {}),
           includeHookEvents: true,
           settings: {
             sandbox: { network: bridgeInClaudeSandbox(bridge) },
             ...(code === null ? {} : { permissions: { additionalDirectories: [code] } }),
+            ...(typeof autoCompact === 'number' ? { autoCompactEnabled: true } : {}),
           },
           ...(name === null ? {} : { extraArgs: { name } }),
         },
@@ -210,7 +210,7 @@ export const CLIS: Record<string, Cli> = {
     reads: null,
     compactWords: false,
     fullAccess: null,
-    sessionMeta: (_bridge, _name, _code, afk) => (afk ? { askUserQuestion: false } : {}),
+    sessionMeta: (_bridge, _name, _code, { unable }) => (unable ? { askUserQuestion: false } : {}),
     renames: '_x.ai/session/rename',
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
     allowHouse: nothing,
