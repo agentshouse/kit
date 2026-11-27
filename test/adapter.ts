@@ -182,6 +182,12 @@ const STEERING = {
   },
 };
 
+const RENAME = {
+  parse(value: unknown): { sessionId: string; title: string } {
+    return value as { sessionId: string; title: string };
+  },
+};
+
 function lines(path: string, from?: string, to?: string): Record<string, any>[] {
   return readFileSync(path, 'utf8')
     .trim()
@@ -670,6 +676,11 @@ const app = agent({ name: 'adapter-double' })
     log({ method: 'session/cancel', params });
     cancelled.get(params.sessionId)?.();
     cancelled.delete(params.sessionId);
+  })
+  .onRequest('_x.ai/session/rename', RENAME, ({ params }) => {
+    log({ method: '_x.ai/session/rename', params });
+    if (kind !== 'grok-build') throw RequestError.methodNotFound('_x.ai/session/rename');
+    return { success: true };
   })
   .onRequest('_session/steering', STEERING, ({ params, client }) => {
     const text = promptText(params.prompt);

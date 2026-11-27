@@ -337,23 +337,31 @@ it("says House accepted a house update whose write into a Run's copy failed and 
   expect((await entries())['c.md']!.revision).toBe(notes.revision('c.md'));
 });
 
-it("opens every Claude Code session, a Run's and its owner's alike, with the name its open carries and resumes it naming none, and names no other CLI's session", async () => {
+it("opens every Claude Code session, a Run's and its owner's alike, with the name its open carries, names each Grok Build session it opens with that name once it opens, resumes either naming none, names none for a session a first message opens in place of one Claude Code does not hold, and names no Codex session", async () => {
   const { hosted, notes } = await staged([{}, { kind: 'claude-agent-acp' }, { kind: 'claude-agent-acp' }, { kind: 'grok-build' }]);
   await session(hosted, 1, notes, 'rev-1', { kind: 'none' });
   const named = await session(hosted, 2, notes, 'rev-2', { kind: 'none' });
-  await session(hosted, 3, notes, 'studio-3');
-  await session(hosted, 4, notes, 'scout-4');
+  const unprompted = await session(hosted, 3, notes, 'studio-3');
+  const scouted = await session(hosted, 4, notes, 'scout-4');
   await turn(hosted, 2, '@say first');
+  await turn(hosted, 4, '@say first');
   expect(await killed(hosted, 2)).toEqual({});
+  expect(await killed(hosted, 4)).toEqual({});
 
   await turn(hosted, 2, '@say again', { provider_session_id: named });
+  await turn(hosted, 4, '@say again', { provider_session_id: scouted });
+  expect(await killed(hosted, 3)).toEqual({});
+  await turn(hosted, 3, '@say started', { provider_session_id: unprompted, first: true });
 
   const options = (opened: { _meta: Record<string, unknown> }) => (opened._meta.claudeCode as { options: Record<string, unknown> } | undefined)?.options;
   expect((await opening(hosted, 'session/new', 0))._meta).toEqual({});
   expect(options(await opening(hosted, 'session/new', 1))).toMatchObject({ extraArgs: { name: 'rev-2' } });
   expect(options(await opening(hosted, 'session/new', 2))).toMatchObject({ extraArgs: { name: 'studio-3' } });
   expect((await opening(hosted, 'session/new', 3))._meta).toEqual({});
+  expect(options(await opening(hosted, 'session/new', 4))).not.toHaveProperty('extraArgs');
   expect(options(await opening(hosted, 'session/resume', 0))).not.toHaveProperty('extraArgs');
+  expect((await opening(hosted, 'session/resume', 1))._meta).toEqual({});
+  expect((await logged(hosted, '_x.ai/session/rename')).map((entry) => entry.params)).toEqual([{ sessionId: scouted, title: 'scout-4' }]);
 });
 
 it("moves and deletes with a house update each file unchanged since its entry, writes the text House merged, keeps a file changed since its entry saying its local integration is pending, and leaves the copy as it was where House refused the update", async () => {
