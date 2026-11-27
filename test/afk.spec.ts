@@ -118,6 +118,7 @@ it.each([
   ['Grok Build', GROK, 'grok-plan-exit', '_x.ai/exit_plan_mode'],
   ['Grok Build', GROK, 'codex-permission', 'session/request_permission'],
   ['Grok Build', GROK, 'codex-mcp-form', 'elicitation/create'],
+  ['Grok Build', GROK, 'grok-mcp-form', '_x.ai/mcp/elicit'],
 ])('fails what still reaches an AFK %s session from %s as a Fault naming the conversation, the CLI and %s, and tells House nothing', async (name, kind, fixture, method) => {
   const { hosted, answer } = await asked(kind, fixture, true, ASKS_ANYWAY);
 

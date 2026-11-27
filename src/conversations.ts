@@ -1,5 +1,6 @@
 import {
   client,
+  RequestError,
   type AvailableCommand,
   type ContentBlock,
   type CreateElicitationRequest,
@@ -186,6 +187,12 @@ const GROK_PLAN = {
 const GROK_QUESTION = {
   parse(value: unknown): GrokQuestions {
     return value as GrokQuestions;
+  },
+};
+
+const GROK_MCP_FORM = {
+  parse(value: unknown): unknown {
+    return value;
   },
 };
 
@@ -950,6 +957,10 @@ export class Conversations {
       .onRequest('_x.ai/ask_user_question', GROK_QUESTION, async ({ params, signal }) => {
         if (afk) throw unanswered('_x.ai/ask_user_question');
         return grokQuestionAnswer(await this.askForm(conversation, grokQuestionForm(params), signal));
+      })
+      .onRequest('_x.ai/mcp/elicit', GROK_MCP_FORM, () => {
+        if (afk) throw unanswered('_x.ai/mcp/elicit');
+        throw RequestError.methodNotFound('_x.ai/mcp/elicit');
       });
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridging = this.bridged(conversation);
