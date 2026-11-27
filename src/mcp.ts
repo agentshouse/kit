@@ -28,6 +28,8 @@ export interface ToolResult {
 
 const MCP_PROTOCOL_VERSION = '2026-07-28';
 
+export const HELP_META_KEY = 'agents.house/help';
+
 export const UNREACHABLE = 'House is unreachable; call again in a minute';
 const UNCONNECTED = 'this computer has no House connection; run house login';
 export const DISCONNECTED = 'House no longer accepts this computer; run house login';
@@ -52,7 +54,12 @@ export interface Sending {
   signal?: AbortSignal;
 }
 
+export function ownCall(name: string, args: Record<string, unknown>): Message {
+  return rpc('tools/call', { name, arguments: { ...args, long: true } });
+}
+
 export function mcpBody(message: Message, { operation = null, named = {} }: Sending = {}): string {
+  const help = (message.params._meta as Record<string, unknown> | undefined)?.[HELP_META_KEY];
   return JSON.stringify({
     ...message,
     params: {
@@ -61,6 +68,7 @@ export function mcpBody(message: Message, { operation = null, named = {} }: Send
         'io.modelcontextprotocol/protocolVersion': MCP_PROTOCOL_VERSION,
         'io.modelcontextprotocol/clientInfo': { name: '@agentshouse/kit', version: KIT_RELEASE },
         'io.modelcontextprotocol/clientCapabilities': {},
+        ...(help === undefined ? {} : { [HELP_META_KEY]: help }),
         ...named,
         ...(operation === null ? {} : { 'agents.house/agent-operation': operation }),
       },
@@ -118,7 +126,7 @@ export function toolAnswer(forwarded: Forwarded): { text: string } | { refused: 
 }
 
 export async function environmentTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const read = toolAnswer({ status: 200, text: await environmentCall(rpc('tools/call', { name, arguments: args })) });
+  const read = toolAnswer({ status: 200, text: await environmentCall(ownCall(name, args)) });
   if ('refused' in read) throw new Error(read.refused.text);
   return read.text;
 }

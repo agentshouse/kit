@@ -10,6 +10,7 @@ import { type Answer, certificate, idOf, startHouse, until, without, type House,
 import { accountOf, fakeBin, runKit, stop, temporaryDirectory, temporaryHome, type KitRun } from './kit.ts';
 import { placeAdapter } from './adapters.ts';
 import { serveKitFiles } from './building.ts';
+import { listed } from './listing.ts';
 import { MISMATCH, startStore, type Store } from './store.ts';
 
 const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
@@ -72,121 +73,6 @@ export function shelled(stdout: string, exit = 0, stderr: string[] = []): ToolRe
   ];
   return { content: [{ type: 'text', text: text.join('\n') }] };
 }
-
-export interface Listed {
-  name: string;
-  description?: string;
-  inputSchema: Record<string, unknown>;
-}
-
-export function helpLine(tool: Listed): string {
-  return tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`;
-}
-
-export const LISTING: Listed[] = [
-  {
-    name: 'search',
-    inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
-  },
-  {
-    name: 'shell',
-    description: 'Read-only shell over `/rooms/<handle>`.',
-    inputSchema: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' } } },
-  },
-  {
-    name: 'info',
-    description: 'Provenance and revisions; `shell` reads current file text.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'A file path.' },
-        view: { type: 'string', enum: ['sources', 'history'], description: 'Optional `history`, or `sources` for a captured item.' },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'update',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        changes: {
-          type: 'array',
-          items: {
-            oneOf: [
-              {
-                type: 'object',
-                properties: {
-                  op: { type: 'string', const: 'set_field' },
-                  path: { type: 'string', description: 'The file.' },
-                  field: { type: 'string', description: "The field's key." },
-                  base: { $ref: '#/$defs/__schema0', description: 'The `v_` revision you read; for a field, its old value.' },
-                  value: { $ref: '#/$defs/__schema0', description: 'Its new value.' },
-                },
-                required: ['op', 'path', 'field', 'value'],
-              },
-              {
-                type: 'object',
-                properties: {
-                  op: { type: 'string', const: 'rename' },
-                  path: { type: 'string', description: 'The file.' },
-                  to: { type: 'string', description: 'The new path; links to it follow.' },
-                  base: {
-                    anyOf: [{ type: 'string' }, { type: 'object', propertyNames: { type: 'string' } }],
-                    description: 'The `v_` revision you read.',
-                  },
-                },
-                required: ['op', 'path', 'to'],
-              },
-            ],
-          },
-          description: 'The changes, each with an `op`.',
-        },
-        mount: { type: 'string', description: 'An empty folder; every change creates a document in it, all or none.' },
-      },
-      required: ['changes'],
-      $defs: {
-        __schema0: {
-          anyOf: [
-            { type: 'string' },
-            { type: 'number' },
-            { type: 'boolean' },
-            { type: 'null' },
-            { type: 'array', items: { $ref: '#/$defs/__schema0' } },
-            { type: 'object', propertyNames: { type: 'string' } },
-          ],
-        },
-      },
-    },
-  },
-  {
-    name: 'records_append',
-    description: 'Add a record to a Room, stored as given.',
-    inputSchema: { type: 'object', properties: { room_ref: { type: 'string' }, body: { type: 'string' } } },
-  },
-  {
-    name: 'upload',
-    description: 'Store a file of any kind at a path in a Room.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        file: { type: 'string', description: 'The file in your Environment.' },
-        path: { type: 'string', description: 'Its path, `/rooms/<handle>/…`.' },
-      },
-      required: ['file', 'path'],
-    },
-  },
-  {
-    name: 'rooms_list',
-    description: 'Your Rooms and what you may do in each.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'get_started',
-    inputSchema: { type: 'object', properties: {} },
-  },
-];
-
 
 export interface McpCall {
   method: string;
@@ -311,9 +197,9 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     const message = request.body as { id: number } & McpCall;
     const name = message.params.name!;
     const answer = tools[name] ?? (() => ({ content: [{ type: 'text', text: `${name} answered` }] }));
-    let result: ToolResult | { tools: typeof LISTING } | null;
+    let result: ToolResult | { tools: unknown[] } | null;
     try {
-      result = message.method === 'tools/list' ? { tools: LISTING } : await answer(message.params.arguments ?? {}, request);
+      result = message.method === 'tools/list' ? listed(message.params) : await answer(message.params.arguments ?? {}, request);
     } catch (error) {
       if (!(error instanceof ProtocolRefusal)) throw error;
       return { status: error.status, headers: error.headers, body: { jsonrpc: '2.0', id: message.id, error: error.error } };

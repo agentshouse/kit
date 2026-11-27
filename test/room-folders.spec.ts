@@ -2,7 +2,7 @@ import { chmod, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'nod
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { until } from './double.ts';
-import { hostKit, ProtocolRefusal, type Hosted } from './environment.ts';
+import { hostKit, ProtocolRefusal, type Hosted, type McpCall } from './environment.ts';
 import { accountOf, temporaryHome } from './kit.ts';
 import { house, manifestOf, roomRootReads, serveRooms, upload, type Room } from './rooms.ts';
 
@@ -205,6 +205,11 @@ it("writes AGENTS.md whole from a Room's instructions House cuts in two parts, r
 
   expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(LONG);
   expect(roomRootReads(hosted)).toEqual([notes.root, notes.root]);
+  const reads = hosted.mcp.map((received) => (received.body as McpCall).params).filter((params) => params.name === 'info');
+  expect(reads.map((params) => params.arguments)).toEqual([
+    { path: notes.root, long: true },
+    { path: notes.root, cursor: expect.any(String), long: true },
+  ]);
 });
 
 it("deletes the two files once House answers a Room's instructions empty, and keeps the last text where it cannot read them, saying so", async () => {

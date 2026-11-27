@@ -131,14 +131,14 @@ it("uploads a document and an attachment under the Kit credential naming the con
   expect(downloaded).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n/rooms/notes: attachment brought at its new revision: photo.jpg\n' });
   const credential = 'Bearer ahk_held';
   const labelOf = (received: Received) => (received.body as McpCall).params._meta[CONVERSATION_META_KEY];
-  const finishing = { upload: expect.any(String), path: '/rooms/notes/photo.jpg', part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest) };
+  const finishing = { upload: expect.any(String), path: '/rooms/notes/photo.jpg', part_sha256: [JPEG.subarray(0, 8), JPEG.subarray(8)].map(digest), long: true };
   expect(fileCalls(hosted).map(labelOf)).toEqual(Array(5).fill('conversation-1'));
   expect(fileCalls(hosted).map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
-    [credential, 'update', { changes: expect.any(Array) }],
+    [credential, 'update', { changes: expect.any(Array), long: true }],
     [credential, 'upload', finishing],
     [credential, 'upload', finishing],
-    [credential, 'update', { changes: expect.any(Array) }],
-    [credential, 'info', { path: '/rooms/notes/photo.jpg', ref: room.binaries.get('photo.jpg')!.revision }],
+    [credential, 'update', { changes: expect.any(Array), long: true }],
+    [credential, 'info', { path: '/rooms/notes/photo.jpg', ref: room.binaries.get('photo.jpg')!.revision, long: true }],
   ]);
   expect(new Set(hosted.mcp.filter((received) => called(received).name === 'update').map(operationOf)).size).toBe(1);
   expect(

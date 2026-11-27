@@ -215,9 +215,9 @@ it("installs for all exactly the names House's catalogue answers, page by page: 
   expect(await readFile(join(skills(hosted.home, FIRST), 'SKILL.md'), 'utf8')).toBe('my own first\n');
   await absent(skills(hosted.home, SECOND));
   expect(await recorded(hosted.home)).toEqual(record(hosted.house.origin, names));
-  const pages = Array.from({ length: Math.ceil(names.length / 4) }, (_, page) => ({ op: 'skill', ...(page === 0 ? {} : { cursor: String(page * 4) }) }));
+  const pages = Array.from({ length: Math.ceil(names.length / 4) }, (_, page) => ({ op: 'skill', ...(page === 0 ? {} : { cursor: String(page * 4) }), long: true }));
   expect(pages.length).toBeGreaterThan(1);
-  expect(guideCalls(hosted)).toEqual([...pages, ...[FIRST, OWN].sort().map((name) => ({ op: 'skill', names: [name] }))]);
+  expect(guideCalls(hosted)).toEqual([...pages, ...[FIRST, OWN].sort().map((name) => ({ op: 'skill', names: [name], long: true }))]);
 });
 
 it("installs a User's own skill whole when House cuts its files across the pages of its answer, beside another one cut too", async () => {

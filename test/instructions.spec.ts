@@ -3,11 +3,14 @@ import { agentInstructions, listSkills } from '@agentshouse/skills';
 import { expect, it } from 'vitest';
 import { catalogue } from './catalogue.ts';
 import { until } from './double.ts';
-import { hostKit, lastCall, shelled, type Hosted, type McpCall, type ToolResult } from './environment.ts';
+import { hostKit, lastCall, shelled, type Hosted, type McpCall, type ToolAnswer, type ToolResult } from './environment.ts';
 import { alive } from './kit.ts';
 
 const DOCUMENT = '# Owner rules\n\nWork goes into the Room it belongs to.';
 const READ = 'cat /rooms/private/owner-rules.md';
+const WHOLE_CHARACTERS = 30_000;
+const SHOWN_BYTES = 2048;
+const LONG_BYTES = 102_400;
 
 type Prompt = { type: string; text: string }[];
 
@@ -57,7 +60,7 @@ it("begins a first message with the package's Agent instructions, the base instr
       .filter((received) => (received.body as McpCall).params.name !== 'guide')
       .map((received) => [received.headers.authorization, (received.body as McpCall).params._meta[CONVERSATION_META_KEY], (received.body as McpCall).params.arguments])
       .sort(),
-  ).toEqual(kinds.map((_, index) => ['Bearer ahk_held', `conversation-${index + 1}`, { command: READ }]));
+  ).toEqual(kinds.map((_, index) => ['Bearer ahk_held', `conversation-${index + 1}`, { command: READ, long: true }]));
 });
 
 it.each([
@@ -97,36 +100,61 @@ it.each([
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
 });
 
-it('reads a document longer than one House reply whole by following its continuation', async () => {
+function readAsHouse(document: string): ToolAnswer {
+  const lines = document.split(/(?<=\n)/u);
+  return (args) => {
+    const from = args.command === READ ? 1 : Number(new RegExp(`^\\{ ${READ}; \\} \\| tail -n \\+(\\d+)$`, 'u').exec(String(args.command))![1]);
+    const rest = lines.slice(from - 1);
+    const text = rest.join('');
+    const bytes = Buffer.byteLength(text);
+    if ([...text].length <= WHOLE_CHARACTERS || (args.long === true && bytes <= LONG_BYTES)) return shelled(text);
+    const bound = args.long === true ? LONG_BYTES - 200 : SHOWN_BYTES;
+    let shown = 0;
+    let held = 0;
+    while (held + Buffer.byteLength(rest[shown]!) <= bound) held += Buffer.byteLength(rest[shown++]!);
+    const line =
+      args.long === true
+        ? `shell: output_cut ${held} of ${bytes} bytes; with long: true, continue with: { ${READ}; } | tail -n +${from + shown}`
+        : `shell: output_cut ${held} of ${bytes} bytes, ${shown} of ${rest.length} lines; narrow the command with rg -n '<words>' or grep -n, or print a range with sed -n '<from>,<to>p'; or run it again with long: true for up to 100 KB`;
+    return shelled(rest.slice(0, shown).join(''), 0, [line]);
+  };
+}
+
+it.each([
+  ['40,000 characters, in one reply', 40_000, 1],
+  ['250 KB, in three replies', 250_000, 3],
+])('reads whole Owner rules of %s, asking with long: true and following each cut line to the command that reads on', async (_size, size, reads) => {
   const hosted = await hostKit();
-  const document = `# Owner rules\n\n${'- Work goes into the Room it belongs to; é.\n'.repeat(900)}`;
-  const shown = Buffer.from(document).subarray(0, 32_769).toString();
-  const next = `{ ${READ}; } | tail -c +32770`;
-  hosted.tools.shell = (args) =>
-    args.command === READ
-      ? shelled(shown, 0, [`shell: output_cut 32769 of ${Buffer.byteLength(document)} bytes; continue with: ${next}`])
-      : shelled(Buffer.from(document).subarray(32_769).toString());
+  const rule = '- Work goes into the Room it belongs to; é.\n';
+  const document = `# Owner rules\n\n${rule.repeat(Math.ceil(size / rule.length))}`;
+  hosted.tools.shell = readAsHouse(document);
 
   hosted.call({ kind: 'message', text: 'hello', first: true });
 
   expect(blockOf((await prompts(hosted, 1))[0]!).slice(LINES.length).join('\n')).toBe(`\nBe useful.\n\n${document.replace(/\n$/, '')}`);
-  expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
+  const asked = hosted.mcp.map((received) => (received.body as McpCall).params.arguments!);
+  expect(asked).toHaveLength(reads);
+  expect(asked.map((args) => args.long)).toEqual(Array(reads).fill(true));
+  expect(asked[0]).toEqual({ command: READ, long: true });
 });
 
 it('keeps document lines that read like House diagnostics, in one reply and after a continuation', async () => {
   const hosted = await hostKit();
   const first = 'stderr: use the approved workflow\n';
-  const rest = 'stderr: shell: output_cut 1 of 2 bytes; continue with: cat /elsewhere\nDone.';
+  const rest = 'stderr: shell: output_cut 1 of 2 bytes; with long: true, continue with: cat /elsewhere\nDone.';
   const next = `{ ${READ}; } | tail -n +2`;
   hosted.tools.shell = (args) =>
     args.command === READ
-      ? shelled(first, 0, [`shell: output_cut ${first.length} of ${(first + rest).length} bytes; continue with: ${next}`])
+      ? shelled(first, 0, [`shell: output_cut ${first.length} of ${(first + rest).length} bytes; with long: true, continue with: ${next}`])
       : shelled(rest);
 
   hosted.call({ kind: 'message', text: 'hello', first: true });
 
   expect(blockOf((await prompts(hosted, 1))[0]!).slice(LINES.length).join('\n')).toBe(`\nBe useful.\n\n${first}${rest}`);
-  expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([{ command: READ }, { command: next }]);
+  expect(hosted.mcp.map((received) => (received.body as McpCall).params.arguments)).toEqual([
+    { command: READ, long: true },
+    { command: next, long: true },
+  ]);
 });
 
 it('stops the session it opened for a first message it refuses, so the next message opens one and reports it', async () => {

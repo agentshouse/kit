@@ -6,7 +6,7 @@ import type { Bridge } from './bridge.ts';
 const OWNER_RULES = '/rooms/private/owner-rules.md';
 const UNREADABLE = /^(?:\S+: )?(?:path_not_found|room_not_found|operation_denied)\b/;
 const FAILED = /^exit: [1-9]\d*$/;
-const CUT = /^stderr: shell: output_cut (\d+) of \d+ bytes; continue with: (.+)$/;
+const CUT = /^stderr: shell: output_cut (\d+) of \d+ bytes; (?:with long: true, )?continue with: (.+)$/;
 
 function cutOf(lines: string[]): RegExpExecArray | null {
   const cut = CUT.exec(lines[0] ?? '');

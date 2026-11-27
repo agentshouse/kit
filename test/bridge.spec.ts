@@ -16,6 +16,7 @@ import {
   runs,
   type McpCall,
 } from './environment.ts';
+import { HELP_META } from './listing.ts';
 import { uploadTool } from './store.ts';
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -66,37 +67,22 @@ it("serves House's listed tools as the house verbs with House's help", async () 
   directed(hosted, '@house --help\n@house info --help\n@house search {"query":"notes"}');
 
   const [help, toolHelp, search] = await runs(hosted, 3);
-  expect(help!.stdout).toBe(
-    [
-      "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments",
-      'help [tool]',
-      'login: connects this computer to House as an Environment, by a link you confirm or a login code',
-      'logout: disconnects this computer and stops the Kit process',
-      "connect: connects this computer, keeping the Environment it has, and starts Kit's service; the install runs it",
-      "resident: keeps this Environment connected; Kit's service runs it",
-      "settings: prints Kit's settings, or changes which skills Kit installs or where its workspace is",
-      "git-credential: answers git with this computer's House credential; git runs it",
-      "upload: in a Room's Local copy, sends at once every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, as Kit's next save would; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder",
-      "download: brings House's changes into every Room's Local copy at once, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next save to merge; a copy holds the Room's documents and only the attachments asked for there, a conversation's copy linking each one already on this computer, and a download brings no attachment nobody asked for and brings each one the copy holds that another writer changed at its new revision, linked where this computer holds it; --with-attachments brings each attachment the copy lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file",
-      'agent run: starts each of "runs" by agent_update request_send, prints its name and reference, and waits until every Run is idle, failed, not started, declined, withdrawn or deleted, printing each one\'s state and never its message; exits 0 only when every Run is idle; with "refs" it starts nothing and waits again',
-      'search',
-      '  query',
-      'shell: Read-only shell over `/rooms/<handle>`.',
-      'info: Provenance and revisions; `shell` reads current file text.',
-      'update',
-      '  changes (required): The changes, each with an `op`.',
-      '  mount: An empty folder; every change creates a document in it, all or none.',
-      'records_append: Add a record to a Room, stored as given.',
-      'upload: Store a file of any kind at a path in a Room.',
-      'rooms_list: Your Rooms and what you may do in each.',
-      'get_started',
-    ].join('\n') + '\n',
-  );
+  expect(help!.stdout.split('\n').slice(0, 6)).toEqual([
+    "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments or its ops; house help <tool> <op>: an op's arguments",
+    'shell: Read Rooms',
+    'info: Show details',
+    'update: Change documents',
+    'guide: Read the Guide',
+    'agent_update: Change Agents and conversations',
+  ]);
   expect(toolHelp!.stdout).toBe(
     [
-      'info: Provenance and revisions; `shell` reads current file text.',
-      '  path (required): A file path.',
-      '  view "sources" | "history": Optional `history`, or `sources` for a captured item.',
+      'info: Details of whatever `path` names.',
+      '  path (at least 1 character): Any link or reference.',
+      '  history: `true` lists its revisions, newest first.',
+      '  cursor (1 to 4096 characters): The `next_cursor` of the answer before.',
+      '  long: `true` raises the limit of a cut answer from 2 KB to 100 KB.',
+      `example: house info '{"path":"/rooms/team-notes/plan.md"}'`,
     ].join('\n') + '\n',
   );
   expect(search!.stdout).toBe('search answered\n');
@@ -105,6 +91,8 @@ it("serves House's listed tools as the house verbs with House's help", async () 
     ['tools/list', undefined],
     ['tools/call', 'search'],
   ]);
+  expect(hosted.mcp.map((received) => called(received).params._meta[HELP_META])).toEqual([true, true, undefined]);
+  expect(called(hosted.mcp[2]!).params.arguments).toEqual({ query: 'notes' });
 });
 
 it("names the Kit's wire in a header on every call a conversation's bridge relays to House's MCP door", async () => {
@@ -134,6 +122,7 @@ it('attaches a fresh operation id to every Tool call, a read included, and never
   const operations = hosted.mcp.map((received) => called(received).params._meta[OPERATION]);
   expect(operations).toEqual(Array(4).fill(expect.stringMatching(UUID_V7)));
   expect(new Set(operations).size).toBe(4);
+  expect(hosted.mcp.map((received) => Object.hasOwn(called(received).params.arguments!, 'long'))).toEqual(Array(4).fill(false));
   expect(hosted.house.requests.filter((received) => received.path.startsWith('/kit/tools/'))).toEqual([]);
 });
 
@@ -280,8 +269,8 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
   directed(
     hosted,
     [
-      '@house search invoice',
-      '@house search ["invoice"]',
+      '@house shell invoice',
+      '@house agent_update ["invoice"]',
       '@house upload {"file":"","path":"/rooms/room/report.txt"}',
       '@house upload {"file":"absent.txt","path":"/rooms/room/absent.txt"}',
       '@house upload {"file":".","path":"/rooms/room/folder"}',
@@ -289,14 +278,14 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
     ].join('\n'),
   );
 
-  const form = `house: the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'\n`;
+  const form = 'house: the arguments are one JSON object, in single quotes or on stdin after -, like';
   expect((await runs(hosted, 6)).map((ran) => ran.stderr)).toEqual([
-    form,
-    form,
+    `${form} house shell '{"command":"rg -n \\"deadline\\" /rooms/team-notes"}'\n`,
+    `${form} house agent_update '{"op":"create","environment":"0199c5fd-aeeb-7757-a9fa-e923d5a4fd12","cli":"claude-agent-acp","model":"opus"}'\n`,
     'house: upload needs "file", a local file\n',
     'house: absent.txt is not a readable file\n',
     'house: . is a folder; upload one file at a time\n',
-    'house: agents/list is no Tool; house --help lists the Tools\n',
+    'house: agents/list is no Tool; house help lists the Tools\n',
   ]);
   expect(hosted.mcp.filter((received) => called(received).method === 'tools/call')).toEqual([]);
 });

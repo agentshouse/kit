@@ -14,7 +14,7 @@ import { changedPaths, DEFAULT_MAX_SIZE, updateAnswer, updateChanges, UPDATE_PAT
 import { fileInfo, roomInstructions, type Finished } from './files.ts';
 import { answered, carried, held, judgement, type Answer, type Pass } from './hold.ts';
 import { readEnrolment, socketDirectory } from './home.ts';
-import { callHouse, mcpBody, refusalIn, rpc, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
+import { callHouse, mcpBody, ownCall, refusalIn, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { namedWait, REFUSAL_HEADER, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { relayed } from './relay.ts';
@@ -142,14 +142,12 @@ function labelled(holder: Holder, origin: string, credential: string, closed: Ab
     }
   };
 
-  const call = (name: string, args: Record<string, unknown>): Message => rpc('tools/call', { name, arguments: args });
-
   const staged = async (operation: string, changes: Change[]): Promise<Upload | { refused: Refusal }> => {
     const bytes = Buffer.from(JSON.stringify({ changes }));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const prepared = toolAnswer(
       await send(
-        call('update', { op: 'stage', paths: changedPaths(changes), bytes: bytes.length, sha256 }),
+        ownCall('update', { op: 'stage', paths: changedPaths(changes), bytes: bytes.length, sha256 }),
         operation,
       ),
     );
@@ -182,7 +180,7 @@ function labelled(holder: Holder, origin: string, credential: string, closed: Ab
   };
 
   const info = async (args: Record<string, unknown>): Promise<string> => {
-    const answer = toolAnswer(await send(call('info', args), operationId()));
+    const answer = toolAnswer(await send(ownCall('info', args), operationId()));
     if ('refused' in answer) throw new Error(answer.refused.text);
     return answer.text;
   };
@@ -190,7 +188,7 @@ function labelled(holder: Holder, origin: string, credential: string, closed: Ab
   const caller: Caller = {
     key: holder.key,
     submit: async (operation, changes, held, retain) => {
-      const inline = call('update', { changes });
+      const inline = ownCall('update', { changes });
       let upload = held;
       if (upload === undefined && Buffer.byteLength(mcpBody(inline, { operation, named })) > MCP_REQUEST_BYTES) {
         const prepared = await staged(operation, changes);
@@ -199,12 +197,12 @@ function labelled(holder: Holder, origin: string, credential: string, closed: Ab
         await retain(upload);
       }
       return updateAnswer(
-        await send(upload === undefined ? inline : call('update', { paths: changedPaths(changes), upload }), operation, true),
+        await send(upload === undefined ? inline : ownCall('update', { paths: changedPaths(changes), upload }), operation, true),
       );
     },
     finish: async (upload, path, partSha256) => {
       const answer = toolAnswer(
-        await send(call('upload', { upload, path, part_sha256: partSha256 }), operationId(), true),
+        await send(ownCall('upload', { upload, path, part_sha256: partSha256 }), operationId(), true),
       );
       if ('refused' in answer) throw new Error(answer.refused.text);
       return parse(answer.text) as Finished<Staged>;
@@ -291,7 +289,7 @@ async function bridgeFor(copies: LocalCopies, waits: RunWaits, holder: Holder): 
     },
     caller,
     tool: async (name, args) => {
-      const forwarded = await forward(JSON.stringify(rpc('tools/call', { name, arguments: args })));
+      const forwarded = await forward(JSON.stringify(ownCall(name, args)));
       if (forwarded.status !== 200) throw new Error(`House refused ${name} with ${forwarded.status}: ${forwarded.text}`);
       const answer = JSON.parse(forwarded.text) as { result?: ToolResult; error?: { message: string } };
       if (answer.error !== undefined) throw new Error(`House refused ${name}: ${answer.error.message}`);

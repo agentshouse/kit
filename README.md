@@ -36,7 +36,7 @@ it, with the endpoint, as `XAI_API_KEY` and `GROK_MODELS_BASE_URL` on the Grok B
 That credential is the one key this computer holds: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you, each with the credential in the Kit
 home of the account it runs as, and each Agent conversation and Environment function run reaches House through Kit under
-it, naming the conversation or the run. `house help` lists the verbs and the Tools and `house help <tool>` one Tool's arguments. Codex sessions started after a
+it, naming the conversation or the run. `house help` lists the Tools and the verbs, `house help <tool>` one Tool's arguments or its ops, and `house help <tool> <op>` an op's arguments, their limits and an example. Codex sessions started after a
 login run a lone `house` command outside their sandbox. `house logout` disconnects this
 computer and stops the Kit process, so `house` and `git` no
 longer act as you here; a later `house login` reconnects the same Environment, or connects

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { settle, until, type Received } from './double.ts';
-import { clocked, GIT_IDENTITY, hostKit, lastCall, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
+import { clocked, GIT_IDENTITY, hostKit, lastCall, shelled, type Hosted, type Hosting, type McpCall, type RouteOverrides } from './environment.ts';
 import { temporaryDirectory } from './kit.ts';
 import { serveRooms, type Room, type Rooms } from './rooms.ts';
 
@@ -270,6 +270,30 @@ it("takes a clone whose origin names the Run's repository by one host and path i
   expect(await opened(hosted, 4, notes, 'imp-4', { url: 'https://gitlab.com/acme/app', code: { kind: 'main' } })).toEqual({
     refused: `${clone} is not a clone of https://gitlab.com/acme/app`,
   });
+});
+
+it("reads the Room's settings/repositories.md past a Search-level Room's 8 kB cut, asking with long: true and following the command its cut line names", async () => {
+  const { hosted, notes } = await staged([CLAUDE]);
+  const app = await origin();
+  const clone = cloned(hosted, app.url);
+  const others = Array.from({ length: 200 }, (_entry, index) => ({ url: `https://example.com/acme/other-${index}` }));
+  const lines = listing([...others, { url: app.url, ref: 'release' }]).split(/(?<=\n)/u);
+  const cut = lines.findIndex((_line, index) => Buffer.byteLength(lines.slice(0, index + 1).join('')) > 8000);
+  const shown = lines.slice(0, cut).join('');
+  const next = `{ cat ${LIST}; } | tail -n +${cut + 1}`;
+  hosted.tools.shell = (args) => {
+    if (args.command === `cat ${LIST}`) return shelled(shown, 0, [`shell: output_cut ${Buffer.byteLength(shown)} of ${Buffer.byteLength(lines.join(''))} bytes; continue with: ${next}`]);
+    return args.command === next ? shelled(lines.slice(cut).join('')) : shelled('', 1, [`cat: path_not_found ${String(args.command)}`]);
+  };
+
+  await session(hosted, 1, notes, 'imp-1', app.url, { kind: 'new_worktree' });
+
+  expect(git(join(`${clone}.worktrees`, 'imp-1'), 'rev-parse', 'HEAD')).toBe(app.release);
+  const reads = hosted.mcp.map((received) => (received.body as McpCall).params).filter((params) => params.name === 'shell' && String(params.arguments?.command).includes(LIST));
+  expect(reads.map((params) => params.arguments)).toEqual([
+    { command: `cat ${LIST}`, long: true },
+    { command: next, long: true },
+  ]);
 });
 
 it("starts each CLI in the Run's copy, told the code folder only as a path, and has it write there without asking: Claude Code by its settings' additional directories at the session's start and its resume, Codex in the full access Kit opens it in and Grok Build with its sandbox off and every tool approved, no adapter taking the folder as an added directory, which would load the repository's own skills; a Run with no repository gets no code folder", async () => {

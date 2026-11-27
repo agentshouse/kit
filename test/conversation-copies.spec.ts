@@ -411,7 +411,7 @@ it("brings back the whole text House merged where its update answer cuts that te
   await until(async () => ((await readFile(join(copy, 'a.md'), 'utf8')) === 'ONE\ntwo\nthree\n' ? true : undefined));
   notes.put('a.md', 'one\ntwo\nTHREE\n');
   await writeFile(join(hosted.home, 'merged'), '');
-  await edited(rooms, 1);
+  const [saved] = await edited(rooms, 1);
   const merged = notes.revision('a.md');
   const files = await until(async () => {
     const { files } = (await manifestAt(copy)) as { files: Record<string, { revision: string }> };
@@ -421,6 +421,7 @@ it("brings back the whole text House merged where its update answer cuts that te
   expect(notes.files.get('a.md')!.content).toBe('ONE\ntwo\nTHREE\n');
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('ONE\ntwo\nTHREE\n');
   expect(files['a.md']).toMatchObject({ bytes: 14 });
+  expect((saved!.body as { params: { arguments: Record<string, unknown> } }).params.arguments.long).toBe(true);
 });
 
 function reports(hosted: Hosted): Received[] {

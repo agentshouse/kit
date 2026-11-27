@@ -121,7 +121,8 @@ function refusedArguments({ method, path, body }: Received): Answer | null {
   }
   const call = body as ToolCall | null;
   if (path !== '/' || call?.method !== 'tools/call') return null;
-  const parsed = TOOL_ARGUMENTS.get(String(call.params?.name))?.safeParse(call.params?.arguments ?? {});
+  const { long, ...rest } = (call.params?.arguments ?? {}) as Record<string, unknown>;
+  const parsed = TOOL_ARGUMENTS.get(String(call.params?.name))?.safeParse(typeof long === 'boolean' ? rest : (call.params?.arguments ?? {}));
   if (parsed === undefined || parsed.success) return null;
   const text = `invalid_arguments: ${parsed.error.issues.map((issue) => issue.message).join('\n')}\n`;
   return { body: { jsonrpc: '2.0', id: call.id, result: { isError: true, content: [{ type: 'text', text }] } } };
