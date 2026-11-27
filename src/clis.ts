@@ -4,9 +4,17 @@ import { constants, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import type { DesiredAgentRoute } from '@agentshouse/kit-wire';
 import { CLAUDE_KEY, CODEX_KEY, GROK_KEY, codexHome, type KeySettings } from './keys.ts';
 import { releaseDirectory } from './placement.ts';
 import { childEnvironment } from './relay.ts';
+
+export interface Launch {
+  unable: boolean;
+  autoCompact: DesiredAgentRoute['auto_compact'];
+}
+
+export const PLAIN_LAUNCH: Launch = { unable: false, autoCompact: undefined };
 
 export interface Cli {
   name: string;
@@ -14,12 +22,12 @@ export interface Cli {
   minimum: string;
   install: string;
   update: string;
-  adapter: { package: string; bin: string; executable: string; env(unable: boolean): Record<string, string> } | null;
+  adapter: { package: string; bin: string; executable: string; env(launch: Launch): Record<string, string> } | null;
   args(fullAccess: boolean): string[];
   reads: 'AGENTS.md' | 'CLAUDE.md' | null;
   compactWords: boolean;
   fullAccess: string | null;
-  sessionMeta(bridge: string, name: string | null, code: string | null, afk: boolean): Record<string, unknown>;
+  sessionMeta(bridge: string, name: string | null, code: string | null, launch: Launch): Record<string, unknown>;
   renames: string | null;
   unknownSession(error: unknown): boolean;
   allowHouse(path: string): Promise<void>;
@@ -100,6 +108,17 @@ function answered(error: unknown): Answered {
   return typeof error === 'object' && error !== null ? (error as Answered) : {};
 }
 
+function codexAutoCompact(autoCompact: Launch['autoCompact']): Record<string, number> {
+  if (autoCompact === undefined) return {};
+  if (autoCompact === 'off') throw new Error('Codex has no auto-compact off');
+  return { model_auto_compact_token_limit: autoCompact };
+}
+
+function claudeAutoCompact(autoCompact: Launch['autoCompact']): Record<string, string> {
+  if (autoCompact === undefined) return {};
+  return autoCompact === 'off' ? { DISABLE_AUTO_COMPACT: '1' } : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(autoCompact) };
+}
+
 function bridgeInClaudeSandbox(bridge: string): Record<string, unknown> {
   return process.platform === 'darwin' ? { allowUnixSockets: [bridge] } : { allowAllUnixSockets: true };
 }
@@ -115,10 +134,11 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/codex-acp',
       bin: 'codex-acp',
       executable: 'CODEX_PATH',
-      env: (unable) => ({
+      env: ({ unable, autoCompact }) => ({
         CODEX_CONFIG: JSON.stringify({
           features: { shell_zsh_fork: true },
           ...(unable ? { tools: { experimental_request_user_input: { enabled: false } } } : {}),
+          ...codexAutoCompact(autoCompact),
         }),
         ...(unable ? { HOUSE_KIT_AFK: '1' } : {}),
       }),
@@ -149,21 +169,22 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/claude-agent-acp',
       bin: 'claude-agent-acp',
       executable: 'CLAUDE_CODE_EXECUTABLE',
-      env: () => ({ CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1' }),
+      env: ({ autoCompact }) => ({ CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1', ...claudeAutoCompact(autoCompact) }),
     },
     args: () => [],
     reads: 'CLAUDE.md',
     compactWords: true,
     fullAccess: 'bypassPermissions',
-    sessionMeta: (bridge, name, code, afk) => ({
+    sessionMeta: (bridge, name, code, { unable, autoCompact }) => ({
       claudeCode: {
         options: {
           allowedTools: ['Bash(house:*)'],
-          ...(afk ? { disallowedTools: ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'], permissionPrompts: 'none' } : {}),
+          ...(unable ? { disallowedTools: ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'], permissionPrompts: 'none' } : {}),
           includeHookEvents: true,
           settings: {
             sandbox: { network: bridgeInClaudeSandbox(bridge) },
             ...(code === null ? {} : { permissions: { additionalDirectories: [code] } }),
+            ...(typeof autoCompact === 'number' ? { autoCompactEnabled: true } : {}),
           },
           ...(name === null ? {} : { extraArgs: { name } }),
         },
@@ -189,7 +210,7 @@ export const CLIS: Record<string, Cli> = {
     reads: null,
     compactWords: false,
     fullAccess: null,
-    sessionMeta: (_bridge, _name, _code, afk) => (afk ? { askUserQuestion: false } : {}),
+    sessionMeta: (_bridge, _name, _code, { unable }) => (unable ? { askUserQuestion: false } : {}),
     renames: '_x.ai/session/rename',
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
     allowHouse: nothing,

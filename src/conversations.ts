@@ -985,6 +985,7 @@ export class Conversations {
       () => this.changed(conversation),
       (message) => this.tapped(conversation, reader, message),
     );
+    const processStart = { unable: afk, autoCompact: route.auto_compact };
     let adapter: Adapter | null = null;
     try {
       bridged(bridge);
@@ -1005,13 +1006,13 @@ export class Conversations {
           { ...bridge.env, ...streamed },
           undefined,
           route.mode === null,
-          afk,
+          processStart,
         ),
       );
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
       const agent = adapter.connection.agent;
       const cwd = place.directory;
-      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name, place.code, afk);
+      const _meta = CLIS[route.kind]!.sessionMeta(bridge.env.HOUSE_BRIDGE!, place.name, place.code, processStart);
       const resumed = sessionId === null ? null : await this.resume(conversation, route.kind, adapter, { sessionId, cwd, mcpServers: [], _meta }, empty);
       const opened =
         resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));
