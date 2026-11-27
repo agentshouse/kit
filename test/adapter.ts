@@ -65,6 +65,8 @@ let spent: Record<string, unknown> = {};
 const steers = kind !== 'grok-build';
 let forms = true;
 const unprompted = new Set<string>();
+const unquestioned = new Set<string>();
+const alwaysApproved = process.argv.includes('--always-approve');
 const approvals = new Map<string, unknown>();
 const CODEX_MODES: Record<string, { approvalPolicy: string; approvalsReviewer: string; sandboxPolicy: Record<string, unknown> }> = {
   'read-only': { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly', networkAccess: false } },
@@ -74,8 +76,9 @@ const CODEX_MODES: Record<string, { approvalPolicy: string; approvalsReviewer: s
 };
 
 function launched(sessionId: string, meta: unknown): void {
-  const options = (meta as { claudeCode?: { options?: { permissionPrompts?: unknown } } } | null | undefined)?.claudeCode?.options;
-  if (options?.permissionPrompts === 'none') unprompted.add(sessionId);
+  const held = meta as { askUserQuestion?: unknown; claudeCode?: { options?: { permissionPrompts?: unknown } } } | null | undefined;
+  if (held?.claudeCode?.options?.permissionPrompts === 'none') unprompted.add(sessionId);
+  if (held?.askUserQuestion === false) unquestioned.add(sessionId);
 }
 
 function reviewsPlan(params: Record<string, unknown> | undefined): boolean {
@@ -85,9 +88,10 @@ function reviewsPlan(params: Record<string, unknown> | undefined): boolean {
 function asks(sessionId: string, method: string, params?: Record<string, unknown>): boolean {
   if (existsSync(join(home, 'asks-anyway'))) return true;
   if (method === 'elicitation/create') return forms;
+  if (method === '_x.ai/ask_user_question') return !unquestioned.has(sessionId);
   if (method !== 'session/request_permission') return true;
   if (reviewsPlan(params)) return collaboration === 'plan';
-  return !unprompted.has(sessionId) && approvals.get(sessionId) !== 'never';
+  return !alwaysApproved && !unprompted.has(sessionId) && approvals.get(sessionId) !== 'never';
 }
 
 // A ten-minute sleep and an idle tick each minute keep the job and its child alive past any spec that watches them.

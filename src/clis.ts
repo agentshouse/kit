@@ -20,7 +20,6 @@ export interface Cli {
   compactWords: boolean;
   fullAccess: string | null;
   sessionMeta(bridge: string, name: string | null, code: string | null, afk: boolean): Record<string, unknown>;
-  unableToAsk: boolean;
   unknownSession(error: unknown): boolean;
   allowHouse(path: string): Promise<void>;
   signedIn: { command: string[] } | { initializeMeta: string; apiKey: string };
@@ -128,7 +127,6 @@ export const CLIS: Record<string, Cli> = {
     compactWords: false,
     fullAccess: 'agent-full-access',
     sessionMeta: () => ({}),
-    unableToAsk: true,
     unknownSession: (error) => {
       const { code, data } = answered(error);
       return code === -32603 && typeof data?.details === 'string' && data.details.startsWith('no rollout found');
@@ -170,7 +168,6 @@ export const CLIS: Record<string, Cli> = {
         emitRawSDKMessages: [...RAW_SUBTYPES.map((subtype) => ({ type: 'system', subtype })), ...RAW_TYPES.map((type) => ({ type }))],
       },
     }),
-    unableToAsk: true,
     unknownSession: (error) => answered(error).code === -32002,
     allowHouse: nothing,
     signedIn: { command: ['auth', 'status'] },
@@ -190,7 +187,6 @@ export const CLIS: Record<string, Cli> = {
     compactWords: false,
     fullAccess: null,
     sessionMeta: (_bridge, _name, _code, afk) => (afk ? { askUserQuestion: false } : {}),
-    unableToAsk: false,
     unknownSession: (error) => answered(error).data?.code === 'FS_NOT_FOUND',
     allowHouse: nothing,
     signedIn: { initializeMeta: 'defaultAuthMethodId', apiKey: 'xai.api_key' },
