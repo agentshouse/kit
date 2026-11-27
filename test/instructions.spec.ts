@@ -121,9 +121,9 @@ function readAsHouse(document: string): ToolAnswer {
 }
 
 it.each([
-  ['40,000 characters, which come whole at 100 KB', 40_000, 1],
-  ['250 KB, which come in three replies', 250_000, 3],
-])('reads Owner rules of %s whole, asking with long: true and following each cut line to the command that reads on', async (_size, size, reads) => {
+  ['40,000 characters, in one reply', 40_000, 1],
+  ['250 KB, in three replies', 250_000, 3],
+])('reads whole Owner rules of %s, asking with long: true and following each cut line to the command that reads on', async (_size, size, reads) => {
   const hosted = await hostKit();
   const rule = '- Work goes into the Room it belongs to; é.\n';
   const document = `# Owner rules\n\n${rule.repeat(Math.ceil(size / rule.length))}`;
