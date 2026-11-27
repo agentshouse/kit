@@ -110,7 +110,7 @@ async function savedBy(rooms: Rooms, index: number, count: number): Promise<void
 }
 
 async function conflicted(hosted: Hosted, rooms: Rooms, marked: number, other: number): Promise<void> {
-  const copy = copyOf(hosted, 'notes', `Plan ${marked}`);
+  const copy = copyOf(hosted, 'notebook', `Plan ${marked}`);
   const [theirs, ours] = [savesBy(rooms, other), savesBy(rooms, marked)];
   told(hosted, other, "@sh sed -i 's/beans/peas/' plan.md");
   await savedBy(rooms, other, theirs + 1);
@@ -121,7 +121,7 @@ async function conflicted(hosted: Hosted, rooms: Rooms, marked: number, other: n
 }
 
 async function pending(hosted: Hosted, rooms: Rooms, index: number): Promise<void> {
-  const copy = copyOf(hosted, 'notes', `Plan ${index}`);
+  const copy = copyOf(hosted, 'notebook', `Plan ${index}`);
   const saves = savesBy(rooms, index);
   rooms.writeUnits = 0;
   told(hosted, index, '@sh echo two >> plan.md');
@@ -173,7 +173,7 @@ async function shows(path: string, text: string): Promise<void> {
 async function staged(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): Promise<{ hosted: Hosted; rooms: Rooms; notes: Room }> {
   const hosted = await hostKit(routes, hosting);
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\ntwo\nthree\n');
   notes.put('plan.md', 'Plant beans\n');
   notes.instructions = INSTRUCTIONS;
@@ -185,7 +185,7 @@ async function staged(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): P
 it("makes a conversation's copy from House's state linking each attachment the Room's folder holds unchanged, numbers a second copy of one name, keeps its path through renames and makes it again where a person deleted it", async () => {
   const hosted = await hostKit([{}, { kind: 'claude-agent-acp' }]);
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   notes.upload('kept.jpg', bytes('kept bytes'));
   notes.upload('changed.jpg', bytes('House bytes'));
@@ -195,7 +195,7 @@ it("makes a conversation's copy from House's state linking each attachment the R
   await rm(join(notes.repository, 'unbrought.jpg'));
   await writeFile(join(notes.repository, 'changed.jpg'), 'changed here');
   await writeFile(join(notes.repository, 'a.md'), 'changed here\n');
-  const copy = copyOf(hosted, 'notes', 'Plan- Q3 - Q4-');
+  const copy = copyOf(hosted, 'notebook', 'Plan- Q3 - Q4-');
 
   const session = await opened(hosted, notes, 'Plan: Q3 / Q4.');
 
@@ -229,7 +229,7 @@ it("makes a conversation's copy from House's state linking each attachment the R
   expect(await held(copy)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'a.md', 'kept.jpg']);
   expect(await inode(join(copy, 'kept.jpg'))).toEqual(folders);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\n');
-  expect(await held(join(hosted.workspace, 'conversations'))).toEqual(['notes']);
+  expect(await held(join(hosted.workspace, 'conversations'))).toEqual(['notebook']);
 });
 
 it("makes the copy of a conversation its owner renamed before its first session at the conversation's own name, which its open carries, and opens its Claude Code session with that name", async () => {
@@ -237,8 +237,8 @@ it("makes the copy of a conversation its owner renamed before its first session 
 
   await opened(hosted, notes, 'studio-3');
 
-  expect(await cwdOf(hosted, 'session/new', 0)).toBe(copyOf(hosted, 'notes', 'studio-3'));
-  expect(await held(join(hosted.workspace, 'conversations', 'notes'))).toEqual(['studio-3']);
+  expect(await cwdOf(hosted, 'session/new', 0)).toBe(copyOf(hosted, 'notebook', 'studio-3'));
+  expect(await held(join(hosted.workspace, 'conversations', 'notebook'))).toEqual(['studio-3']);
   expect((await logged(hosted, 'session/new'))[0]!.params).toMatchObject({ _meta: { claudeCode: { options: { extraArgs: { name: 'studio-3' } } } } });
 });
 
@@ -248,7 +248,7 @@ it("asks House nothing before a turn while no notice came, the first turn after 
   garden.put('beds.md', 'Two beds\n');
   rooms.answered = [notes, garden];
   await rooms.download([notes, garden]);
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   await settle();
   let asked = roomAsks(hosted);
@@ -275,7 +275,7 @@ it("asks House nothing before a turn while no notice came, the first turn after 
   await shows(join(notes.repository, 'AGENTS.md'), `${INSTRUCTIONS}Put new tasks on the map.\n`);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree, from House\n');
   expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans and peas\n');
-  expect(roomRootReads(hosted).slice(read)).toEqual(['/rooms/garden', '/rooms/notes', '/rooms/notes']);
+  expect(roomRootReads(hosted).slice(read)).toEqual(['rooms/garden', 'rooms/notebook', 'rooms/notebook']);
   await until(() => (notes.files.get('plan.md')!.content === 'Plant beans and peas\n' ? true : undefined));
   await settle();
   asked = roomAsks(hosted);
@@ -289,7 +289,7 @@ it("asks House nothing before a turn while no notice came, the first turn after 
 
 it("downloads a notice that arrives during a turn into the copy at once, and leaves the copy as it stands where that download fails, until the next notice downloads again", async () => {
   const { hosted, rooms, notes } = await staged();
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   said(hosted, '@gate first-ends');
   await prompt(hosted, 0);
@@ -317,7 +317,7 @@ it("takes a change of the Environment's rights in the copy's Room at House's not
   const own = rooms.room('private');
   rooms.answered = [notes, own];
   await rooms.download([notes, own]);
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   await settle();
   expect((await entriesOf(copy))['a.md']!.read_only).toBeUndefined();
@@ -337,7 +337,7 @@ it("takes a change of the Environment's rights in the copy's Room at House's not
   await shows(join(notes.repository, 'AGENTS.md'), `${INSTRUCTIONS}Your owner rules changed.\n`);
   await until(() => roomRootReads(hosted).length >= read + 3 && roomAsks(hosted) >= asked + 6);
   await settle();
-  expect(roomRootReads(hosted).slice(read).sort()).toEqual(['/rooms/notes', '/rooms/notes', '/rooms/private']);
+  expect(roomRootReads(hosted).slice(read).sort()).toEqual(['rooms/notebook', 'rooms/notebook', 'rooms/private']);
   expect(roomAsks(hosted)).toBe(asked + 6);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
   expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
@@ -345,7 +345,7 @@ it("takes a change of the Environment's rights in the copy's Room at House's not
 
 it('downloads into each copy once at a reconnection, which a notice lost to the disconnection leaves owed', async () => {
   const { hosted, notes } = await staged();
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   await settle();
 
@@ -358,7 +358,7 @@ it('downloads into each copy once at a reconnection, which a notice lost to the 
 
 it("sends a batch left pending in a conversation's copy only by that copy's next save, never by another conversation's or the Room folder's", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}]);
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   await opened(hosted, notes, 'Other', 'conversation-2', 'agent-2');
   rooms.writeUnits = 0;
@@ -382,17 +382,17 @@ it("sends a batch left pending in a conversation's copy only by that copy's next
 
   expect(sent!.headers.authorization).toBe('Bearer ahk_held');
   expect(operationOf(sent!)).toBe(operationOf(first!));
-  expect(changesOf(sent!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\ntwo\n', base: expect.any(String) }]);
-  expect(changesOf(newer!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\ntwo\nthree\n', base: expect.any(String) }]);
+  expect(changesOf(sent!)).toEqual([{ op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant beans\ntwo\n', base: expect.any(String) }]);
+  expect(changesOf(newer!)).toEqual([{ op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant beans\ntwo\nthree\n', base: expect.any(String) }]);
   expect(notes.files.get('plan.md')!.content).toBe('Plant beans\ntwo\nthree\n');
-  expect(await prompt(hosted, 2)).toBe(`@sh echo three >> plan.md\nNot saved:\n- /rooms/notes/plan.md: ${LIMITED}`);
+  expect(await prompt(hosted, 2)).toBe(`@sh echo three >> plan.md\nNot saved:\n- rooms/notebook/plan.md: ${LIMITED}`);
   expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans\ntwo\nthree\n');
 });
 
 it("saves the copy as the conversation's call while its turn runs and brings the merged text back, starts no save at a turn that changed nothing, and saves what a killed turn wrote", async () => {
   const { hosted, rooms, notes } = await staged();
   notes.put('old.md', 'old\n');
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
 
   said(hosted, "@sh sed -i 's/one/ONE/' a.md && echo new > new.md && rm old.md\n@gate merged");
@@ -403,9 +403,9 @@ it("saves the copy as the conversation's call while its turn runs and brings the
   expect(ended(hosted)).toHaveLength(0);
   expect(batch!.headers.authorization).toBe('Bearer ahk_held');
   expect(changesOf(batch!)).toEqual([
-    { op: 'write', path: '/rooms/notes/a.md', content: 'ONE\ntwo\nthree\n', base: expect.any(String) },
-    { op: 'write', path: '/rooms/notes/new.md', content: 'new\n' },
-    { op: 'delete', path: '/rooms/notes/old.md', base: expect.any(String) },
+    { op: 'write', path: 'rooms/notebook/a.md', content: 'ONE\ntwo\nthree\n', base: expect.any(String) },
+    { op: 'write', path: 'rooms/notebook/new.md', content: 'new\n' },
+    { op: 'delete', path: 'rooms/notebook/old.md', base: expect.any(String) },
   ]);
   expect(notes.files.get('a.md')!.content).toBe('ONE\ntwo\nTHREE\n');
   await shows(join(copy, 'a.md'), 'ONE\ntwo\nTHREE\n');
@@ -422,12 +422,12 @@ it("saves the copy as the conversation's call while its turn runs and brings the
   hosted.call({ kind: 'kill', conversation_id: 'conversation-1', agent_id: 'agent-1' });
   await turned(hosted, 3);
   const [, saved] = await edited(rooms, 2);
-  expect(changesOf(saved!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nkilled\n', base: expect.any(String) }]);
+  expect(changesOf(saved!)).toEqual([{ op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant beans\nkilled\n', base: expect.any(String) }]);
 });
 
 it("brings back the whole text House merged where its update answer cuts that text with cut beside it", async () => {
   const { hosted, rooms, notes } = await staged();
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   notes.bound = 8;
 
@@ -464,12 +464,12 @@ function operationOf(received: Received): string {
   return (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation']!;
 }
 
-const MARKED = { path: '/rooms/notes/plan.md', markers: true };
-const MARKED_TEXT = 'Not saved:\n- /rooms/notes/plan.md: it holds conflict markers';
+const MARKED = { path: 'rooms/notebook/plan.md', markers: true };
+const MARKED_TEXT = 'Not saved:\n- rooms/notebook/plan.md: it holds conflict markers';
 
 it("lands the rest of a save around a file House answers in conflict, leaves the marked file out of the Kit's own saves until its markers go, reports each turn's end that leaves a file unsaved, and ends the next prompt with House's text, a /command taking none", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}]);
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   await opened(hosted, notes, 'Other', 'conversation-2', 'agent-2');
   const alpha = notes.revision('a.md');
@@ -482,10 +482,10 @@ it("lands the rest of a save around a file House answers in conflict, leaves the
   const peas = notes.revision('plan.md');
 
   expect(changesOf(edits[1]!)).toEqual([
-    { op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: alpha },
-    { op: 'write', path: '/rooms/notes/plan.md', content: 'Plant corn\n', base: expect.any(String) },
+    { op: 'write', path: 'rooms/notebook/a.md', content: 'one\ntwo\nthree\nfour\n', base: alpha },
+    { op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant corn\n', base: expect.any(String) },
   ]);
-  expect(changesOf(edits[2]!)).toEqual([{ op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: alpha }]);
+  expect(changesOf(edits[2]!)).toEqual([{ op: 'write', path: 'rooms/notebook/a.md', content: 'one\ntwo\nthree\nfour\n', base: alpha }]);
   expect(operationOf(edits[2]!)).not.toBe(operationOf(edits[1]!));
   expect(notes.files.get('a.md')!.content).toBe('one\ntwo\nthree\nfour\n');
   expect(notes.files.get('plan.md')!.content).toBe('Plant peas\n');
@@ -505,13 +505,13 @@ it("lands the rest of a save around a file House answers in conflict, leaves the
   said(hosted, "@sh echo five >> a.md && sed -i 's/corn/maize/' plan.md");
   expect((await prompt(hosted, 4)).endsWith(`\n${MARKED_TEXT}`)).toBe(true);
   const marking = await edited(rooms, 4);
-  expect(changesOf(marking[3]!)).toEqual([{ op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\nfive\n', base: expect.any(String) }]);
+  expect(changesOf(marking[3]!)).toEqual([{ op: 'write', path: 'rooms/notebook/a.md', content: 'one\ntwo\nthree\nfour\nfive\n', base: expect.any(String) }]);
   await turned(hosted, 5);
   await reported(hosted, 4);
 
   said(hosted, "@sh printf 'Plant peas and corn\\n' > plan.md");
   const resolved = await edited(rooms, 5);
-  expect(changesOf(resolved[4]!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant peas and corn\n', base: peas }]);
+  expect(changesOf(resolved[4]!)).toEqual([{ op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant peas and corn\n', base: peas }]);
   await turned(hosted, 6);
   said(hosted, 'landed');
   expect(await prompt(hosted, 6)).toBe('landed');
@@ -523,10 +523,10 @@ it("lands the rest of a save around a file House answers in conflict, leaves the
 
 it("reports a turn's end that leaves a file House refused, which the next prompt names unless it was saved meanwhile, drops the text once no file is left, and reports nothing for a turn's end that leaves none", async () => {
   const { hosted, rooms, notes } = await staged();
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
-  const x = 'protected_path: /rooms/notes/capture/x.md is not writable';
-  const y = 'protected_path: /rooms/notes/capture/y.md is not writable';
+  const x = 'protected_path: rooms/notebook/capture/x.md is not writable';
+  const y = 'protected_path: rooms/notebook/capture/y.md is not writable';
 
   said(hosted, '@sh mkdir -p capture && echo held > capture/x.md && echo held > capture/y.md && echo four >> a.md');
   const edits = await edited(rooms, 3);
@@ -534,15 +534,15 @@ it("reports a turn's end that leaves a file House refused, which the next prompt
 
   expect(edits.map(changesOf)).toEqual([
     [
-      { op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) },
-      { op: 'write', path: '/rooms/notes/capture/x.md', content: 'held\n' },
-      { op: 'write', path: '/rooms/notes/capture/y.md', content: 'held\n' },
+      { op: 'write', path: 'rooms/notebook/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) },
+      { op: 'write', path: 'rooms/notebook/capture/x.md', content: 'held\n' },
+      { op: 'write', path: 'rooms/notebook/capture/y.md', content: 'held\n' },
     ],
     [
-      { op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) },
-      { op: 'write', path: '/rooms/notes/capture/y.md', content: 'held\n' },
+      { op: 'write', path: 'rooms/notebook/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) },
+      { op: 'write', path: 'rooms/notebook/capture/y.md', content: 'held\n' },
     ],
-    [{ op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) }],
+    [{ op: 'write', path: 'rooms/notebook/a.md', content: 'one\ntwo\nthree\nfour\n', base: expect.any(String) }],
   ]);
   expect(new Set(edits.map(operationOf)).size).toBe(3);
   expect(notes.files.get('a.md')!.content).toBe('one\ntwo\nthree\nfour\n');
@@ -551,8 +551,8 @@ it("reports a turn's end that leaves a file House refused, which the next prompt
       conversation: 'conversation-1',
       turn: endedTurn(hosted, 0),
       files: [
-        { path: '/rooms/notes/capture/x.md', refused: x },
-        { path: '/rooms/notes/capture/y.md', refused: y },
+        { path: 'rooms/notebook/capture/x.md', refused: x },
+        { path: 'rooms/notebook/capture/y.md', refused: y },
       ],
     },
   ]);
@@ -562,9 +562,9 @@ it("reports a turn's end that leaves a file House refused, which the next prompt
 
   await rm(join(copy, 'capture', 'y.md'));
   said(hosted, 'and then');
-  expect((await prompt(hosted, 1)).split('\n').slice(-3)).toEqual(['and then', 'Not saved:', `- /rooms/notes/capture/x.md: ${x}`]);
+  expect((await prompt(hosted, 1)).split('\n').slice(-3)).toEqual(['and then', 'Not saved:', `- rooms/notebook/capture/x.md: ${x}`]);
   await turned(hosted, 2);
-  expect((await reported(hosted, 2))[1]).toEqual({ conversation: 'conversation-1', turn: endedTurn(hosted, 1), files: [{ path: '/rooms/notes/capture/x.md', refused: x }] });
+  expect((await reported(hosted, 2))[1]).toEqual({ conversation: 'conversation-1', turn: endedTurn(hosted, 1), files: [{ path: 'rooms/notebook/capture/x.md', refused: x }] });
 
   await rm(join(copy, 'capture', 'x.md'));
   said(hosted, 'saved meanwhile');
@@ -588,7 +588,7 @@ it("resumes a warm conversation moved since its session opened in the old Room's
   await hosted.restart();
   said(hosted, '@say resumed', { provider_session_id: session });
 
-  expect(await cwdOf(hosted, 'session/resume', 0)).toBe(copyOf(hosted, 'notes', 'Plan'));
+  expect(await cwdOf(hosted, 'session/resume', 0)).toBe(copyOf(hosted, 'notebook', 'Plan'));
   await turned(hosted, 2);
   await opened(hosted, garden, 'Plan');
   expect(await cwdOf(hosted, 'session/new', 1)).toBe(copyOf(hosted, 'garden', 'Plan'));
@@ -639,7 +639,7 @@ it("runs a conversation in a Room held at the Open level in a copy holding the t
   expect(await prompt(hosted, 0)).toBe(`${house}\n\nBe useful.\n@say hello`);
   await turned(hosted, 1);
 
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   expect(await manifestAt(copy)).toMatchObject({ kit: ['AGENTS.md', 'CLAUDE.md'] });
   rooms.answered = [];
@@ -674,7 +674,7 @@ it('moves the conversations folder with the workspace and its records, so the ne
   await hosted.restart();
   said(hosted, '@say moved', { provider_session_id: session });
 
-  const moved = join(workspace, 'conversations', 'notes', 'Plan');
+  const moved = join(workspace, 'conversations', 'notebook', 'Plan');
   expect(await cwdOf(hosted, 'session/resume', 0)).toBe(moved);
   expect((await stat(moved)).isDirectory()).toBe(true);
   await absent(join(hosted.workspace, 'conversations'));
@@ -685,7 +685,7 @@ it('moves the conversations folder with the workspace and its records, so the ne
 it("removes on a deletion's kill a copy whose every file matches its manifest and keeps, naming them, copies holding a changed, a new or a deleted file House refused or a conflicted one, each as its download leaves it, while a Conversation kill removes and names nothing", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}, {}, {}, {}, {}]);
   for (const index of [1, 2, 3, 4, 5, 6]) await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`);
-  const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  const copy = (index: number) => copyOf(hosted, 'notebook', `Plan ${index}`);
   for (const index of [2, 3, 4]) rooms.denied.add(`conversation-${index}`);
   await writeFile(join(copy(2), 'a.md'), 'one\ntwo\nchanged\n');
   await writeFile(join(copy(3), 'new.md'), 'new\n');
@@ -718,7 +718,7 @@ it('removes or keeps each copy of a conversation in two Rooms by its own state o
   const outside = await contents(hosted.workspace, join(hosted.workspace, 'conversations'));
 
   expect(await killed(hosted, 1, true)).toEqual({ kept: [{ room_ref: garden.ref, path: copyOf(hosted, 'garden', 'Plan') }] });
-  await absent(copyOf(hosted, 'notes', 'Plan'));
+  await absent(copyOf(hosted, 'notebook', 'Plan'));
   expect(await readFile(join(copyOf(hosted, 'garden', 'Plan'), 'beds.md'), 'utf8')).toBe('Three beds\n');
   expect(await contents(hosted.workspace, join(hosted.workspace, 'conversations'))).toEqual(outside);
 });
@@ -728,7 +728,7 @@ it("removes on a deletion's kill a clean copy of a Room no longer reached and on
   notes.put('capture/log.md', 'House wrote this\n');
   await rooms.download([notes]);
   for (const index of [1, 2, 3]) await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`);
-  const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  const copy = (index: number) => copyOf(hosted, 'notebook', `Plan ${index}`);
   await writeFile(join(copy(2), 'capture', 'log.md'), 'changed here\n');
   await rm(join(copy(2), 'AGENTS.md'));
   await pending(hosted, rooms, 3);
@@ -748,7 +748,7 @@ it("removes a clean copy idle for 24 hours at the next turn's end, even one endi
   const { hosted, rooms, notes } = await staged([{}, {}, {}, {}, {}, {}, {}], clock.hosting);
   const sessions: string[] = [];
   for (const index of [1, 2, 3, 4, 5, 6]) sessions.push(await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`));
-  const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  const copy = (index: number) => copyOf(hosted, 'notebook', `Plan ${index}`);
   told(hosted, 1, '@say first');
   await turned(hosted, 1);
   told(hosted, 2, '@say first');
@@ -807,7 +807,7 @@ it("removes an idle copy at the Kit's start, reporting a Sandbox idle only once 
   for (let index = 0; index < 400; index++) notes.put(`notes/${index}.md`, `note ${index}\n`);
   await rooms.download([notes]);
   await opened(hosted, notes, 'Plan');
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   said(hosted, '@say first');
   await turned(hosted, 1);
   const idled = hosted.idles.length;
@@ -834,7 +834,7 @@ it('removes an idle copy once the Kit goes idle after a call, and runs the next 
   const halted = join(await temporaryDirectory(), 'halted-removal');
   const { hosted, rooms, notes } = await staged([{}], { environment: { ...clock.hosting.environment, KIT_HALTED_REMOVAL: halted }, node: [...MOVED_CLOCK, ...HALTED_REMOVAL] });
   const session = await opened(hosted, notes, 'Plan');
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   said(hosted, '@say first');
   await turned(hosted, 1);
   expect(await killed(hosted, 1)).toEqual({});
@@ -852,14 +852,14 @@ it('removes an idle copy once the Kit goes idle after a call, and runs the next 
 
   expect(await cwdOf(hosted, 'session/resume', 0)).toBe(copy);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
-  expect(changesOf(batch!)).toEqual([{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nagain\n', base: expect.any(String) }]);
+  expect(changesOf(batch!)).toEqual([{ op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant beans\nagain\n', base: expect.any(String) }]);
   expect(notes.files.get('a.md')!.content).toBe('one\ntwo\nthree\n');
 });
 
 it("links into a conversation's copy at its making an attachment only another conversation's copy holds unchanged, downloading nothing, and leaves one a folder holds changed or at an older revision, and one no folder holds, its manifest entry with no file", async () => {
   const hosted = await hostKit([{}, {}]);
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   notes.upload('kept.jpg', bytes('kept bytes'));
   notes.upload('changed.jpg', bytes('House bytes'));
@@ -870,14 +870,14 @@ it("links into a conversation's copy at its making an attachment only another co
   notes.upload('unbrought.jpg', bytes('never downloaded'));
   await writeFile(join(notes.repository, 'changed.jpg'), 'changed here');
   await opened(hosted, notes, 'First');
-  const first = copyOf(hosted, 'notes', 'First');
-  const wanted = { path: '/rooms/notes/elsewhere.jpg', file: join(first, 'elsewhere.jpg') };
+  const first = copyOf(hosted, 'notebook', 'First');
+  const wanted = { path: 'rooms/notebook/elsewhere.jpg', file: join(first, 'elsewhere.jpg') };
   expect(await house(hosted, first, 'download', JSON.stringify(wanted))).toMatchObject({ status: 0 });
   const fetched = fetchedBytes(hosted);
 
   await opened(hosted, notes, 'Second', 'conversation-2', 'agent-2');
 
-  const second = copyOf(hosted, 'notes', 'Second');
+  const second = copyOf(hosted, 'notebook', 'Second');
   expect(await held(second)).toEqual(['.house', 'a.md', 'elsewhere.jpg', 'kept.jpg']);
   expect(await inode(join(second, 'kept.jpg'))).toEqual(await inode(join(notes.repository, 'kept.jpg')));
   expect(await inode(join(second, 'elsewhere.jpg'))).toEqual(await inode(join(first, 'elsewhere.jpg')));
@@ -893,11 +893,11 @@ it("links into a conversation's copy at its making an attachment only another co
 it('leaves an attachment its manifest entry, copying nothing in its place, where the filesystem refuses the link, and --with-attachments then downloads it', async () => {
   const hosted = await hostKit([{}], { node: REFUSED_LINKS });
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   notes.upload('photo.jpg', bytes('photo bytes'));
   await rooms.download([notes], '--with-attachments');
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
 
   await opened(hosted, notes, 'Plan');
 
@@ -915,12 +915,12 @@ it("removes an idle copy holding only linked attachments and manifest entries as
   const clock = await clocked();
   const hosted = await hostKit([{}, {}], clock.hosting);
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   notes.upload('photo.jpg', bytes('photo bytes'));
   await rooms.download([notes], '--with-attachments');
   notes.upload('far.jpg', bytes('far bytes'));
-  const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  const copy = (index: number) => copyOf(hosted, 'notebook', `Plan ${index}`);
   for (const index of [1, 2]) await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`);
   expect((await stat(join(notes.repository, 'photo.jpg'))).nlink).toBe(3);
   expect(await killed(hosted, 1)).toEqual({});
@@ -942,11 +942,11 @@ it("removes a copy whose linked attachment another folder wrote in place and upl
   const clock = await clocked();
   const hosted = await hostKit([{}, {}, {}], clock.hosting);
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   notes.upload('photo.jpg', bytes('photo bytes'));
   await rooms.download([notes], '--with-attachments');
-  const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
+  const copy = (index: number) => copyOf(hosted, 'notebook', `Plan ${index}`);
   for (const index of [1, 2, 3]) await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`);
   rooms.denied.add('conversation-3');
   await replaced(join(copy(3), 'photo.jpg'), bytes('own bytes'));
@@ -971,11 +971,11 @@ it("removes a copy whose linked attachment another folder wrote in place and upl
 it("keeps House's bytes in every other folder when a copy replaces a linked attachment, by a file renamed over it or by a delete and a write, or a person replaces it in the Room's folder, and when a download in the Room's folder brings a new revision, moves or removes one", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   for (const name of ['renamed', 'rewritten', 'brought', 'moved', 'removed', 'replaced']) notes.upload(`${name}.jpg`, bytes(`${name} bytes`));
   await rooms.download([notes], '--with-attachments');
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   for (const name of ['renamed', 'rewritten', 'brought', 'moved', 'removed', 'replaced']) {
     expect(await inode(join(copy, `${name}.jpg`))).toEqual(await inode(join(notes.repository, `${name}.jpg`)));
@@ -988,8 +988,8 @@ it("keeps House's bytes in every other folder when a copy replaces a linked atta
   expect(await house(hosted, copy, 'upload')).toMatchObject({ status: 0, stdout: `House accepted 2 files of ${notes.root}.\n` });
 
   expect(notes.batches.at(-1)).toEqual([
-    { op: 'upload', path: '/rooms/notes/renamed.jpg', base: revisions.renamed, bytes: 12, sha256: digest('renamed here'), media_type: 'image/jpeg' },
-    { op: 'upload', path: '/rooms/notes/rewritten.jpg', base: revisions.rewritten, bytes: 14, sha256: digest('rewritten here'), media_type: 'image/jpeg' },
+    { op: 'upload', path: 'rooms/notebook/renamed.jpg', base: revisions.renamed, bytes: 12, sha256: digest('renamed here'), media_type: 'image/jpeg' },
+    { op: 'upload', path: 'rooms/notebook/rewritten.jpg', base: revisions.rewritten, bytes: 14, sha256: digest('rewritten here'), media_type: 'image/jpeg' },
   ]);
   expect(await readFile(join(notes.repository, 'renamed.jpg'), 'utf8')).toBe('renamed bytes');
   expect(await readFile(join(notes.repository, 'rewritten.jpg'), 'utf8')).toBe('rewritten bytes');
@@ -1011,18 +1011,18 @@ it("keeps House's bytes in every other folder when a copy replaces a linked atta
 it("brings a held attachment another writer changed down at its new revision, linked from a folder holding it and otherwise downloaded through info's link and checked, whatever its size, records that revision and names it in the answer, removes no file, keeps one changed here, does the same with a read-only one whatever its file holds, and leaves one the copy does not hold on House", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   for (const path of ['photo.jpg', 'cover.jpg', 'mine.jpg', 'capture/linked.jpg', 'capture/left.jpg']) notes.upload(path, bytes(`${path} bytes`));
   notes.upload('big.bin', Buffer.alloc(PAST_DEFAULT_SIZE, 1));
   await rooms.download([notes], '--with-attachments', '--max-size', '11');
   notes.upload('far.jpg', bytes('far bytes'));
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   await replaced(join(copy, 'photo.jpg'), bytes('photo, drawn here'));
   expect(await house(hosted, copy, 'upload')).toMatchObject({ status: 0, stdout: `House accepted 1 file of ${notes.root}.\n` });
   notes.upload('capture/linked.jpg', bytes('capture/linked.jpg, from House'));
-  const wanted = { path: '/rooms/notes/capture/linked.jpg', file: join(copy, 'capture/linked.jpg') };
+  const wanted = { path: 'rooms/notebook/capture/linked.jpg', file: join(copy, 'capture/linked.jpg') };
   expect(await house(hosted, copy, 'download', JSON.stringify(wanted))).toMatchObject({ status: 0 });
   expect(await house(hosted, copy, 'download')).toMatchObject({ status: 0 });
   const mine = notes.revision('mine.jpg');
@@ -1065,13 +1065,13 @@ it("brings a held attachment another writer changed down at its new revision, li
 it("with --with-attachments links what a folder holds unchanged and downloads the rest up to --max-size, leaving one over it an entry though a folder holds it, links a held attachment's new revision whatever its size, and a one-file download at a skipped attachment's own path, a read-only one's too, is held after the next download, which brings its new revision", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   notes.upload('small.jpg', bytes('small bytes'));
   notes.upload('big.bin', Buffer.alloc(MEGABYTE_AND_ONE, 1));
   await rooms.download([notes], '--with-attachments', '--max-size', '3');
   notes.upload('extra.jpg', bytes('extra bytes'));
-  const copy = copyOf(hosted, 'notes', 'Plan');
+  const copy = copyOf(hosted, 'notebook', 'Plan');
   await opened(hosted, notes, 'Plan');
   expect(await held(copy)).toEqual(['.house', 'a.md', 'big.bin', 'small.jpg']);
   notes.upload('small.jpg', bytes('small, from House'));
@@ -1096,7 +1096,7 @@ it("with --with-attachments links what a folder holds unchanged and downloads th
   expect((await entriesOf(copy))['big.bin']).toEqual({ revision: notes.revision('big.bin'), sha256: digest(Buffer.alloc(MEGABYTE_AND_ONE, 2)), bytes: MEGABYTE_AND_ONE });
   expect((await entriesOf(copy))['huge.bin']).toEqual({ revision: notes.revision('huge.bin'), sha256: digest(Buffer.alloc(MEGABYTE_AND_ONE, 3)), bytes: MEGABYTE_AND_ONE, skipped: true });
 
-  const wanted = { path: '/rooms/notes/huge.bin', file: join(copy, 'huge.bin') };
+  const wanted = { path: 'rooms/notebook/huge.bin', file: join(copy, 'huge.bin') };
   expect(await house(hosted, copy, 'download', JSON.stringify(wanted))).toMatchObject({ status: 0 });
   expect(await house(hosted, copy, 'download')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
   expect((await entriesOf(copy))['huge.bin']).not.toHaveProperty('skipped');
@@ -1107,7 +1107,7 @@ it("with --with-attachments links what a folder holds unchanged and downloads th
   notes.upload('capture/shot.jpg', bytes('shot bytes'));
   expect(await house(hosted, copy, 'download')).toMatchObject({ status: 0 });
   expect((await entriesOf(copy))['capture/shot.jpg']).toMatchObject({ read_only: true, skipped: true });
-  const shot = { path: '/rooms/notes/capture/shot.jpg', file: join(copy, 'capture/shot.jpg') };
+  const shot = { path: 'rooms/notebook/capture/shot.jpg', file: join(copy, 'capture/shot.jpg') };
   expect(await house(hosted, copy, 'download', JSON.stringify(shot))).toMatchObject({ status: 0 });
   expect(await house(hosted, copy, 'download')).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
   expect((await entriesOf(copy))['capture/shot.jpg']).not.toHaveProperty('skipped');

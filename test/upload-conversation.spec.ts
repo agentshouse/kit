@@ -48,7 +48,7 @@ async function opened(hosted: Hosted, room: Room, index: number): Promise<string
 async function copied(routes = [{}], opening = true): Promise<Copied> {
   const hosted = await hostKit(routes);
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'Alpha\n');
   room.put('index.md', 'See [alpha](a.md).\n');
   room.put('plan.md', 'one\n');
@@ -73,7 +73,7 @@ it("uploads a Room's folder from a Conversation process and a conversation's cop
   const second = await shell(hosted, 'cd ./. && echo three >> plan.md && house upload', 'conversation-2', 'agent-2');
   const owner = await shell(hosted, 'house upload --owner', 'conversation-2', 'agent-2');
 
-  expect(first).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(first).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
   expect(second.status).toBe(1);
   expect(second.stderr).toContain('operation_denied');
   expect(owner).toMatchObject({ status: 1, stderr: expect.stringMatching(/^house: unexpected argument --owner; usage: house upload, /) });
@@ -93,10 +93,24 @@ it('uploads a move from a conversation and writes the links House rewrote, which
 
   const moved = await shell(hosted, 'mv a.md b.md && house upload');
 
-  expect(moved).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
-  expect(rooms.edits().map(changesOf)).toEqual([[{ op: 'move', path: '/rooms/notes/a.md', to: '/rooms/notes/b.md', base: alpha }]]);
+  expect(moved).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
+  expect(rooms.edits().map(changesOf)).toEqual([[{ op: 'move', path: 'rooms/notebook/a.md', to: 'rooms/notebook/b.md', base: alpha }]]);
   expect(await readFile(join(copy, 'index.md'), 'utf8')).toBe('See [alpha](b.md).\n');
   expect(JSON.parse(await readFile(join(copy, '.house'), 'utf8')).files['index.md'].revision).toBe(room.revision('index.md'));
+});
+
+it("sends a conversation's upload a handle rename met between building and sending once more under the handle its refusal's current_path names, and it lands once", async () => {
+  const { hosted, rooms, room, copy } = await copied();
+  rooms.beforeEdit = () => {
+    rooms.beforeEdit = null;
+    room.rehandle('renamed');
+  };
+
+  expect(await shell(hosted, `cd '${copy}' && echo two >> plan.md && house upload`)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/renamed.\n' });
+
+  const edits = hosted.mcp.filter((received) => (received.body as { params: { name?: string } }).params.name === 'update').map(changesOf) as { path: string }[][];
+  expect(edits.map((changes) => changes.map((change) => change.path))).toEqual([['rooms/notebook/plan.md'], ['rooms/renamed/plan.md']]);
+  expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
 });
 
 it("downloads House's changes into the copy from a Conversation process", async () => {
@@ -105,7 +119,7 @@ it("downloads House's changes into the copy from a Conversation process", async 
 
   const downloaded = await shell(hosted, 'house download');
 
-  expect(downloaded).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n' });
+  expect(downloaded).toMatchObject({ status: 0, stdout: 'rooms/notebook: 1 file updated from House\n' });
   expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('one, from House\n');
 });
 
@@ -143,13 +157,13 @@ it(
 
     const uploaded = await shell(hosted, `${bigFile('big.md', BIG)} && house upload`);
 
-    expect(uploaded).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
-    const bytes = Buffer.from(JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/big.md', content: big }] }));
+    expect(uploaded).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
+    const bytes = Buffer.from(JSON.stringify({ changes: [{ op: 'write', path: 'rooms/notebook/big.md', content: big }] }));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    expect(rooms.prepared).toEqual([{ paths: ['/rooms/notes/big.md'], bytes: bytes.length, sha256, long: true }]);
+    expect(rooms.prepared).toEqual([{ paths: ['rooms/notebook/big.md'], bytes: bytes.length, sha256, long: true }]);
     expect(rooms.uploaded).toEqual([bytes]);
     const sent = rooms.edits().map((received) => (received.body as { params: { arguments: unknown } }).params.arguments);
-    expect(sent).toEqual([{ paths: ['/rooms/notes/big.md'], upload: { url: expect.any(String), operation: expect.any(String), bytes: bytes.length, sha256 }, long: true }, sent[0]]);
+    expect(sent).toEqual([{ paths: ['rooms/notebook/big.md'], upload: { url: expect.any(String), operation: expect.any(String), bytes: bytes.length, sha256 }, long: true }, sent[0]]);
     const operations = hosted.mcp
       .filter((received) => (received.body as { params: { name?: string } }).params.name === 'update')
       .map((received) => (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation']);
@@ -168,7 +182,7 @@ it('uploads a prepared batch again when the byte origin refuses it with a refusa
 
   const landed = await shell(hosted, `${bigFile('big.md', 800_000)} && house upload`);
 
-  expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
   expect(hosted.house.requests.filter((request) => request.path.startsWith('/uploads/'))).toHaveLength(2);
   expect(rooms.uploaded).toHaveLength(1);
 });
@@ -186,7 +200,7 @@ it("prints the byte origin's refusal of a prepared batch it does not mark retrya
   const landed = await shell(hosted, 'house upload');
 
   expect(refused).toMatchObject({ status: 1, stderr: 'house: invalid_upload: the uploaded edit does not match its upload; run the same command again\n' });
-  expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
 });
 
 function refusingFirstEdit(hosted: Hosted, status: number, error: { message: string; data: { code: string; retryable: boolean } }): void {
@@ -208,7 +222,7 @@ it('sends an upload House refuses with a refusal it marks retryable again under 
 
   const landed = await shell(hosted, 'echo two >> plan.md && house upload');
 
-  expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
   expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
   const operations = editOperations(hosted);
   expect(operations).toHaveLength(2);
@@ -224,7 +238,7 @@ it("answers the CLI House's own words for an upload refusal it does not mark ret
   expect(refused).toMatchObject({ status: 1, stderr: 'house: internal_error: House failed on this call; call again once\n' });
   expect(editOperations(hosted)).toHaveLength(1);
   const landed = await shell(hosted, 'house upload');
-  expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(landed).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
   expect(room.files.get('plan.md')!.content).toBe('one\ntwo\n');
 });
 
@@ -240,10 +254,10 @@ it("writes the Room's current instructions back into a conversation's upload Hou
   expect(proposed).toMatchObject({
     status: 0,
     stdout:
-      "House accepted 0 files of /rooms/notes.\n/rooms/notes/settings/instructions.md: House keeps your change as a proposal, which waits for Ada to answer it in their Asks you; this copy holds the Room's current instructions again\nNothing to upload: /rooms/notes matches House.\n",
+      "House accepted 0 files of rooms/notebook.\nrooms/notebook/settings/instructions.md: House keeps your change as a proposal, which waits for Ada to answer it in their Asks you; this copy holds the Room's current instructions again\nNothing to upload: rooms/notebook matches House.\n",
   });
   expect(rooms.edits().map(changesOf)).toEqual([
-    [{ op: 'write', path: '/rooms/notes/settings/instructions.md', content: 'Keep notes short.\nDate every note.\n', base: current }],
+    [{ op: 'write', path: 'rooms/notebook/settings/instructions.md', content: 'Keep notes short.\nDate every note.\n', base: current }],
   ]);
   expect(room.proposals).toEqual([{ proposal: 'p-1', content: 'Keep notes short.\nDate every note.\n', base: current }]);
   expect(await readFile(join(copy, 'settings', 'instructions.md'), 'utf8')).toBe('Keep notes short.\n');

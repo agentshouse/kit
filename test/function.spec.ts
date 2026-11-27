@@ -357,14 +357,14 @@ it("answers a run's house call House refuses for its Kit credential at once by s
 it("uploads a Room's folder with house upload through the run's bridge, naming the run, and takes no --owner", async () => {
   const hosted = await hostKit([]);
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('ROOM.md', 'The notes Room\n');
   await rooms.download([room]);
   const id = run(hosted, `cd ${room.repository} && echo added > added.md && house upload 2>&1; echo "exit $?"; house upload --owner 2>&1; echo "exit $?"`);
 
   const { output } = await ended(hosted, id);
 
-  expect(output).toMatch(/^House accepted 1 file of \/rooms\/notes\.\nexit 0\nhouse: unexpected argument --owner; usage: house upload, .*\nexit 1\n$/);
+  expect(output).toMatch(/^House accepted 1 file of rooms\/notebook\.\nexit 0\nhouse: unexpected argument --owner; usage: house upload, .*\nexit 1\n$/);
   expect(hosted.house.requests.filter((received) => received.path === '/kit/door/update')).toEqual([]);
   expect(rooms.edits().map((received) => [received.headers.authorization, metaOf(received)[FUNCTION_RUN_META_KEY]])).toEqual([['Bearer ahk_held', id]]);
 });

@@ -60,7 +60,7 @@ function at(room: Room, position: number): { authority: string; position: string
 it('carries a Room it holds nothing of through the enumeration from position zero, reading no chunk', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   room.put('capture/mail/one.md', 'one\n', 'source: s_mail\n');
   room.remove('capture/mail/one.md');
@@ -86,7 +86,7 @@ it('carries a Room it holds nothing of through the enumeration from position zer
 it('copies a Room House answers too old at position zero from its chunks straight from storage into its folder, recording its attachment as skipped and making no folder', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.write = ['ROOM.md', 'plans'];
   room.put('ROOM.md', 'The notes Room\n');
   room.put('plans/q4.md', 'Ship it\n');
@@ -121,7 +121,7 @@ it('copies a Room House answers too old at position zero from its chunks straigh
 it("places the Space schema a Room's chunk list names as its model, which no chunk holds", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   room.models = [{ path: 'settings/schema.yaml', revision: 'v_9.1.x', sha256: 'unused', bytes: 7, lines: 1, content: 'note: {}\n', space: 's_one.x' }];
   rooms.expired.add(room.ref);
@@ -166,7 +166,7 @@ it('keeps every chunk body through a garbage collection that runs between its an
 it("reads what changed since the chunk list's position through the enumeration, so a download after an upload keeps what the upload sent", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   room.put('b.md', 'b\n');
   await rooms.download([room]);
@@ -188,7 +188,7 @@ it("reads what changed since the chunk list's position through the enumeration, 
 it("brings a new copy to what changed since the chunk list's position", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   room.build();
   room.put('late.md', 'late\n');
@@ -219,7 +219,7 @@ it('reads a Room whose carry from zero fits no one answer from its chunks, and l
 it("asks a Room answered not ready again only when House's notice that its chunks are built arrives, then once, and copies it", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   rooms.carriedDocuments = 0;
   rooms.notReady.set(room.ref, 1);
@@ -241,7 +241,7 @@ it("asks a Room answered not ready again only when House's notice that its chunk
 it('copies a Room once at a notice that arrives before the download that answered it not ready ends', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   rooms.carriedDocuments = 0;
   rooms.notReady.set(room.ref, 1);
@@ -287,7 +287,7 @@ it('asks at a notice only about the Room it names, while another Room it waits f
 it('keeps what a held Room shows while House answers it not ready, and takes it from chunks keeping what changed here once it is built', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   await rooms.download([room]);
   await writeFile(join(room.repository, 'a.md'), 'a, local\n');
@@ -309,7 +309,7 @@ it('keeps what a held Room shows while House answers it not ready, and takes it 
 it('copies a Room it waits for in the download its next connection opens with, with no notice', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   rooms.carriedDocuments = 0;
   rooms.notReady.set(room.ref, 1);
@@ -347,7 +347,7 @@ it("keeps waiting for a Room answered not ready when another Room's read fails i
 it('reads nothing of a Room at its notice once it left the selection while the Kit waited for it, and downloads a Room it follows at its notice', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   const held = rooms.room('held');
   held.put('b.md', 'b\n');
@@ -416,7 +416,7 @@ it('removes what a copy staged when its chunks cannot be read', async () => {
   const workspace = await temporaryHome();
   const hosted = await hostKit([{}], { workspace });
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   rooms.expired.add(room.ref);
   rooms.damagesChunks = true;
@@ -448,7 +448,7 @@ it('asks the list again when a chunk address expired, and downloads only the chu
 it("refuses a chunk that did not arrive whole or whose text cannot be read, and keeps the copy and its manifest where they were", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   await rooms.download([room]);
   const before = await manifestOf(room);

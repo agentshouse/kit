@@ -4,11 +4,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
 import { link, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
+import { parseRoomPath, writeRoomPath } from '@agentshouse/mdmodel';
 import { finalRefusal, HouseRefusal, retrying, type House } from './api.ts';
 import { Changed, eachAtOnce, isDocument, mediaType, receivedBinary, sentBinary, type Staged, type StagedUpload } from './binaries.ts';
 import { chunkEntries, stagedChunks, type Chunk, type Text } from './chunks.ts';
-import { fileInfo, roomInstructions, type FileInfo, type Finished, type RoomInstructions } from './files.ts';
-import { conversationsFolder, kitHome, roomsFolder } from './home.ts';
+import { fileInfo, linkedFrom, roomInstructions, type FileInfo, type Finished, type RoomInstructions } from './files.ts';
+import { conversationsFolder, kitHome, roomFolder, roomsFolder } from './home.ts';
 import {
   covered,
   digest,
@@ -449,8 +450,8 @@ function unstagedUploads(refusal: Refusal): StagedUpload[] {
 }
 
 function currentHandle(refusal: Refusal): string | null {
-  const path = typeof refusal.detail.current_path === 'string' ? refusal.detail.current_path : /use (\/rooms\/\S+)/.exec(refusal.text)?.[1];
-  return path === undefined ? null : (/^\/rooms\/([^/]+)/.exec(path)?.[1] ?? null);
+  const path = refusal.detail.current_path;
+  return typeof path === 'string' ? (parseRoomPath(path)?.handle ?? null) : null;
 }
 
 function outside(path: string): Answered {
@@ -534,7 +535,7 @@ function leftForAgents(path: string, chosen: readonly string[]): void {
 }
 
 function rootOf(handle: string): string {
-  return `/rooms/${handle}`;
+  return writeRoomPath({ handle, path: '' });
 }
 
 function copyKey(conversation: string, room: string): string {
@@ -552,7 +553,7 @@ function copyName(name: string): string {
 }
 
 function relative(path: string): string {
-  return path.replace(/^\/rooms\/[^/]+\//, '');
+  return parseRoomPath(path)?.path ?? path;
 }
 
 function kitsOwn(path: string): boolean {
@@ -695,6 +696,10 @@ function adopt(manifest: Manifest, paths: readonly string[]): void {
 
 export function changedPaths(changes: readonly Change[]): string[] {
   return [...new Set(changes.flatMap((change) => (change.op === 'move' ? [change.path, change.to] : [change.path])))].sort();
+}
+
+function namesNoRoomPath(pending: Pending): boolean {
+  return changedPaths(pending.changes).some((path) => parseRoomPath(path) === null);
 }
 
 function batched(changes: readonly Change[]): Change[][] {
@@ -1027,7 +1032,7 @@ export class LocalCopies {
         const text = await readFile(path, 'utf8').catch(() => null);
         if (text === null) continue;
         const copy = JSON.parse(text) as Held;
-        this.copies.set(copy.key, copy);
+        this.copies.set(copy.key, 'pending' in copy && copy.pending !== undefined && namesNoRoomPath(copy.pending) ? without(copy) : copy);
       }
     }
     for (const name of (await readdir(join(home, PLACES)).catch(() => [])).filter((held) => held.endsWith('.json'))) {
@@ -2012,7 +2017,8 @@ export class LocalCopies {
   }
 
   private async written(folder: string, root: string, caller: Caller, kept: boolean, reading: RoomSkillsReading): Promise<string | null> {
-    const { text, approved } = await caller.instructions(root);
+    const { text: read, approved } = await caller.instructions(root);
+    const text = linkedFrom(`${root}/AGENTS.md`, read);
     if (!kept) {
       await kitFiles(folder, text);
       return null;
@@ -2194,7 +2200,7 @@ export class LocalCopies {
     const record = this.folders.get(ref);
     const held = record === undefined ? null : join(roomsFolder(), record.name);
     if (held === null || !(await found(held))?.isDirectory()) return null;
-    const target = join(roomsFolder(), handle);
+    const target = roomFolder(handle);
     if (held === target || chosen.some((launch) => within(launch, held))) {
       this.folders.set(ref, { name: basename(held) });
       return held;
@@ -2257,7 +2263,7 @@ export class LocalCopies {
           if (rewrites(ref)) due.push({ root: rootOf(handle), folder: held, copied: false });
           continue;
         }
-        const target = join(roomsFolder(), handle);
+        const target = roomFolder(handle);
         await this.setAside(target, chosen);
         await mkdir(target, { recursive: true, mode: 0o700 });
         this.folders.set(ref, { name: handle });
@@ -2334,7 +2340,7 @@ export class LocalCopies {
   }
 
   private async renamed<T extends Held>(copy: T, chosen: readonly string[]): Promise<T> {
-    const folder = join(roomsFolder(), copy.room_handle);
+    const folder = roomFolder(copy.room_handle);
     if (dirname(copy.repository) !== roomsFolder() || basename(copy.repository) === copy.room_handle) return copy;
     if (chosen.some((launch) => within(launch, copy.repository))) return copy;
     await this.setAside(folder, chosen);
@@ -2345,7 +2351,7 @@ export class LocalCopies {
   private async materialized(wanted: Wanted, whole: (directory: string) => Promise<Whole>, chosen: readonly string[]): Promise<Copy> {
     const { handle, authority } = wanted;
     const held = await this.heldFolder(authority.room_ref, handle, chosen);
-    const repository = held ?? join(roomsFolder(), handle);
+    const repository = held ?? roomFolder(handle);
     if (held === null) await this.setAside(repository, chosen);
     const placing = (folder: string) => (held === null ? rename(folder, repository) : this.placedIn(folder, repository, chosen));
     const saved = await this.madeIn(wanted, repository, whole, placing, async () => false);

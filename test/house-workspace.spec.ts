@@ -45,7 +45,7 @@ async function earlierKit(hosted: Hosted, rooms: Room[], root: string): Promise<
 }
 
 async function copied(rooms: Rooms): Promise<{ notes: Room; design: Room }> {
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.put('c.md', 'c\n');
   const design = rooms.room('design');
@@ -100,9 +100,9 @@ it("moves an earlier workspace in Kit home to ~/house at its first start, each c
 
   expect(moved.status).toBe(1);
   expect(moved.stderr.split('\n').at(-2)).toBe(`kit: Kit ${KIT.version} moved its workspace to ${hosted.workspace}; its supervisor starts it there`);
-  expect(await readFile(join(hosted.workspace, 'rooms', 'notes', 'a.md'), 'utf8')).toBe('a, changed here\n');
-  expect(await readFile(join(hosted.workspace, 'rooms', 'notes', 'new.md'), 'utf8')).toBe('new here\n');
-  expect(await readFile(join(hosted.workspace, 'rooms', 'notes', 'c.md'), 'utf8')).toBe(CONFLICTED);
+  expect(await readFile(join(hosted.workspace, 'rooms', 'notebook', 'a.md'), 'utf8')).toBe('a, changed here\n');
+  expect(await readFile(join(hosted.workspace, 'rooms', 'notebook', 'new.md'), 'utf8')).toBe('new here\n');
+  expect(await readFile(join(hosted.workspace, 'rooms', 'notebook', 'c.md'), 'utf8')).toBe(CONFLICTED);
   expect(await manifestOf(notes)).toEqual(manifest);
   const kept = join(hosted.workspace, 'rooms', `${design.ref} (kept)`);
   expect(await readFile(join(kept, 'draft.md'), 'utf8')).toBe('draft\n');
@@ -116,7 +116,7 @@ it("moves an earlier workspace in Kit home to ~/house at its first start, each c
 
   expect(await agentBase(hosted)).toBe(join(hosted.workspace, 'agents'));
 
-  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual([`${design.ref} (kept)`, 'notes'].sort());
+  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual([`${design.ref} (kept)`, 'notebook'].sort());
   expect(await upload(hosted, notes)).toMatchObject({ status: 1, stderr: `house: ${notes.root}/c.md still holds conflict markers; the next save sends it once its markers go\n` });
   await until(() => notes.files.get('new.md'));
   expect(notes.files.get('new.md')?.content).toBe('new here\n');
@@ -136,7 +136,7 @@ it('keeps a workspace its person set elsewhere at its path and lays its Local co
 
   expect(moved.status).toBe(1);
   expect(moved.stderr.split('\n').at(-2)).toBe(`kit: Kit ${KIT.version} laid out its workspace ${workspace}; its supervisor starts it again`);
-  expect(await readFile(join(workspace, 'rooms', 'notes', 'new.md'), 'utf8')).toBe('new here\n');
+  expect(await readFile(join(workspace, 'rooms', 'notebook', 'new.md'), 'utf8')).toBe('new here\n');
   expect(await readFile(join(workspace, 'rooms', `${design.ref} (kept)`, 'draft.md'), 'utf8')).toBe('draft\n');
   await absent(join(workspace, 'local-copies'));
   await absent(join(accountOf(hosted.home), 'house'));
@@ -157,13 +157,13 @@ it("keeps an earlier workspace in Kit home where ~/house holds what is not Kit's
 
   expect(moved.status).toBe(1);
   expect(moved.stderr.split('\n').at(-2)).toBe(`kit: Kit ${KIT.version} laid out its workspace ${hosted.home}; its supervisor starts it again`);
-  expect(await readFile(join(hosted.home, 'rooms', 'notes', 'a.md'), 'utf8')).toBe('a, changed here\n');
+  expect(await readFile(join(hosted.home, 'rooms', 'notebook', 'a.md'), 'utf8')).toBe('a, changed here\n');
   expect(await readdir(folder)).toEqual(['mine.txt']);
   expect(await settings(hosted)).toMatchObject({ workspace: hosted.home });
 
   expect(await agentBase(hosted)).toBe(join(hosted.home, 'agents'));
   expect(await readdir(folder)).toEqual(['mine.txt']);
-  expect((await readdir(join(hosted.home, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual([`${design.ref} (kept)`, 'notes'].sort());
+  expect((await readdir(join(hosted.home, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual([`${design.ref} (kept)`, 'notebook'].sort());
 });
 
 function routed(hosted: Hosted, routes: { agent_id: string; working_directory: string }[]): void {
@@ -229,5 +229,5 @@ it("stays where it is and moves at its next start while House does not answer wh
   await waiting.exited;
   routed(hosted, []);
   expect((await started(hosted)).status).toBe(1);
-  expect(await readFile(join(hosted.workspace, 'rooms', 'notes', 'new.md'), 'utf8')).toBe('new here\n');
+  expect(await readFile(join(hosted.workspace, 'rooms', 'notebook', 'new.md'), 'utf8')).toBe('new here\n');
 });

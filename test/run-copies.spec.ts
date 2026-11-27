@@ -32,7 +32,7 @@ async function absent(path: string): Promise<void> {
 async function staged(routes: RouteOverrides[], hosting: Hosting = {}): Promise<{ hosted: Hosted; rooms: Rooms; notes: Room }> {
   const hosted = await hostKit(routes, hosting);
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\ntwo\nthree\n');
   notes.put('plan.md', 'Plant beans\n');
   notes.instructions = INSTRUCTIONS;
@@ -125,7 +125,7 @@ it("starts a Run with no copy in its Agent's launch directory, one with a new co
   garden.put('beds.md', 'Two beds\n');
   rooms.answered = [notes, garden];
   await rooms.download([notes, garden]);
-  const made = copyOf(hosted, 'notes', 'imp-1');
+  const made = copyOf(hosted, 'notebook', 'imp-1');
   const bare = await emptyFolder();
 
   await session(hosted, 1, notes, 'rev-1', { kind: 'none' });
@@ -134,13 +134,13 @@ it("starts a Run with no copy in its Agent's launch directory, one with a new co
   await session(hosted, 4, notes, 'rev-3', { kind: 'existing', path: notes.repository });
 
   expect((await opening(hosted, 'session/new', 0)).cwd).toBe(hosted.workingDirectory);
-  await absent(copyOf(hosted, 'notes', 'rev-1'));
+  await absent(copyOf(hosted, 'notebook', 'rev-1'));
   expect((await opening(hosted, 'session/new', 1)).cwd).toBe(made);
   expect(await held(made)).toEqual(MADE);
   expect(await readFile(join(made, 'AGENTS.md'), 'utf8')).toBe(INSTRUCTIONS);
   expect((await opening(hosted, 'session/new', 2)).cwd).toBe(made);
   expect((await opening(hosted, 'session/new', 3)).cwd).toBe(notes.repository);
-  expect(await readdir(join(hosted.workspace, 'conversations', 'notes'))).toEqual(['imp-1']);
+  expect(await readdir(join(hosted.workspace, 'conversations', 'notebook'))).toEqual(['imp-1']);
   expect(await opened(hosted, 5, notes, 'rev-4', { kind: 'existing', path: bare })).toEqual({ refused: `${bare} holds no Local copy of a Room` });
   expect(await opened(hosted, 6, notes, 'rev-5', { kind: 'existing', path: garden.repository })).toEqual({
     refused: `${garden.repository} is a Local copy of another Room`,
@@ -150,8 +150,8 @@ it("starts a Run with no copy in its Agent's launch directory, one with a new co
 
 it("makes a Run's new copy follow its Room as every copy, downloading at a notice and saving what its turns write under the Run's label, while a copy made for a Run before this release stays unfollowed and house upload there sends its work", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}, {}]);
-  const imp = copyOf(hosted, 'notes', 'imp-1');
-  const earlier = copyOf(hosted, 'notes', 'imp-0');
+  const imp = copyOf(hosted, 'notebook', 'imp-1');
+  const earlier = copyOf(hosted, 'notebook', 'imp-0');
   await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
   await session(hosted, 3, notes, 'imp-0', { kind: 'new' });
   const place = join(hosted.home, 'local-copies', 'places', 'conversation-3.json');
@@ -174,15 +174,15 @@ it("makes a Run's new copy follow its Room as every copy, downloading at a notic
   expect(rooms.edits().map((received) => (received.body as { params: { _meta: Record<string, string> } }).params._meta[CONVERSATION_META_KEY])).toEqual(['conversation-1']);
   expect(await readFile(join(earlier, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
   expect(await prompt(hosted, 1)).toBe('@sh echo earlier > b.md');
-  expect(await house(hosted, earlier, 'upload')).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(await house(hosted, earlier, 'upload')).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
   expect(notes.files.get('b.md')!.content).toBe('earlier\n');
 });
 
 it("keeps a copy a Run given it as existing had a turn in within 24 hours, removes it once no turn ran in it for 24 hours and makes it again from a fresh download at that Run's next turn, never removes a Room's folder, and reckons a Run's copy holding work after its download", async () => {
   const clock = await clocked();
   const { hosted, rooms, notes } = await staged([{}, {}, {}, {}], clock.hosting);
-  const imp = copyOf(hosted, 'notes', 'imp-1');
-  const worked = copyOf(hosted, 'notes', 'cha-1');
+  const imp = copyOf(hosted, 'notebook', 'imp-1');
+  const worked = copyOf(hosted, 'notebook', 'cha-1');
   const sessions = [
     await session(hosted, 1, notes, 'imp-1', { kind: 'new' }),
     await session(hosted, 2, notes, 'rev-1', { kind: 'existing', path: imp }),
@@ -223,8 +223,8 @@ it("keeps a copy a Run given it as existing had a turn in within 24 hours, remov
 
 it("removes a deleted conversation's copy only once no other living conversation works in it, keeping it while a Run given it as existing lives and naming it at that Run's deletion where it holds work", async () => {
   const { hosted, notes } = await staged([{}, {}, {}, {}]);
-  const imp = copyOf(hosted, 'notes', 'imp-1');
-  const cha = copyOf(hosted, 'notes', 'cha-1');
+  const imp = copyOf(hosted, 'notebook', 'imp-1');
+  const cha = copyOf(hosted, 'notebook', 'cha-1');
   await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
   await session(hosted, 2, notes, 'rev-1', { kind: 'existing', path: imp });
   await session(hosted, 3, notes, 'cha-1', { kind: 'new' });
@@ -247,7 +247,7 @@ it("writes each document a house update changed and each attachment write of a f
   const { hosted, rooms, notes } = await staged([{}, {}], { node: HELD_SAVES });
   notes.upload('table.csv', Buffer.from('a,b\n'));
   await rooms.download([notes], '--with-attachments');
-  const imp = copyOf(hosted, 'notes', 'imp-1');
+  const imp = copyOf(hosted, 'notebook', 'imp-1');
   await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
   await session(hosted, 2, notes, 'rev-1', { kind: 'none' });
   await writeFile(join(imp, 'plan.md'), 'Plant beans here\n');
@@ -257,11 +257,11 @@ it("writes each document a house update changed and each attachment write of a f
     hosted,
     1,
     `@sh cd ${hosted.workingDirectory} && house update ${updating([
-      { op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nfour\n', base: notes.revision('a.md') },
-      { op: 'write', path: '/rooms/notes/plan.md', content: 'Plant peas\n', base: notes.revision('plan.md') },
-      { op: 'write', path: '/rooms/notes/new.md', content: 'new\n' },
-      { op: 'write', path: '/rooms/notes/table.csv', content: 'a,b,c\n', base: notes.revision('table.csv') },
-      { op: 'write', path: '/rooms/notes/new.csv', content: 'x\n' },
+      { op: 'write', path: 'rooms/notebook/a.md', content: 'one\ntwo\nfour\n', base: notes.revision('a.md') },
+      { op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant peas\n', base: notes.revision('plan.md') },
+      { op: 'write', path: 'rooms/notebook/new.md', content: 'new\n' },
+      { op: 'write', path: 'rooms/notebook/table.csv', content: 'a,b,c\n', base: notes.revision('table.csv') },
+      { op: 'write', path: 'rooms/notebook/new.csv', content: 'x\n' },
     ])}`,
   );
 
@@ -277,18 +277,18 @@ it("writes each document a house update changed and each attachment write of a f
   expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
   expect(await readFile(join(notes.repository, 'table.csv'), 'utf8')).toBe('a,b\n');
 
-  await turn(hosted, 2, `@sh cd ${notes.repository} && house update ${updating([{ op: 'write', path: '/rooms/notes/a.md', content: 'one\n', base: notes.revision('a.md') }])}`);
+  await turn(hosted, 2, `@sh cd ${notes.repository} && house update ${updating([{ op: 'write', path: 'rooms/notebook/a.md', content: 'one\n', base: notes.revision('a.md') }])}`);
 
   expect(await readFile(join(notes.repository, 'a.md'), 'utf8')).toBe('one\n');
   expect((await manifestOf(notes)).files['a.md']!.revision).toBe(notes.revision('a.md'));
   expect(await readFile(join(imp, 'a.md'), 'utf8')).toBe('one\ntwo\nfour\n');
 
   await writeFile(join(notes.repository, 'plan.md'), 'Plant beans there\n');
-  const pending = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant corn\n', base: notes.revision('plan.md') }] }));
-  const outside = await house(hosted, '/', 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/a.md', content: 'one, outside\n', base: notes.revision('a.md') }] }));
+  const pending = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant corn\n', base: notes.revision('plan.md') }] }));
+  const outside = await house(hosted, '/', 'update', JSON.stringify({ changes: [{ op: 'write', path: 'rooms/notebook/a.md', content: 'one, outside\n', base: notes.revision('a.md') }] }));
 
   expect(pending).toMatchObject({ status: 0, stderr: '' });
-  expect(pending.stdout).toContain('/rooms/notes/plan.md: changed here, so House accepted the update and local integration is pending; the next save sends this file as it is\n');
+  expect(pending.stdout).toContain('rooms/notebook/plan.md: changed here, so House accepted the update and local integration is pending; the next save sends this file as it is\n');
   expect(await readFile(join(notes.repository, 'plan.md'), 'utf8')).toBe('Plant beans there\n');
   expect((await manifestOf(notes)).files['plan.md']).toEqual(plan);
   expect(outside).toMatchObject({ status: 0, stderr: '' });
@@ -300,7 +300,7 @@ it("says House accepted a house update whose write into a Run's copy failed and 
   const { hosted, rooms, notes } = await staged([{}]);
   notes.put('c.md', 'one\ntwo\n');
   await rooms.download([notes]);
-  const imp = copyOf(hosted, 'notes', 'imp-1');
+  const imp = copyOf(hosted, 'notebook', 'imp-1');
   await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
   const read = notes.revision('c.md');
   notes.put('c.md', 'zero\none\ntwo\n');
@@ -316,8 +316,8 @@ it("says House accepted a house update whose write into a Run's copy failed and 
     'update',
     JSON.stringify({
       changes: [
-        { op: 'write', path: '/rooms/notes/a.md', content: 'one, here\n', base: notes.revision('a.md') },
-        { op: 'write', path: '/rooms/notes/c.md', content: 'one\ntwo\nthree\n', base: read },
+        { op: 'write', path: 'rooms/notebook/a.md', content: 'one, here\n', base: notes.revision('a.md') },
+        { op: 'write', path: 'rooms/notebook/c.md', content: 'one\ntwo\nthree\n', base: read },
       ],
     }),
   );
@@ -374,10 +374,10 @@ it("moves and deletes with a house update each file unchanged since its entry, w
   notes.put('c.md', 'zero\none\ntwo\n');
   await writeFile(join(notes.repository, 'b.md'), 'bee, mine\n');
   const changes = [
-    { op: 'move', path: '/rooms/notes/plan.md', to: '/rooms/notes/done.md', base: notes.revision('plan.md') },
-    { op: 'delete', path: '/rooms/notes/a.md', base: notes.revision('a.md') },
-    { op: 'delete', path: '/rooms/notes/b.md', base: notes.revision('b.md') },
-    { op: 'write', path: '/rooms/notes/c.md', content: 'one\ntwo\nthree\n', base: read },
+    { op: 'move', path: 'rooms/notebook/plan.md', to: 'rooms/notebook/done.md', base: notes.revision('plan.md') },
+    { op: 'delete', path: 'rooms/notebook/a.md', base: notes.revision('a.md') },
+    { op: 'delete', path: 'rooms/notebook/b.md', base: notes.revision('b.md') },
+    { op: 'write', path: 'rooms/notebook/c.md', content: 'one\ntwo\nthree\n', base: read },
   ];
   const refused = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ ...changes[1], base: read }] }));
 
@@ -387,7 +387,7 @@ it("moves and deletes with a house update each file unchanged since its entry, w
   const answered = await house(hosted, notes.repository, 'update', JSON.stringify({ changes }));
 
   expect(answered).toMatchObject({ status: 0, stderr: '' });
-  expect(answered.stdout).toContain('/rooms/notes/b.md: changed here, so House accepted the update and local integration is pending; the next save sends this file as it is\n');
+  expect(answered.stdout).toContain('rooms/notebook/b.md: changed here, so House accepted the update and local integration is pending; the next save sends this file as it is\n');
   expect(await held(notes.repository)).toEqual(['.house', 'AGENTS.md', 'CLAUDE.md', 'b.md', 'c.md', 'done.md']);
   expect(await readFile(join(notes.repository, 'done.md'), 'utf8')).toBe('Plant beans\n');
   expect(await readFile(join(notes.repository, 'b.md'), 'utf8')).toBe('bee, mine\n');
@@ -400,7 +400,7 @@ it("moves and deletes with a house update each file unchanged since its entry, w
 
 it("keeps a Room's folder a Run works in through the Room's handle change, so the Run's next session opens where it worked, moves it to the new handle once that Run is deleted, and writes a house update naming the new handle into a Run's copy", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}]);
-  const imp = copyOf(hosted, 'notes', 'imp-1');
+  const imp = copyOf(hosted, 'notebook', 'imp-1');
   const folder = notes.repository;
   await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
   const worked = await session(hosted, 2, notes, 'rev-1', { kind: 'existing', path: folder });
@@ -409,7 +409,7 @@ it("keeps a Room's folder a Run works in through the Room's handle change, so th
 
   notes.rehandle('notes-2');
   expect(await rooms.download([notes])).toMatchObject({ status: 0, stderr: '' });
-  await turn(hosted, 1, `@sh house update ${updating([{ op: 'write', path: '/rooms/notes-2/a.md', content: 'one\n', base: notes.revision('a.md') }])}`);
+  await turn(hosted, 1, `@sh house update ${updating([{ op: 'write', path: 'rooms/notes-2/a.md', content: 'one\n', base: notes.revision('a.md') }])}`);
   await turn(hosted, 2, '@say again', { provider_session_id: worked });
 
   expect(await readFile(join(imp, 'a.md'), 'utf8')).toBe('one\n');
@@ -431,7 +431,7 @@ it("counts a linked attachment another folder of the Room wrote in place and upl
   const { hosted, rooms, notes } = await staged([{}, {}], clock.hosting);
   notes.upload('table.csv', Buffer.from('a,b\n'));
   await rooms.download([notes], '--with-attachments');
-  const imp = copyOf(hosted, 'notes', 'imp-1');
+  const imp = copyOf(hosted, 'notebook', 'imp-1');
   await session(hosted, 1, notes, 'imp-1', { kind: 'new' });
   await session(hosted, 2, notes, 'rev-1', { kind: 'none' });
   await turn(hosted, 1, '@say first');

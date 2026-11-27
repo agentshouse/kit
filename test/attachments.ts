@@ -19,16 +19,16 @@ export interface Attached {
   key: string;
 }
 
-export const ATTACHMENTS = '/rooms/private/attachments/2026-10-21';
+export const ATTACHMENTS = 'rooms/private/attachments/2026-10-21';
 
 export function link(path: string): string {
-  return `[${path.slice(path.lastIndexOf('/') + 1)}](${path})`;
+  return `[${path.slice(path.lastIndexOf('/') + 1).replace(/\?.*/u, '')}](${path})`;
 }
 
 export function attached(hosted: Hosted, attachments: Attachment[], documents: string[] = [], refusals: Record<string, string> = {}): Attached[] {
   const held = new Map<string, Attachment & { key: string; ordinal: number }>();
   const files = attachments.map((attachment, index) => {
-    const path = `${ATTACHMENTS}/${attachment.name}`;
+    const path = `${ATTACHMENTS}/${attachment.name}?key=k_${index + 1}`;
     const key = `binary/${index + 1}/${attachment.name}`;
     hosted.store.objects.set(key, attachment.content);
     held.set(path, { ...attachment, key, ordinal: index + 2 });

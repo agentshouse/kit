@@ -31,7 +31,7 @@ it, with the endpoint, as `XAI_API_KEY` and `GROK_MODELS_BASE_URL` on the Grok B
 
 ## Commands
 
-`house` is Kit's one command: beside the Tools, `upload`, `download` and `help`, its own verbs `login`, `logout`, `connect`, `resident`, `settings` and `git-credential` run on this computer, and all but `git-credential` refuse inside an Agent conversation or a function run, so an agent's slip ends no connection.
+`house` is Kit's one command: beside the Tools, `upload`, `download` and `help`, its own verbs `login`, `logout`, `connect`, `resident`, `settings` and `git-credential` run on this computer, and all but `git-credential` refuse inside an Agent conversation or a function run, so an agent's slip ends no connection. Every path of a Room `house` takes or prints is its Room path, `rooms/<handle>/<path>`, which begins with no slash, and that path in the workspace, `~/house/rooms/<handle>/<path>`, is the file on this computer.
 `house login` opens or prints a link you confirm in any browser, on this computer or another, continues on its own and keeps the Environment's credential in `~/.agents/house`. `--environment <id>` reconnects an Environment you already have, which keeps its Rooms: its page in House changes them. A new Environment takes `--rooms <ref>[,<ref>...]` for only those Rooms and `--no-private` for every Room but your Private Room; `--code <code>` connects immediately without a link.
 That credential is the one key this computer holds: outside an Agent conversation, `house <tool>` calls
 House as you and `git` clones and pushes your Apps at `<house>/app/` as you, each with the credential in the Kit

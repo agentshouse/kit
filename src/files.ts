@@ -6,6 +6,7 @@ import { request as httpsRequest } from 'node:https';
 import { basename, dirname, extname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { destinationText, isRoomHandle, linkSpans, parseRoomPath, relativePath, retarget, roomPathLink, type LinkSpan } from '@agentshouse/mdmodel';
 import { parseDocument } from 'yaml';
 import { resendDelay, retryDelay } from './api.ts';
 import { answerDocument, Unsettled } from './mcp.ts';
@@ -55,8 +56,6 @@ const STALLED_ROUNDS = 8;
 
 const PART_CHECKSUM = 'x-amz-checksum-sha256';
 
-const LINK = /\]\((\/rooms\/[^/)\s]+\/[^)\s]+)\)/gu;
-
 const MEDIA_TYPES = new Map([
   ['avif', 'image/avif'],
   ['csv', 'text/csv'],
@@ -89,8 +88,35 @@ export function mediaTypeOf(path: string): string | undefined {
   return MEDIA_TYPES.get(extname(path).slice(1).toLowerCase());
 }
 
+function destinations(text: string): LinkSpan[] {
+  const spans = new Map(linkSpans(text).map((span) => [span.destination.start, span]));
+  return [...spans.values()].sort((left, right) => left.destination.start - right.destination.start);
+}
+
 export function linkedPaths(text: string): string[] {
-  return [...new Set(Array.from(text.matchAll(LINK), (link) => link[1]!))];
+  return [
+    ...new Set(
+      destinations(text).flatMap(({ href }) => {
+        const named = roomPathLink(href);
+        return named === null || named.path === '' ? [] : [href.trim()];
+      }),
+    ),
+  ];
+}
+
+export function linkedFrom(file: string, text: string): string {
+  const from = parseRoomPath(file)!;
+  let written = '';
+  let cursor = 0;
+  for (const span of destinations(text)) {
+    const to = roomPathLink(span.href);
+    if (to === null || !isRoomHandle(to.handle)) continue;
+    const destination = destinationText(retarget(span.href, relativePath(from, to) || '.'), span.bracketed);
+    if (destination === null) continue;
+    written += text.slice(cursor, span.destination.start) + destination;
+    cursor = span.destination.end;
+  }
+  return written + text.slice(cursor);
 }
 
 export function fileInfo(answer: string): FileInfo | null {

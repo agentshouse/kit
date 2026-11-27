@@ -68,7 +68,7 @@ function block(text: string): { type: 'text'; text: string } {
 }
 
 function transcribed(path: string, said: RegExp): unknown {
-  return { type: 'text', text: expect.stringMatching(new RegExp(`^${path.replaceAll('.', '\\.')}\nTranscript: .*${said.source}`, said.flags)) };
+  return { type: 'text', text: expect.stringMatching(new RegExp(`^${path.replace(/[.?]/gu, '\\$&')}\nTranscript: .*${said.source}`, said.flags)) };
 }
 
 function engines(hosted: Hosted): number[] {

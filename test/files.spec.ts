@@ -7,7 +7,7 @@ import { idOf, until } from './double.ts';
 import { hostKit, lastCall, opened, type Hosted } from './environment.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
-const PLAN = '/rooms/notes/plan.md';
+const PLAN = 'rooms/notebook/plan.md';
 
 async function prompt(hosted: Hosted): Promise<unknown> {
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
@@ -43,8 +43,8 @@ it('keeps a link to an image or a document in the text, reading only what info a
 
 it('keeps a link info refuses in the text, into a Room the Environment does not reach or to no file, and goes on to the prompt', async () => {
   const hosted = await hostKit();
-  const unreached = '/rooms/elsewhere/voice.ogg';
-  const missing = '/rooms/private/attachments/2026-10-21/gone.ogg';
+  const unreached = 'rooms/elsewhere/voice.ogg';
+  const missing = 'rooms/private/attachments/2026-10-21/gone.ogg';
   attached(hosted, [], [], { [unreached]: `room_not_found: ${unreached} is in no Room this conversation reaches\n` });
   const text = `hear ${link(unreached)} and ${link(missing)}`;
 
@@ -59,9 +59,9 @@ it('keeps a link info refuses in the text, into a Room the Environment does not 
 
 it('keeps a link in the text whose info answer is no mapping, a captured item or a history or listing info pages, and goes on to the prompt', async () => {
   const hosted = await hostKit();
-  const item = '/rooms/notes/inbox/2026-10-21.md';
-  const history = '/rooms/notes/log.md';
-  const folder = '/rooms/notes/drafts';
+  const item = 'rooms/notebook/inbox/2026-10-21.md';
+  const history = 'rooms/notebook/log.md';
+  const folder = 'rooms/notebook/drafts';
   const answers: Record<string, string> = {
     [item]: `${item}:4-6 revision=v_3.1.x ref=ep_1\nepisode: ep_1\nthe item's own words: a note\n`,
     [history]: stringify({ ref: 'd_4.x', path: history, media_type: 'text/markdown', revisions: [{ revision: 'v_4.2.x' }], next_cursor: 'v_4.2.x' }),

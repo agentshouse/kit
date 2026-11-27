@@ -119,7 +119,7 @@ export interface Hosted {
   reports: Record<string, unknown>[];
   call(fields: Record<string, unknown>): void;
   watch(watching: boolean): void;
-  restart(): Promise<void>;
+  restart(stopped?: () => Promise<void>): Promise<void>;
   transcribe(on: boolean): void;
   result(callId: string): Promise<unknown>;
   adapterLog(): Promise<Record<string, unknown>[]>;
@@ -307,11 +307,12 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
     starts: [],
     activity: () => ({ body: {} }),
     watch: (watching) => house.connections.at(-1)!.send({ type: 'watching', watching }),
-    restart: async () => {
+    restart: async (stopped = async () => {}) => {
       const opened = house.connections.length;
       const idled = idles.length;
       stop(hosted.kit.pid);
       await hosted.kit.exited;
+      await stopped();
       hosted.kit = runKit(['resident'], environment, hosting.node);
       await until(() => house.connections.length > opened);
       await until(() => idles.length > idled);

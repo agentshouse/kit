@@ -49,9 +49,9 @@ export const LISTING: Listed[] = [
         },
         ['command'],
       ),
-      example: { command: 'rg -n "deadline" /rooms/team-notes' },
+      example: { command: 'rg -n "deadline" rooms/team-notes' },
     },
-    'Read-only shell over `/rooms/<handle>`.',
+    'Read-only shell over `rooms/<handle>`.',
   ),
   tool(
     'info',
@@ -63,7 +63,7 @@ export const LISTING: Listed[] = [
         cursor: CURSOR,
         long: LONG,
       }),
-      example: { path: '/rooms/team-notes/plan.md' },
+      example: { path: 'rooms/team-notes/plan.md' },
     },
     'Details of whatever `path` names.',
   ),
@@ -79,7 +79,7 @@ export const LISTING: Listed[] = [
     ops: {
       write: {
         inputSchema: object({ path: PATH, content: { type: 'string', description: 'The document’s whole text.' }, base: BASE }, ['path', 'content']),
-        example: { changes: [{ op: 'write', path: '/rooms/team-notes/plan.md', content: '# Plan\n\nShip the beta on Friday.\n' }] },
+        example: { changes: [{ op: 'write', path: 'rooms/team-notes/plan.md', content: '# Plan\n\nShip the beta on Friday.\n' }] },
       },
       move: {
         inputSchema: object(
@@ -96,11 +96,11 @@ export const LISTING: Listed[] = [
           },
           ['path', 'to'],
         ),
-        example: { changes: [{ op: 'move', path: '/rooms/team-notes/plan.md', to: '/rooms/team-notes/archive/plan.md' }] },
+        example: { changes: [{ op: 'move', path: 'rooms/team-notes/plan.md', to: 'rooms/team-notes/archive/plan.md' }] },
       },
       delete: {
         inputSchema: object({ path: PATH, base: BASE }, ['path']),
-        example: { changes: [{ op: 'delete', path: '/rooms/team-notes/draft.md', base: 'v_4t.3.b' }] },
+        example: { changes: [{ op: 'delete', path: 'rooms/team-notes/draft.md', base: 'v_4t.3.b' }] },
       },
     },
   }),
@@ -117,12 +117,12 @@ export const LISTING: Listed[] = [
             ],
             description: 'The file in your Environment, or a file from the chat; omit it for the link.',
           },
-          path: { type: 'string', minLength: 1, description: 'Its path, `/rooms/<handle>/…`; with no file, the folder.' },
+          path: { type: 'string', minLength: 1, description: 'Its path, `rooms/<handle>/…`; with no file, the folder.' },
           long: LONG,
         },
         ['path'],
       ),
-      example: { path: '/rooms/team-notes/photos' },
+      example: { path: 'rooms/team-notes/photos' },
     },
     'Store a file at a path in a Room as an attachment.',
   ),

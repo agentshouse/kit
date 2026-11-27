@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { KitSkills } from '@agentshouse/kit-wire';
+import { ROOMS, writeRoomPath } from '@agentshouse/mdmodel';
 
 export interface Enrolment {
   house: string;
@@ -105,7 +106,11 @@ export function agentBase(): string {
 }
 
 export function roomsFolder(): string {
-  return join(workspaceRoot(), 'rooms');
+  return join(workspaceRoot(), ROOMS);
+}
+
+export function roomFolder(handle: string): string {
+  return join(workspaceRoot(), writeRoomPath({ handle, path: '' }));
 }
 
 export function conversationsFolder(): string {
