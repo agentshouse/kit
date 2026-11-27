@@ -10,6 +10,8 @@ const CLAUDE = 'claude-agent-acp';
 
 const CODEX = 'codex-acp';
 
+const GROK = 'grok-build';
+
 const UNABLE = { claudeCode: { options: { disallowedTools: ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'], permissionPrompts: 'none' } } };
 
 const KIT_FEATURE = { features: { shell_zsh_fork: true } };
@@ -43,7 +45,10 @@ function reachedHouse(hosted: Hosted): string[] {
   return hosted.house.requests.flatMap((request) => (/\/kit\/conversations\/interaction\/ask$|\/kit\/secret-inputs\/await$/.test(request.path) ? [request.path] : []));
 }
 
-function launch(log: Record<string, unknown>[], method: string): { _meta: unknown; capabilities: Record<string, unknown>; config: unknown; thread: unknown } {
+function launch(
+  log: Record<string, unknown>[],
+  method: string,
+): { _meta: unknown; capabilities: Record<string, unknown>; config: unknown; thread: unknown; argv: string[] } {
   const started = log.find((entry) => entry.method === method)!;
   const initialized = log.find((entry) => entry.method === 'initialize' && entry.pid === started.pid)!;
   const config = (initialized.env as Record<string, string | undefined>).CODEX_CONFIG;
@@ -52,6 +57,7 @@ function launch(log: Record<string, unknown>[], method: string): { _meta: unknow
     capabilities: (initialized.params as { clientCapabilities: Record<string, unknown> }).clientCapabilities,
     config: config === undefined ? undefined : JSON.parse(config),
     thread: log.find((entry) => entry.threadOpened !== undefined && entry.pid === started.pid)?.approvalPolicy,
+    argv: initialized.argv as string[],
   };
 }
 
@@ -108,6 +114,10 @@ it.each([
   ['Codex', CODEX, 'codex-question', 'elicitation/create'],
   ['Codex', CODEX, 'codex-secret', 'elicitation/create'],
   ['Codex', CODEX, 'codex-mcp-form', 'elicitation/create'],
+  ['Grok Build', GROK, 'grok-question', '_x.ai/ask_user_question'],
+  ['Grok Build', GROK, 'grok-plan-exit', '_x.ai/exit_plan_mode'],
+  ['Grok Build', GROK, 'codex-permission', 'session/request_permission'],
+  ['Grok Build', GROK, 'codex-mcp-form', 'elicitation/create'],
 ])('fails what still reaches an AFK %s session from %s as a Fault naming the conversation, the CLI and %s, and tells House nothing', async (name, kind, fixture, method) => {
   const { hosted, answer } = await asked(kind, fixture, true, ASKS_ANYWAY);
 
@@ -120,7 +130,7 @@ it.each([
 it.each([
   ['Claude Code', CLAUDE, 'claude-permission', { code: -32603 }],
   ['Codex', CODEX, 'codex-permission', { code: -32603 }],
-  ['Grok Build', 'grok-build', 'codex-permission', { outcome: { outcome: 'selected', optionId: 'allow_once' } }],
+  ['Grok Build', GROK, 'codex-permission', { code: -32603 }],
 ])('holds AFK for a %s session from the call that launched it, so a later message without it asks House nothing', async (_, kind, fixture, answer) => {
   const hosted = await opened(kind, true, ASKS_ANYWAY);
 
@@ -145,13 +155,58 @@ it.each([
   expect(ended(hosted)).toEqual([]);
 });
 
-it('starts Grok Build with its question tool off', async () => {
-  const hosted = await opened('grok-build');
-  const plain = await opened('grok-build', false);
+it.each([
+  ['opens', { kind: 'open', afk: true }, 'session/new'],
+  ['resumes', { kind: 'message', provider_session_id: 'session-stored', text: '@say ok', first: false, afk: true }, 'session/resume'],
+])('%s an AFK Grok Build session with its question tool off, its process told the client shows no form', async (_, call, method) => {
+  const hosted = await hostKit([{ kind: GROK }]);
 
-  const meta = async (of: Hosted) => ((await of.adapterLog()).find((entry) => entry.method === 'session/new')!.params as { _meta: unknown })._meta;
-  expect(await meta(hosted)).toMatchObject({ askUserQuestion: false });
-  expect(JSON.stringify(await meta(plain))).not.toMatch(/askUserQuestion/);
+  hosted.call(call);
+
+  await hosted.result(lastCall());
+  const { _meta, capabilities } = launch(await hosted.adapterLog(), method);
+  expect(_meta).toEqual({ askUserQuestion: false });
+  expect(capabilities).not.toHaveProperty('elicitation');
+});
+
+it('starts a Grok Build session that is not AFK with none of it, its process told the client shows forms', async () => {
+  const hosted = await opened(GROK, false);
+
+  const { _meta, capabilities } = launch(await hosted.adapterLog(), 'session/new');
+  expect(JSON.stringify(_meta)).not.toMatch(/askUserQuestion/);
+  expect(capabilities).toMatchObject({ elicitation: { form: {} } });
+});
+
+it.each([
+  ['outside a Run’s full access, with no always-approve', {}, false],
+  ['in a Run’s full access, approving every tool', { mode: null }, true],
+])('starts an AFK Grok Build process %s', async (_, fields, approves) => {
+  const hosted = await opened(GROK, true, {}, fields);
+
+  const { argv } = launch(await hosted.adapterLog(), 'session/new');
+  expect(argv.includes('--always-approve')).toBe(approves);
+  expect(argv.slice(2)).toEqual(['--sandbox', 'off', 'agent', ...(approves ? ['--always-approve'] : []), '--no-leader', 'stdio']);
+});
+
+it('runs an AFK Grok Build turn to its end with no question asked, since its question tool is off', async () => {
+  const hosted = await opened(GROK);
+  hosted.call({ kind: 'message', text: '@asked grok-question\n@say went on', first: true, afk: true });
+
+  expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'went on' });
+  expect(unasked(await hosted.adapterLog())).toEqual(['_x.ai/ask_user_question']);
+  expect(await answersOf(hosted)).toEqual([]);
+  expect(reachedHouse(hosted)).toEqual([]);
+  expect(hosted.kit.stderr()).not.toContain('AFK session');
+});
+
+it('runs an AFK Grok Build turn in a Run’s full access to its end with no permission prompt, since Grok Build approves every tool there', async () => {
+  const hosted = await opened(GROK, true, {}, { mode: null });
+  hosted.call({ kind: 'message', text: '@asked codex-permission\n@say went on', first: true, afk: true });
+
+  expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'went on' });
+  expect(unasked(await hosted.adapterLog())).toEqual(['session/request_permission']);
+  expect(await answersOf(hosted)).toEqual([]);
+  expect(reachedHouse(hosted)).toEqual([]);
 });
 
 it.each([
@@ -226,27 +281,6 @@ it('starts an AFK Codex thread under approvals never, so a prompt Codex would ra
 
   expect(await until(async () => unasked(await hosted.adapterLog())[0])).toBe('session/request_permission');
   expect(await answersOf(hosted)).toEqual([]);
-  expect(reachedHouse(hosted)).toEqual([]);
-});
-
-it('answers no question Grok Build raises anyway, declining it, and the turn goes on with nothing reported to House', async () => {
-  const { hosted, answer } = await asked('grok-build', 'grok-question');
-
-  expect(answer).toEqual({ outcome: 'cancelled' });
-  expect(reachedHouse(hosted)).toEqual([]);
-});
-
-it('allows a permission prompt on Grok Build at once', async () => {
-  const { hosted, answer } = await asked('grok-build', 'codex-permission');
-
-  expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'allow_once' } });
-  expect(reachedHouse(hosted)).toEqual([]);
-});
-
-it('approves a Grok plan at once', async () => {
-  const { hosted, answer } = await asked('grok-build', 'grok-plan-exit');
-
-  expect(answer).toEqual({ outcome: 'approved' });
   expect(reachedHouse(hosted)).toEqual([]);
 });
 

@@ -27,7 +27,6 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { unlessAborted } from './abort.ts';
 import { signedOut, startAdapter, type Adapter } from './acp.ts';
-import { permissionAllowed, PLAN_APPROVED, QUESTION_DECLINED } from './afk.ts';
 import type { Agents } from './agents.ts';
 import { finalRefusal, HouseRefusal, type House } from './api.ts';
 import { openBridge, type Bridge } from './bridge.ts';
@@ -930,7 +929,6 @@ export class Conversations {
   ): Promise<string> {
     const route = await routed;
     const { afk } = route;
-    const unable = afk && CLIS[route.kind]!.unableToAsk;
     const unanswered = (method: string) =>
       faulted(new Error(`conversation ${conversation.id}: ${CLIS[route.kind]!.name} sent ${method} from an AFK session, which starts unable to ask`));
     const reader = readerFor(route.kind);
@@ -938,20 +936,20 @@ export class Conversations {
     conversation.reader = reader;
     const app = client({ name: '@agentshouse/kit' })
       .onRequest('session/request_permission', ({ params, signal }) => {
-        if (unable) throw unanswered('session/request_permission');
-        return afk ? permissionAllowed(params) : this.ask(conversation, 'session/request_permission', params, false, signal);
+        if (afk) throw unanswered('session/request_permission');
+        return this.ask(conversation, 'session/request_permission', params, false, signal);
       })
       .onRequest('elicitation/create', ({ params, signal }) => {
-        if (unable) throw unanswered('elicitation/create');
-        return afk ? QUESTION_DECLINED : this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal);
+        if (afk) throw unanswered('elicitation/create');
+        return this.ask(conversation, 'elicitation/create', params, asksSecret(params), signal);
       })
       .onRequest('_x.ai/exit_plan_mode', GROK_PLAN, async ({ params, signal }) => {
-        if (unable) throw unanswered('_x.ai/exit_plan_mode');
-        return afk ? PLAN_APPROVED : grokPlanAnswer(await this.askForm(conversation, grokPlanForm(params), signal));
+        if (afk) throw unanswered('_x.ai/exit_plan_mode');
+        return grokPlanAnswer(await this.askForm(conversation, grokPlanForm(params), signal));
       })
       .onRequest('_x.ai/ask_user_question', GROK_QUESTION, async ({ params, signal }) => {
-        if (unable) throw unanswered('_x.ai/ask_user_question');
-        return grokQuestionAnswer(afk ? QUESTION_DECLINED : await this.askForm(conversation, grokQuestionForm(params), signal));
+        if (afk) throw unanswered('_x.ai/ask_user_question');
+        return grokQuestionAnswer(await this.askForm(conversation, grokQuestionForm(params), signal));
       });
     const cli = await unlessAborted(this.kit.agents.cli(route.kind), conversation.killed.signal);
     const bridging = this.bridged(conversation);
@@ -996,7 +994,7 @@ export class Conversations {
           { ...bridge.env, ...streamed },
           undefined,
           route.mode === null,
-          unable,
+          afk,
         ),
       );
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));
