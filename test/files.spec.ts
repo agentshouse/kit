@@ -35,7 +35,7 @@ it('keeps a link to an image or a document in the text, reading only what info a
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   expect(await prompt(hosted)).toEqual([{ type: 'text', text }]);
-  expect(infoCalls(hosted)).toEqual([{ path: photo!.path }, { path: PLAN }]);
+  expect(infoCalls(hosted)).toEqual([{ path: photo!.path, long: true }, { path: PLAN, long: true }]);
   expect(hosted.store.requests).toEqual([]);
   expect(hosted.transcripts).toEqual([]);
   expect(await readdir(hosted.workingDirectory)).toEqual([]);
@@ -52,7 +52,7 @@ it('keeps a link info refuses in the text, into a Room the Environment does not 
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   expect(await prompt(hosted)).toEqual([{ type: 'text', text }]);
-  expect(infoCalls(hosted)).toEqual([{ path: unreached }, { path: missing }]);
+  expect(infoCalls(hosted)).toEqual([{ path: unreached, long: true }, { path: missing, long: true }]);
   expect(hosted.store.requests).toEqual([]);
   expect(hosted.transcripts).toEqual([]);
 });
@@ -74,7 +74,7 @@ it('keeps a link in the text whose info answer is no mapping, a captured item or
 
   expect(await hosted.result(lastCall())).toEqual({ provider_session_id: expect.any(String) });
   expect(await prompt(hosted)).toEqual([{ type: 'text', text }]);
-  expect(infoCalls(hosted)).toEqual([{ path: item }, { path: history }, { path: folder }]);
+  expect(infoCalls(hosted)).toEqual([{ path: item, long: true }, { path: history, long: true }, { path: folder, long: true }]);
   expect(hosted.store.requests).toEqual([]);
 });
 
