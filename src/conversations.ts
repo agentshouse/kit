@@ -1005,7 +1005,7 @@ export class Conversations {
           { ...bridge.env, ...streamed },
           undefined,
           route.mode === null,
-          afk,
+          { unable: afk, autoCompact: route.auto_compact },
         ),
       );
       void adapter.exited.then(() => this.closeBridge(conversation, bridging, bridge));

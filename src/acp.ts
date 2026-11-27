@@ -8,7 +8,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { CLIS, KIT_RELEASE, adapterCommand, cliEnvironment } from './clis.ts';
+import { CLIS, KIT_RELEASE, PLAIN_LAUNCH, adapterCommand, cliEnvironment, type Launch } from './clis.ts';
 import type { Message } from './events.ts';
 import { killTree } from './kill.ts';
 
@@ -38,12 +38,12 @@ export async function startAdapter(
   added: Record<string, string> = {},
   signal?: AbortSignal,
   fullAccess = false,
-  unable = false,
+  launch: Launch = PLAIN_LAUNCH,
 ): Promise<Adapter> {
   const adapter = CLIS[kind]!.adapter;
   const child = spawn(adapter === null ? cli : adapterCommand(kind), CLIS[kind]!.args(fullAccess), {
     cwd,
-    env: { ...(await cliEnvironment(kind)), ...(adapter === null ? {} : { ...adapter.env(unable), [adapter.executable]: cli }), ...added },
+    env: { ...(await cliEnvironment(kind)), ...(adapter === null ? {} : { ...adapter.env(launch), [adapter.executable]: cli }), ...added },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
@@ -107,7 +107,7 @@ export async function startAdapter(
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
-        ...(unable ? {} : { elicitation: { form: {} } }),
+        ...(launch.unable ? {} : { elicitation: { form: {} } }),
         session: { compaction: {}, notices: {} },
         _meta: { jetbrains: { air: { version: 1, capabilities: CLIS[kind]!.air } } },
       },

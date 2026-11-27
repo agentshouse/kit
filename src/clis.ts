@@ -4,9 +4,17 @@ import { constants, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import type { DesiredAgentRoute } from '@agentshouse/kit-wire';
 import { CLAUDE_KEY, CODEX_KEY, GROK_KEY, codexHome, type KeySettings } from './keys.ts';
 import { releaseDirectory } from './placement.ts';
 import { childEnvironment } from './relay.ts';
+
+export interface Launch {
+  unable: boolean;
+  autoCompact: DesiredAgentRoute['auto_compact'];
+}
+
+export const PLAIN_LAUNCH: Launch = { unable: false, autoCompact: undefined };
 
 export interface Cli {
   name: string;
@@ -14,7 +22,7 @@ export interface Cli {
   minimum: string;
   install: string;
   update: string;
-  adapter: { package: string; bin: string; executable: string; env(unable: boolean): Record<string, string> } | null;
+  adapter: { package: string; bin: string; executable: string; env(launch: Launch): Record<string, string> } | null;
   args(fullAccess: boolean): string[];
   reads: 'AGENTS.md' | 'CLAUDE.md' | null;
   compactWords: boolean;
@@ -100,6 +108,18 @@ function answered(error: unknown): Answered {
   return typeof error === 'object' && error !== null ? (error as Answered) : {};
 }
 
+const CODEX_LARGEST_LIMIT = Number.MAX_SAFE_INTEGER;
+
+function codexAutoCompact(autoCompact: Launch['autoCompact']): Record<string, number> {
+  if (autoCompact === undefined) return {};
+  return { model_auto_compact_token_limit: autoCompact === 'off' ? CODEX_LARGEST_LIMIT : autoCompact };
+}
+
+function claudeAutoCompact(autoCompact: Launch['autoCompact']): Record<string, string> {
+  if (autoCompact === undefined) return {};
+  return autoCompact === 'off' ? { DISABLE_AUTO_COMPACT: '1' } : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(autoCompact) };
+}
+
 function bridgeInClaudeSandbox(bridge: string): Record<string, unknown> {
   return process.platform === 'darwin' ? { allowUnixSockets: [bridge] } : { allowAllUnixSockets: true };
 }
@@ -115,10 +135,11 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/codex-acp',
       bin: 'codex-acp',
       executable: 'CODEX_PATH',
-      env: (unable) => ({
+      env: ({ unable, autoCompact }) => ({
         CODEX_CONFIG: JSON.stringify({
           features: { shell_zsh_fork: true },
           ...(unable ? { tools: { experimental_request_user_input: { enabled: false } } } : {}),
+          ...codexAutoCompact(autoCompact),
         }),
         ...(unable ? { HOUSE_KIT_AFK: '1' } : {}),
       }),
@@ -149,7 +170,7 @@ export const CLIS: Record<string, Cli> = {
       package: '@agentclientprotocol/claude-agent-acp',
       bin: 'claude-agent-acp',
       executable: 'CLAUDE_CODE_EXECUTABLE',
-      env: () => ({ CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1' }),
+      env: ({ autoCompact }) => ({ CLAUDE_CODE_ENTRYPOINT: 'claude-agent-acp', IS_SANDBOX: '1', ...claudeAutoCompact(autoCompact) }),
     },
     args: () => [],
     reads: 'CLAUDE.md',
