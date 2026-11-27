@@ -24,10 +24,10 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "2.4.0",
-    "@agentshouse/kit-wire": "0.1.0-c4195e2c44da6",
+    "@agentshouse/kit-wire": "0.1.0-cfcbd107ff599",
     "@agentshouse/mdmodel": "0.1.0-c10742c13923b",
     "@agentshouse/session-content": "0.1.0-c4fbf3096f963",
-    "@agentshouse/skills": "0.1.0-c899697421efa",
+    "@agentshouse/skills": "0.1.0-cc1fd220a703b",
     "@lydell/node-pty": "1.2.0-beta.15",
     "micromark": "4.0.2",
     "smol-toml": "1.9.1",
