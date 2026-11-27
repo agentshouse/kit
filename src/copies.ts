@@ -59,6 +59,7 @@ const MEGABYTE = 1_000_000;
 const KIT_IGNORES = ['.gitignore', '.ignore'];
 const KIT_GIT = ['.git/refs/house/received', '.git/house-chunks', '.git/house-uploads', '.git/house-downloads'];
 const KIT_FILES = ['AGENTS.md', 'CLAUDE.md'];
+const INSTRUCTIONS_AT_ONCE = 4;
 const IMPORTED = '@AGENTS.md\n';
 const FOLDERS = 'folders.json';
 const PRIVATE = 'private';
@@ -2277,7 +2278,7 @@ export class LocalCopies {
         const cause = houseCause(error);
         unread.set(cause, [...(unread.get(cause) ?? []), root]);
       }
-    });
+    }, INSTRUCTIONS_AT_ONCE);
     for (const [cause, roots] of unread) lines.push(`${roots.sort().join(', ')}: AGENTS.md kept as it was: ${cause}`);
     return [...lines, ...unskilled.sort()];
   }

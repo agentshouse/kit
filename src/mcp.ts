@@ -1,6 +1,8 @@
 import { KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { parseDocument } from 'yaml';
+import { retryDelay } from './api.ts';
 import { KIT_RELEASE } from './clis.ts';
 import { carried, retryAt } from './hold.ts';
 import { readEnrolment } from './home.ts';
@@ -34,6 +36,10 @@ export const UNREACHABLE = 'House is unreachable; call again in a minute';
 const UNCONNECTED = 'this computer has no House connection; run house login';
 export const DISCONNECTED = 'House no longer accepts this computer; run house login';
 const UNCONFIRMED = 'with no result; a write may or may not have taken effect, so read before you repeat it';
+
+const BUSY = new Set(['house_overloaded', 'reading_paused']);
+
+const BUSY_ROUNDS = 4;
 
 export class Unsettled extends Error {
   readonly after: number | null;
@@ -125,10 +131,18 @@ export function toolAnswer(forwarded: Forwarded): { text: string } | { refused: 
   return answer.result!.isError === true ? { refused: refusalIn(text, forwarded.status) } : { text };
 }
 
+export async function readAgainWhileBusy(sent: () => Promise<Forwarded>): Promise<string> {
+  for (let round = 1; ; round++) {
+    const read = toolAnswer(await sent());
+    if (!('refused' in read)) return read.text;
+    if (!BUSY.has(read.refused.code) || round === BUSY_ROUNDS) throw new Error(read.refused.text);
+    // A read House answered busy is sent again on the jittered curve, so the User's reads that met a full share land a moment later instead of being dropped.
+    await delay(retryDelay(round - 1));
+  }
+}
+
 export async function environmentTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const read = toolAnswer({ status: 200, text: await environmentCall(ownCall(name, args)) });
-  if ('refused' in read) throw new Error(read.refused.text);
-  return read.text;
+  return readAgainWhileBusy(async () => ({ status: 200, text: await environmentCall(ownCall(name, args)) }));
 }
 
 export function answerDocument<T>(answer: string): T {

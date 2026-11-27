@@ -39,12 +39,12 @@ export function mediaType(path: string): string {
   return mediaTypeOf(path) ?? OCTET_STREAM;
 }
 
-export async function eachAtOnce<T>(items: readonly T[], work: (item: T) => Promise<void>): Promise<void> {
+export async function eachAtOnce<T>(items: readonly T[], work: (item: T) => Promise<void>, atOnce = SENT_AT_ONCE): Promise<void> {
   let next = 0;
   const working = async () => {
     while (next < items.length) await work(items[next++]!);
   };
-  await Promise.all(Array.from({ length: Math.min(SENT_AT_ONCE, items.length) }, working));
+  await Promise.all(Array.from({ length: Math.min(atOnce, items.length) }, working));
 }
 
 export async function sentBinary(
