@@ -222,6 +222,23 @@ it("keeps House's merge of a text clash below the fields, with the fields merged
   expect(batches(hosted)).toHaveLength(1);
 });
 
+it("merges the frontmatter fields of a document no type reads one by one, and marks the whole frontmatter where both writers changed one field", async () => {
+  const { hosted, room } = await copied((held) => held.put('notes/seeds.md', '---\nkind: beans\nrows: 4\n---\nSow in May.\n'));
+  const current = room.put('notes/seeds.md', '---\nkind: peas\nrows: 4\n---\nSow in May.\n');
+  await writeFile(join(room.repository, 'notes', 'seeds.md'), '---\nkind: beans\nrows: 6\n---\nSow in May.\n');
+
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(batches(hosted).at(-1)!.changes).toEqual([{ op: 'write', path: '/rooms/notes/notes/seeds.md', content: '---\nkind: peas\nrows: 6\n---\nSow in May.\n', base: current }]);
+
+  const now = room.put('notes/seeds.md', '---\nkind: corn\nrows: 6\n---\nSow in May.\n');
+  await writeFile(join(room.repository, 'notes', 'seeds.md'), '---\nkind: oats\nrows: 6\n---\nSow in May.\n');
+  const marked = '<<<<<<< current\n---\nkind: corn\nrows: 6\n---\n=======\n---\nkind: oats\nrows: 6\n---\n>>>>>>> yours\nSow in May.\n';
+
+  expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/notes/seeds.md: conflict markers written; the next save sends it once its markers go\n');
+  expect(await readFile(join(room.repository, 'notes', 'seeds.md'), 'utf8')).toBe(marked);
+  expect((await manifestOf(room)).files['notes/seeds.md']).toEqual({ revision: now, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
+});
+
 it('uploads a renamed file holding the same bytes as one move, and brings the links House rewrote into the working files', async () => {
   const { hosted, room } = await copied((room) => {
     room.put('a.md', 'Alpha\n');

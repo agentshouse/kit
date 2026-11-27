@@ -109,7 +109,7 @@ function fieldsMerged(was: Document, now: Document, mine: Document, definition: 
   }
   const mineOver = (document: Document, names: readonly string[]) =>
     apply(document, names.map((name): Change => ({ kind: 'field', name, value: valueOf(mine, name), prior: valueOf(document, name) })), definition);
-  const placed = mineOver(now, [...taken, ...clashing.filter((name) => valueOf(now, name) === undefined)]);
+  const placed = mineOver(now, [...taken, ...clashing.filter((name) => valueOf(now, name) === undefined && rangeOf(mine, name) !== undefined)]);
   if (placed.outcome !== 'applied') return null;
   const { document } = placed;
   const spliced = [...taken.filter((name) => rangeOf(mine, name) !== undefined), ...clashing].flatMap((name) => {
@@ -146,12 +146,12 @@ export function fieldMerged(file: string, schema: string | null, base: string, c
     const parsed = parse(text, file, definitions);
     return parsed.ok ? parsed.document : null;
   };
-  const top = (document: Document | null) => (document === null ? null : read(document.content.slice(0, document.listEnd)));
+  const top = (document: Document) => read(document.content.slice(0, document.listEnd));
   const clashes = pieces(answer);
   const [was, now, mine] = [base, current, yours].map(read);
-  const [held, sent] = [sideOf(clashes, 'current'), sideOf(clashes, 'yours')].map(read);
-  if (was === null || now === null || mine === null || held === null || sent === null || now.type !== was.type || mine.type !== was.type) return kept;
-  const from = below(clashes, topLines(held), topLines(sent));
+  const [currentSide, yoursSide] = [sideOf(clashes, 'current'), sideOf(clashes, 'yours')].map(read);
+  if (was === null || now === null || mine === null || currentSide === null || yoursSide === null || now.type !== was.type || mine.type !== was.type) return kept;
+  const from = below(clashes, topLines(currentSide), topLines(yoursSide));
   const [wasTop, nowTop, mineTop] = [was, now, mine].map(top);
   if (from === null || wasTop === null || nowTop === null || mineTop === null) return kept;
   const fields = fieldsMerged(wasTop, nowTop, mineTop, definitions(now.type));
