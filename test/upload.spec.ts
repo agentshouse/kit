@@ -8,6 +8,7 @@ import { digest, house, manifestOf, serveRooms, upload, type Room, type Rooms } 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
 const TYPES = '---\nfolders:\n  tasks/: task\ntask:\n  properties:\n    name: { type: string }\n    status: { type: string, title: Status }\n    owner: { type: string, title: Owner }\n---\n';
 const TASK = '# Ship\n\n- **Status**: open\n- **Owner**: Ada\n\nFirst step.\nSecond step.\n';
+const UNNAMED = TYPES.replace('    name: { type: string }\n', '');
 
 function batches(hosted: Hosted): { operation_id: string; changes: Record<string, unknown>[] }[] {
   return hosted.house.requests
@@ -237,6 +238,86 @@ it("merges the frontmatter fields of a document no type reads one by one, and ma
   expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/notes/seeds.md: conflict markers written; the next save sends it once its markers go\n');
   expect(await readFile(join(room.repository, 'notes', 'seeds.md'), 'utf8')).toBe(marked);
   expect((await manifestOf(room)).files['notes/seeds.md']).toEqual({ revision: now, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
+});
+
+it('merges the fields into the side that changed the heading a type does not read as a field, keeping that heading where both writers changed one field', async () => {
+  const { hosted, room } = await copied((held) => {
+    held.put('settings/schema.md', UNNAMED);
+    held.put('tasks/ship.md', TASK);
+  });
+  const current = room.put('tasks/ship.md', TASK.replace('open', 'done'));
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), TASK.replace('# Ship', '# Ship now').replace('Ada', 'Bea'));
+  const merged = TASK.replace('# Ship', '# Ship now').replace('open', 'done').replace('Ada', 'Bea');
+
+  expect(await upload(hosted, room)).toEqual({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n', stderr: '' });
+  expect(batches(hosted).at(-1)!.changes).toEqual([{ op: 'write', path: '/rooms/notes/tasks/ship.md', content: merged, base: current }]);
+
+  const now = room.put('tasks/ship.md', merged.replace('done', 'review'));
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), merged.replace('# Ship now', '# Ship today').replace('done', 'blocked'));
+  const marked = '# Ship today\n\n<<<<<<< current\n- **Status**: review\n=======\n- **Status**: blocked\n>>>>>>> yours\n- **Owner**: Bea\n\nFirst step.\nSecond step.\n';
+
+  expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/tasks/ship.md: conflict markers written; the next save sends it once its markers go\n');
+  expect(await readFile(join(room.repository, 'tasks', 'ship.md'), 'utf8')).toBe(marked);
+  expect((await manifestOf(room)).files['tasks/ship.md']).toEqual({ revision: now, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
+});
+
+it("keeps House's merge whole where both writers changed the heading a type does not read as a field to different text", async () => {
+  const { hosted, room } = await copied((held) => {
+    held.put('settings/schema.md', UNNAMED);
+    held.put('tasks/ship.md', TASK);
+  });
+  const current = room.put('tasks/ship.md', TASK.replace('# Ship', '# Ship it'));
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), TASK.replace('# Ship', '# Ship now'));
+  const marked = TASK.replace('# Ship\n', '<<<<<<< current\n# Ship it\n=======\n# Ship now\n>>>>>>> yours\n');
+
+  expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/tasks/ship.md: conflict markers written; the next save sends it once its markers go\n');
+  expect(await readFile(join(room.repository, 'tasks', 'ship.md'), 'utf8')).toBe(marked);
+  expect((await manifestOf(room)).files['tasks/ship.md']).toEqual({ revision: current, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
+  expect(batches(hosted)).toHaveLength(1);
+});
+
+it('marks a field both writers changed on the last line of a document with no final newline, and lands the rest of the batch', async () => {
+  const task = '# Ship\n\n- **Status**: open\n- **Owner**: Ada';
+  const { hosted, room } = await copied((held) => {
+    held.put('settings/schema.md', TYPES);
+    held.put('tasks/ship.md', task);
+  });
+  const current = room.put('tasks/ship.md', task.replace('Ada', 'Bea'));
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), task.replace('Ada', 'Cy'));
+  await writeFile(join(room.repository, 'other.md'), 'other\n');
+  const marked = '# Ship\n\n- **Status**: open\n<<<<<<< current\n- **Owner**: Bea\n=======\n- **Owner**: Cy\n>>>>>>> yours\n';
+
+  expect(await upload(hosted, room)).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: 'house: House accepted 1 file of /rooms/notes.\n/rooms/notes/tasks/ship.md: conflict markers written; the next save sends it once its markers go\n',
+  });
+  expect(await readFile(join(room.repository, 'tasks', 'ship.md'), 'utf8')).toBe(marked);
+  expect((await manifestOf(room)).files['tasks/ship.md']).toEqual({ revision: current, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
+  expect(room.files.get('other.md')!.content).toBe('other\n');
+});
+
+it("keeps House's merge whole where House's text opens a conflict it never closes, and marks rather than sends again a merge holding a marker line House holds", async () => {
+  const { hosted, room } = await copied(typed);
+  const opened = room.put('tasks/ship.md', TASK.replace('open', 'done').replace('Second step.', '<<<<<<< current\nSecond step.'));
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), TASK.replace('Ada', 'Bea'));
+  const kept = '# Ship\n\n<<<<<<< current\n- **Status**: done\n- **Owner**: Ada\n=======\n- **Status**: open\n- **Owner**: Bea\n>>>>>>> yours\n\nFirst step.\n<<<<<<< current\nSecond step.\n';
+
+  expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/tasks/ship.md: conflict markers written; the next save sends it once its markers go\n');
+  expect(await readFile(join(room.repository, 'tasks', 'ship.md'), 'utf8')).toBe(kept);
+  expect((await manifestOf(room)).files['tasks/ship.md']).toEqual({ revision: opened, sha256: digest(kept), bytes: Buffer.byteLength(kept), conflicted: true });
+
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), TASK.replace('open', 'done').replace('Ada', 'Bea'));
+  expect(await upload(hosted, room)).toMatchObject({ status: 0 });
+  const held = room.put('tasks/ship.md', TASK.replace('open', 'review').replace('Ada', 'Bea').replace('Second step.', '<<<<<<< mine\nSecond step.'));
+  await writeFile(join(room.repository, 'tasks', 'ship.md'), TASK.replace('open', 'done').replace('Ada', 'Cy'));
+  const marked = TASK.replace('open', 'review').replace('Ada', 'Cy').replace('Second step.', '<<<<<<< mine\nSecond step.');
+  const sent = batches(hosted).length;
+
+  expect((await upload(hosted, room)).stderr).toBe('house: /rooms/notes/tasks/ship.md: conflict markers written; the next save sends it once its markers go\n');
+  expect(await readFile(join(room.repository, 'tasks', 'ship.md'), 'utf8')).toBe(marked);
+  expect((await manifestOf(room)).files['tasks/ship.md']).toEqual({ revision: held, sha256: digest(marked), bytes: Buffer.byteLength(marked), conflicted: true });
+  expect(batches(hosted)).toHaveLength(sent + 1);
 });
 
 it('uploads a renamed file holding the same bytes as one move, and brings the links House rewrote into the working files', async () => {

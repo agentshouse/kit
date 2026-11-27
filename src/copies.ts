@@ -3142,9 +3142,8 @@ export class LocalCopies {
   ): Promise<{ text: string; current?: string }> {
     const { fieldMerged, whole } = await import('./merge.ts');
     if (answer === undefined) return { text: whole(await this.revisionText(named, revision), change.content) };
-    if (change.base === undefined) return { text: answer };
     const current = await this.revisionText(named, revision);
-    const merged = fieldMerged(path, schema, await this.revisionText(named, change.base), current, change.content, answer);
+    const merged = fieldMerged(path, schema, await this.revisionText(named, change.base!), current, change.content, answer);
     return merged.settled ? { text: merged.text, current } : { text: merged.text };
   }
 
