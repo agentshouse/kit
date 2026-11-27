@@ -179,17 +179,18 @@ it('starts a Codex session that is not AFK with none of it, its adapter told the
 });
 
 it.each([
-  ['an AFK', 'read-only', 'never', true, { type: 'readOnly', networkAccess: false }],
-  ['an AFK', 'workspace-write', 'never', true, { type: 'workspaceWrite', networkAccess: false }],
-  ['an AFK', 'agent-full-access', 'never', true, { type: 'dangerFullAccess' }],
-  ['a', 'read-only', 'on-request', false, { type: 'readOnly', networkAccess: false }],
-])('runs %s Codex conversation’s turn in %s under approvals %s, in the sandbox its mode names', async (_, mode, approvalPolicy, afk, sandboxPolicy) => {
+  ['an AFK', 'read-only', 'never', true, 'user', { type: 'readOnly', networkAccess: false }],
+  ['an AFK', 'workspace-write', 'never', true, 'user', { type: 'workspaceWrite', networkAccess: false }],
+  ['an AFK', 'agent', 'never', true, 'auto_review', { type: 'workspaceWrite', networkAccess: false }],
+  ['an AFK', 'agent-full-access', 'never', true, 'user', { type: 'dangerFullAccess' }],
+  ['a', 'read-only', 'on-request', false, 'user', { type: 'readOnly', networkAccess: false }],
+])('runs %s Codex conversation’s turn in %s under approvals %s, in the sandbox and with the reviewer its mode names', async (_, mode, approvalPolicy, afk, approvalsReviewer, sandboxPolicy) => {
   const hosted = await opened(CODEX, afk, {}, { mode });
 
   hosted.call({ kind: 'message', text: '@say went on', first: true, ...(afk ? { afk: true } : {}) });
 
   expect(outcome((await until(() => ended(hosted)[0])).body)).toEqual({ text: 'went on' });
-  expect(turnSettings(await hosted.adapterLog())).toEqual([{ approvalPolicy, approvalsReviewer: 'user', sandboxPolicy }]);
+  expect(turnSettings(await hosted.adapterLog())).toEqual([{ approvalPolicy, approvalsReviewer, sandboxPolicy }]);
 });
 
 async function planned(afk: boolean): Promise<{ hosted: Hosted; turn: { body: unknown } }> {

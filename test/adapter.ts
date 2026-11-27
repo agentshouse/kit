@@ -66,11 +66,11 @@ const steers = kind !== 'grok-build';
 let forms = true;
 const unprompted = new Set<string>();
 const approvals = new Map<string, unknown>();
-const CODEX_MODES: Record<string, { approvalPolicy: string; sandboxPolicy: Record<string, unknown> }> = {
-  'read-only': { approvalPolicy: 'on-request', sandboxPolicy: { type: 'readOnly', networkAccess: false } },
-  'workspace-write': { approvalPolicy: 'on-request', sandboxPolicy: { type: 'workspaceWrite', networkAccess: false } },
-  agent: { approvalPolicy: 'on-request', sandboxPolicy: { type: 'workspaceWrite', networkAccess: false } },
-  'agent-full-access': { approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } },
+const CODEX_MODES: Record<string, { approvalPolicy: string; approvalsReviewer: string; sandboxPolicy: Record<string, unknown> }> = {
+  'read-only': { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly', networkAccess: false } },
+  'workspace-write': { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandboxPolicy: { type: 'workspaceWrite', networkAccess: false } },
+  agent: { approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', sandboxPolicy: { type: 'workspaceWrite', networkAccess: false } },
+  'agent-full-access': { approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'dangerFullAccess' } },
 };
 
 function launched(sessionId: string, meta: unknown): void {
@@ -150,9 +150,8 @@ async function threadOpen(method: 'thread/start' | 'thread/resume', sessionId: s
 }
 
 async function turnStart(sessionId: string, text: string): Promise<void> {
-  const { approvalPolicy, sandboxPolicy } = CODEX_MODES[mode ?? 'agent']!;
   const input = [{ type: 'text', text, text_elements: [] }];
-  await codexRequest('turn/start', { threadId: sessionId, input, approvalPolicy, approvalsReviewer: 'user', sandboxPolicy });
+  await codexRequest('turn/start', { threadId: sessionId, input, ...CODEX_MODES[mode ?? 'agent']! });
 }
 
 async function plan(client: AgentContext, sessionId: string): Promise<PromptResponse> {
