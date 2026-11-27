@@ -142,7 +142,6 @@ function labelled(holder: Holder, origin: string, credential: string, closed: Ab
     }
   };
 
-
   const staged = async (operation: string, changes: Change[]): Promise<Upload | { refused: Refusal }> => {
     const bytes = Buffer.from(JSON.stringify({ changes }));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
