@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Bridge } from './bridge.ts';
 
-const OWNER_RULES = '/rooms/private/owner-rules.md';
 const UNREADABLE = /^(?:\S+: )?(?:path_not_found|room_not_found|operation_denied)\b/;
 const FAILED = /^exit: [1-9]\d*$/;
 const CUT = /^stderr: shell: output_cut (\d+) of \d+ bytes; (?:with long: true, )?continue with: (.+)$/;
@@ -35,8 +34,8 @@ function block(base: string, last: string): string {
   return [agentInstructions().join('\n'), base, last.replace(/\n$/, '')].filter((part) => part !== '').join('\n\n');
 }
 
-export async function instructions(bridge: Bridge, base: string): Promise<string> {
-  return block(base, (await shellDocument(bridge, OWNER_RULES)) ?? '');
+export function instructions(base: string): string {
+  return block(base, '');
 }
 
 export async function copyInstructions(base: string, copy: string, reads: boolean): Promise<string> {

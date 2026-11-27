@@ -325,7 +325,6 @@ interface Waiting {
   atOnce: boolean;
   route: LaunchRoute;
   content: ContentBlock[];
-  instructing: Promise<string> | null;
   settle(result: KitCallResult): void;
 }
 
@@ -597,23 +596,13 @@ export class Conversations {
     while (conversation.launch !== null) await conversation.launch.session.catch(() => undefined);
   }
 
-  private instructed(conversation: Conversation, route: DesiredAgentRoute): Promise<string> | null {
-    const bridge = conversation.running === null ? conversation.launch?.bridge : Promise.resolve(conversation.running.bridge);
-    if (bridge === undefined) return null;
-    const read = bridge.then((opened) => (conversation.place?.copy === true ? '' : instructions(opened, route.base_instructions)));
-    read.catch(() => undefined);
-    return read;
-  }
-
   private async message(conversation: Conversation, call: Said): Promise<{ result: Promise<KitCallResult> }> {
     const content: ContentBlock[] = call.recent === undefined ? [] : [{ type: 'text', text: call.recent }];
     let route: LaunchRoute;
-    let instructing: Promise<string> | null = null;
     try {
       route = conversationRoute(await this.route(conversation, call.agent_id), call);
       const text = call.compact === true ? compactCommand(route.kind, call.text) : call.text;
       content.push({ type: 'text', text });
-      if (call.first === true) instructing = this.instructed(conversation, route);
       if (call.message_id !== null) content.push(...(await this.transcribed(conversation, call.message_id, text)));
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {
@@ -623,7 +612,7 @@ export class Conversations {
     }
     conversation.preparing = null;
     const { promise, resolve: settle } = Promise.withResolvers<KitCallResult>();
-    const waiting: Waiting = { call, atOnce: call.at_once === true, route, content, instructing, settle };
+    const waiting: Waiting = { call, atOnce: call.at_once === true, route, content, settle };
     if (call.at_once === true && conversation.turns.size > 0) await this.atOnce(conversation, waiting);
     else conversation.waiting.push(waiting);
     this.next(conversation);
@@ -691,7 +680,6 @@ export class Conversations {
     const { call } = waiting;
     let result: KitCallResult = {};
     let started = false;
-    let instructing = waiting.instructing;
     const prompt: ContentBlock[] = [];
     try {
       if (conversation.running === null) {
@@ -702,7 +690,6 @@ export class Conversations {
         const stored = conversation.session ?? call.provider_session_id;
         const empty = call.first === true && conversation.prompted !== stored;
         const launch = this.launch(conversation, Promise.resolve(waiting.route), stored, empty, null);
-        if (call.first === true) instructing = this.instructed(conversation, waiting.route);
         started = (await launch.session) !== stored;
       }
       const session = conversation.running!.sessionId;
@@ -711,9 +698,9 @@ export class Conversations {
       }
       const place = conversation.place!;
       if (call.first === true) {
+        const base = waiting.route.base_instructions;
         const reads = CLIS[waiting.route.kind]!.reads !== null;
-        const block = place.copy ? copyInstructions(waiting.route.base_instructions, place.directory, reads) : (instructing ?? this.instructed(conversation, waiting.route)!);
-        prompt.push({ type: 'text', text: await block });
+        prompt.push({ type: 'text', text: place.copy ? await copyInstructions(base, place.directory, reads) : instructions(base) });
       }
       if (conversation.kills > 0) throw new Error(KILLED);
     } catch (error) {

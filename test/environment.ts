@@ -189,7 +189,7 @@ export async function hostKit(routes: RouteOverrides[] = [{}], hosting: Hosting 
   const idles: Received[] = [];
   const mcp: Received[] = [];
   const tools: Record<string, ToolAnswer> = {
-    shell: () => shelled('', 1, ['cat: path_not_found /rooms/private/owner-rules.md']),
+    shell: (args) => shelled('', 1, [`cat: path_not_found ${String(args.command).replace(/^cat /u, '')}`]),
     ...hosting.tools,
   };
   house.route('POST', '/', async (request) => {

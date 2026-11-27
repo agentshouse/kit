@@ -128,8 +128,8 @@ it("prompts a conversation's first message while a house download still waits fo
   hosted.call({ kind: 'message', text: 'hello', first: true });
 
   const prompt = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
-  const block = (prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.split('\n\n')[0]!.split('\n');
-  expect(block).toEqual(agentInstructions());
+  const opening = `${agentInstructions().join('\n')}\n\n`;
+  expect((prompt.params as { prompt: { text: string }[] }).prompt[0]!.text.slice(0, opening.length)).toBe(opening);
   release();
   expect(await downloading).toMatchObject({ status: 0 });
 });
