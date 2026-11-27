@@ -243,3 +243,64 @@ it("deletes the two files once House answers a Room's instructions empty, and ke
   expect(await manifestOf(notes)).not.toHaveProperty('kit');
   expect(await held(folderOf(hosted, 'garden'))).toEqual([]);
 });
+
+it("reads a Room's instructions again once House answers that read busy, so the download rewrites every Room's AGENTS.md and keeps none as it was", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notes');
+  notes.put('a.md', 'a\n');
+  notes.instructions = FIRST;
+  const garden = rooms.room('garden');
+  garden.instructions = FIRST;
+  rooms.open = [garden];
+  await rooms.download([notes]);
+
+  const info = hosted.tools.info!;
+  const busy = new Map([
+    [notes.root, 'house_overloaded: House is busy and changed nothing; call again in 1 s\n'],
+    [garden.root, 'reading_paused: reading is paused while writes still work; call again in 1 s\n'],
+  ]);
+  const refused: string[] = [];
+  hosted.tools.info = (args, request) => {
+    const text = busy.get(args.path as string);
+    if (text === undefined) return info(args, request);
+    busy.delete(args.path as string);
+    refused.push(args.path as string);
+    return { isError: true, content: [{ type: 'text', text }] };
+  };
+  notes.instructions = SECOND;
+  garden.instructions = SECOND;
+
+  expect(await rooms.download([notes])).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+
+  expect(refused.sort()).toEqual([garden.root, notes.root]);
+  expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(SECOND);
+  expect(await readFile(join(folderOf(hosted, 'garden'), 'AGENTS.md'), 'utf8')).toBe(SECOND);
+});
+
+it("reads at most four Rooms' instructions at once in a download, as many as House runs at a time for one User", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const open = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l'].map((name) => {
+    const room = rooms.room(`room-${name}`);
+    room.instructions = FIRST;
+    return room;
+  });
+  rooms.open = open;
+  const info = hosted.tools.info!;
+  let reading = 0;
+  let most = 0;
+  hosted.tools.info = async (args, request) => {
+    if (!open.some((room) => room.root === args.path)) return info(args, request);
+    most = Math.max(most, ++reading);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    reading--;
+    return info(args, request);
+  };
+
+  expect(await rooms.download([])).toMatchObject({ status: 0 });
+
+  expect(roomRootReads(hosted).sort()).toEqual(open.map((room) => room.root).sort());
+  for (const room of open) expect(await readFile(join(folderOf(hosted, room.handle), 'AGENTS.md'), 'utf8')).toBe(FIRST);
+  expect(most).toBe(4);
+});

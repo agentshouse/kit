@@ -449,3 +449,25 @@ it("needs nothing more uploaded once the advised house download brings House's a
   expect(await readFile(join(room.repository, 'photo.jpg'))).toEqual(RECORDING);
   expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
 });
+
+it("reads the copy's Room's instructions again in a conversation's download once House answers that read busy, so the copy's AGENTS.md takes the new text", async () => {
+  const { hosted, room } = await copied((held) => {
+    held.instructions = 'Write dates as YYYY-MM-DD.\n';
+  });
+  const copy = await openedIn(hosted, room, 'Plan');
+  room.instructions = 'Write dates as YYYY-MM-DD.\nPut new tasks on the map.\n';
+  const info = hosted.tools.info!;
+  const refused: unknown[] = [];
+  hosted.tools.info = (args, request) => {
+    const label = (request.body as McpCall).params._meta?.[CONVERSATION_META_KEY];
+    if (args.path !== room.root || label !== 'conversation-1' || refused.length > 0) return info(args, request);
+    refused.push(label);
+    return { isError: true, content: [{ type: 'text', text: 'house_overloaded: House is busy and changed nothing; call again in 1 s\n' }] };
+  };
+
+  const downloaded = await ran(hosted, '@sh house download');
+
+  expect(downloaded).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
+  expect(refused).toEqual(['conversation-1']);
+  expect(await readFile(join(copy, 'AGENTS.md'), 'utf8')).toBe('Write dates as YYYY-MM-DD.\nPut new tasks on the map.\n');
+});

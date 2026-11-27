@@ -14,7 +14,7 @@ import { changedPaths, DEFAULT_MAX_SIZE, updateAnswer, updateChanges, UPDATE_PAT
 import { fileInfo, roomInstructions, type Finished } from './files.ts';
 import { answered, carried, held, judgement, type Answer, type Pass } from './hold.ts';
 import { readEnrolment, socketDirectory } from './home.ts';
-import { callHouse, mcpBody, ownCall, refusalIn, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
+import { callHouse, mcpBody, ownCall, readAgainWhileBusy, refusalIn, toolAnswer, UNREACHABLE, type Forwarded, type Message, type ToolResult } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { namedWait, REFUSAL_HEADER, refusalOf, retryable, stopsPush, type Refusal } from './refusals.ts';
 import { relayed } from './relay.ts';
@@ -179,11 +179,7 @@ function labelled(holder: Holder, origin: string, credential: string, closed: Ab
     return send(message, message.method === 'tools/call' ? operationId() : null);
   };
 
-  const info = async (args: Record<string, unknown>): Promise<string> => {
-    const answer = toolAnswer(await send(ownCall('info', args), operationId()));
-    if ('refused' in answer) throw new Error(answer.refused.text);
-    return answer.text;
-  };
+  const info = (args: Record<string, unknown>): Promise<string> => readAgainWhileBusy(() => send(ownCall('info', args), operationId()));
 
   const caller: Caller = {
     key: holder.key,
