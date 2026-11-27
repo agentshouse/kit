@@ -1,17 +1,17 @@
-import { agentInstructions } from '@agentshouse/skills';
+import { agentInstructions, GUIDE } from '@agentshouse/skills';
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until, type Received } from './double.ts';
-import { clocked, hostKit, lastCall, MOVED_CLOCK, shelled, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
+import { clocked, hostKit, lastCall, MOVED_CLOCK, shelled, type Hosted, type Hosting, type McpCall, type RouteOverrides } from './environment.ts';
 import { alive, filesUnder, temporaryDirectory } from './kit.ts';
 import { callUpdate, released, serveRelease } from './release.ts';
 import { digest, house, manifestOf, roomRootReads, serveRooms, upload, type ManifestEntry, type Room, type Rooms } from './rooms.ts';
 
 const INSTRUCTIONS = 'These instructions come after House’s and your own.\n\nWrite dates as YYYY-MM-DD.\n';
-const OWNER_RULES = 'Keep the work in its Room.\n';
+const OWN_RULES = 'Keep the work in its Room.\n';
 const IMPORTED = '@AGENTS.md\n';
 const PLACED = '0.2.1-c000000000002';
 const HOUR = 60 * 60_000;
@@ -581,11 +581,12 @@ it("resumes a warm conversation moved since its session opened in the old Room's
   expect(await readFile(join(copyOf(hosted, 'garden', 'Plan'), 'beds.md'), 'utf8')).toBe('Two beds\n');
 });
 
-it("takes the Room's parts from the copy's file for a CLI that reads one and from the block for one that reads neither", async () => {
+it("opens a first prompt in a copy with House's lines, ending with the where-work-goes page, then the base instructions, taking the Room's parts from the copy's file for a CLI that reads one and after them for one that reads neither, with no read of owner-rules.md", async () => {
   const routes = [{}, { kind: 'claude-agent-acp' }, { kind: 'grok-build' }];
   const { hosted, notes } = await staged(routes);
-  hosted.tools.shell = () => shelled(OWNER_RULES);
+  hosted.tools.shell = () => shelled(OWN_RULES);
   const house = agentInstructions().join('\n');
+  expect(house.endsWith(`\n${GUIDE.find((page) => page.path === 'where-work-goes')!.text.trimEnd()}`)).toBe(true);
 
   for (const [index] of routes.entries()) {
     const conversation = `conversation-${index + 1}`;
@@ -597,11 +598,12 @@ it("takes the Room's parts from the copy's file for a CLI that reads one and fro
   expect(await prompt(hosted, 0)).toBe(`${house}\n\nBe useful.\n@say hello`);
   expect(await prompt(hosted, 1)).toBe(`${house}\n\nBe useful.\n@say hello`);
   expect(await prompt(hosted, 2)).toBe(`${house}\n\nBe useful.\n\n${INSTRUCTIONS.trimEnd()}\n@say hello`);
+  expect(hosted.mcp.filter((received) => JSON.stringify((received.body as McpCall).params).includes('owner-rules.md'))).toEqual([]);
 });
 
-it("runs a conversation in a Room held at the Open level in a copy holding the two files alone, one with no Room or in a Room no longer reached in its launch directory with the Owner rules, and drops the two files from a copy whose Room is no longer reached", async () => {
+it("runs a conversation in a Room held at the Open level in a copy holding the two files alone, one with no Room or in a Room no longer reached in its launch directory with House's lines and the base instructions alone, and drops the two files from a copy whose Room is no longer reached", async () => {
   const { hosted, rooms, notes } = await staged([{}, {}, {}, {}]);
-  hosted.tools.shell = () => shelled(OWNER_RULES);
+  hosted.tools.shell = () => shelled(OWN_RULES);
   const garden = rooms.room('garden');
   garden.put('beds.md', 'Two beds\n');
   garden.instructions = INSTRUCTIONS;
@@ -620,7 +622,7 @@ it("runs a conversation in a Room held at the Open level in a copy holding the t
   expect(await cwdOf(hosted, 'session/new', 1)).toBe(hosted.workingDirectory);
   expect(await cwdOf(hosted, 'session/new', 2)).toBe(hosted.workingDirectory);
   first('conversation-3', 'agent-3');
-  expect(await prompt(hosted, 0)).toBe(`${house}\n\nBe useful.\n\n${OWNER_RULES.trimEnd()}\n@say hello`);
+  expect(await prompt(hosted, 0)).toBe(`${house}\n\nBe useful.\n@say hello`);
   await turned(hosted, 1);
 
   const copy = copyOf(hosted, 'notes', 'Plan');

@@ -90,32 +90,26 @@ it('kills a process still opening its session and refuses the open, and the next
   expect(await hosted.result(lastCall())).toHaveProperty('provider_session_id');
 });
 
-it.each([
-  ['its tool call', '@say hello'],
-  ['the read of a file it links', '@say [file.txt](/rooms/private/file.txt)'],
-])(
-  'kills a running process the moment the kill arrives while House holds %s for its first message, and refuses that message',
-  async (_held, text) => {
-    const hosted = await hostKit();
-    await opened(hosted);
-    const adapter = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.pid as number;
-    let release!: (answer: Answer) => void;
-    const held = new Promise<Answer>((resolve) => {
-      release = resolve;
-    });
-    onTestFinished(() => release({ body: {} }));
-    hosted.house.route('POST', '/', () => held);
-    hosted.call({ kind: 'message', text, first: true });
-    const message = lastCall();
-    await until(() => hosted.house.requests.find((request) => request.path === '/'));
+it('kills a running process the moment the kill arrives while House holds the read of a file its first message links, and refuses that message', async () => {
+  const hosted = await hostKit();
+  await opened(hosted);
+  const adapter = (await hosted.adapterLog()).find((entry) => entry.method === 'session/new')!.pid as number;
+  let release!: (answer: Answer) => void;
+  const held = new Promise<Answer>((resolve) => {
+    release = resolve;
+  });
+  onTestFinished(() => release({ body: {} }));
+  hosted.house.route('POST', '/', () => held);
+  hosted.call({ kind: 'message', text: '@say [file.txt](/rooms/private/file.txt)', first: true });
+  const message = lastCall();
+  await until(() => hosted.house.requests.find((request) => request.path === '/'));
 
-    hosted.call({ kind: 'kill' });
+  hosted.call({ kind: 'kill' });
 
-    expect(await hosted.result(message)).toEqual({ refused: 'the conversation was killed' });
-    expect(await hosted.result(lastCall())).toEqual({});
-    expect(alive(adapter)).toBe(false);
-  },
-);
+  expect(await hosted.result(message)).toEqual({ refused: 'the conversation was killed' });
+  expect(await hosted.result(lastCall())).toEqual({});
+  expect(alive(adapter)).toBe(false);
+});
 
 it('refuses an open and returns the result of the kill at once while the Kit still installs the CLI the open needs', async () => {
   const hosted = await hostKit();

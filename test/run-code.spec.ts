@@ -296,6 +296,33 @@ it("reads the Room's settings/repositories.md past a Search-level Room's 8 kB cu
   ]);
 });
 
+it("reads the Room's settings/repositories.md past a long read's 100 KB cut, following the command its cut line names and keeping a line of its own that reads like a cut line", async () => {
+  const { hosted, notes } = await staged([CLAUDE]);
+  const app = await origin();
+  const clone = cloned(hosted, app.url);
+  const lines = `${listing([{ url: app.url, ref: 'release' }])}${'The code this Room works on.\n'.repeat(4000)}`.split(/(?<=\n)/u);
+  let cut = 0;
+  let held = 0;
+  while (held + Buffer.byteLength(lines[cut]!) <= 102_400) held += Buffer.byteLength(lines[cut++]!);
+  lines.splice(cut, 0, 'stderr: shell: output_cut 1 of 2 bytes; with long: true, continue with: cat /elsewhere\n');
+  const next = `{ cat ${LIST}; } | tail -n +${cut + 1}`;
+  hosted.tools.shell = (args) => {
+    if (args.command === `cat ${LIST}`) {
+      return shelled(lines.slice(0, cut).join(''), 0, [`shell: output_cut ${held} of ${Buffer.byteLength(lines.join(''))} bytes; with long: true, continue with: ${next}`]);
+    }
+    return args.command === next ? shelled(lines.slice(cut).join('')) : shelled('', 1, [`cat: path_not_found ${String(args.command)}`]);
+  };
+
+  await session(hosted, 1, notes, 'imp-1', app.url, { kind: 'new_worktree' });
+
+  expect(git(join(`${clone}.worktrees`, 'imp-1'), 'rev-parse', 'HEAD')).toBe(app.release);
+  const reads = hosted.mcp.map((received) => (received.body as McpCall).params).filter((params) => params.name === 'shell');
+  expect(reads.map((params) => params.arguments)).toEqual([
+    { command: `cat ${LIST}`, long: true },
+    { command: next, long: true },
+  ]);
+});
+
 it("starts each CLI in the Run's copy, told the code folder only as a path, and has it write there without asking: Claude Code by its settings' additional directories at the session's start and its resume, Codex in the full access Kit opens it in and Grok Build with its sandbox off and every tool approved, no adapter taking the folder as an added directory, which would load the repository's own skills; a Run with no repository gets no code folder", async () => {
   const { hosted, notes } = await staged([CLAUDE, { kind: 'codex-acp' }, { kind: 'grok-build' }, CLAUDE, { kind: 'codex-acp' }]);
   const app = await origin();

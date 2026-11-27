@@ -499,7 +499,7 @@ it('writes the start-up step it is still in on a Kit connection that reopens', a
   expect(starting(reopened)).toEqual(['session', null]);
 });
 
-it("prepares a new conversation's first message, reading what it links and House's instructions through the one House connection its CLI opens the session with", async () => {
+it("prepares a new conversation's first message, reading what it links through the one House connection its CLI opens the session with", async () => {
   const hosted = await hostKit();
   const [photo] = attached(hosted, [{ name: 'photo.jpg', media_type: 'image/jpeg', content: Buffer.from([0xff, 0xd8, 0xff, 0xe0]) }]);
   await writeFile(join(hosted.home, 'hold-new'), '');
@@ -510,7 +510,6 @@ it("prepares a new conversation's first message, reading what it links and House
 
   await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/new'));
   await until(() => infoCalls(hosted).length > 0);
-  await until(() => hosted.mcp.find((received) => (received.body as { params?: { name?: string } }).params?.name === 'shell'));
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/prompt')).toEqual([]);
   await rm(join(hosted.home, 'hold-new'));
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
@@ -525,20 +524,9 @@ it("prepares a new conversation's first message, reading what it links and House
   expect(new Set(bridges).size).toBe(1);
 });
 
-it("prompts a first message with House's instructions through the CLI it starts itself when its open's start failed while it read them", async () => {
+it("prompts a first message with House's instructions through the CLI it starts itself when its open's start failed", async () => {
   const hosted = await hostKit();
   await writeFile(join(hosted.home, 'refuse-new'), '');
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  onTestFinished(() => release());
-  let reads = 0;
-  hosted.house.route('POST', '/', async (request) => {
-    const message = request.body as { id: number };
-    if (reads++ === 0) await released;
-    return { body: { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: '' }] } } };
-  });
 
   hosted.call({ kind: 'open' });
   const open = lastCall();
@@ -547,7 +535,6 @@ it("prompts a first message with House's instructions through the CLI it starts 
   await rm(join(hosted.home, 'refuse-new'));
   hosted.call({ kind: 'message', text: '@say hello', first: true });
   const message = lastCall();
-  release();
   expect(await hosted.result(message)).toHaveProperty('provider_session_id');
   const prompted = await until(async () => (await hosted.adapterLog()).find((entry) => entry.method === 'session/prompt'));
   expect((prompted.params as { prompt: { text: string }[] }).prompt.map((block) => block.text)).toEqual([
