@@ -372,6 +372,43 @@ it("sends a turn's report once the copy's due save ends, and the report outside 
   expect(turnReports(hosted)).toHaveLength(1);
 });
 
+it('leaves a document holding a marker line the Kit never wrote out of every save, reporting it once as holding markers, saves a heading underlined with seven = and an attachment holding marker lines, and saves the document once its markers go', { timeout: 60_000 }, async () => {
+  const { hosted, notes } = await staged();
+  const markers = '<<<<<<<\nmine\n=======\ntheirs\n>>>>>>>\n';
+  await writeFile(join(notes.repository, 'a.md'), `one\n${markers}`);
+  await writeFile(join(notes.repository, 'heading.md'), 'Plans\n=======\n\nBeans first.\n');
+  await writeFile(join(notes.repository, 'markers.txt'), markers);
+  await until(() => (outside(hosted).length > 0 && notes.binaries.has('markers.txt') ? true : undefined), SAVED_MS);
+
+  expect(outside(hosted)).toEqual([{ room_ref: notes.ref, path: '/rooms/notes/a.md', markers: true }]);
+  expect(notes.files.get('heading.md')!.content).toBe('Plans\n=======\n\nBeans first.\n');
+  expect(notes.binaries.get('markers.txt')!.bytes.toString()).toBe(markers);
+  expect(notes.files.get('a.md')!.content).toBe('one\ntwo\nthree\n');
+  expect(doorSaves(hosted).flatMap((received) => (changesOf(received) as { path: string }[]).map((change) => change.path))).not.toContain('/rooms/notes/a.md');
+
+  await writeFile(join(notes.repository, 'a.md'), 'one\ntwo, mine\nthree\n');
+  await until(() => (notes.files.get('a.md')?.content === 'one\ntwo, mine\nthree\n' ? true : undefined), SAVED_MS);
+  await quiet(NO_SAVE_MS);
+  expect(outside(hosted)).toHaveLength(1);
+});
+
+it("merges the fields of a document House changed meanwhile one by one at the folder's save and sends it again on the current revision, holding no marker", { timeout: 60_000 }, async () => {
+  const { hosted, rooms, notes } = await staged();
+  const task = '# Ship\n\n- **Status**: open\n- **Owner**: Ada\n\nFirst step.\n';
+  notes.put('settings/schema.md', '---\nfolders:\n  tasks/: task\ntask:\n  properties:\n    name: { type: string }\n    status: { type: string, title: Status }\n    owner: { type: string, title: Owner }\n---\n');
+  notes.put('tasks/ship.md', task);
+  expect(await rooms.download([notes])).toMatchObject({ status: 0 });
+  const current = notes.put('tasks/ship.md', task.replace('open', 'done'));
+  const merged = task.replace('open', 'done').replace('Ada', 'Bea');
+
+  await writeFile(join(notes.repository, 'tasks', 'ship.md'), task.replace('Ada', 'Bea'));
+  await until(() => (notes.files.get('tasks/ship.md')?.content === merged ? true : undefined), SAVED_MS);
+
+  expect(changesOf(doorSaves(hosted).at(-1)!)).toEqual([{ op: 'write', path: '/rooms/notes/tasks/ship.md', content: merged, base: current }]);
+  await shows(join(notes.repository, 'tasks', 'ship.md'), merged);
+  expect(outside(hosted)).toEqual([]);
+});
+
 it("refuses house upload on a marker line, answers house download that the next save merges a file changed here, and names the next save on an update answer, naming no command", { timeout: 60_000 }, async () => {
   const { hosted, rooms, notes } = await staged();
   notes.put('plan.md', 'Plant beans\nTHEIRS\n');

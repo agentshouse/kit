@@ -64,6 +64,7 @@ const FOLDERS = 'folders.json';
 const PRIVATE = 'private';
 const UNWRITTEN = 'unwritten';
 const NOTHING_NEW = 'Nothing new from House.';
+const SCHEMA = 'settings/schema.md';
 
 interface RoomFolder {
   name: string;
@@ -187,6 +188,7 @@ interface Copied {
 interface Copy extends Copied {
   pending?: Pending;
   refused?: Record<string, string>;
+  marked?: string[];
   reported?: Record<string, string>;
 }
 
@@ -361,7 +363,7 @@ interface Batch {
 }
 
 type Settled =
-  | { refused: true; text: string; refusal?: Refusal; batch?: Batch; lines?: string[]; admits?: number }
+  | { refused: true; text: string; refusal?: Refusal; batch?: Batch; lines?: string[]; again?: Batch; admits?: number }
   | { refused: false; files: number; lines: string[] };
 
 type Stopped = Extract<Settled, { refused: true }>;
@@ -566,12 +568,14 @@ function saving(state: Followed): boolean {
   return state.changes > state.saved || state.running > 0;
 }
 
-async function stillMarked(directory: string, manifest: Manifest, { present, left }: Scan): Promise<string[]> {
+async function holdingMarkers(directory: string, manifest: Manifest, scan: Scan): Promise<string[]> {
+  const { added, changed } = changeSet(manifest, scan);
+  const flagged = Object.entries(manifest.files).flatMap(([path, entry]) => (entry.conflicted && !leaves(scan.left, path) ? [path] : []));
   const named: string[] = [];
-  for (const [path, entry] of Object.entries(manifest.files)) {
-    if (entry.conflicted && !leaves(left, path) && (await marked(directory, present.get(path)?.name ?? path))) named.push(path);
+  for (const path of new Set([...added, ...changed, ...flagged])) {
+    if (isDocument(path) && (await marked(directory, scan.present.get(path)?.name ?? path))) named.push(path);
   }
-  return named;
+  return named.sort();
 }
 
 function leftOut(root: string, left: readonly string[]): string[] {
@@ -608,14 +612,6 @@ function differing(left: string, right: string): number {
     else unmatched++;
   }
   return unmatched + [...counts.values()].reduce((sum, count) => sum + count, 0);
-}
-
-function whole(theirs: string, mine: string): string {
-  return `<<<<<<< current\n${ended(theirs)}=======\n${ended(mine)}>>>>>>> yours\n`;
-}
-
-function ended(text: string): string {
-  return text === '' || text.endsWith('\n') ? text : `${text}\n`;
 }
 
 function sameBytes(file: { sha256: string; bytes: number }): string {
@@ -1418,7 +1414,7 @@ export class LocalCopies {
           return { refused: false, text: `${rootOf(copy.room_handle)}: ${copy.repository} holds no manifest, so Kit sends nothing from it and copies the Room there again` };
         }
         const caller = requested ?? (await this.callerOf(key));
-        const answer = await this.uploaded(key, caller, how.byHand, named === null ? null : [...named, ...Object.keys((copy as Copy).refused ?? {})]);
+        const answer = await this.uploaded(key, caller, how.byHand, named === null ? null : [...named, ...Object.keys((copy as Copy).refused ?? {}), ...((copy as Copy).marked ?? [])]);
         if (answer.refused && !how.byHand) logged(`${copy.repository}: ${answer.text}`);
         this.refusedAt(key, state, answer.read);
         if (this.livingConversation(key) === null) await this.reportedOutside(key);
@@ -1476,10 +1472,10 @@ export class LocalCopies {
     const manifest = await readManifest(copy.repository).catch(() => null);
     if (manifest === null) return [];
     const conflicted = Object.entries(manifest.files).flatMap(([path, entry]) => (entry.conflicted ? [path] : []));
-    const refusedPaths = Object.keys(copy.refused ?? {});
-    if (conflicted.length + refusedPaths.length === 0) return [];
-    const scan = await scannedAt(copy.repository, [...refusedPaths, ...conflicted]);
-    const marked = await stillMarked(copy.repository, manifest, scan);
+    const named = [...Object.keys(copy.refused ?? {}), ...(copy.marked ?? []), ...conflicted];
+    if (named.length === 0) return [];
+    const scan = await scannedAt(copy.repository, named);
+    const marked = await holdingMarkers(copy.repository, manifest, scan);
     const { added, changed, gone } = changeSet(manifest, scan);
     const unsent = new Set([...added, ...changed, ...gone]);
     const refused = Object.entries(copy.refused ?? {}).flatMap(([path, reason]) => (unsent.has(path) && !marked.includes(path) ? [{ path, refused: reason }] : []));
@@ -1490,7 +1486,7 @@ export class LocalCopies {
     const manifest = await readManifest(copy.repository);
     const scan = await scanned(copy.repository);
     for (const [path, file] of scan.present) read.set(path, file.sha256);
-    const marked = await stillMarked(copy.repository, manifest, scan);
+    const marked = await holdingMarkers(copy.repository, manifest, scan);
     const { added, changed, gone } = changeSet(manifest, scan);
     return [...new Set([...added, ...changed, ...gone])].filter((path) => !marked.includes(path));
   }
@@ -2783,7 +2779,8 @@ export class LocalCopies {
     const manifest = await readManifest(copy.repository);
     const scan = named === null ? await scanned(copy.repository) : await scannedAt(copy.repository, named);
     for (const [path, file] of scan.present) sending.read.set(path, file.sha256);
-    const marked = await stillMarked(copy.repository, manifest, scan);
+    const marked = await holdingMarkers(copy.repository, manifest, scan);
+    await this.keptMarked(key, marked);
     if (byHand && marked.length > 0) {
       await this.keptRefused(key, refused, true);
       const unresolved = marked.map((path) => `${root}/${path}`);
@@ -2832,13 +2829,14 @@ export class LocalCopies {
         sending.stopped = settled;
         return;
       }
-      if (refusal!.code === 'edit_conflict') sending.conflicted = true;
-      else for (const change of named) refused.set(relative(change.path), firstLine(refusal!));
+      const again = settled.again ?? { changes: [], read: {} };
+      if (refusal!.code !== 'edit_conflict') for (const change of named) refused.set(relative(change.path), firstLine(refusal!));
+      else if (again.changes.length < named.length) sending.conflicted = true;
       sending.lines.push(...(settled.lines ?? []));
-      const rest = batch!.changes.filter((change) => !named.includes(change));
+      const rest = [...batch!.changes.filter((change) => !named.includes(change)), ...again.changes];
       if (rest.length === 0) return;
       const paths = new Set(changedPaths(rest).map(relative));
-      const read = Object.fromEntries(Object.entries(batch!.read).filter(([path]) => paths.has(path)));
+      const read = { ...Object.fromEntries(Object.entries(batch!.read).filter(([path]) => paths.has(path))), ...again.read };
       copy = await this.save({ ...(this.copies.get(start.key) as Copy), pending: { operation_id: operationId(), caller: caller.key, changes: rest, read } });
     }
   }
@@ -2857,6 +2855,11 @@ export class LocalCopies {
     const unsent = after > 0 ? [`${counted(after, 'batch', 'batches')} after it ${after === 1 ? 'was' : 'were'} not sent`] : [];
     const text = [...done, ...sending.lines, ...named, stopped.text, ...unsent].join('\n');
     return stopped.admits === undefined ? { refused: true, text, read: sending.read } : { refused: true, text, read: sending.read, admits: stopped.admits };
+  }
+
+  private async keptMarked(key: string, marked: readonly string[]): Promise<void> {
+    const { marked: held, ...copy } = this.copies.get(key) as Copy;
+    if ((held ?? []).join('\n') !== marked.join('\n')) await this.save(marked.length === 0 ? copy : { ...copy, marked: [...marked] });
   }
 
   private async keptRefused(key: string, refused: ReadonlyMap<string, string>, merged: boolean): Promise<void> {
@@ -2972,8 +2975,8 @@ export class LocalCopies {
       const settled = await this.save(without(copy));
       const sent = { refusal: outcome.refused, batch: { changes: copy.pending!.changes, read: copy.pending!.read } };
       if (outcome.refused.code !== 'edit_conflict') return { refused: true, text: outcome.refused.text, ...sent };
-      const lines = await this.conflicted(settled, copy.pending!, outcome.refused, caller);
-      return { refused: true, text: [outcome.refused.text, ...lines].join('\n'), ...sent, lines };
+      const { lines, again } = await this.conflicted(settled, copy.pending!, outcome.refused, caller);
+      return { refused: true, text: [outcome.refused.text, ...lines].join('\n'), ...sent, lines, again };
     }
     return this.integrated(copy, outcome.accepted);
   }
@@ -3028,16 +3031,18 @@ export class LocalCopies {
     };
   }
 
-  private async conflicted(copy: Copy, pending: Pending, refusal: Refusal, caller: Caller): Promise<string[]> {
+  private async conflicted(copy: Copy, pending: Pending, refusal: Refusal, caller: Caller): Promise<{ lines: string[]; again: Batch }> {
     const root = rootOf(copy.room_handle);
     const manifest = await readManifest(copy.repository);
     const { present } = await scanned(copy.repository);
     const work = await staging();
     const lines: string[] = [];
+    const again: Batch = { changes: [], read: {} };
     const next = this.nextOf(copy.key);
     const followed = this.follows(copy.key);
     const nameOf = (path: string) => present.get(path)?.name ?? path;
     const holds = async (path: string, sha256: string) => present.has(path) && (await holding(copy.repository, nameOf(path), sha256));
+    const schema = await readFile(join(copy.repository, nameOf(SCHEMA)), 'utf8').catch(() => null);
     const brought = async (path: string, revision: string): Promise<boolean> => {
       const named = `${root}/${path}`;
       const target = join(copy.repository, nameOf(path));
@@ -3078,9 +3083,15 @@ export class LocalCopies {
           lines.push(busy);
           continue;
         }
-        const content = conflict.content ?? whole(await this.revisionText(named, conflict.revision), change.content);
-        await placed(work, join(copy.repository, nameOf(path)), content);
-        manifest.files[path] = { revision: conflict.revision, sha256: digest(content), bytes: Buffer.byteLength(content), conflicted: true };
+        const { text, current } = await this.merged(named, path, schema, change, conflict.revision, conflict.content);
+        await placed(work, join(copy.repository, nameOf(path)), text);
+        if (current !== undefined) {
+          manifest.files[path] = { revision: conflict.revision, sha256: digest(current), bytes: Buffer.byteLength(current) };
+          again.changes.push({ op: 'write', path: named, content: text, base: conflict.revision });
+          again.read[path] = { name: nameOf(path), sha256: digest(text) };
+          continue;
+        }
+        manifest.files[path] = { revision: conflict.revision, sha256: digest(text), bytes: Buffer.byteLength(text), conflicted: true };
         lines.push(`${named}: conflict markers written; ${followed ? 'the next save sends it once its markers go' : 'resolve them, then run house upload again'}`);
         continue;
       }
@@ -3118,7 +3129,22 @@ export class LocalCopies {
       } else lines.push(busy);
     }
     await writeManifest(copy.repository, work, manifest);
-    return lines;
+    return { lines, again };
+  }
+
+  private async merged(
+    named: string,
+    path: string,
+    schema: string | null,
+    change: Extract<Change, { op: 'write' }>,
+    revision: string,
+    answer: string | undefined,
+  ): Promise<{ text: string; current?: string }> {
+    const { fieldMerged, whole } = await import('./merge.ts');
+    if (answer === undefined) return { text: whole(await this.revisionText(named, revision), change.content) };
+    const current = await this.revisionText(named, revision);
+    const merged = fieldMerged(path, schema, await this.revisionText(named, change.base!), current, change.content, answer);
+    return merged.settled ? { text: merged.text, current } : { text: merged.text };
   }
 
   private async textOf(written: Written, sent: string | undefined): Promise<string> {

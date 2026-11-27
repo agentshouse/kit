@@ -153,15 +153,6 @@ export function digest(bytes: Buffer | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function lines(text: string): string[] {
-  return text === '' ? [] : text.split(/(?<=\n)/);
-}
-
-function ended(chunk: string[]): string[] {
-  const last = chunk.at(-1);
-  return last === undefined || last.endsWith('\n') ? chunk : [...chunk.slice(0, -1), `${last}\n`];
-}
-
 function matched(left: string[], right: string[]): Map<number, number> {
   const table = Array.from({ length: left.length + 1 }, () => new Array<number>(right.length + 1).fill(0));
   for (let i = left.length - 1; i >= 0; i--) {
@@ -179,27 +170,29 @@ function matched(left: string[], right: string[]): Map<number, number> {
 }
 
 export function merged3(base: string, current: string, yours: string): { merged: string } | { conflicted: string } {
-  const [o, a, b] = [lines(base), lines(current), lines(yours)];
+  const [o, a, b] = [base.split('\n'), current.split('\n'), yours.split('\n')];
   const [toA, toB] = [matched(o, a), matched(o, b)];
+  const same = (left: string[], right: string[]) => left.length === right.length && left.every((line, index) => line === right[index]);
   const out: string[] = [];
   let conflicted = false;
   let [io, ia, ib] = [0, 0, 0];
   const syncs = [...o.keys()].filter((index) => toA.has(index) && toB.has(index));
   for (const sync of [...syncs, o.length]) {
     const [ea, eb] = sync === o.length ? [a.length, b.length] : [toA.get(sync)!, toB.get(sync)!];
-    const [co, ca, cb] = [o.slice(io, sync).join(''), a.slice(ia, ea), b.slice(ib, eb)];
-    if (ca.join('') === co) out.push(...cb);
-    else if (cb.join('') === co || ca.join('') === cb.join('')) out.push(...ca);
+    const [co, ca, cb] = [o.slice(io, sync), a.slice(ia, ea), b.slice(ib, eb)];
+    if (same(ca, co)) out.push(...cb);
+    else if (same(cb, co) || same(ca, cb)) out.push(...ca);
     else {
       conflicted = true;
-      out.push('<<<<<<< current\n', ...ended(ca), '=======\n', ...ended(cb), '>>>>>>> yours\n');
+      out.push('<<<<<<< current', ...ca, '=======', ...cb, '>>>>>>> yours');
     }
     if (sync < o.length) {
       out.push(o[sync]!);
       [io, ia, ib] = [sync + 1, ea + 1, eb + 1];
     }
   }
-  return conflicted ? { conflicted: out.join('') } : { merged: out.join('') };
+  const text = out.join('\n');
+  return conflicted ? { conflicted: text } : { merged: text };
 }
 
 let revisions = 0;

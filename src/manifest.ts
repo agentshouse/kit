@@ -8,7 +8,7 @@ export const MANIFEST = '.house';
 
 const GIT = '.git';
 
-const MARKER = /^(?:<{7}|={7}|>{7})(?: .*)?$/m;
+const MARKER = /^(?:<{7}|>{7})(?: .*)?$/m;
 
 export interface Entry {
   revision: string;
@@ -163,7 +163,11 @@ export function leftIn(repository: string): Promise<string[]> {
   return walked(repository, async () => undefined);
 }
 
+export function holdsMarker(text: string): boolean {
+  return MARKER.test(text);
+}
+
 export async function marked(repository: string, name: string): Promise<boolean> {
   const text = await readFile(join(repository, name), 'utf8').catch(() => null);
-  return text !== null && MARKER.test(text);
+  return text !== null && holdsMarker(text);
 }
