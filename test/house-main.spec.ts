@@ -1,5 +1,5 @@
 import { CONVERSATION_META_KEY, FUNCTION_RUN_META_KEY, KIT_WIRE, KIT_WIRE_HEADER } from '@agentshouse/kit-wire';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { chmod, open, readFile, writeFile } from 'node:fs/promises';
@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { ownerSocket } from '../src/home.ts';
 import { startHouse, type House } from './double.ts';
-import { helpLine, LISTING, shelled, type McpCall } from './environment.ts';
+import { shelled, type McpCall } from './environment.ts';
+import { HELP_META, LISTING, listed } from './listing.ts';
 import { accountOf, runKit, temporaryHome } from './kit.ts';
 import { startRelay, type Relay } from './relay-double.ts';
 import { startStore, uploadTool, type Store } from './store.ts';
@@ -18,8 +19,9 @@ import { startStore, uploadTool, type Store } from './store.ts';
 const HOUSE = fileURLToPath(new URL('../src/house-main.ts', import.meta.url));
 const MEMORY = fileURLToPath(new URL('./memory.ts', import.meta.url));
 const FAST_TIMEOUTS = fileURLToPath(new URL('./fast-timeouts.ts', import.meta.url));
-const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
-const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
+const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments or its ops; house help <tool> <op>: an op's arguments";
+const ARGUMENTS = 'the arguments are one JSON object, in single quotes or on stdin after -';
+const LONG = '`true` raises the limit of a cut answer from 2 KB to 100 KB.';
 const UPLOAD =
   "upload: in a Room's Local copy, sends at once every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, as Kit's next save would; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
 const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
@@ -66,7 +68,7 @@ async function connected(house: House, enrolled = true): Promise<string> {
   if (enrolled) await writeFile(join(home, 'credential.json'), JSON.stringify({ house: house.origin, environment: 'environment-one', credential: 'ahk_kit' }));
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
-    const result = message.method === 'tools/list' ? { tools: LISTING } : shelled(`found for ${String(message.params.arguments?.query)}`);
+    const result = message.method === 'tools/list' ? listed(message.params) : shelled(`found for ${String(message.params.arguments?.query)}`);
     return { body: { jsonrpc: '2.0', id: message.id, result } };
   });
   return home;
@@ -84,6 +86,7 @@ it("sends a Tool call outside a conversation to House's root under the Kit crede
   expect(call).toMatchObject({ path: '/', headers: { authorization: 'Bearer ahk_kit' } });
   const { params } = call!.body as McpCall;
   expect(params).toMatchObject({ name: 'search', arguments: { query: 'invoice' } });
+  expect(params.arguments).toEqual({ query: 'invoice' });
   expect(params._meta['agents.house/agent-operation']).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(params._meta).not.toHaveProperty(CONVERSATION_META_KEY);
   expect(params._meta).not.toHaveProperty(FUNCTION_RUN_META_KEY);
@@ -101,16 +104,6 @@ it("reads a Tool's arguments from stdin after -, so an update larger than one Li
 
   expect(ran).toEqual({ status: 0, stdout: 'applied\n', stderr: '' });
   expect((house.requests[0]!.body as McpCall).params).toMatchObject({ name: 'update', arguments: { changes } });
-});
-
-it('refuses arguments on stdin that are no JSON object with the form they take', async () => {
-  const house = await startHouse();
-  const home = await connected(house);
-
-  const ran = await runHouse(home, ['search', '-'], undefined, [], {}, 'invoice');
-
-  expect(ran).toEqual({ status: 1, stdout: '', stderr: `house: ${ARGUMENTS}\n` });
-  expect(house.requests).toEqual([]);
 });
 
 it("names the Kit's wire in a header on its call to House's MCP door", async () => {
@@ -389,18 +382,6 @@ it('prints the revision House answers and posts no bytes when the path already h
   expect((house.requests[0]!.body as McpCall).params.arguments).toMatchObject({ media_type: 'image/png' });
 });
 
-it("lists the Tools House lists as its help, asking under the Kit credential with no operation id", async () => {
-  const house = await startHouse();
-  const home = await connected(house);
-
-  const ran = await runHouse(home, ['--help']);
-
-  expect(ran.status).toBe(0);
-  for (const tool of LISTING) expect(ran.stdout).toContain(helpLine(tool));
-  expect(house.requests.map((request) => request.headers.authorization)).toEqual(['Bearer ahk_kit']);
-  expect((house.requests[0]!.body as McpCall).params._meta).not.toHaveProperty('agents.house/agent-operation');
-});
-
 it('says a write may have taken effect when House answers with no result, and to read before repeating it', async () => {
   const house = await startHouse();
   const home = await connected(house);
@@ -544,16 +525,37 @@ function listing(house: House, tools: unknown[]): void {
   });
 }
 
-it("prints the same help for house help as for house --help, naming house help <tool>, listing help, the Kit's own verbs, both forms of upload and download and agent run, and no Git sync verb", async () => {
+function pasted(line: string): unknown {
+  const command = line.slice('example: house '.length);
+  return JSON.parse(execFileSync('sh', ['-c', `set -- ${command}; printf %s "$2"`], { encoding: 'utf8' }));
+}
+
+const HOUSE_HELP = [
+  USAGE,
+  'shell: Read Rooms',
+  'info: Show details',
+  'update: Change documents',
+  'guide: Read the Guide',
+  'agent_update: Change Agents and conversations',
+  ...KIT_VERBS,
+  UPLOAD,
+  DOWNLOAD,
+  AGENT_RUN,
+];
+
+it("prints house help as the usage line, one line per Tool House's help listing names, its name and title, and one per Kit verb, the same for house --help, asking under the Kit credential with no operation id", async () => {
   const house = await startHouse();
   const home = await connected(house);
 
   const help = await runHouse(home, ['help']);
   const dashed = await runHouse(home, ['--help']);
 
-  expect(help).toEqual(dashed);
-  expect(help.status).toBe(0);
-  expect(help.stdout.split('\n').slice(0, 11)).toEqual([USAGE, 'help [tool]', ...KIT_VERBS, UPLOAD, DOWNLOAD, AGENT_RUN]);
+  expect(help).toEqual({ status: 0, stdout: `${HOUSE_HELP.join('\n')}\n`, stderr: '' });
+  expect(dashed).toEqual(help);
+  expect(house.requests.map((request) => request.headers.authorization)).toEqual(['Bearer ahk_kit', 'Bearer ahk_kit']);
+  const asked = house.requests.map((request) => (request.body as McpCall).params);
+  expect(asked.map((params) => params._meta[HELP_META])).toEqual([true, true]);
+  expect(asked.map((params) => params._meta)).not.toContainEqual(expect.objectContaining({ 'agents.house/agent-operation': expect.anything() }));
   expect(help.stdout).not.toMatch(/\bcommit\b|\brebase\b|house push|house fetch|git (?:push|fetch|pull)/);
 });
 
@@ -573,53 +575,51 @@ it("runs a Kit verb where House lists a Tool of its name", async () => {
   expect(house.requests).toEqual([]);
 });
 
-it('lists a Tool without a description in house --help with its top-level arguments, and a described Tool by its line alone', async () => {
-  const house = await startHouse();
-  const home = await connected(house);
-  listing(house, [...LISTING, { name: 'about_house', inputSchema: { type: 'object' } }]);
-
-  const help = await runHouse(home, ['--help']);
-
-  expect(help.stdout).toContain(
-    [
-      'update',
-      '  changes (required): The changes, each with an `op`.',
-      '  mount: An empty folder; every change creates a document in it, all or none.',
-      'records_append: Add a record to a Room, stored as given.',
-    ].join('\n'),
-  );
-  expect(help.stdout).toContain('info: Provenance and revisions; `shell` reads current file text.\nupdate\n');
-  expect(help.stdout.endsWith('\nabout_house\n')).toBe(true);
-});
-
 it.each([
   [
-    'update',
+    'shell',
     [
-      'update',
-      '  changes (required): The changes, each with an `op`.',
-      '    - op "set_field" (required)',
-      '      path (required): The file.',
-      "      field (required): The field's key.",
-      '      base: The `v_` revision you read; for a field, its old value.',
-      '      value (required): Its new value.',
-      '    - op "rename" (required)',
-      '      path (required): The file.',
-      '      to (required): The new path; links to it follow.',
-      '      base: The `v_` revision you read.',
-      '  mount: An empty folder; every change creates a document in it, all or none.',
+      'shell: Read-only shell over `/rooms/<handle>`.',
+      '  command (required, 1 to 16000 characters): The command line.',
+      '  cwd (at least 1 character): Starting directory; default `/`.',
+      `  long: ${LONG}`,
+      `example: house shell '{"command":"rg -n \\"deadline\\" /rooms/team-notes"}'`,
     ],
   ],
   [
     'info',
     [
-      'info: Provenance and revisions; `shell` reads current file text.',
-      '  path (required): A file path.',
-      '  view "sources" | "history": Optional `history`, or `sources` for a captured item.',
+      'info: Details of whatever `path` names.',
+      '  path (at least 1 character): Any link or reference.',
+      '  history: `true` lists its revisions, newest first.',
+      '  cursor (1 to 4096 characters): The `next_cursor` of the answer before.',
+      `  long: ${LONG}`,
+      `example: house info '{"path":"/rooms/team-notes/plan.md"}'`,
     ],
   ],
-  ['get_started', ['get_started']],
-])("prints %s's help as its arguments, each alternative of a oneOf with its own, for house help <tool> as for house <tool> --help", async (tool, expected) => {
+  [
+    'update',
+    [
+      'update: Change documents',
+      '  changes (required, 1 to 10000 items): The changes, each with an `op`, applied all or none.',
+      '  mount (at least 1 character): An empty folder; every change creates a document in it, all or none.',
+      `  long: ${LONG}`,
+      '  write path content [base]',
+      '  move path to [base]',
+      '  delete path [base]',
+    ],
+  ],
+  [
+    'agent_update',
+    [
+      'agent_update: Change Agents and conversations',
+      '  create environment [cli] model [compaction_threshold]',
+      '  request_send room [agent_function] payload [copy]',
+      '  conversation_send conversation text',
+    ],
+  ],
+  ['guide', ['guide: House’s guides and formats.', '  open [paths] [cursor]', '  search query [cursor]']],
+])("prints house help %s from House's help listing, a Tool's arguments with their limits and its example, a family's ops one line each, update's own arguments first, the same for house <tool> --help", async (tool, expected) => {
   const house = await startHouse();
   const home = await connected(house);
 
@@ -628,6 +628,93 @@ it.each([
 
   expect(help).toEqual({ status: 0, stdout: `${expected.join('\n')}\n`, stderr: '' });
   expect(dashed).toEqual(help);
+  expect(house.requests.map((request) => (request.body as McpCall).params._meta[HELP_META])).toEqual([true, true]);
+});
+
+it.each([
+  [
+    ['agent_update', 'conversation_send'],
+    [
+      'agent_update conversation_send',
+      '  conversation (required): The conversation; for `mail`, one from `agent` `conversations`.',
+      '  text (required, 1 to 100000 characters): `mail`: the mail; `conversation_send`: the message.',
+      `example: house agent_update '{"op":"conversation_send","conversation":"0199c58f-219e-7cb0-bb53-f16947ccf25e","text":"Summarise what'\\''s changed today."}'`,
+    ],
+  ],
+  [
+    ['agent_update', 'create'],
+    [
+      'agent_update create',
+      '  environment (required): Its Environment.',
+      '  cli "claude-agent-acp" | "codex-acp" | "grok-build": Its CLI.',
+      '  model (required, at least 1 character): Its model as the CLI names it.',
+      '  compaction_threshold (more than 0, at most 2147483647): The context past which House compacts a conversation; null for never.',
+      `example: house agent_update '{"op":"create","environment":"0199c5fd-aeeb-7757-a9fa-e923d5a4fd12","cli":"claude-agent-acp","model":"opus"}'`,
+    ],
+  ],
+  [
+    ['update', 'move'],
+    [
+      'update move',
+      '  path (required, at least 1 character): The document or attachment.',
+      '  to (required, at least 1 character): The new path; links to it follow.',
+      '  base (1 to 64 characters): The `v_` revision you read; a folder’s `move` takes `{name: revision}`.',
+      `example: house update '{"changes":[{"op":"move","path":"/rooms/team-notes/plan.md","to":"/rooms/team-notes/archive/plan.md"}]}'`,
+    ],
+  ],
+  [
+    ['guide', 'open'],
+    [
+      'guide open',
+      '  paths (at least 1 item, each 1 to 200 characters): The pages `open` answers; none for `index`.',
+      '  cursor (1 to 4096 characters): The `next_cursor` of the answer before.',
+      `example: house guide '{"op":"open","paths":["reference/triggers"]}'`,
+    ],
+  ],
+])("prints house help %j as that op's arguments with their wording and limits and its example in the CLI's form, which pastes as the op's example", async (named, expected) => {
+  const house = await startHouse();
+  const home = await connected(house);
+
+  const help = await runHouse(home, ['help', ...named]);
+
+  expect(help).toEqual({ status: 0, stdout: `${expected.join('\n')}\n`, stderr: '' });
+  const [tool, op] = named as [string, string];
+  const held = LISTING.find((one) => one.name === tool)!._meta[HELP_META];
+  expect(pasted(expected.at(-1)!)).toEqual('ops' in held ? held.ops[op]!.example : undefined);
+});
+
+it.each([
+  [['help', 'agent_update', 'conversation_ask'], 'agent_update has no op conversation_ask; house help agent_update lists what it takes'],
+  [['help', 'update', 'set_field'], 'update has no op set_field; house help update lists what it takes'],
+  [['help', 'shell', 'run'], 'shell has no op run; house help shell lists what it takes'],
+  [['help', 'agent_update', 'constructor'], 'agent_update has no op constructor; house help agent_update lists what it takes'],
+  [['help', 'search'], 'search is no Tool; house help lists the Tools'],
+  [['help', 'search', 'pages'], 'search is no Tool; house help lists the Tools'],
+  [['search', '--help'], 'search is no Tool; house help lists the Tools'],
+])('refuses house %j naming the help that lists what there is', async (argv, refusal) => {
+  const house = await startHouse();
+  const home = await connected(house);
+
+  const ran = await runHouse(home, argv);
+
+  expect(ran).toEqual({ status: 1, stdout: '', stderr: `house: ${refusal}\n` });
+});
+
+it.each([
+  [['shell', '-'], `${ARGUMENTS}, like house shell '{"command":"rg -n \\"deadline\\" /rooms/team-notes"}'`],
+  [['update', '-'], `${ARGUMENTS}, like house update '{"changes":[{"op":"write","path":"/rooms/team-notes/plan.md","content":"# Plan\\n\\nShip the beta on Friday.\\n"}]}'`],
+  [['agent_update', '-'], `${ARGUMENTS}, like house agent_update '{"op":"create","environment":"0199c5fd-aeeb-7757-a9fa-e923d5a4fd12","cli":"claude-agent-acp","model":"opus"}'`],
+  [['upload', '-'], `${ARGUMENTS}, like house upload '{"path":"/rooms/team-notes/photos"}'`],
+  [['download', '-'], `${ARGUMENTS}, like house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}'`],
+  [['search', '-'], 'search is no Tool; house help lists the Tools'],
+])('refuses house %j given arguments that are no JSON object with the named Tool\'s example, a family\'s first op\'s, and sends no call', async (argv, refusal) => {
+  const house = await startHouse();
+  const home = await connected(house);
+
+  const ran = await runHouse(home, argv, undefined, [], {}, '["invoice"]');
+
+  expect(ran).toEqual({ status: 1, stdout: '', stderr: `house: ${refusal}\n` });
+  expect(house.requests.map((request) => (request.body as McpCall).method).filter((method) => method !== 'tools/list')).toEqual([]);
 });
 
 it.each([
@@ -680,6 +767,16 @@ it.each([
     { root: { $ref: '#/$defs/node' } },
     ['  root', '    title: Its title.', '    children'],
   ],
+  [
+    'limits on a nested argument, an item and each alternative',
+    {
+      when: { type: 'object', properties: { every: { type: 'integer', minimum: 1, maximum: 60, description: 'Minutes.' } } },
+      tags: { type: 'array', maxItems: 20, items: { type: 'string', enum: ['red', 'blue'] } },
+      name: { anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }] },
+      level: { anyOf: [{ type: 'string', const: 'all' }, { type: 'number', exclusiveMaximum: 1 }] },
+    },
+    ['  when', '    every (1 to 60): Minutes.', '  tags (at most 20 items, each "red" | "blue")', '  name (at most 200 characters)', '  level "all" (less than 1)'],
+  ],
 ])('prints the arguments of %s', async (_shape, properties, expected) => {
   const house = await startHouse();
   const home = await connected(house);
@@ -687,18 +784,21 @@ it.each([
     'a/b~1c': { type: 'string', description: 'From the target.' },
     node: { type: 'object', properties: { title: { type: 'string', description: 'Its title.' }, children: { type: 'array', items: { $ref: '#/$defs/node' } } } },
   };
-  listing(house, [{ name: 'shape', inputSchema: { type: 'object', properties, $defs } }]);
+  const inputSchema = { type: 'object', properties, $defs };
+  listing(house, [{ name: 'shape', title: 'Shape', inputSchema, _meta: { [HELP_META]: { inputSchema, example: {} } } }]);
 
   const help = await runHouse(home, ['help', 'shape']);
 
-  expect(help).toEqual({ status: 0, stdout: `${['shape', ...expected].join('\n')}\n`, stderr: '' });
+  expect(help).toEqual({ status: 0, stdout: `${['shape: Shape', ...expected, "example: house shape '{}'"].join('\n')}\n`, stderr: '' });
 });
 
 it.each([
   [['update', '{"changes":[{"op":"write","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
   [['rooms_list', '{}', '--bogus'], '--bogus'],
   [['--version'], '--version'],
-  [['help', 'update', '{}'], '{}'],
+  [['shell', '{"command":"ls"}', 'twice'], 'twice'],
+  [['help', 'login', 'now'], 'now'],
+  [['help', 'upload', 'write'], 'write'],
 ])('refuses house %j with its usage before it calls House', async (argv, unexpected) => {
   const house = await startHouse();
   const home = await connected(house);

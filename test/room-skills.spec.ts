@@ -145,7 +145,7 @@ it("writes into a copied Room's folder, in .agents/skills and .claude/skills ali
   expect(await recorded(notes)).toEqual(record([OWNED, SECOND], [FIRST, SECOND, OWNED, NEWER]));
   expect(((await recorded(notes)) as { sources: unknown }).sources).toEqual({ [FIRST]: 'environment', [SECOND]: expect.stringMatching(/^house:[0-9a-f]{64}$/u) });
   expect(Object.keys((await manifestOf(notes)).files)).toEqual(['a.md']);
-  expect(roomAsks(hosted)).toEqual([{ op: 'skill', room: notes.ref }]);
+  expect(roomAsks(hosted)).toEqual([{ op: 'skill', room: notes.ref, long: true }]);
 });
 
 it("writes a member's own skill of a listed name in place of the Room owner's, and leaves a skill folder of a listed name it did not write as it is, writing nothing under that name", async () => {
@@ -333,7 +333,7 @@ it("asks House nothing of a Room's skills at a connection's opening or a notice 
   await until(async () => (await readFile(join(notes.repository, '.agents', 'skills', OWNED, 'SKILL.md'), 'utf8').catch(() => null)) === MINE['SKILL.md']);
   await settle();
 
-  expect(roomAsks(hosted).slice(asked)).toEqual([{ op: 'skill', room: notes.ref }]);
+  expect(roomAsks(hosted).slice(asked)).toEqual([{ op: 'skill', room: notes.ref, long: true }]);
   expect(await written(plans.repository, SECOND)).toEqual(await packaged(SECOND));
   expect(await written(chat, SECOND)).toEqual(await packaged(SECOND));
 });
@@ -396,7 +396,7 @@ it("reads the Room's skills whole where House cuts their files across the pages 
   expect(await written(notes.repository, SECOND)).toEqual(await packaged(SECOND));
   expect(await written(notes.repository, 'tail')).toEqual({ 'SKILL.md': 'Tail.\n' });
   expect(roomAsks(hosted)).toEqual([
-    { op: 'skill', room: notes.ref },
-    ...['1', '2', '3', '4'].map((cursor) => ({ op: 'skill', room: notes.ref, cursor })),
+    { op: 'skill', room: notes.ref, long: true },
+    ...['1', '2', '3', '4'].map((cursor) => ({ op: 'skill', room: notes.ref, cursor, long: true })),
   ]);
 });

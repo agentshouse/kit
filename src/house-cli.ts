@@ -18,19 +18,30 @@ import {
 import { DEFAULT_MAX_SIZE, UPDATE_PATH } from './copies.ts';
 import { ownerSocket } from './home.ts';
 import { fileDigest, MANIFEST } from './manifest.ts';
-import { DISCONNECTED, environmentCall, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
+import { DISCONNECTED, environmentCall, HELP_META_KEY, rpc, unconfirmed, UNREACHABLE, type ToolResult } from './mcp.ts';
 import { refusalOf } from './refusals.ts';
 import { proxyUnlessRelayed } from './relay.ts';
 import { parse } from 'yaml';
 
+type Example = Record<string, unknown>;
+
+interface OpHelp {
+  inputSchema: Schema;
+  example: Example;
+}
+
+type ToolHelp = { inputSchema: Schema; example: Example } | { inputSchema: Schema; ops: Record<string, OpHelp> };
+
 interface Tool {
   name: string;
+  title: string;
   description?: string;
-  inputSchema: Schema;
+  _meta: { [HELP_META_KEY]: ToolHelp };
 }
 
 interface Schema {
   $ref?: string;
+  type?: string | string[];
   description?: string;
   properties?: Record<string, Schema>;
   required?: string[];
@@ -39,6 +50,14 @@ interface Schema {
   anyOf?: Schema[];
   const?: unknown;
   enum?: unknown[];
+  minLength?: number;
+  maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
 }
 
 interface Description {
@@ -55,18 +74,19 @@ interface KitVerb {
   run(args: string[]): Promise<void>;
 }
 
-const USAGE = "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments";
-const HELP = 'help [tool]';
+const USAGE =
+  "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments or its ops; house help <tool> <op>: an op's arguments";
 const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
 const UPLOAD =
   "upload: in a Room's Local copy, sends at once every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, as Kit's next save would; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
-const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
+const DOWNLOAD_FORM = `house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}'`;
+const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or ${DOWNLOAD_FORM}, adding "ref" for a revision`;
 const DOWNLOAD = `download: brings House's changes into every Room's Local copy at once, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next save to merge; a copy holds the Room's documents and only the attachments asked for there, a conversation's copy linking each one already on this computer, and a download brings no attachment nobody asked for and brings each one the copy holds that another writer changed at its new revision, linked where this computer holds it; --with-attachments brings each attachment the copy lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
 const AGENT_RUN =
   'agent run: starts each of "runs" by agent_update request_send, prints its name and reference, and waits until every Run is idle, failed, not started, declined, withdrawn or deleted, printing each one\'s state and never its message; exits 0 only when every Run is idle; with "refs" it starts nothing and waits again';
 const MAX_SIZE = `--max-size takes a number of megabytes; ${DOWNLOAD_USAGE}`;
 const MEGABYTES = /^\d+(?:\.\d+)?$/;
-const ARGUMENTS = `the arguments are one JSON object, in single quotes or on stdin after -, like house search '{"query":"invoice"}'`;
+const ARGUMENTS = 'the arguments are one JSON object, in single quotes or on stdin after -';
 const CLOSED = 'this House connection is closed; nothing to do from here';
 const SANDBOXED = "your CLI's sandbox kept house from House; run house directly, not through another program";
 const REVOKED = 'this conversation no longer has House access; nothing to do from here';
@@ -120,8 +140,23 @@ async function mcp<T>(method: string, params: Record<string, unknown>, operation
   return answer.result!;
 }
 
-async function tools(): Promise<Tool[]> {
-  return (await mcp<{ tools: Tool[] }>('tools/list', {})).tools;
+async function listing(): Promise<Tool[]> {
+  return (await mcp<{ tools: Tool[] }>('tools/list', { _meta: { [HELP_META_KEY]: true } })).tools;
+}
+
+async function listed(name: string): Promise<Tool> {
+  const tool = (await listing()).find((one) => one.name === name);
+  if (tool === undefined) throw new Error(`${name} is no Tool; house help lists the Tools`);
+  return tool;
+}
+
+function cliForm(name: string, example: Example): string {
+  return `house ${name} '${JSON.stringify(example).replaceAll("'", "'\\''")}'`;
+}
+
+async function exampleOf(name: string): Promise<string> {
+  const help = (await listed(name))._meta[HELP_META_KEY];
+  return cliForm(name, 'ops' in help ? Object.values(help.ops)[0]!.example : help.example);
 }
 
 function unreadable(path: string, error: unknown): Error {
@@ -145,7 +180,7 @@ async function download(args: string[]): Promise<string> {
     return copyVerb('/copy/download', { attachments: flags.has('--with-attachments'), max_size: maxSize, cwd: process.cwd() });
   }
   if (valued !== -1 || flags.has('--with-attachments')) throw unexpected(valued !== -1 ? '--max-size' : '--with-attachments', DOWNLOAD_USAGE);
-  const { file, ...selected } = await argumentsOf(argument);
+  const { file, ...selected } = await argumentsOf(argument, async () => DOWNLOAD_FORM);
   if (typeof file !== 'string' || file === '') throw new Error('download needs "file", the local file to write');
   const written = resolve(file);
   await downloaded(
@@ -222,20 +257,20 @@ async function copyVerb(path: string, body: Record<string, unknown>): Promise<st
 async function uploadVerb(args: string[]): Promise<string> {
   const { flags, positionals: [argument] } = accepted(args, ['--help'], 1, UPLOAD_USAGE);
   if (flags.has('--help')) return `${UPLOAD_USAGE}\n${UPLOAD}`;
-  if (argument !== undefined) return upload(await argumentsOf(argument));
+  if (argument !== undefined) return upload(await argumentsOf(argument, () => exampleOf('upload')));
   return copyVerb('/copy/upload', { cwd: process.cwd() });
 }
 
-async function argumentsOf(argument: string | undefined): Promise<Record<string, unknown>> {
+async function argumentsOf(argument: string | undefined, like: () => Promise<string>): Promise<Record<string, unknown>> {
   if (argument === undefined) return {};
   const given = argument === '-' ? await textOf(process.stdin) : argument;
   let parsed: unknown;
   try {
     parsed = JSON.parse(given);
   } catch {
-    throw new Error(ARGUMENTS);
+    parsed = null;
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error(ARGUMENTS);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error(`${ARGUMENTS}, like ${await like()}`);
   return parsed as Record<string, unknown>;
 }
 
@@ -257,17 +292,59 @@ function expanded(schema: Schema, root: Schema, refs: ReadonlySet<string>): { sc
   return refs.has(schema.$ref) ? null : { schema: resolved(schema, root), refs: new Set([...refs, schema.$ref]) };
 }
 
-// One line per argument: its name, its value when it has one or a few, whether it is required, and its
-// description. When deep, the arguments its value holds follow it.
-function argumentLines(schema: Schema, root: Schema, indent: string, deep: boolean, refs: ReadonlySet<string> = new Set()): string[] {
+function counted(least: number | undefined, most: number | undefined, unit: string): string[] {
+  const of = (count: number) => `${count} ${unit}${count === 1 ? '' : 's'}`;
+  if (least !== undefined && most !== undefined) return [`${least} to ${of(most)}`];
+  if (least !== undefined) return [`at least ${of(least)}`];
+  return most === undefined ? [] : [`at most ${of(most)}`];
+}
+
+function ranged({ minimum, maximum, exclusiveMinimum, exclusiveMaximum }: Schema): string[] {
+  if (minimum !== undefined && maximum !== undefined) return [`${minimum} to ${maximum}`];
+  return [
+    ...(minimum !== undefined ? [`at least ${minimum}`] : exclusiveMinimum !== undefined ? [`more than ${exclusiveMinimum}`] : []),
+    ...(maximum !== undefined ? [`at most ${maximum}`] : exclusiveMaximum !== undefined ? [`less than ${exclusiveMaximum}`] : []),
+  ];
+}
+
+function valuesOf(schema: Schema): unknown[] {
+  return schema.const !== undefined ? [schema.const] : (schema.enum ?? []);
+}
+
+function limitsOf(schema: Schema): string[] {
+  return [...counted(schema.minLength, schema.maxLength, 'character'), ...counted(schema.minItems, schema.maxItems, 'item'), ...ranged(schema)];
+}
+
+function scalars(schema: Schema, root: Schema, refs: ReadonlySet<string>): Schema[] {
+  const value = expanded(schema, root, refs);
+  if (value === null || value.schema.properties !== undefined) return [];
+  const alternatives = value.schema.oneOf ?? value.schema.anyOf ?? [];
+  return [value.schema, ...alternatives.flatMap((alternative) => scalars(alternative, root, value.refs))];
+}
+
+function spoken(values: unknown[]): string {
+  return [...new Set(values.map((one) => JSON.stringify(one)))].join(' | ');
+}
+
+function declared(schema: Schema, root: Schema, refs: ReadonlySet<string>): { values: unknown[]; limits: string[] } {
+  const own = scalars(schema, root, refs);
+  const items = own.flatMap((one) => (one.items === undefined ? [] : scalars(one.items, root, refs)));
+  const each = [...(items.some((one) => valuesOf(one).length > 0) ? [spoken(items.flatMap(valuesOf))] : []), ...items.flatMap(limitsOf)];
+  return { values: own.flatMap(valuesOf), limits: [...new Set([...own.flatMap(limitsOf), ...each.map((limit) => `each ${limit}`)])] };
+}
+
+// One line per argument: its name, its value when it has one or a few, whether it is required, its limits
+// and its description, then the arguments its value holds.
+function argumentLines(schema: Schema, root = schema, indent = '  ', refs: ReadonlySet<string> = new Set()): string[] {
   const required = new Set(schema.required ?? []);
   return Object.entries(schema.properties ?? {}).flatMap(([name, property]) => {
     const value = resolved(property, root);
-    const values = value.const !== undefined ? [value.const] : (value.enum ?? []);
-    const words = [name, ...(values.length === 0 ? [] : [values.map((one) => JSON.stringify(one)).join(' | ')]), ...(required.has(name) ? ['(required)'] : [])];
+    const { values, limits } = declared(property, root, refs);
+    const marks = [...(required.has(name) ? ['required'] : []), ...limits];
+    const words = [name, ...(values.length === 0 ? [] : [spoken(values)]), ...(marks.length === 0 ? [] : [`(${marks.join(', ')})`])];
     const description = property.description ?? value.description;
     const line = `${indent}${words.join(' ')}${description === undefined ? '' : `: ${description}`}`;
-    return deep ? [line, ...held(property, root, `${indent}  `, refs)] : [line];
+    return [line, ...held(property, root, `${indent}  `, refs)];
   });
 }
 
@@ -280,7 +357,7 @@ function held(schema: Schema, root: Schema, indent: string, refs: ReadonlySet<st
     .map((alternative) => held(alternative, root, indent, value.refs))
     .filter((lines) => lines.length > 0);
   return [
-    ...argumentLines(value.schema, root, indent, true, value.refs),
+    ...argumentLines(value.schema, root, indent, value.refs),
     ...(value.schema.items === undefined ? [] : held(value.schema.items, root, indent, value.refs)),
     ...(alternatives.length === 1
       ? alternatives[0]!
@@ -288,30 +365,42 @@ function held(schema: Schema, root: Schema, indent: string, refs: ReadonlySet<st
   ];
 }
 
-function listed(tool: Tool): string {
-  return tool.description === undefined ? tool.name : `${tool.name}: ${tool.description}`;
+function opLine(op: string, schema: Schema): string {
+  const required = new Set(schema.required ?? []);
+  return ['  ', op, ...Object.keys(schema.properties ?? {}).map((name) => (required.has(name) ? ` ${name}` : ` [${name}]`))].join('');
+}
+
+async function houseHelp(): Promise<string> {
+  const tools = (await listing()).filter((tool) => !LOCAL.has(tool.name)).map((tool) => `${tool.name}: ${tool.title}`);
+  return [USAGE, ...tools, ...[...KIT_VERBS].map(([name, { about }]) => `${name}: ${about}`), UPLOAD, DOWNLOAD, AGENT_RUN].join('\n');
 }
 
 async function toolHelp(name: string): Promise<string> {
-  const tool = (await tools()).find((one) => one.name === name);
-  if (tool === undefined) throw new Error(`${name} is no Tool; house --help lists the Tools`);
-  return [listed(tool), ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', true)].join('\n');
+  const tool = await listed(name);
+  const help = tool._meta[HELP_META_KEY];
+  const head = `${name}: ${tool.description ?? tool.title}`;
+  if (!('ops' in help)) return [head, ...argumentLines(help.inputSchema), `example: ${cliForm(name, help.example)}`].join('\n');
+  const own = help.inputSchema.properties?.op === undefined ? argumentLines(help.inputSchema) : [];
+  return [head, ...own, ...Object.entries(help.ops).map(([op, { inputSchema }]) => opLine(op, inputSchema))].join('\n');
+}
+
+async function opHelp(name: string, op: string): Promise<string> {
+  const help = (await listed(name))._meta[HELP_META_KEY];
+  if (!('ops' in help) || !Object.hasOwn(help.ops, op)) throw new Error(`${name} has no op ${op}; house help ${name} lists what it takes`);
+  const { inputSchema, example } = help.ops[op]!;
+  return [`${name} ${op}`, ...argumentLines(inputSchema), `example: ${cliForm(name, example)}`].join('\n');
 }
 
 async function house(args: string[]): Promise<string | undefined> {
-  const { flags, positionals: [verb, argument] } = accepted(args, ['--help'], 2, USAGE);
+  const { flags, positionals: [verb, argument, op] } = accepted(args, ['--help'], 3, USAGE);
   if (flags.has('--help') && argument !== undefined) throw unexpected('--help', USAGE);
+  if (op !== undefined && (verb !== 'help' || LOCAL.has(argument!))) throw unexpected(op, USAGE);
   // house help <name> runs as house <name> --help, so both forms answer alike.
-  if (verb === 'help' && argument !== undefined) return run([argument, '--help']);
-  if (verb === undefined || verb === 'help') {
-    const listing = (await tools()).flatMap((tool) =>
-      tool.description === undefined ? [tool.name, ...argumentLines(tool.inputSchema, tool.inputSchema, '  ', false)] : [listed(tool)],
-    );
-    return [USAGE, HELP, ...[...KIT_VERBS].map(([name, { about }]) => `${name}: ${about}`), UPLOAD, DOWNLOAD, AGENT_RUN, ...listing].join('\n');
-  }
+  if (verb === 'help' && argument !== undefined) return op === undefined ? run([argument, '--help']) : opHelp(argument, op);
+  if (verb === undefined || verb === 'help') return houseHelp();
   if (flags.has('--help')) return toolHelp(verb);
-  if (verb === 'update') return update(await argumentsOf(argument));
-  return called(verb, await argumentsOf(argument));
+  const given = await argumentsOf(argument, () => exampleOf(verb));
+  return verb === 'update' ? update(given) : called(verb, given);
 }
 
 async function called(name: string, args: Record<string, unknown>, operation?: string): Promise<string> {
@@ -411,6 +500,8 @@ const KIT_VERBS = new Map<string, KitVerb>([
     },
   ],
 ]);
+
+const LOCAL: ReadonlySet<string> = new Set([...KIT_VERBS.keys(), 'upload', 'download', 'help']);
 
 async function kitVerb(name: string, verb: KitVerb, args: string[]): Promise<undefined> {
   if (verb.connection && socketPath !== undefined && !args.includes('--help')) throw new Error(`house ${name} ${INSIDE}`);

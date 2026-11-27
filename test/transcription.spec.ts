@@ -160,7 +160,7 @@ it("posts the transcript of each audio file a message links in the order it link
     ['conversation-1', lastMessage(), { path: note!.path, text: expect.stringMatching(ENGLISH) }],
     ['conversation-1', lastMessage(), { path: voice!.path, text: expect.stringMatching(RUSSIAN) }],
   ]);
-  expect(infoCalls(hosted)).toEqual(files.map((file) => ({ path: file.path })));
+  expect(infoCalls(hosted)).toEqual(files.map((file) => ({ path: file.path, long: true })));
   expect(hosted.store.requests.map((request) => request.key)).toEqual([note!.key, voice!.key]);
   expect(await readdir(hosted.workingDirectory)).toEqual([]);
   expect(await readdir(temporary)).toEqual([]);
@@ -183,7 +183,7 @@ it("writes a first message as House's instructions, then the primer it carries, 
     block(text),
     transcribed(note!.path, ENGLISH),
   ]);
-  expect(infoCalls(hosted)).toEqual([{ path: note!.path }]);
+  expect(infoCalls(hosted)).toEqual([{ path: note!.path, long: true }]);
   expect(posted(hosted)).toEqual([['conversation-1', lastMessage(), { path: note!.path, text: expect.stringMatching(ENGLISH) }]]);
   expect(hosted.store.requests.map((request) => request.key)).toEqual([note!.key]);
 });
@@ -292,7 +292,7 @@ it('closes the connection a message opened to read its links once it refuses tha
   hosted.call({ kind: 'message', text: linked('off', [voice!]), first: false });
 
   await refusedUnprompted(hosted, OFF);
-  expect(infoCalls(hosted)).toEqual([{ path: voice!.path }]);
+  expect(infoCalls(hosted)).toEqual([{ path: voice!.path, long: true }]);
   await until(async () => (await bridgeSockets(hosted)).length === 0);
 });
 
@@ -494,7 +494,7 @@ it('asks House again for an audio file whose download address the store refuses 
   hosted.call({ kind: 'message', text: linked('listen', [file!]), first: false });
 
   expect(await prompted(hosted, 0)).toEqual([block(linked('listen', [file!])), transcribed(file!.path, ENGLISH)]);
-  expect(infoCalls(hosted)).toEqual([{ path: file!.path }, { path: file!.path }]);
+  expect(infoCalls(hosted)).toEqual([{ path: file!.path, long: true }, { path: file!.path, long: true }]);
   expect(hosted.store.requests.map((request) => request.status)).toEqual([403, 200]);
 });
 

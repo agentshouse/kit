@@ -146,10 +146,10 @@ it(
     expect(uploaded).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
     const bytes = Buffer.from(JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/big.md', content: big }] }));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    expect(rooms.prepared).toEqual([{ paths: ['/rooms/notes/big.md'], bytes: bytes.length, sha256 }]);
+    expect(rooms.prepared).toEqual([{ paths: ['/rooms/notes/big.md'], bytes: bytes.length, sha256, long: true }]);
     expect(rooms.uploaded).toEqual([bytes]);
     const sent = rooms.edits().map((received) => (received.body as { params: { arguments: unknown } }).params.arguments);
-    expect(sent).toEqual([{ paths: ['/rooms/notes/big.md'], upload: { url: expect.any(String), operation: expect.any(String), bytes: bytes.length, sha256 } }, sent[0]]);
+    expect(sent).toEqual([{ paths: ['/rooms/notes/big.md'], upload: { url: expect.any(String), operation: expect.any(String), bytes: bytes.length, sha256 }, long: true }, sent[0]]);
     const operations = hosted.mcp
       .filter((received) => (received.body as { params: { name?: string } }).params.name === 'update')
       .map((received) => (received.body as { params: { _meta: Record<string, string> } }).params._meta['agents.house/agent-operation']);

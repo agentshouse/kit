@@ -861,7 +861,7 @@ it('closes the connection a message opened to read its links when its CLI does n
   hosted.call({ kind: 'message', text: 'read [plan.md](/rooms/notes/plan.md)', first: false });
 
   expect(await hosted.result(lastCall())).toEqual({ refused: "the Agent's CLI is not ready on this computer" });
-  expect(infoCalls(hosted)).toEqual([{ path: '/rooms/notes/plan.md' }]);
+  expect(infoCalls(hosted)).toEqual([{ path: '/rooms/notes/plan.md', long: true }]);
   await until(async () => (await bridgeSockets(hosted)).length === 0);
 });
 
