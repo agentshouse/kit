@@ -1016,6 +1016,10 @@ export class Conversations {
       const opened =
         resumed ?? (await step(unopened(NO_SESSION), agent.request('session/new', { cwd, mcpServers: [], _meta })));
       reader.session = opened.sessionId;
+      const renames = CLIS[route.kind]!.renames;
+      if (renames !== null && place.name !== null) {
+        await step(unopened(NO_SESSION), agent.request(renames, { sessionId: opened.sessionId, title: place.name }));
+      }
       if (opened.sessionId !== conversation.session) conversation.state = QUIET;
       const running: Running = { adapter, bridging, bridge, sessionId: opened.sessionId, killed: false, reader, work };
       const options = await step(NO_SETTINGS, this.launchSettings(running, route, opened.configOptions ?? []));

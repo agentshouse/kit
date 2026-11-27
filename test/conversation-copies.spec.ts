@@ -222,6 +222,16 @@ it("makes a conversation's copy from House's state linking each attachment the R
   expect(await held(join(hosted.workspace, 'conversations'))).toEqual(['notes']);
 });
 
+it("makes the copy of a conversation its owner renamed before its first session at the conversation's own name, which its open carries, and opens its Claude Code session with that name", async () => {
+  const { hosted, notes } = await staged([{ kind: 'claude-agent-acp' }]);
+
+  await opened(hosted, notes, 'studio-3');
+
+  expect(await cwdOf(hosted, 'session/new', 0)).toBe(copyOf(hosted, 'notes', 'studio-3'));
+  expect(await held(join(hosted.workspace, 'conversations', 'notes'))).toEqual(['studio-3']);
+  expect((await logged(hosted, 'session/new'))[0]!.params).toMatchObject({ _meta: { claudeCode: { options: { extraArgs: { name: 'studio-3' } } } } });
+});
+
 it("asks House nothing before a turn while no notice came, the first turn after the copy's making included, and downloads into a copy at once at a notice that its Room changed, reading the instructions of the copy's Room and its folder's alone and keeping what the conversation changed for its save", async () => {
   const { hosted, rooms, notes } = await staged();
   const garden = rooms.room('garden');
