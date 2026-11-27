@@ -73,7 +73,6 @@ interface RoomFolder {
 
 interface Ran {
   copy: KitRun['copy']['kind'];
-  name: string;
   code?: string;
   follows?: true;
 }
@@ -1615,11 +1614,12 @@ export class LocalCopies {
 
   private async placedCopy(conversation: string, opening: Opening, caller: Caller, launch: string, code: string | undefined): Promise<Place> {
     const kind = opening.run?.copy.kind;
+    const name = opening.run?.name ?? opening.name;
     const run =
       opening.run === undefined
         ? undefined
-        : { copy: opening.run.copy.kind, name: opening.run.name, ...(code === undefined ? {} : { code }), ...(kind === 'new' ? { follows: true as const } : {}) };
-    const place = (directory: string, copy: boolean): Place => ({ directory, copy, synced: this.followsAt(directory), name: run?.name ?? null, code: null });
+        : { copy: opening.run.copy.kind, ...(code === undefined ? {} : { code }), ...(kind === 'new' ? { follows: true as const } : {}) };
+    const place = (directory: string, copy: boolean): Place => ({ directory, copy, synced: this.followsAt(directory), name, code: null });
     if (opening.run?.copy.kind === 'none') {
       await this.session(conversation, launch, run);
       return place(launch, false);
@@ -1636,7 +1636,7 @@ export class LocalCopies {
     }
     const directory = await this.exclusive(PLACES, async () => {
       const recorded = this.places.get(conversation) ?? { copies: {} };
-      const path = recorded.copies[reached.room_ref] ?? (await this.freePath(reached.room_handle, run?.name ?? opening.name));
+      const path = recorded.copies[reached.room_ref] ?? (await this.freePath(reached.room_handle, name));
       await this.savePlace(conversation, { ...recorded, copies: { ...recorded.copies, [reached.room_ref]: path }, session: path, ...(run === undefined ? {} : { run }) });
       return path;
     });
@@ -1647,10 +1647,7 @@ export class LocalCopies {
   private async placedAgain(conversation: string, caller: Caller, launch: string): Promise<Place> {
     const held = this.places.get(conversation) ?? { copies: {} };
     const directory = held.session ?? launch;
-    const place = (copy: boolean): Place => {
-      const run = this.places.get(conversation)?.run;
-      return { directory, copy, synced: this.followsAt(directory), name: run?.name ?? null, code: run?.code ?? null };
-    };
+    const place = (copy: boolean): Place => ({ directory, copy, synced: this.followsAt(directory), name: null, code: this.places.get(conversation)?.run?.code ?? null });
     const room = Object.keys(held.copies).find((ref) => held.copies[ref] === directory);
     if (room !== undefined) {
       await this.ensured(conversation, room, directory, caller, () => this.reachedRoom(room));
