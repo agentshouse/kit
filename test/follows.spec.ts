@@ -166,7 +166,11 @@ it('sends a refused file again only with the next change, and the whole set a re
   await until(() => (doorSaves(hosted).length === 2 ? true : undefined), SAVED_MS);
   const held = { op: 'write', path: '/rooms/notes/capture/x.md', content: 'held\n' };
   expect(doorSaves(hosted).map(changesOf)).toEqual([[held, { op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nand peas\n', base: expect.any(String) }], [expect.objectContaining({ path: '/rooms/notes/plan.md' })]]);
-  expect(await recordOf(hosted, notes)).toMatchObject({ refused: { 'capture/x.md': PROTECTED } });
+  const settled = await until(async () => {
+    const record = await recordOf(hosted, notes);
+    return record.pending === undefined ? record : undefined;
+  });
+  expect(settled).toMatchObject({ refused: { 'capture/x.md': PROTECTED } });
 
   await quiet(NO_SAVE_MS);
   expect(doorSaves(hosted)).toHaveLength(2);
