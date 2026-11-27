@@ -292,7 +292,7 @@ function expanded(schema: Schema, root: Schema, refs: ReadonlySet<string>): { sc
   return refs.has(schema.$ref) ? null : { schema: resolved(schema, root), refs: new Set([...refs, schema.$ref]) };
 }
 
-function counted(least: number | undefined, most: number | undefined, unit: string): string[] {
+function bounded(least: number | undefined, most: number | undefined, unit: string): string[] {
   const of = (count: number) => `${count} ${unit}${count === 1 ? '' : 's'}`;
   if (least !== undefined && most !== undefined) return [`${least} to ${of(most)}`];
   if (least !== undefined) return [`at least ${of(least)}`];
@@ -312,7 +312,7 @@ function valuesOf(schema: Schema): unknown[] {
 }
 
 function limitsOf(schema: Schema): string[] {
-  return [...counted(schema.minLength, schema.maxLength, 'character'), ...counted(schema.minItems, schema.maxItems, 'item'), ...ranged(schema)];
+  return [...bounded(schema.minLength, schema.maxLength, 'character'), ...bounded(schema.minItems, schema.maxItems, 'item'), ...ranged(schema)];
 }
 
 function scalars(schema: Schema, root: Schema, refs: ReadonlySet<string>): Schema[] {
