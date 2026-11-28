@@ -1630,7 +1630,7 @@ it("does not return a result for a waiting message, so a restarted Kit process r
   ]);
 });
 
-it('reports a turn start and end once each under the turn id Kit gave it', async () => {
+it('reports a turn start, naming the message its prompt carries, and end once each under the turn id Kit gave it', async () => {
   const hosted = await opened();
 
   hosted.call({ kind: 'message', text: '@say Hello', first: true });
@@ -1638,7 +1638,7 @@ it('reports a turn start and end once each under the turn id Kit gave it', async
   const ended = await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/end'));
   const started = hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
   expect(started).toHaveLength(1);
-  expect(started[0]!.body).toEqual({ conversation: 'conversation-1', turn: expect.stringMatching(UUID) });
+  expect(started[0]!.body).toEqual({ conversation: 'conversation-1', turn: expect.stringMatching(UUID), message_id: lastMessage() });
   expect(idOf(ended, 'turn')).toBe(idOf(started[0]!, 'turn'));
   expect(Object.keys(without(ended, 'conversation', 'turn') as object)).toEqual(['content']);
   expect(isTurn((ended.body as { content: unknown }).content)).toBe(true);
@@ -1781,16 +1781,45 @@ it('ends a turn when Claude answers its prompt without an end notice, as it does
   expect(await ends(hosted, 1)).toEqual([{ text: 'local output' }]);
 });
 
-it.each(KINDS)('reports a turn the CLI starts by itself like any other and ends it when %s ends it', async (kind) => {
+it.each(KINDS)('reports a turn the CLI starts by itself like any other, its start naming no message where the prompted one names its own, and ends it when %s ends it', async (kind) => {
   const hosted = await opened(kind);
 
   // The CLI starts its own turn half a second after the prompted one ends, so the two stay apart.
   hosted.call({ kind: 'message', text: '@later 500 by itself', first: true });
+  const prompted = lastMessage();
 
   expect(await ends(hosted, 2)).toEqual([{ text: '' }, { text: 'by itself' }]);
   const starts = hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
   const finished = hosted.turns.filter((turn) => turn.path === '/kit/turns/end');
   expect(starts.map((turn) => idOf(turn, 'turn'))).toEqual(finished.map((turn) => idOf(turn, 'turn')));
+  expect(starts.map((turn) => without(turn, 'conversation', 'turn'))).toEqual([{ message_id: prompted }, {}]);
+});
+
+it("returns a message's Result only once House has answered the start of the turn its prompt opens, and names no message in the start of a turn a steered one joins", async () => {
+  const hosted = await opened();
+  const { promise: answered, resolve: answer } = Promise.withResolvers<void>();
+  hosted.house.route('POST', '/kit/turns/start', async (request) => {
+    hosted.turns.push(request);
+    await answered;
+    return { body: {} };
+  });
+  const release = gated(hosted, 'first');
+
+  hosted.call({ kind: 'message', text: '@gate first\n@say first', first: false });
+  const first = lastCall();
+  const prompted = lastMessage();
+  await until(async () => (await prompts(hosted)).length === 1);
+  await settle();
+
+  expect(hosted.results.map((result) => idOf(result, 'call'))).not.toContain(first);
+  answer();
+  expect(await hosted.result(first)).toEqual({});
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+  expect(await hosted.result(lastCall())).toEqual({});
+  await release();
+  expect(await ends(hosted, 1)).toEqual([{ text: 'steeredfirst' }]);
+  const starts = hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
+  expect(starts.map((turn) => without(turn, 'conversation', 'turn'))).toEqual([{ message_id: prompted }]);
 });
 
 it.each(KINDS)('reports a turn %s starts by itself when it starts it, before it writes any text', async (kind) => {

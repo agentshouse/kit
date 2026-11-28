@@ -304,6 +304,7 @@ class Turn {
   quietUntil = Infinity;
   images = 0;
   readonly uploads: Promise<unknown>[] = [];
+  reported: Promise<unknown> = Promise.resolve();
 
   constructor(emit: (operation: Operation) => void) {
     this.content = new Content(emit);
@@ -717,8 +718,10 @@ export class Conversations {
     this.starts(conversation, null);
     const line = call.text.startsWith('/') ? null : await this.unsavedText(conversation);
     const said: ContentBlock[] = line === null ? [] : [{ type: 'text', text: line }];
-    this.prompt(conversation, [...prompt, ...waiting.content, ...said], () => this.kit.calls.keepResult(call.input_id, result));
-    waiting.settle(result);
+    const turn = this.prompt(conversation, [...prompt, ...waiting.content, ...said], call.message_id, () =>
+      this.kit.calls.keepResult(call.input_id, result),
+    );
+    void turn.reported.then(() => waiting.settle(result));
   }
 
   private async unsavedText(conversation: Conversation): Promise<string | null> {
@@ -1163,14 +1166,14 @@ export class Conversations {
     for (const operation of turn.content.operations()) this.write(conversation, turn, operation);
   }
 
-  private begin(conversation: Conversation): Turn {
+  private begin(conversation: Conversation, messageId: string | null = null): Turn {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
     conversation.turns.add(turn);
-    void this.deliver(conversation, 'turns/start', turnOf(conversation, turn))
-      .then((answer) => {
-        if (answer.run === true) turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
-      })
-      .catch(logged);
+    const opened = messageId === null ? {} : { message_id: messageId };
+    const started = this.deliver(conversation, 'turns/start', { ...turnOf(conversation, turn), ...opened }).then((answer) => {
+      if (answer.run === true) turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
+    });
+    turn.reported = started.catch(logged);
     conversation.turn = turn;
     this.stated(conversation, { suggestion: null });
     for (const event of conversation.reader?.began() ?? []) this.event(conversation, event);
@@ -1202,9 +1205,9 @@ export class Conversations {
     this.changed(conversation);
   }
 
-  private prompt(conversation: Conversation, prompt: ContentBlock[], taken: () => void): void {
+  private prompt(conversation: Conversation, prompt: ContentBlock[], messageId: string | null, taken: () => void): Turn {
     const running = conversation.running!;
-    const turn = this.begin(conversation);
+    const turn = this.begin(conversation, messageId);
     turn.prompted = true;
     turn.taken = taken;
     conversation.prompted = running.sessionId;
@@ -1231,6 +1234,7 @@ export class Conversations {
         }
       },
     );
+    return turn;
   }
 
   private started(conversation: Conversation): Turn {
