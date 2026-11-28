@@ -1,5 +1,5 @@
 import { CONVERSATION_GIT_HEADER, type DesiredAgentRoute, type KitCall, type KitSkills } from '@agentshouse/kit-wire';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -125,8 +125,13 @@ export interface Hosted {
 }
 
 export async function clocked(): Promise<{ shift: (by: number) => Promise<void>; hosting: Hosting }> {
-  const file = join(await temporaryDirectory(), 'clock-shift');
-  return { shift: (by) => writeFile(file, String(by)), hosting: { environment: { KIT_CLOCK_SHIFT: file }, node: MOVED_CLOCK } };
+  const directory = await temporaryDirectory();
+  const file = join(directory, 'clock-shift');
+  const shift = async (by: number) => {
+    await writeFile(join(directory, 'clock-shift.next'), String(by));
+    await rename(join(directory, 'clock-shift.next'), file);
+  };
+  return { shift, hosting: { environment: { KIT_CLOCK_SHIFT: file }, node: MOVED_CLOCK } };
 }
 
 const IMAGE_PART_BYTES = 32;
