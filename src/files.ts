@@ -3,12 +3,13 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, rm } from 'node:fs/promises';
 import { request, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, extname, join, relative, sep } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { destinationText, isRoomHandle, linkSpans, parseRoomPath, relativePath, retarget, roomPathLink, type LinkSpan } from '@agentshouse/mdmodel';
+import { destinationText, isRoomHandle, linkSpans, parseRoomPath, relativePath, retarget, roomPathLink, writeRoomPath, type LinkSpan } from '@agentshouse/mdmodel';
 import { parseDocument } from 'yaml';
 import { resendDelay, retryDelay } from './api.ts';
+import { workspaceRoot } from './home.ts';
 import { answerDocument, Unsettled } from './mcp.ts';
 import { operationId } from './operation.ts';
 import { proxyUnlessRelayed, relayed } from './relay.ts';
@@ -104,14 +105,15 @@ export function linkedPaths(text: string): string[] {
   ];
 }
 
-export function linkedFrom(file: string, text: string): string {
+export function linkedFrom(file: string, folder: string, text: string): string {
   const from = parseRoomPath(file)!;
   let written = '';
   let cursor = 0;
   for (const span of destinations(text)) {
     const to = roomPathLink(span.href);
     if (to === null || !isRoomHandle(to.handle)) continue;
-    const destination = destinationText(retarget(span.href, relativePath(from, to) || '.'), span.bracketed);
+    const path = to.handle === from.handle ? relativePath(from, to) || '.' : relative(folder, join(workspaceRoot(), writeRoomPath(to))).split(sep).join('/');
+    const destination = destinationText(retarget(span.href, path), span.bracketed);
     if (destination === null) continue;
     written += text.slice(cursor, span.destination.start) + destination;
     cursor = span.destination.end;

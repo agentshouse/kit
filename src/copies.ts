@@ -655,9 +655,10 @@ function skillRecord(manifest: Manifest | null): RoomSkillsRecord | typeof UNWRI
 }
 
 function rehandled(copy: Copy, handle: string): Copy {
-  const from = `${rootOf(copy.room_handle)}/`;
-  const to = `${rootOf(handle)}/`;
-  const moved = (path: string) => (path.startsWith(from) ? `${to}${path.slice(from.length)}` : path);
+  const moved = (path: string) => {
+    const named = parseRoomPath(path);
+    return named?.handle === copy.room_handle ? writeRoomPath({ handle, path: named.path }) : path;
+  };
   const { upload, ...pending } = copy.pending!;
   return {
     ...copy,
@@ -1511,14 +1512,17 @@ export class LocalCopies {
   }
 
   private async currentlyNamed(copy: Copy, accepted: readonly Written[]): Promise<Copy> {
-    if (accepted.every((written) => written.path.startsWith(`${rootOf(copy.room_handle)}/`))) return copy;
+    if (accepted.every((written) => parseRoomPath(written.path)?.handle === copy.room_handle)) return copy;
     const reached = await this.reachedRoom(copy.room_ref);
     return reached === null || reached.room_handle === copy.room_handle ? copy : this.save({ ...copy, room_handle: reached.room_handle });
   }
 
   private async wroteBack(copy: Copy, changes: readonly Sent[], accepted: readonly Written[]): Promise<string[]> {
     const root = rootOf(copy.room_handle);
-    const local = (path: string) => (path.startsWith(`${root}/`) ? path.slice(root.length + 1) : null);
+    const local = (path: string) => {
+      const named = parseRoomPath(path);
+      return named?.handle === copy.room_handle ? named.path : null;
+    };
     const into: Integrating = { repository: copy.repository, manifest: await readManifest(copy.repository), work: await staging() };
     const { files } = into.manifest;
     const left = await leftIn(copy.repository);
@@ -2018,7 +2022,7 @@ export class LocalCopies {
 
   private async written(folder: string, root: string, caller: Caller, kept: boolean, reading: RoomSkillsReading): Promise<string | null> {
     const { text: read, approved } = await caller.instructions(root);
-    const text = linkedFrom(`${root}/AGENTS.md`, read);
+    const text = linkedFrom(`${root}/AGENTS.md`, folder, read);
     if (!kept) {
       await kitFiles(folder, text);
       return null;

@@ -242,6 +242,25 @@ it("makes the copy of a conversation its owner renamed before its first session 
   expect((await logged(hosted, 'session/new'))[0]!.params).toMatchObject({ _meta: { claudeCode: { options: { extraArgs: { name: 'studio-3' } } } } });
 });
 
+it("writes each link of the instructions into a conversation's copy's AGENTS.md as the relative path from that file, one into its own Room within the copy and one into another Room to that Room's folder", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const notes = rooms.room('notebook');
+  notes.put('a.md', 'one\n');
+  notes.instructions = 'Plan in [the plan](rooms/notebook/plans/q4.md#dates), [my rules](rooms/private/rooms/notebook/AGENTS.md) and [the map](<rooms/open-questions/map.md>).\n';
+  rooms.answered = [notes];
+  await rooms.download([notes]);
+
+  await opened(hosted, notes, 'Beds');
+
+  expect(await readFile(join(copyOf(hosted, 'notebook', 'Beds'), 'AGENTS.md'), 'utf8')).toBe(
+    'Plan in [the plan](plans/q4.md#dates), [my rules](../../../rooms/private/rooms/notebook/AGENTS.md) and [the map](<../../../rooms/open-questions/map.md>).\n',
+  );
+  expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(
+    'Plan in [the plan](plans/q4.md#dates), [my rules](../private/rooms/notebook/AGENTS.md) and [the map](<../open-questions/map.md>).\n',
+  );
+});
+
 it("asks House nothing before a turn while no notice came, the first turn after the copy's making included, and downloads into a copy at once at a notice that its Room changed, reading the instructions of the copy's Room and its folder's alone and keeping what the conversation changed for its save", async () => {
   const { hosted, rooms, notes } = await staged();
   const garden = rooms.room('garden');
