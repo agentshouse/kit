@@ -1148,17 +1148,21 @@ it.each([
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
 });
 
-it('lands an at-once message as the turn Codex starts for it when Codex has already reported idle the turn whose prompt it has not answered yet', async () => {
+it('lands an at-once message as the turn Codex starts for it when Codex has already reported idle the turn whose prompt it has not answered yet, that turn\'s start naming the message', async () => {
   const hosted = await opened();
   const release = gated(hosted, 'first');
   hosted.call({ kind: 'message', text: '@ended\n@gate first', first: false });
+  const first = lastMessage();
   await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
   await settle();
 
   hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+  const steered = lastMessage();
 
   expect(await hosted.result(lastCall())).toEqual({});
   expect(await ends(hosted, 1)).toEqual([{ text: 'steered' }]);
+  const starts = hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
+  expect(starts.map((turn) => without(turn, 'conversation', 'turn'))).toEqual([{ message_id: first }, { message_id: steered }]);
   await release();
   expect(await ends(hosted, 2)).toEqual([{ text: 'steered' }, { text: '' }]);
   expect(await prompts(hosted)).toEqual(['@ended\n@gate first']);

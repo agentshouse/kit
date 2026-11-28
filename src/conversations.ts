@@ -334,6 +334,11 @@ interface Launch {
   session: Promise<string>;
 }
 
+interface Steering {
+  opened: Promise<string | null>;
+  claim(turn: Turn): void;
+}
+
 interface Question {
   conversation: Conversation;
   answer(response: unknown): void;
@@ -355,6 +360,7 @@ class Conversation {
   sending: Promise<void> | null = null;
   readonly subagents = new Set<string>();
   opening: Bridge | null = null;
+  steering: Steering | null = null;
   bridge: Promise<Bridge> | null = null;
   launch: Launch | null = null;
   prompted: string | null = null;
@@ -639,6 +645,10 @@ export class Conversations {
   }
 
   private async steer(conversation: Conversation, running: Running, waiting: Waiting): Promise<void> {
+    const opened = Promise.withResolvers<string | null>();
+    const claimed = Promise.withResolvers<Turn>();
+    const steering: Steering = { opened: opened.promise, claim: claimed.resolve };
+    conversation.steering = steering;
     let outcome: unknown;
     try {
       ({ outcome } = await running.adapter.connection.agent.request<{ outcome?: unknown }>('_session/steering', {
@@ -649,14 +659,19 @@ export class Conversations {
     } catch (error) {
       outcome = error;
     }
+    const took = outcome === 'injected' || outcome === 'startedNewTurn';
+    const begun = conversation.steering !== steering;
+    opened.resolve(took ? waiting.call.message_id : null);
+    if (!begun && outcome !== 'startedNewTurn') conversation.steering = null;
     if (outcome === 'promptRequired') {
       this.ahead(conversation, waiting);
-    } else if (outcome === 'injected' || outcome === 'startedNewTurn') {
+    } else if (took) {
       if (outcome === 'injected') {
         for (const turn of conversation.turns) turn.steered ||= turn.prompted;
       }
       this.kit.calls.keepResult(waiting.call.input_id, {});
-      waiting.settle({});
+      if (begun || outcome === 'startedNewTurn') void claimed.promise.then((turn) => turn.reported).then(() => waiting.settle({}));
+      else waiting.settle({});
     } else {
       const cause = outcome instanceof Error ? outcome : new Error(`the CLI answered ${JSON.stringify(outcome)}`);
       waiting.settle({ refused: refusal(conversation, new NotStarted(UNSTEERED, { cause })) });
@@ -1166,11 +1181,17 @@ export class Conversations {
     for (const operation of turn.content.operations()) this.write(conversation, turn, operation);
   }
 
-  private begin(conversation: Conversation, messageId: string | null = null): Turn {
+  private begin(conversation: Conversation, prompted?: string | null): Turn {
     const turn: Turn = new Turn((operation) => this.write(conversation, turn, operation));
     conversation.turns.add(turn);
-    const opened = messageId === null ? {} : { message_id: messageId };
-    const started = this.deliver(conversation, 'turns/start', { ...turnOf(conversation, turn), ...opened }).then((answer) => {
+    const steering = conversation.steering;
+    conversation.steering = null;
+    steering?.claim(turn);
+    const request = Promise.resolve(prompted === undefined ? (steering?.opened ?? null) : prompted).then((messageId) => ({
+      ...turnOf(conversation, turn),
+      ...(messageId === null ? {} : { message_id: messageId }),
+    }));
+    const started = this.deliver(conversation, 'turns/start', request).then((answer) => {
       if (answer.run === true) turn.quietUntil = Date.now() + ACTIVITY_REPORT_MS;
     });
     turn.reported = started.catch(logged);
