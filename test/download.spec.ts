@@ -57,7 +57,7 @@ function updated(...rooms: Room[]): string {
 it('changes no Local copy on the agents One-way call or a Kit call, and still takes both', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   await rooms.download([room]);
   const asked = hosted.house.requests.length;
@@ -77,7 +77,7 @@ it('changes no Local copy on the agents One-way call or a Kit call, and still ta
 it('copies every Room it may sync as a plain folder as soon as it connects, and a reconnect copies none again and leaves the work in them', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   const design = rooms.room('design');
   design.put('brief.md', 'Brief\n');
@@ -104,7 +104,7 @@ it('copies every Room it may sync as a plain folder as soon as it connects, and 
 it("keeps a copied Room's documents at its root beside capture/ and collaboration/, marks what it may not write read-only, and makes no Git state", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.write = ['ROOM.md', 'plans'];
   room.put('ROOM.md', 'The notes Room\n');
   room.put('plans/q4.md', 'Ship it\n');
@@ -124,8 +124,8 @@ it("keeps a copied Room's documents at its root beside capture/ and collaboratio
   await writeFile(join(room.repository, 'archive/old.md'), 'changed here\n');
   await writeFile(join(room.repository, 'plans/q4.md'), 'Ship it, edited\n');
 
-  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
-  expect(room.batches.flat().map((change) => change.path)).toEqual(['/rooms/notes/plans/q4.md']);
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
+  expect(room.batches.flat().map((change) => change.path)).toEqual(['rooms/notebook/plans/q4.md']);
 
   room.put('archive/old.md', 'Read only, from House\n');
   expect(await house(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: updated(room) });
@@ -135,7 +135,7 @@ it("keeps a copied Room's documents at its root beside capture/ and collaboratio
 it('overwrites a file House changed only while it is unchanged here, keeps one changed here and a path House added that the copy holds, names each, and the next upload merges it', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   room.put('b.md', 'one\ntwo\nthree\n');
   room.put('gone.md', 'gone\n');
@@ -154,9 +154,9 @@ it('overwrites a file House changed only while it is unchanged here, keeps one c
   expect(downloaded).toEqual({
     status: 0,
     stdout: [
-      '/rooms/notes: 3 files updated from House',
-      "/rooms/notes/b.md: changed here, so House's change was not brought; the next save merges it",
-      "/rooms/notes/c.md: changed here, so House's change was not brought; the next save merges it",
+      'rooms/notebook: 3 files updated from House',
+      "rooms/notebook/b.md: changed here, so House's change was not brought; the next save merges it",
+      "rooms/notebook/c.md: changed here, so House's change was not brought; the next save merges it",
       '',
     ].join('\n'),
     stderr: '',
@@ -175,13 +175,13 @@ it('overwrites a file House changed only while it is unchanged here, keeps one c
   expect(refused).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'house: House accepted 1 file of /rooms/notes.\n/rooms/notes/c.md: conflict markers written; the next save sends it once its markers go\n',
+    stderr: 'house: House accepted 1 file of rooms/notebook.\nrooms/notebook/c.md: conflict markers written; the next save sends it once its markers go\n',
   });
   expect(room.files.get('b.md')!.content).toBe('ONE\ntwo\nTHREE\n');
   expect(await text(room, 'c.md')).toBe('<<<<<<< current\nc, theirs\n=======\nc, mine\n>>>>>>> yours\n');
   await writeFile(join(room.repository, 'c.md'), 'c, theirs and mine\n');
 
-  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
   expect(room.files.get('b.md')!.content).toBe('ONE\ntwo\nTHREE\n');
   expect(room.files.get('c.md')!.content).toBe('c, theirs and mine\n');
   expect(await text(room, 'b.md')).toBe('ONE\ntwo\nTHREE\n');
@@ -191,7 +191,7 @@ it('overwrites a file House changed only while it is unchanged here, keeps one c
 it("says nothing came from House when a download reads back only the copy's own upload", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('Meeting notes.md', 'notes\n');
   room.put('a.md', 'a\n');
   await rooms.download([room]);
@@ -206,7 +206,7 @@ it("says nothing came from House when a download reads back only the copy's own 
 it('moves or removes each attachment the copy holds as the Room does, records every skipped one, and brings skipped ones up to --max-size with --with-attachments', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('ROOM.md', 'The notes Room\n');
   room.upload('photos/small.jpg', JPEG);
   room.upload('photos/large.jpg', Buffer.alloc(2_000_001, 1));
@@ -237,13 +237,13 @@ it('moves or removes each attachment the copy holds as the Room does, records ev
   room.upload('photos/new.jpg', JPEG);
   expect(await house(hosted, '/', 'download', '--with-attachments')).toMatchObject({ status: 0, stdout: updated(room) });
   expect(await readFile(join(room.repository, 'photos/new.jpg'))).toEqual(JPEG);
-  expect(await upload(hosted, room)).toMatchObject({ stdout: 'Nothing to upload: /rooms/notes matches House.\n' });
+  expect(await upload(hosted, room)).toMatchObject({ stdout: 'Nothing to upload: rooms/notebook matches House.\n' });
 });
 
 it("leaves a held attachment's file and entry as they were where the bytes of its new revision fail their SHA-256 check, and the next download brings that revision", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('ROOM.md', 'The notes Room\n');
   room.upload('photo.jpg', JPEG);
   await rooms.download([room], '--with-attachments');
@@ -279,15 +279,15 @@ it("keeps the copied Rooms beneath the workspace kit.json names and none beneath
   const workspace = await temporaryHome();
   const hosted = await hostKit([{}], { workspace });
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('plan.md', 'plan\n');
 
   await rooms.download([notes]);
 
-  const repository = join(workspace, 'rooms', 'notes');
+  const repository = join(workspace, 'rooms', 'notebook');
   expect(await readFile(join(repository, 'plan.md'), 'utf8')).toBe('plan\n');
   expect(notes.repository).toBe(repository);
-  expect(existsSync(join(accountOf(hosted.home), 'house', 'rooms', 'notes'))).toBe(false);
+  expect(existsSync(join(accountOf(hosted.home), 'house', 'rooms', 'notebook'))).toBe(false);
 });
 
 it.each([2, 3, 5])(
@@ -316,7 +316,7 @@ it.each([2, 3, 5])(
 it('reads a Room whole again when its grant changed or House no longer holds its position, keeping what changed here', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const copied = ['notes', 'regranted', 'expired'].map((handle) => rooms.room(handle));
+  const copied = ['notebook', 'regranted', 'expired'].map((handle) => rooms.room(handle));
   const [notes, regranted, expired] = copied as [Room, Room, Room];
   for (const room of copied) {
     room.put('a.md', 'a\n');
@@ -344,7 +344,7 @@ it('reads a Room whole again when its grant changed or House no longer holds its
 it("renames a copy's folder with the handle House names, every file in it, unuploaded and conflicted ones included, and builds its paths with that handle", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('a.md', 'a\n');
   room.put('c.md', 'c\n');
   await rooms.download([room]);
@@ -357,7 +357,7 @@ it("renames a copy's folder with the handle House names, every file in it, unupl
 
   room.rehandle('renamed-notes');
   room.put('a.md', 'a, from House\n');
-  expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: '/rooms/renamed-notes: 1 file updated from House\n' });
+  expect(await rooms.download([room])).toMatchObject({ status: 0, stdout: 'rooms/renamed-notes: 1 file updated from House\n' });
 
   expect(room.repository).toBe(join(hosted.workspace, 'rooms', 'renamed-notes'));
   expect(existsSync(earlier)).toBe(false);
@@ -367,43 +367,43 @@ it("renames a copy's folder with the handle House names, every file in it, unupl
   expect(await text(room, 'c.md')).toBe(conflicted);
   expect((await manifestOf(room)).files['c.md']).toMatchObject({ conflicted: true });
   await writeFile(join(room.repository, 'c.md'), 'c, resolved\n');
-  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/renamed-notes.\n' });
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 2 files of rooms/renamed-notes.\n' });
 });
 
 it("sets aside the folder of a Room it no longer follows as ' (kept)' where another Room's folder takes its name, every file kept, and leaves the folder of a Room it stopped following under its name", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const [notes, design, lowered] = ['notes', 'design', 'lowered'].map((handle) => rooms.room(handle)) as [Room, Room, Room];
+  const [notes, design, lowered] = ['notebook', 'design', 'lowered'].map((handle) => rooms.room(handle)) as [Room, Room, Room];
   for (const room of [notes, design, lowered]) room.put('a.md', `a of ${room.handle}\n`);
   await rooms.download([notes, design, lowered]);
   await writeFile(join(notes.repository, 'draft.md'), 'draft, not uploaded\n');
-  const taken = join(hosted.workspace, 'rooms', 'notes (kept)');
+  const taken = join(hosted.workspace, 'rooms', 'notebook (kept)');
   await mkdir(taken);
   await writeFile(join(taken, 'mine.md'), 'mine\n');
   const left = notes.repository;
   await rooms.download([design]);
   notes.rehandle('old-notes');
 
-  design.rehandle('notes');
+  design.rehandle('notebook');
   expect((await rooms.download([design])).status).toBe(0);
 
   expect(design.repository).toBe(left);
   expect(await text(design, 'a.md')).toBe('a of design\n');
-  const kept = join(hosted.workspace, 'rooms', 'notes (kept) 2');
-  expect(await readFile(join(kept, 'a.md'), 'utf8')).toBe('a of notes\n');
+  const kept = join(hosted.workspace, 'rooms', 'notebook (kept) 2');
+  expect(await readFile(join(kept, 'a.md'), 'utf8')).toBe('a of notebook\n');
   expect(await readFile(join(kept, 'draft.md'), 'utf8')).toBe('draft, not uploaded\n');
   expect(await readFile(join(taken, 'mine.md'), 'utf8')).toBe('mine\n');
   expect(JSON.parse(await readFile(join(hosted.home, 'local-copies/rooms', `${notes.ref}.json`), 'utf8'))).toMatchObject({ repository: kept });
   expect(await text(lowered, 'a.md')).toBe('a of lowered\n');
-  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual(['lowered', 'notes', 'notes (kept)', 'notes (kept) 2']);
+  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual(['lowered', 'notebook', 'notebook (kept)', 'notebook (kept) 2']);
 });
 
 it("keeps a Room's folder an Agent's owner chose as its launch directory through a handle change, and leaves it where another Room's folder is to take its name, saying so", async () => {
   const home = await temporaryHome();
-  const chosen = join(accountOf(home), 'house', 'rooms', 'notes');
+  const chosen = join(accountOf(home), 'house', 'rooms', 'notebook');
   const hosted = await hostKit([{ working_directory: chosen }], { home });
   const rooms = serveRooms(hosted);
-  const [notes, design] = ['notes', 'design'].map((handle) => rooms.room(handle)) as [Room, Room];
+  const [notes, design] = ['notebook', 'design'].map((handle) => rooms.room(handle)) as [Room, Room];
   notes.put('a.md', 'a\n');
   design.put('brief.md', 'Brief\n');
   await rooms.download([notes, design]);
@@ -414,10 +414,10 @@ it("keeps a Room's folder an Agent's owner chose as its launch directory through
 
   expect(await readFile(join(chosen, 'draft.md'), 'utf8')).toBe('draft\n');
   expect(JSON.parse(await readFile(join(hosted.home, 'local-copies/rooms', `${notes.ref}.json`), 'utf8'))).toMatchObject({ room_handle: 'renamed-notes', repository: chosen });
-  design.rehandle('notes');
+  design.rehandle('notebook');
   expect(await rooms.download([notes, design])).toMatchObject({
     status: 1,
-    stderr: `house: /rooms/notes: ${chosen} holds a folder an Agent works in, so Kit leaves it as it is\n`,
+    stderr: `house: rooms/notebook: ${chosen} holds a folder an Agent works in, so Kit leaves it as it is\n`,
   });
   expect(await readFile(join(chosen, 'a.md'), 'utf8')).toBe('a\n');
   expect(await readFile(join(hosted.workspace, 'rooms', 'design', 'brief.md'), 'utf8')).toBe('Brief\n');
@@ -425,10 +425,10 @@ it("keeps a Room's folder an Agent's owner chose as its launch directory through
 
 it("reads which folders its Agents' owners chose from House for a download before its first read of the Agents, so the chosen folder keeps its path", async () => {
   const home = await temporaryHome();
-  const chosen = join(accountOf(home), 'house', 'rooms', 'notes');
+  const chosen = join(accountOf(home), 'house', 'rooms', 'notebook');
   const hosted = await hostKit([{ working_directory: chosen }], { home });
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   await rooms.download([notes]);
   stop(hosted.kit.pid);
@@ -448,7 +448,7 @@ it("reads which folders its Agents' owners chose from House for a download befor
 const DENIED = 'operation_denied: you may not write here; the Room owner grants Room access, your User widens an Agent at /agents';
 
 async function unfollowed(rooms: Rooms): Promise<{ notes: Room; design: Room }> {
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.put('capture/mail/one.md', 'one\n');
   const design = rooms.room('design');
@@ -504,14 +504,14 @@ it('catches a Room House answers again up from the position it kept, reading no 
   expect(enumerations(hosted).slice(enumerated)).toEqual([{ prefixes: [notes.root, design.root], positions: [position, at(design)] }]);
   expect(await text(notes, 'b.md')).toBe('b, from House\n');
   expect(await text(notes, 'a.md')).toBe('a, local\n');
-  expect(await upload(hosted, notes)).toMatchObject({ status: 0, stdout: 'House accepted 2 files of /rooms/notes.\n' });
+  expect(await upload(hosted, notes)).toMatchObject({ status: 0, stdout: 'House accepted 2 files of rooms/notebook.\n' });
   expect(notes.files.get('a.md')!.content).toBe('a, local\n');
 });
 
 it('keeps a file holding the conflict markers an upload wrote through a download that brings a newer change of it, and the resolution merges with that change', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('plan.md', 'one\ntwo\nthree\nfour\nfive\n');
   await rooms.download([room]);
   room.put('plan.md', 'one\nTWO, theirs\nthree\nfour\nfive\n');
@@ -523,14 +523,14 @@ it('keeps a file holding the conflict markers an upload wrote through a download
 
   expect(await house(hosted, '/', 'download')).toEqual({
     status: 0,
-    stdout: "/rooms/notes/plan.md: changed here, so House's change was not brought; the next save merges it\n",
+    stdout: "rooms/notebook/plan.md: changed here, so House's change was not brought; the next save merges it\n",
     stderr: '',
   });
   expect(await text(room, 'plan.md')).toBe(marked);
   expect((await manifestOf(room)).files['plan.md']).toMatchObject({ revision: conflicted, conflicted: true });
 
   await writeFile(join(room.repository, 'plan.md'), 'one\nTWO, both\nthree\nfour\nfive\n');
-  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of /rooms/notes.\n' });
+  expect(await upload(hosted, room)).toMatchObject({ status: 0, stdout: 'House accepted 1 file of rooms/notebook.\n' });
   expect(room.files.get('plan.md')!.content).toBe('one\nTWO, both\nthree\nfour\nFIVE\n');
   expect(await text(room, 'plan.md')).toBe('one\nTWO, both\nthree\nfour\nFIVE\n');
 });

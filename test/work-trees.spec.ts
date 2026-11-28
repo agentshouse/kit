@@ -15,7 +15,7 @@ function git(cwd: string, ...args: string[]): void {
 }
 
 function leftOut(folder: string): string {
-  return `/rooms/notes/${folder}: not uploaded, as it holds a Git work tree`;
+  return `rooms/notebook/${folder}: not uploaded, as it holds a Git work tree`;
 }
 
 function batches(hosted: Hosted): Record<string, unknown>[][] {
@@ -39,7 +39,7 @@ async function paths(folder: string): Promise<string[]> {
 async function staged(): Promise<{ hosted: Hosted; rooms: Rooms; notes: Room }> {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'one\n');
   notes.put('plan.md', 'Plant beans\n');
   expect(await rooms.download([notes])).toMatchObject({ status: 0 });
@@ -68,14 +68,14 @@ async function leavesBoth(hosted: Hosted, notes: Room, folder: string): Promise<
 
   expect(await house(hosted, join(folder, 'app'), 'upload')).toEqual({
     status: 0,
-    stdout: ['House accepted 2 files of /rooms/notes.', leftOut('app'), leftOut('docs/site'), ''].join('\n'),
+    stdout: ['House accepted 2 files of rooms/notebook.', leftOut('app'), leftOut('docs/site'), ''].join('\n'),
     stderr: '',
   });
 
   expect(batches(hosted)).toEqual([
     [
-      { op: 'write', path: '/rooms/notes/new.md', content: 'new\n' },
-      { op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans and corn\n', base: plan },
+      { op: 'write', path: 'rooms/notebook/new.md', content: 'new\n' },
+      { op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant beans and corn\n', base: plan },
     ],
   ]);
   expect([...notes.files.keys()].sort()).toEqual(['a.md', 'new.md', 'plan.md']);
@@ -95,7 +95,7 @@ async function leavesBoth(hosted: Hosted, notes: Room, folder: string): Promise<
   expect(await paths(folder)).toEqual(['a.md', 'new.md', 'plan.md']);
   expect(await house(hosted, folder, 'upload')).toEqual({
     status: 0,
-    stdout: ['Nothing to upload: /rooms/notes matches House.', leftOut('app'), leftOut('docs/site'), ''].join('\n'),
+    stdout: ['Nothing to upload: rooms/notebook matches House.', leftOut('app'), leftOut('docs/site'), ''].join('\n'),
     stderr: '',
   });
   expect(batches(hosted)).toHaveLength(1);
@@ -105,7 +105,7 @@ it("uploads a conversation's copy holding a clone with a .git folder and its wor
   const { hosted, notes } = await staged();
   hosted.call({ kind: 'open', conversation_id: 'conversation-1', agent_id: 'agent-1', room_ref: notes.ref, name: 'Plan' });
   expect(await hosted.result(lastCall())).toMatchObject({ provider_session_id: expect.any(String) });
-  const copy = join(hosted.workspace, 'conversations', 'notes', 'Plan');
+  const copy = join(hosted.workspace, 'conversations', 'notebook', 'Plan');
 
   await leavesBoth(hosted, notes, copy);
 
@@ -123,7 +123,7 @@ it("uploads a Room's folder holding a clone with a .git folder and its worktree 
 it("keeps in the Room the files a folder held before it gained a .git: an upload sends nothing of them, their manifest entries stay, and a download, with its attachments too, and a house update there write and remove nothing in the folder", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('plan.md', 'Plant beans\n');
   for (const name of ['one', 'two', 'three', 'four']) notes.put(`code/${name}.md`, `${name}\n`);
   notes.upload('code/cover.jpg', JPEG);
@@ -138,9 +138,9 @@ it("keeps in the Room the files a folder held before it gained a .git: an upload
   await writeFile(join(notes.repository, 'plan.md'), 'Plant corn\n');
   const plan = notes.revision('plan.md');
 
-  expect(await upload(hosted, notes)).toEqual({ status: 0, stdout: ['House accepted 1 file of /rooms/notes.', leftOut('code'), ''].join('\n'), stderr: '' });
+  expect(await upload(hosted, notes)).toEqual({ status: 0, stdout: ['House accepted 1 file of rooms/notebook.', leftOut('code'), ''].join('\n'), stderr: '' });
 
-  expect(batches(hosted)).toEqual([[{ op: 'write', path: '/rooms/notes/plan.md', content: 'Plant corn\n', base: plan }]]);
+  expect(batches(hosted)).toEqual([[{ op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant corn\n', base: plan }]]);
   expect([...notes.files.keys()].sort()).toEqual(['code/four.md', 'code/one.md', 'code/three.md', 'code/two.md', 'plan.md']);
   expect(notes.binaries.has('code/cover.jpg')).toBe(true);
   const kept = (await manifestOf(notes)).files;
@@ -158,19 +158,19 @@ it("keeps in the Room the files a folder held before it gained a .git: an upload
   const downloaded = (await manifestOf(notes)).files;
   expect(Object.fromEntries(Object.entries(downloaded).filter(([path]) => path.startsWith('code/')))).toEqual(entries);
 
-  const updated = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/code/three.md', content: 'three, updated\n', base: notes.revision('code/three.md') }] }));
+  const updated = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ op: 'write', path: 'rooms/notebook/code/three.md', content: 'three, updated\n', base: notes.revision('code/three.md') }] }));
 
   expect(updated).toMatchObject({ status: 0, stderr: '' });
   expect(notes.files.get('code/three.md')!.content).toBe('three, updated\n');
   expect(await tree(code)).toEqual(before);
   expect((await manifestOf(notes)).files['code/three.md']).toEqual(entries['code/three.md']);
-  expect(await upload(hosted, notes)).toEqual({ status: 0, stdout: ['Nothing to upload: /rooms/notes matches House.', leftOut('code'), ''].join('\n'), stderr: '' });
+  expect(await upload(hosted, notes)).toEqual({ status: 0, stdout: ['Nothing to upload: rooms/notebook matches House.', leftOut('code'), ''].join('\n'), stderr: '' });
 });
 
 it("leaves a held attachment under a folder that gained a .git, its file and its entry, as they were when another writer changes it, downloading nothing", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('plan.md', 'Plant beans\n');
   notes.upload('code/logo.jpg', JPEG);
   expect(await rooms.download([notes], '--with-attachments')).toMatchObject({ status: 0 });
@@ -189,7 +189,7 @@ it("leaves a held attachment under a folder that gained a .git, its file and its
 it("leaves the files of a folder that gained a .git as they were when House answers a moved file's links rewritten in them, and uploads around one of them still holding conflict markers", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('plan.md', 'Plant beans\n');
   notes.put('code/links.md', 'See [the plan](../plan.md).\n');
   notes.put('code/clash.md', 'one\n');
@@ -207,9 +207,9 @@ it("leaves the files of a folder that gained a .git as they were when House answ
   await rm(join(notes.repository, 'plan.md'));
   await writeFile(join(notes.repository, 'plans.md'), 'Plant beans\n');
 
-  expect(await upload(hosted, notes)).toEqual({ status: 0, stdout: ['House accepted 1 file of /rooms/notes.', leftOut('code'), ''].join('\n'), stderr: '' });
+  expect(await upload(hosted, notes)).toEqual({ status: 0, stdout: ['House accepted 1 file of rooms/notebook.', leftOut('code'), ''].join('\n'), stderr: '' });
 
-  expect(batches(hosted).at(-1)).toEqual([{ op: 'move', path: '/rooms/notes/plan.md', to: '/rooms/notes/plans.md', base: plan }]);
+  expect(batches(hosted).at(-1)).toEqual([{ op: 'move', path: 'rooms/notebook/plan.md', to: 'rooms/notebook/plans.md', base: plan }]);
   expect(notes.files.get('code/links.md')!.content).toBe('See [the plan](../plans.md).\n');
   expect(await tree(code)).toEqual(before);
   const after = (await manifestOf(notes)).files;

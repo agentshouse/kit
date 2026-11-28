@@ -41,7 +41,7 @@ async function staged(hosting: Hosting = {}, skills: RoomSkill[] = [], routes = 
     { skills: [], ...hosting, tools: { guide: catalogue(UPSTREAM, () => own), ...hosting.tools } },
   );
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.instructions = INSTRUCTIONS;
   notes.skills = skills;
@@ -182,7 +182,7 @@ it("writes none for a member at no version, asking House nothing of the Room's s
 
   expect(await tree(join(hosted.workingDirectory, '.agents'))).toEqual([]);
   expect(await tree(join(hosted.workingDirectory, '.claude'))).toEqual([]);
-  expect(await written(copyOf(hosted, 'notes', 'Fresh'), OWNED)).toEqual(OWNED_FILES);
+  expect(await written(copyOf(hosted, 'notebook', 'Fresh'), OWNED)).toEqual(OWNED_FILES);
 });
 
 it("writes the skills of an approved version whose text compiles to nothing beside no AGENTS.md, in a Room's folder and a conversation's copy, keeps them once the folder's text goes, and deletes them once the Environment no longer reaches the Room", async () => {
@@ -225,7 +225,7 @@ it("rewrites a conversation's copy's skills and its Room's folder's at the notic
   const { hosted, rooms, notes } = await staged({}, [owned()]);
   await rooms.download([notes]);
   await opened(hosted, 1, notes, 'Chat');
-  const copy = copyOf(hosted, 'notes', 'Chat');
+  const copy = copyOf(hosted, 'notebook', 'Chat');
   expect(await written(copy, OWNED)).toEqual(OWNED_FILES);
   const asked = roomAsks(hosted).length;
 
@@ -251,7 +251,7 @@ it("rewrites the skills in every copy, a Run's among them, when house settings c
   const { hosted, rooms, notes } = await staged({}, [{ name: SECOND, files: {} }, owned()]);
   await rooms.download([notes]);
   await opened(hosted, 1, notes, 'Fresh', { kind: 'new' });
-  const fresh = copyOf(hosted, 'notes', 'Fresh');
+  const fresh = copyOf(hosted, 'notebook', 'Fresh');
   expect(await folderTree(notes.repository)).toContain(join(SECOND, 'SKILL.md'));
   expect(await written(fresh, SECOND)).toEqual(await packaged(SECOND));
 
@@ -351,7 +351,7 @@ it("uploads nothing .agents/skills or .claude/skills hold in a Room's folder or 
   expect(rooms.edits()).toEqual([]);
 
   await opened(hosted, 1, notes, 'Chat');
-  const copy = copyOf(hosted, 'notes', 'Chat');
+  const copy = copyOf(hosted, 'notebook', 'Chat');
   await writeFile(join(copy, '.agents', 'skills', OWNED, 'SKILL.md'), 'edited in the copy\n');
   expect(await house(hosted, copy, 'upload')).toMatchObject({ status: 0, stdout: `Nothing to upload: ${notes.root} matches House.\n` });
   expect(rooms.edits()).toEqual([]);

@@ -82,7 +82,7 @@ it("serves House's listed tools as the house verbs with House's help", async () 
       '  history: `true` lists its revisions, newest first.',
       '  cursor (1 to 4096 characters): The `next_cursor` of the answer before.',
       '  long: `true` raises the limit of a cut answer from 2 KB to 100 KB.',
-      `example: house info '{"path":"/rooms/team-notes/plan.md"}'`,
+      `example: house info '{"path":"rooms/team-notes/plan.md"}'`,
     ].join('\n') + '\n',
   );
   expect(search!.stdout).toBe('search answered\n');
@@ -111,7 +111,7 @@ it('attaches a fresh operation id to every Tool call, a read included, and never
   await opened(hosted);
   const record = '{"room_ref":"r_room","source_ref":"s_source","body":"hello"}';
 
-  const changes = '{"changes":[{"op":"mkdir","path":"/rooms","name":"Notes"}]}';
+  const changes = '{"changes":[{"op":"mkdir","path":"rooms","name":"Notes"}]}';
 
   directed(
     hosted,
@@ -158,12 +158,12 @@ it("uploads the local file named by file to its path in the Room, filling its si
 
   directed(
     hosted,
-    '@house upload {"file":"messenger-evidence/messenger-light.jpg","path":"/rooms/porting/evidence/messenger-next-light.jpg"}',
+    '@house upload {"file":"messenger-evidence/messenger-light.jpg","path":"rooms/porting/evidence/messenger-next-light.jpg"}',
   );
 
   expect((await runs(hosted, 1))[0]).toMatchObject({
     status: 0,
-    stdout: 'path: /rooms/porting/evidence/messenger-next-light.jpg\nrevision: v_1.1.x\n',
+    stdout: 'path: rooms/porting/evidence/messenger-next-light.jpg\nrevision: v_1.1.x\n',
     stderr: '',
   });
   const [declared] = hosted.mcp;
@@ -172,7 +172,7 @@ it("uploads the local file named by file to its path in the Room, filling its si
   expect(called(declared!).params._meta[CONVERSATION_META_KEY]).toBe('conversation-1');
   expect(called(declared!).params.name).toBe('upload');
   expect(called(declared!).params.arguments).toEqual({
-    path: '/rooms/porting/evidence/messenger-next-light.jpg',
+    path: 'rooms/porting/evidence/messenger-next-light.jpg',
     bytes: content.length,
     sha256: createHash('sha256').update(content).digest('hex'),
     media_type: 'image/jpeg',
@@ -207,7 +207,7 @@ it("prints House's own line for a refused call, and no route, status or body", a
     };
   });
 
-  directed(hosted, '@house search {"query":"one"}\n@house info {"path":"/rooms/private"}');
+  directed(hosted, '@house search {"query":"one"}\n@house info {"path":"rooms/private"}');
 
   expect((await runs(hosted, 2)).map((ran) => [ran.status, ran.stderr])).toEqual([
     [1, 'house: room_not_found: you have no Room with that room_ref; pass an r_… ref from rooms_list, not a handle\n'],
@@ -240,7 +240,7 @@ it("prints House's refusal of an upload's finishing call as House words it", asy
       : { isError: true, content: [{ type: 'text', text: 'upload_expired: this upload is gone; run the same command again to start a new one\n' }] };
   await opened(hosted);
 
-  directed(hosted, '@house upload {"file":"report.txt","path":"/rooms/room/report.txt"}');
+  directed(hosted, '@house upload {"file":"report.txt","path":"rooms/room/report.txt"}');
 
   expect((await runs(hosted, 1))[0]).toMatchObject({
     status: 1,
@@ -250,15 +250,15 @@ it("prints House's refusal of an upload's finishing call as House words it", asy
 
 it("sends upload with no file to House as given and prints House's answer, the link", async () => {
   const hosted = await hostKit();
-  const link = 'path: /rooms/room/scans\nurl: https://agents.house/rooms/room/scans?upload\n';
+  const link = 'path: rooms/room/scans\nurl: https://agents.house/rooms/room/scans?upload\n';
   hosted.tools.upload = () => ({ content: [{ type: 'text', text: link }] });
   await opened(hosted);
 
-  directed(hosted, '@house upload {"path":"/rooms/room/scans"}');
+  directed(hosted, '@house upload {"path":"rooms/room/scans"}');
 
   expect((await runs(hosted, 1))[0]).toMatchObject({ status: 0, stdout: `${link}\n` });
   expect(hosted.mcp.map(called).filter((sent) => sent.method === 'tools/call').map((sent) => sent.params)).toEqual([
-    expect.objectContaining({ name: 'upload', arguments: { path: '/rooms/room/scans' } }),
+    expect.objectContaining({ name: 'upload', arguments: { path: 'rooms/room/scans' } }),
   ]);
 });
 
@@ -271,16 +271,16 @@ it('refuses arguments that are no JSON object and a file it cannot read in one l
     [
       '@house shell invoice',
       '@house agent_update ["invoice"]',
-      '@house upload {"file":"","path":"/rooms/room/report.txt"}',
-      '@house upload {"file":"absent.txt","path":"/rooms/room/absent.txt"}',
-      '@house upload {"file":".","path":"/rooms/room/folder"}',
+      '@house upload {"file":"","path":"rooms/room/report.txt"}',
+      '@house upload {"file":"absent.txt","path":"rooms/room/absent.txt"}',
+      '@house upload {"file":".","path":"rooms/room/folder"}',
       '@house agents/list --help',
     ].join('\n'),
   );
 
   const form = 'house: the arguments are one JSON object, in single quotes or on stdin after -, like';
   expect((await runs(hosted, 6)).map((ran) => ran.stderr)).toEqual([
-    `${form} house shell '{"command":"rg -n \\"deadline\\" /rooms/team-notes"}'\n`,
+    `${form} house shell '{"command":"rg -n \\"deadline\\" rooms/team-notes"}'\n`,
     `${form} house agent_update '{"op":"create","environment":"0199c5fd-aeeb-7757-a9fa-e923d5a4fd12","cli":"claude-agent-acp","model":"opus"}'\n`,
     'house: upload needs "file", a local file\n',
     'house: absent.txt is not a readable file\n',

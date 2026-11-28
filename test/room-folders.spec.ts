@@ -34,7 +34,7 @@ function chunked(hosted: Hosted, room: Room): unknown[] {
 it("writes a copied Room's AGENTS.md and CLAUDE.md read-only, rewrites a hand-edited AGENTS.md, uploads neither, deletes both with their manifest entries once the Environment no longer reaches the Room, and reads that copy no more once it holds no .house", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.instructions = FIRST;
 
@@ -68,13 +68,40 @@ it("writes a copied Room's AGENTS.md and CLAUDE.md read-only, rewrites a hand-ed
   expect(await held(notes.repository)).toEqual(['a.md']);
 });
 
+it("writes each link of a Room's instructions, which House shows as a Room path, into AGENTS.md as the relative path from that file, keeping its key and fragment, and leaves a web address and a link naming a Room by its reference as written", async () => {
+  const hosted = await hostKit();
+  const rooms = serveRooms(hosted);
+  const garden = rooms.room('garden');
+  garden.put('a.md', 'a\n');
+  garden.instructions = [
+    'Plan in [the plan](rooms/garden/plans/q4.md#dates), [the Room](rooms/garden) and [my rules](rooms/private/rooms/garden/AGENTS.md).',
+    'See [the photo](rooms/garden/photos/a.jpg?key=k_1), [the map][map], [the site](https://agents.house/rooms/garden/plan.md) and [by reference](rooms/r_8k2m/plan.md).',
+    '',
+    '[map]: <rooms/open-questions/map.md>',
+    '',
+  ].join('\n');
+
+  expect((await rooms.download([garden])).status).toBe(0);
+
+  expect(await readFile(join(garden.repository, 'AGENTS.md'), 'utf8')).toBe(
+    [
+      'Plan in [the plan](plans/q4.md#dates), [the Room](.) and [my rules](../private/rooms/garden/AGENTS.md).',
+      'See [the photo](photos/a.jpg?key=k_1), [the map][map], [the site](https://agents.house/rooms/garden/plan.md) and [by reference](rooms/r_8k2m/plan.md).',
+      '',
+      '[map]: <../open-questions/map.md>',
+      '',
+    ].join('\n'),
+  );
+  expect(await readFile(join(garden.repository, 'CLAUDE.md'), 'utf8')).toBe(IMPORTED);
+});
+
 it("makes the folder of a Room held at the Open level holding the two files alone, renames it with the Room's handle, keeps the folder and files of a Room lowered from the Keep to the Open level, and takes a lost Room's folder back once the Room is reached again", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
   const garden = rooms.room('garden');
   garden.put('plan.md', 'Plant beans\n');
   garden.instructions = FIRST;
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.instructions = SECOND;
   rooms.open = [garden];
@@ -115,7 +142,7 @@ it("makes the folder of a Room held at the Open level holding the two files alon
 
   expect(await held(folderOf(hosted, 'garden-club'))).toEqual(['AGENTS.md', 'CLAUDE.md']);
   expect(await readFile(join(folderOf(hosted, 'garden-club'), 'AGENTS.md'), 'utf8')).toBe(FIRST);
-  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual(['garden-club', 'notes']);
+  expect((await readdir(join(hosted.workspace, 'rooms'))).filter((name) => !name.startsWith('.')).sort()).toEqual(['garden-club', 'notebook']);
 });
 
 it("copies a Room raised from the Open to the Keep level into its folder beside what else the folder holds, an Agent's chosen launch directory, setting aside only what a document of the Room takes the name of", async () => {
@@ -169,7 +196,7 @@ it("leaves a raised Room's folder as it was where a document of the Room takes t
 it('changes AGENTS.md at the next connection after an approval or a new version, and leaves it at the download after it', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.instructions = FIRST;
   const garden = rooms.room('garden');
@@ -197,7 +224,7 @@ it('changes AGENTS.md at the next connection after an approval or a new version,
 it("writes AGENTS.md whole from a Room's instructions House cuts in two parts, reading on through next_cursor to the last part", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.instructions = LONG;
 
@@ -215,7 +242,7 @@ it("writes AGENTS.md whole from a Room's instructions House cuts in two parts, r
 it("deletes the two files once House answers a Room's instructions empty, and keeps the last text where it cannot read them, saying so", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.instructions = FIRST;
   const garden = rooms.room('garden');
@@ -247,7 +274,7 @@ it("deletes the two files once House answers a Room's instructions empty, and ke
 it("reads a Room's instructions again once House answers that read busy, so the download rewrites every Room's AGENTS.md and keeps none as it was", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   notes.instructions = FIRST;
   const garden = rooms.room('garden');

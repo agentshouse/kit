@@ -24,7 +24,7 @@ const ARGUMENTS = 'the arguments are one JSON object, in single quotes or on std
 const LONG = '`true` raises the limit of a cut answer from 2 KB to 100 KB.';
 const UPLOAD =
   "upload: in a Room's Local copy, sends at once every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, as Kit's next save would; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
-const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
+const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"rooms/<handle>/<folder>"}' for the link where your User picks the files`;
 const DOWNLOAD =
   "download: brings House's changes into every Room's Local copy at once, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next save to merge; a copy holds the Room's documents and only the attachments asked for there, a conversation's copy linking each one already on this computer, and a download brings no attachment nobody asked for and brings each one the copy holds that another writer changed at its new revision, linked where this computer holds it; --with-attachments brings each attachment the copy lacks up to --max-size megabytes, 10 by default; with JSON, writes one attachment of a Room to the local file named by file";
 const KIT_VERBS = [
@@ -38,7 +38,7 @@ const KIT_VERBS = [
 const AGENT_RUN_USAGE = `usage: house agent run '{"runs":[{"room":"<handle>","agent_function":"<card>","payload":"<brief>"}]}', each Run with agent_update request_send's arguments, or house agent run '{"refs":["<Run reference or name>"]}' to wait again; - reads them from stdin`;
 const AGENT_RUN =
   'agent run: starts each of "runs" by agent_update request_send, prints its name and reference, and waits until every Run is idle, failed, not started, declined, withdrawn or deleted, printing each one\'s state and never its message; exits 0 only when every Run is idle; with "refs" it starts nothing and waits again';
-const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
+const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or house download '{"path":"rooms/<handle>/<path>","file":"<local file>"}', adding "ref" for a revision`;
 
 function runHouse(
   home: string,
@@ -96,7 +96,7 @@ it("reads a Tool's arguments from stdin after -, so an update larger than one Li
   const house = await startHouse();
   const home = await connected(house);
   house.route('POST', '/', ({ body }) => ({ body: { jsonrpc: '2.0', id: (body as { id: string }).id, result: shelled('applied') } }));
-  const changes = [{ op: 'write', path: '/rooms/notes/long.md', content: 'line\n'.repeat(1024 * 1024 / 5) }];
+  const changes = [{ op: 'write', path: 'rooms/notebook/long.md', content: 'line\n'.repeat(1024 * 1024 / 5) }];
   const piped = JSON.stringify({ changes });
   expect(Buffer.byteLength(piped)).toBeGreaterThan(1024 * 1024);
 
@@ -147,15 +147,15 @@ it("uploads a file larger than the house CLI's memory budget from disk in parts 
   await held.close();
   const peak = join(home, 'peak-memory');
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/recordings/recording.webm' })], undefined, [
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: 'rooms/room/recordings/recording.webm' })], undefined, [
     '--import',
     MEMORY,
   ], { KIT_TEST_PEAK_MEMORY: peak });
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: /rooms/room/recordings/recording.webm\nrevision: v_1.1.x\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: rooms/room/recordings/recording.webm\nrevision: v_1.1.x\n', stderr: '' });
   expect(uploads.calls.declared).toEqual([
     {
-      path: '/rooms/room/recordings/recording.webm',
+      path: 'rooms/room/recordings/recording.webm',
       bytes: size,
       sha256: zeros(size),
       media_type: 'video/webm',
@@ -179,11 +179,11 @@ it("names every part's SHA-256 and the file's path in each finishing call and se
   const file = join(home, 'notes.bin');
   await writeFile(file, content);
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/notes/notes.bin' })]);
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: 'rooms/room/notes/notes.bin' })]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: /rooms/room/notes/notes.bin\nrevision: v_1.1.x\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: rooms/room/notes/notes.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(uploads.calls.finished).toEqual(
-    Array(3).fill({ upload: expect.any(String), path: '/rooms/room/notes/notes.bin', part_sha256: digests.map((digest) => digest.toString('hex')) }),
+    Array(3).fill({ upload: expect.any(String), path: 'rooms/room/notes/notes.bin', part_sha256: digests.map((digest) => digest.toString('hex')) }),
   );
   expect(store.requests.map((request) => [request.part, request.checksum, request.bytes, request.status])).toEqual([
     [1, one, 10, 200],
@@ -207,7 +207,7 @@ it('gives up an upload whose store keeps refusing every part, saying so without 
   const file = join(home, 'cover.bin');
   await writeFile(file, Buffer.from([0, 1, 2, 255]));
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/covers/cover.bin' })], undefined, [
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: 'rooms/room/covers/cover.bin' })], undefined, [
     '--import',
     FAST_TIMEOUTS,
   ]);
@@ -232,12 +232,12 @@ it("resumes an upload outside a conversation after its connection drops, finishi
   const file = join(home, 'cover.bin');
   await writeFile(file, Buffer.from([0, 1, 2, 255]));
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/covers/cover.bin' })], undefined, [
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: 'rooms/room/covers/cover.bin' })], undefined, [
     '--import',
     FAST_TIMEOUTS,
   ]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: /rooms/room/covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: rooms/room/covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(store.requests.map((request) => [request.part, request.status])).toEqual([
     [1, 200],
     [2, 0],
@@ -262,12 +262,12 @@ it('finishes an upload outside a conversation again while House answers it with 
   const file = join(home, 'cover.bin');
   await writeFile(file, Buffer.from([0, 1, 2, 255]));
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/covers/cover.bin' })], undefined, [
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: 'rooms/room/covers/cover.bin' })], undefined, [
     '--import',
     FAST_TIMEOUTS,
   ]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: /rooms/room/covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: rooms/room/covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(store.requests.map((request) => [request.part, request.status])).toEqual([
     [1, 200],
     [2, 200],
@@ -298,9 +298,9 @@ it('finishes an upload outside a conversation again only once the wait House nam
   const file = join(home, 'cover.bin');
   await writeFile(file, Buffer.from([0, 1, 2, 255]));
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/covers/cover.bin' })]);
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: 'rooms/room/covers/cover.bin' })]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: /rooms/room/covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: rooms/room/covers/cover.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(finished[1]! - finished[0]!).toBeGreaterThanOrEqual(2_000);
 });
 
@@ -315,14 +315,14 @@ it('sends each part and reads each download at its store address through the Kit
   const relay = await startRelay();
   const relayed = { HOUSE_KIT_RELAY: relay.origin };
 
-  const sent = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/covers/cover.bin' })], undefined, [], relayed);
+  const sent = await runHouse(home, ['upload', JSON.stringify({ file, path: 'rooms/room/covers/cover.bin' })], undefined, [], relayed);
   store.objects.set('binary/cover', content);
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
     const details = `sha256: ${createHash('sha256').update(content).digest('hex')}\ndownload: ${store.address('GET', 'binary/cover')}`;
     return { body: { jsonrpc: '2.0', id: message.id, result: shelled(details) } };
   });
-  const fetched = await runHouse(home, ['download', JSON.stringify({ path: '/rooms/room/covers/cover.bin', file: join(home, 'back.bin') })], undefined, [], relayed);
+  const fetched = await runHouse(home, ['download', JSON.stringify({ path: 'rooms/room/covers/cover.bin', file: join(home, 'back.bin') })], undefined, [], relayed);
 
   expect([sent.status, fetched.status]).toEqual([0, 0]);
   expect(await readFile(join(home, 'back.bin'))).toEqual(content);
@@ -372,12 +372,12 @@ it('prints the revision House answers and posts no bytes when the path already h
   await writeFile(file, 'png');
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
-    return { body: { jsonrpc: '2.0', id: message.id, result: shelled('path: /rooms/room/covers/cover.png\nrevision: v_1.1.x') } };
+    return { body: { jsonrpc: '2.0', id: message.id, result: shelled('path: rooms/room/covers/cover.png\nrevision: v_1.1.x') } };
   });
 
-  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: '/rooms/room/covers/cover.png' })]);
+  const ran = await runHouse(home, ['upload', JSON.stringify({ file, path: 'rooms/room/covers/cover.png' })]);
 
-  expect(ran).toEqual({ status: 0, stdout: 'path: /rooms/room/covers/cover.png\nrevision: v_1.1.x\n', stderr: '' });
+  expect(ran).toEqual({ status: 0, stdout: 'path: rooms/room/covers/cover.png\nrevision: v_1.1.x\n', stderr: '' });
   expect(house.requests.map((request) => request.path)).toEqual(['/']);
   expect((house.requests[0]!.body as McpCall).params.arguments).toMatchObject({ media_type: 'image/png' });
 });
@@ -387,7 +387,7 @@ it('says a write may have taken effect when House answers with no result, and to
   const home = await connected(house);
   house.route('POST', '/', () => ({ status: 502, bytes: { type: 'text/html', content: '<html>Bad Gateway</html>' } }));
 
-  const ran = await runHouse(home, ['update', '{"changes":[{"op":"write","path":"/rooms/notes/new.md","content":"new"}]}']);
+  const ran = await runHouse(home, ['update', '{"changes":[{"op":"write","path":"rooms/notebook/new.md","content":"new"}]}']);
 
   expect(ran).toEqual({
     status: 1,
@@ -579,11 +579,11 @@ it.each([
   [
     'shell',
     [
-      'shell: Read-only shell over `/rooms/<handle>`.',
+      'shell: Read-only shell over `rooms/<handle>`.',
       '  command (required, 1 to 16000 characters): The command line.',
       '  cwd (at least 1 character): Starting directory; default `/`.',
       `  long: ${LONG}`,
-      `example: house shell '{"command":"rg -n \\"deadline\\" /rooms/team-notes"}'`,
+      `example: house shell '{"command":"rg -n \\"deadline\\" rooms/team-notes"}'`,
     ],
   ],
   [
@@ -594,7 +594,7 @@ it.each([
       '  history: `true` lists its revisions, newest first.',
       '  cursor (1 to 4096 characters): The `next_cursor` of the answer before.',
       `  long: ${LONG}`,
-      `example: house info '{"path":"/rooms/team-notes/plan.md"}'`,
+      `example: house info '{"path":"rooms/team-notes/plan.md"}'`,
     ],
   ],
   [
@@ -659,7 +659,7 @@ it.each([
       '  path (required, at least 1 character): The document or attachment.',
       '  to (required, at least 1 character): The new path; links to it follow.',
       '  base (1 to 64 characters): The `v_` revision you read; a folder’s `move` takes `{name: revision}`.',
-      `example: house update '{"changes":[{"op":"move","path":"/rooms/team-notes/plan.md","to":"/rooms/team-notes/archive/plan.md"}]}'`,
+      `example: house update '{"changes":[{"op":"move","path":"rooms/team-notes/plan.md","to":"rooms/team-notes/archive/plan.md"}]}'`,
     ],
   ],
   [
@@ -701,11 +701,11 @@ it.each([
 });
 
 it.each([
-  [['shell', '-'], `${ARGUMENTS}, like house shell '{"command":"rg -n \\"deadline\\" /rooms/team-notes"}'`],
-  [['update', '-'], `${ARGUMENTS}, like house update '{"changes":[{"op":"write","path":"/rooms/team-notes/plan.md","content":"# Plan\\n\\nShip the beta on Friday.\\n"}]}'`],
+  [['shell', '-'], `${ARGUMENTS}, like house shell '{"command":"rg -n \\"deadline\\" rooms/team-notes"}'`],
+  [['update', '-'], `${ARGUMENTS}, like house update '{"changes":[{"op":"write","path":"rooms/team-notes/plan.md","content":"# Plan\\n\\nShip the beta on Friday.\\n"}]}'`],
   [['agent_update', '-'], `${ARGUMENTS}, like house agent_update '{"op":"create","environment":"0199c5fd-aeeb-7757-a9fa-e923d5a4fd12","cli":"claude-agent-acp","model":"opus"}'`],
-  [['upload', '-'], `${ARGUMENTS}, like house upload '{"path":"/rooms/team-notes/photos"}'`],
-  [['download', '-'], `${ARGUMENTS}, like house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}'`],
+  [['upload', '-'], `${ARGUMENTS}, like house upload '{"path":"rooms/team-notes/photos"}'`],
+  [['download', '-'], `${ARGUMENTS}, like house download '{"path":"rooms/<handle>/<path>","file":"<local file>"}'`],
   [['search', '-'], 'search is no Tool; house help lists the Tools'],
 ])('refuses house %j given arguments that are no JSON object with the named Tool\'s example, a family\'s first op\'s, and sends no call', async (argv, refusal) => {
   const house = await startHouse();
@@ -793,7 +793,7 @@ it.each([
 });
 
 it.each([
-  [['update', '{"changes":[{"op":"write","path":"/rooms/notes/new.md","content":"new"}]}', '--help'], '--help'],
+  [['update', '{"changes":[{"op":"write","path":"rooms/notebook/new.md","content":"new"}]}', '--help'], '--help'],
   [['rooms_list', '{}', '--bogus'], '--bogus'],
   [['--version'], '--version'],
   [['shell', '{"command":"ls"}', 'twice'], 'twice'],
@@ -836,7 +836,7 @@ it.each([
   [['upload', '--dry-run'], true, '--dry-run', UPLOAD_USAGE],
   [['upload', '--owner'], false, '--owner', UPLOAD_USAGE],
   [['upload', '--owner'], true, '--owner', UPLOAD_USAGE],
-  [['upload', '{"file":"a.md","path":"/rooms/notes/a.md"}', '--owner'], false, '--owner', UPLOAD_USAGE],
+  [['upload', '{"file":"a.md","path":"rooms/notebook/a.md"}', '--owner'], false, '--owner', UPLOAD_USAGE],
   [['download', '--x'], false, '--x', DOWNLOAD_USAGE],
 ])('refuses house %j with its usage before it opens a Kit connection', async (argv, conversation, unexpected, usage) => {
   const home = await temporaryHome();
@@ -865,13 +865,13 @@ it("exits with the status House's shell answer names, and 0 when it names none",
   const home = await connected(house);
   house.route('POST', '/', ({ body }) => {
     const message = body as { id: string } & McpCall;
-    const failed = message.params.arguments?.command === 'ls /rooms/private/house';
-    return { body: { jsonrpc: '2.0', id: message.id, result: failed ? shelled('', 2, ['ls: path_not_found /rooms/private/house']) : shelled('ROOM.md') } };
+    const failed = message.params.arguments?.command === 'ls rooms/private/house';
+    return { body: { jsonrpc: '2.0', id: message.id, result: failed ? shelled('', 2, ['ls: path_not_found rooms/private/house']) : shelled('ROOM.md') } };
   });
 
-  const failed = await runHouse(home, ['shell', '{"command":"ls /rooms/private/house"}']);
-  const listed = await runHouse(home, ['shell', '{"command":"ls /rooms/private"}']);
+  const failed = await runHouse(home, ['shell', '{"command":"ls rooms/private/house"}']);
+  const listed = await runHouse(home, ['shell', '{"command":"ls rooms/private"}']);
 
-  expect(failed).toEqual({ status: 2, stdout: 'exit: 2\nstderr: ls: path_not_found /rooms/private/house\n', stderr: '' });
+  expect(failed).toEqual({ status: 2, stdout: 'exit: 2\nstderr: ls: path_not_found rooms/private/house\n', stderr: '' });
   expect(listed).toEqual({ status: 0, stdout: 'ROOM.md\n', stderr: '' });
 });

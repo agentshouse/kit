@@ -100,7 +100,7 @@ it('kills a running process the moment the kill arrives while House holds the re
   });
   onTestFinished(() => release({ body: {} }));
   hosted.house.route('POST', '/', () => held);
-  hosted.call({ kind: 'message', text: '@say [file.txt](/rooms/private/file.txt)', first: true });
+  hosted.call({ kind: 'message', text: '@say [file.txt](rooms/private/file.txt)', first: true });
   const message = lastCall();
   await until(() => hosted.house.requests.find((request) => request.path === '/'));
 

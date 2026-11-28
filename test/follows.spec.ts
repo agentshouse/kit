@@ -10,7 +10,7 @@ import { callUpdate, released, serveRelease } from './release.ts';
 import { house, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
 const PLACED = '0.2.1-c000000000002';
-const PROTECTED = 'protected_path: /rooms/notes/capture/x.md is not writable';
+const PROTECTED = 'protected_path: rooms/notebook/capture/x.md is not writable';
 const LIMITED = "limit_reached: you reached today's Write limit; try again at 2026-11-17T00:00:00.000Z";
 const MARKDOWN = 'it is Markdown, which holds text only: UTF-8 without NUL, at most 1000000 bytes';
 const LOST_WATCH = ['--import', fileURLToPath(new URL('./lost-watch.ts', import.meta.url))];
@@ -32,7 +32,7 @@ interface Staged {
 async function staged(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): Promise<Staged> {
   const hosted = await hostKit(routes, hosting);
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('plan.md', 'Plant beans\n');
   notes.put('a.md', 'one\ntwo\nthree\n');
   rooms.answered = [notes];
@@ -43,7 +43,7 @@ async function staged(routes: RouteOverrides[] = [{}], hosting: Hosting = {}): P
 }
 
 function copyOf(hosted: Hosted, name: string): string {
-  return join(hosted.workspace, 'conversations', 'notes', name);
+  return join(hosted.workspace, 'conversations', 'notebook', name);
 }
 
 async function opened(hosted: Hosted, index: number, room: Room, name: string, copy?: Copy): Promise<void> {
@@ -116,8 +116,8 @@ it("saves a write in a Room's folder, in a conversation's copy and in a Run's co
 
   expect(arrivals.at(-1)! - written).toBeGreaterThanOrEqual(QUIET_MS);
   expect(changesOf(room!)).toEqual([
-    { op: 'write', path: '/rooms/notes/first.md', content: 'first\n' },
-    { op: 'write', path: '/rooms/notes/second.md', content: 'second\n' },
+    { op: 'write', path: 'rooms/notebook/first.md', content: 'first\n' },
+    { op: 'write', path: 'rooms/notebook/second.md', content: 'second\n' },
   ]);
 
   told(hosted, 1, '@sh echo one > one.md && sleep 1 && echo two > two.md\n@gate plan-done');
@@ -127,10 +127,10 @@ it("saves a write in a Room's folder, in a conversation's copy and in a Run's co
 
   expect(ended(hosted)).toHaveLength(0);
   expect(changesOf(plan!)).toEqual([
-    { op: 'write', path: '/rooms/notes/one.md', content: 'one\n' },
-    { op: 'write', path: '/rooms/notes/two.md', content: 'two\n' },
+    { op: 'write', path: 'rooms/notebook/one.md', content: 'one\n' },
+    { op: 'write', path: 'rooms/notebook/two.md', content: 'two\n' },
   ]);
-  expect(changesOf(imp!)).toEqual([{ op: 'write', path: '/rooms/notes/imp.md', content: 'imp\n' }]);
+  expect(changesOf(imp!)).toEqual([{ op: 'write', path: 'rooms/notebook/imp.md', content: 'imp\n' }]);
   expect(notes.files.get('imp.md')!.content).toBe('imp\n');
 });
 
@@ -164,8 +164,8 @@ it('sends a refused file again only with the next change, and the whole set a re
   await writeFile(join(notes.repository, 'capture', 'x.md'), 'held\n');
   await writeFile(join(notes.repository, 'plan.md'), 'Plant beans\nand peas\n');
   await until(() => (doorSaves(hosted).length === 2 ? true : undefined), SAVED_MS);
-  const held = { op: 'write', path: '/rooms/notes/capture/x.md', content: 'held\n' };
-  expect(doorSaves(hosted).map(changesOf)).toEqual([[held, { op: 'write', path: '/rooms/notes/plan.md', content: 'Plant beans\nand peas\n', base: expect.any(String) }], [expect.objectContaining({ path: '/rooms/notes/plan.md' })]]);
+  const held = { op: 'write', path: 'rooms/notebook/capture/x.md', content: 'held\n' };
+  expect(doorSaves(hosted).map(changesOf)).toEqual([[held, { op: 'write', path: 'rooms/notebook/plan.md', content: 'Plant beans\nand peas\n', base: expect.any(String) }], [expect.objectContaining({ path: 'rooms/notebook/plan.md' })]]);
   const settled = await until(async () => {
     const record = await recordOf(hosted, notes);
     return record.pending === undefined ? record : undefined;
@@ -177,7 +177,7 @@ it('sends a refused file again only with the next change, and the whole set a re
 
   await writeFile(join(notes.repository, 'a.md'), 'one\n');
   await until(() => (doorSaves(hosted).length === 4 ? true : undefined), SAVED_MS);
-  expect(doorSaves(hosted).slice(2).map(changesOf)).toEqual([[expect.objectContaining({ path: '/rooms/notes/a.md' }), held], [expect.objectContaining({ path: '/rooms/notes/a.md' })]]);
+  expect(doorSaves(hosted).slice(2).map(changesOf)).toEqual([[expect.objectContaining({ path: 'rooms/notebook/a.md' }), held], [expect.objectContaining({ path: 'rooms/notebook/a.md' })]]);
 
   rooms.writeUnits = 0;
   rooms.retryAfter = 3;
@@ -348,7 +348,7 @@ it("sends a turn's report once the copy's due save ends, and the report outside 
   await until(() => ended(hosted)[0]);
   const [report] = await until(() => (turnReports(hosted).length === 1 ? turnReports(hosted) : undefined), SAVED_MS);
   expect(rooms.edits()).toHaveLength(1);
-  expect(report!.body).toMatchObject({ files: [{ path: '/rooms/notes/capture/x.md', refused: PROTECTED }] });
+  expect(report!.body).toMatchObject({ files: [{ path: 'rooms/notebook/capture/x.md', refused: PROTECTED }] });
 
   await mkdir(join(notes.repository, 'capture'));
   await writeFile(join(notes.repository, 'capture', 'x.md'), 'held\n');
@@ -365,9 +365,9 @@ it("sends a turn's report once the copy's due save ends, and the report outside 
   await quiet(NO_SAVE_MS);
 
   expect(outside(hosted)).toEqual([
-    { room_ref: notes.ref, path: '/rooms/notes/capture/x.md', refused: PROTECTED },
-    { room_ref: notes.ref, path: '/rooms/notes/capture/x.md', refused: MARKDOWN },
-    { room_ref: notes.ref, path: '/rooms/notes/capture/x.md', refused: PROTECTED },
+    { room_ref: notes.ref, path: 'rooms/notebook/capture/x.md', refused: PROTECTED },
+    { room_ref: notes.ref, path: 'rooms/notebook/capture/x.md', refused: MARKDOWN },
+    { room_ref: notes.ref, path: 'rooms/notebook/capture/x.md', refused: PROTECTED },
   ]);
   expect(turnReports(hosted)).toHaveLength(1);
 });
@@ -380,11 +380,11 @@ it('leaves a document holding a marker line the Kit never wrote out of every sav
   await writeFile(join(notes.repository, 'markers.txt'), markers);
   await until(() => (outside(hosted).length > 0 && notes.binaries.has('markers.txt') ? true : undefined), SAVED_MS);
 
-  expect(outside(hosted)).toEqual([{ room_ref: notes.ref, path: '/rooms/notes/a.md', markers: true }]);
+  expect(outside(hosted)).toEqual([{ room_ref: notes.ref, path: 'rooms/notebook/a.md', markers: true }]);
   expect(notes.files.get('heading.md')!.content).toBe('Plans\n=======\n\nBeans first.\n');
   expect(notes.binaries.get('markers.txt')!.bytes.toString()).toBe(markers);
   expect(notes.files.get('a.md')!.content).toBe('one\ntwo\nthree\n');
-  expect(doorSaves(hosted).flatMap((received) => (changesOf(received) as { path: string }[]).map((change) => change.path))).not.toContain('/rooms/notes/a.md');
+  expect(doorSaves(hosted).flatMap((received) => (changesOf(received) as { path: string }[]).map((change) => change.path))).not.toContain('rooms/notebook/a.md');
 
   await writeFile(join(notes.repository, 'a.md'), 'one\ntwo, mine\nthree\n');
   await until(() => (notes.files.get('a.md')?.content === 'one\ntwo, mine\nthree\n' ? true : undefined), SAVED_MS);
@@ -404,7 +404,7 @@ it("merges the fields of a document House changed meanwhile one by one at the fo
   await writeFile(join(notes.repository, 'tasks', 'ship.md'), task.replace('Ada', 'Bea'));
   await until(() => (notes.files.get('tasks/ship.md')?.content === merged ? true : undefined), SAVED_MS);
 
-  expect(changesOf(doorSaves(hosted).at(-1)!)).toEqual([{ op: 'write', path: '/rooms/notes/tasks/ship.md', content: merged, base: current }]);
+  expect(changesOf(doorSaves(hosted).at(-1)!)).toEqual([{ op: 'write', path: 'rooms/notebook/tasks/ship.md', content: merged, base: current }]);
   await shows(join(notes.repository, 'tasks', 'ship.md'), merged);
   expect(outside(hosted)).toEqual([]);
 });
@@ -418,7 +418,7 @@ it("refuses house upload on a marker line, answers house download that the next 
   expect(await upload(hosted, notes)).toEqual({
     status: 1,
     stdout: '',
-    stderr: 'house: /rooms/notes/plan.md still holds conflict markers; the next save sends it once its markers go\n',
+    stderr: 'house: rooms/notebook/plan.md still holds conflict markers; the next save sends it once its markers go\n',
   });
 
   const saves = doorSaves(hosted).length;
@@ -427,9 +427,9 @@ it("refuses house upload on a marker line, answers house download that the next 
   await until(() => (doorSaves(hosted).length > saves ? true : undefined), SAVED_MS);
   notes.put('a.md', 'one\ntwo\nTHREE\n');
   const downloaded = await rooms.download([notes]);
-  const updated = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ op: 'write', path: '/rooms/notes/a.md', content: 'one\ntwo\nTHREE, too\n', base: notes.revision('a.md') }] }));
+  const updated = await house(hosted, notes.repository, 'update', JSON.stringify({ changes: [{ op: 'write', path: 'rooms/notebook/a.md', content: 'one\ntwo\nTHREE, too\n', base: notes.revision('a.md') }] }));
 
-  expect(downloaded).toMatchObject({ status: 0, stdout: "/rooms/notes/a.md: changed here, so House's change was not brought; the next save merges it\n" });
-  expect(updated.stdout).toContain('/rooms/notes/a.md: changed here, so House accepted the update and local integration is pending; the next save sends this file as it is');
+  expect(downloaded).toMatchObject({ status: 0, stdout: "rooms/notebook/a.md: changed here, so House's change was not brought; the next save merges it\n" });
+  expect(updated.stdout).toContain('rooms/notebook/a.md: changed here, so House accepted the update and local integration is pending; the next save sends this file as it is');
   expect(`${downloaded.stdout}${updated.stdout}`).not.toMatch(/house (upload|download)/);
 });

@@ -10,7 +10,7 @@ import { temporaryDirectory } from './kit.ts';
 import { serveRooms, type Room, type Rooms } from './rooms.ts';
 
 const HOUR = 60 * 60_000;
-const LIST = '/rooms/notes/settings/repositories.md';
+const LIST = 'rooms/notebook/settings/repositories.md';
 const CLAUDE: RouteOverrides = { kind: 'claude-agent-acp' };
 const NO_COPY = "the Agent's computer could not copy this conversation's Room; try again";
 
@@ -83,7 +83,7 @@ function listReads(hosted: Hosted): number {
 async function staged(routes: RouteOverrides[], hosting: Hosting = {}): Promise<{ hosted: Hosted; rooms: Rooms; notes: Room; garden: Room }> {
   const hosted = await hostKit(routes, hosting);
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('plan.md', 'Plant beans\n');
   const garden = rooms.room('garden');
   rooms.answered = [notes];
@@ -92,7 +92,7 @@ async function staged(routes: RouteOverrides[], hosting: Hosting = {}): Promise<
 }
 
 function copyOf(hosted: Hosted, name: string): string {
-  return join(hosted.workspace, 'conversations', 'notes', name);
+  return join(hosted.workspace, 'conversations', 'notebook', name);
 }
 
 async function opened(

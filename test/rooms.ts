@@ -134,7 +134,8 @@ export function said(refusal: Refused): string {
 }
 
 function spokenRefusal(refusal: Refused): string {
-  const named = refusal.path !== undefined && refusal.code !== 'handle_changed' ? stringify({ path: refusal.path }) : '';
+  if (refusal.code === 'handle_changed') return `${said(refusal)}\n${stringify({ path: refusal.path, current_path: refusal.current_path })}`;
+  const named = refusal.path !== undefined ? stringify({ path: refusal.path }) : '';
   return `${said(refusal)}\n${named}`;
 }
 
@@ -273,7 +274,7 @@ export class Room {
   }
 
   get root(): string {
-    return `/rooms/${this.handle}`;
+    return `rooms/${this.handle}`;
   }
 
   get repository(): string {
@@ -286,7 +287,7 @@ export class Room {
   }
 
   names(path: string): boolean {
-    return [this.handle, ...this.former].some((handle) => path === `/rooms/${handle}` || path.startsWith(`/rooms/${handle}/`));
+    return [this.handle, ...this.former].some((handle) => path === `rooms/${handle}` || path.startsWith(`rooms/${handle}/`));
   }
 
   writable(path: string): boolean {
@@ -471,9 +472,9 @@ export class Room {
 
   edit(changes: EditChange[], staged: (sha256: string) => Buffer | undefined = () => undefined, admitted: () => boolean = () => true): Edited {
     for (const named of changes.flatMap((change) => [change.path, ...(change.to === undefined ? [] : [change.to])])) {
-      const handle = /^\/rooms\/([^/]+)/.exec(named)![1]!;
+      const handle = /^rooms\/([^/]+)/.exec(named)![1]!;
       if (handle !== this.handle && this.former.has(handle)) {
-        return { refusal: { code: 'handle_changed', path: named, current_path: `${this.root}${named.slice(`/rooms/${handle}`.length)}` } };
+        return { refusal: { code: 'handle_changed', path: named, current_path: `${this.root}${named.slice(`rooms/${handle}`.length)}` } };
       }
     }
     const distinct = new Set(changes.flatMap((change) => [change.path, ...(change.to === undefined ? [] : [change.to])]));
@@ -887,7 +888,7 @@ export function serveRooms(hosted: Hosted): Rooms {
   hosted.tools.info = (args) => {
     const path = String(args.path);
     const room = roomOf(path);
-    if (!path.slice('/rooms/'.length).includes('/')) {
+    if (!path.slice('rooms/'.length).includes('/')) {
       return { content: [{ type: 'text', text: stringify({ ref: room.ref, path, ...room.instructionsFrom(Number(args.cursor ?? 0)) }) }] };
     }
     const local = path.slice(room.root.length + 1);
@@ -986,7 +987,7 @@ export function house(hosted: Hosted, cwd: string, ...args: string[]): Promise<H
 
 function readsRoomRoot(received: Received): boolean {
   const { name, arguments: args } = (received.body as { params: { name?: string; arguments?: { path?: unknown } } }).params;
-  return name === 'info' && typeof args?.path === 'string' && /^\/rooms\/[^/]+$/.test(args.path);
+  return name === 'info' && typeof args?.path === 'string' && /^rooms\/[^/]+$/.test(args.path);
 }
 
 export function roomRootReads(hosted: Hosted): string[] {

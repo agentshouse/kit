@@ -124,7 +124,7 @@ it.each([
 it("catches a Local copy up from the position its record keeps, reading the Room no other way, and reads a field a later Kit added with no harm", async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const notes = rooms.room('notes');
+  const notes = rooms.room('notebook');
   notes.put('a.md', 'a\n');
   await rooms.download([notes]);
   const path = join(hosted.home, 'local-copies', 'rooms', `${notes.ref}.json`);
@@ -135,7 +135,7 @@ it("catches a Local copy up from the position its record keeps, reading the Room
   const asked = hosted.house.requests.length;
   notes.put('b.md', 'b, from House\n');
 
-  expect(await houseRun(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n' });
+  expect(await houseRun(hosted, '/', 'download')).toMatchObject({ status: 0, stdout: 'rooms/notebook: 1 file updated from House\n' });
 
   await settle();
   const read = hosted.house.requests.slice(asked).filter((request) => request.path.startsWith('/kit/door/'));

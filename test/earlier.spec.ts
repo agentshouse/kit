@@ -48,22 +48,22 @@ async function earlierKit(house: House, account: string, home: string, workspace
   await put(join(home, 'placement'), `${placement}\n`);
   await put(join(home, 'install-command'), 'curl -fsSL agents.house/kit | sh --linux\n');
   await put(join(workspace, 'agents', 'agent-1', 'notes.md'), 'kept\n');
-  await put(join(workspace, 'local-copies', 'rooms', 'notes', 'plan.md'), 'plan\n');
+  await put(join(workspace, 'local-copies', 'rooms', 'notebook', 'plan.md'), 'plan\n');
   return { account, folder: join(account, '.agents', 'house'), home, workspace };
 }
 
 async function copyRecord(home: string, repository: string): Promise<void> {
-  await put(join(home, 'local-copies', 'rooms', 'r_notes.json'), JSON.stringify({ key: 'rooms/r_notes', room_handle: 'notes', repository, moves: [{ worktree: repository, from: 'a', to: 'b' }] }));
+  await put(join(home, 'local-copies', 'rooms', 'r_notes.json'), JSON.stringify({ key: 'rooms/r_notes', room_handle: 'notebook', repository, moves: [{ worktree: repository, from: 'a', to: 'b' }] }));
 }
 
 async function moved(earlier: Earlier, workspace = earlier.folder): Promise<void> {
   expect(JSON.parse(await readFile(join(earlier.folder, 'credential.json'), 'utf8'))).toMatchObject({ environment: 'environment-one', credential: 'ahk_held' });
   expect(await readFile(join(earlier.folder, 'install-command'), 'utf8')).toBe('curl -fsSL agents.house/kit | sh\n');
   expect(await readFile(join(workspace, 'agents', 'agent-1', 'notes.md'), 'utf8')).toBe('kept\n');
-  expect(await readFile(join(workspace, 'local-copies', 'rooms', 'notes', 'plan.md'), 'utf8')).toBe('plan\n');
+  expect(await readFile(join(workspace, 'local-copies', 'rooms', 'notebook', 'plan.md'), 'utf8')).toBe('plan\n');
   const record = JSON.parse(await readFile(join(earlier.folder, 'local-copies', 'rooms', 'r_notes.json'), 'utf8')) as { repository: string; moves: { worktree: string }[] };
-  expect(record.repository).toBe(join(workspace, 'local-copies', 'rooms', 'notes'));
-  expect(record.moves[0]!.worktree).toBe(join(workspace, 'local-copies', 'rooms', 'notes'));
+  expect(record.repository).toBe(join(workspace, 'local-copies', 'rooms', 'notebook'));
+  expect(record.moves[0]!.worktree).toBe(join(workspace, 'local-copies', 'rooms', 'notebook'));
   await absent(earlier.home);
 }
 
@@ -72,7 +72,7 @@ async function desktopKit(house: House, tools: Supervision, workspace?: string):
   const home = join(account, '.house-kit');
   const chosen = workspace ?? join(account, 'AgentsHouse');
   const earlier = await earlierKit(house, account, home, chosen, 'native');
-  await copyRecord(home, join(chosen, 'local-copies', 'rooms', 'notes'));
+  await copyRecord(home, join(chosen, 'local-copies', 'rooms', 'notebook'));
   await put(join(chosen, 'mine.txt'), 'mine\n');
   const prefix = join(account, '.local', 'share', 'house-kit');
   await put(join(prefix, 'current'), '0.2.1\n');
@@ -149,7 +149,7 @@ async function rootKit(house: House, tools: Supervision, unit: boolean, runs = '
   const home = join(account, '.house-kit');
   const workspace = join(tools.root, 'agents', 'house');
   const earlier = await earlierKit(house, account, home, workspace, 'server');
-  await copyRecord(home, '/agents/house/local-copies/rooms/notes');
+  await copyRecord(home, '/agents/house/local-copies/rooms/notebook');
   await put(join(tools.root, 'opt', 'house-kit', 'current'), '0.2.1\n');
   for (const command of ['kit', 'house']) await put(join(tools.root, 'usr', 'local', 'bin', command), '#!/bin/sh\n');
   if (unit) {
@@ -221,7 +221,7 @@ it("takes over a container's Kit home as the same Environment when the install r
   const account = await temporaryDirectory();
   const home = join(account, '.house-kit');
   const earlier = await earlierKit(house, account, home, join(account, 'AgentsHouse'), 'container');
-  await copyRecord(home, '/agents/house/local-copies/rooms/notes');
+  await copyRecord(home, '/agents/house/local-copies/rooms/notebook');
   await put(join(home, 'kit', 'current'), '0.2.1\n');
   await writeFile(join(tools.fake, 'container'), JSON.stringify([{ Source: home, Destination: '/kit-home' }, { Source: earlier.workspace, Destination: '/agents/house' }]));
   await tools.systemd();
@@ -355,7 +355,7 @@ it("takes over the Kit home the Windows command copied out of its container as t
   const workspace = join(account, 'mnt', 'c', 'Users', 'owner', 'AgentsHouse');
   const earlier = await earlierKit(house, account, home, workspace, 'windows');
   await put(join(home, 'workspace'), `${workspace}\n`);
-  await copyRecord(home, '/agents/house/local-copies/rooms/notes');
+  await copyRecord(home, '/agents/house/local-copies/rooms/notebook');
   await tools.systemd();
 
   const kit = connecting(house, earlier, tools);

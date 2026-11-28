@@ -76,10 +76,10 @@ interface KitVerb {
 
 const USAGE =
   "usage: house <tool> ['<arguments as JSON>'], or house <tool> - to read them from stdin; house help <tool>: its arguments or its ops; house help <tool> <op>: an op's arguments";
-const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"/rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"/rooms/<handle>/<folder>"}' for the link where your User picks the files`;
+const UPLOAD_USAGE = `usage: house upload, house upload '{"file":"<local file>","path":"rooms/<handle>/<path>"}', adding "base", the revision it replaces, or house upload '{"path":"rooms/<handle>/<folder>"}' for the link where your User picks the files`;
 const UPLOAD =
   "upload: in a Room's Local copy, sends at once every file changed, added or deleted there since it last matched House, each .md file as document text and every other file as an attachment, as Kit's next save would; with JSON, sends one local file to the Room path it names, or with no file prints the link where your User picks the files for that folder";
-const DOWNLOAD_FORM = `house download '{"path":"/rooms/<handle>/<path>","file":"<local file>"}'`;
+const DOWNLOAD_FORM = `house download '{"path":"rooms/<handle>/<path>","file":"<local file>"}'`;
 const DOWNLOAD_USAGE = `usage: house download [--with-attachments] [--max-size <MB>], or ${DOWNLOAD_FORM}, adding "ref" for a revision`;
 const DOWNLOAD = `download: brings House's changes into every Room's Local copy at once, or, run in a conversation's copy, into that copy alone, leaving each file changed here for the next save to merge; a copy holds the Room's documents and only the attachments asked for there, a conversation's copy linking each one already on this computer, and a download brings no attachment nobody asked for and brings each one the copy holds that another writer changed at its new revision, linked where this computer holds it; --with-attachments brings each attachment the copy lacks up to --max-size megabytes, ${DEFAULT_MAX_SIZE} by default; with JSON, writes one attachment of a Room to the local file named by file`;
 const AGENT_RUN =

@@ -37,7 +37,7 @@ function called(received: Received): McpCall['params'] {
 async function copied(): Promise<{ hosted: Hosted; rooms: Rooms; room: Room }> {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('ROOM.md', 'The notes Room\n');
   room.put('plan.md', 'one\n');
   room.upload('photo.jpg', JPEG);
@@ -67,33 +67,33 @@ it("uploads a local file in the parts House answers, finishes it naming its path
   const uploads = uploadTool(hosted.store, 5);
   const refusal = [
     'edit_conflict: nothing was written; fix each conflict listed, then send the edit again',
-    stringify({ conflicts: [{ path: '/rooms/notes/cover.jpg', code: 'base_required', state: 'current', revision: 'v_9.1.x' }] }).trimEnd(),
+    stringify({ conflicts: [{ path: 'rooms/notebook/cover.jpg', code: 'base_required', state: 'current', revision: 'v_9.1.x' }] }).trimEnd(),
   ].join('\n');
   hosted.tools.upload = (args) =>
-    args.upload === undefined && args.path === '/rooms/notes/cover.jpg' && args.base === undefined
+    args.upload === undefined && args.path === 'rooms/notebook/cover.jpg' && args.base === undefined
       ? { isError: true, content: [{ type: 'text', text: `${refusal}\n` }] }
       : uploads.answer(args);
   await opened(hosted);
 
-  const first = await ran(hosted, '@house upload {"file":"photo.jpg","path":"/rooms/notes/photo.jpg"}');
-  const occupied = await ran(hosted, '@house upload {"file":"photo.jpg","path":"/rooms/notes/cover.jpg"}');
-  const based = await ran(hosted, '@house upload {"file":"photo.jpg","path":"/rooms/notes/cover.jpg","base":"v_9.1.x"}');
+  const first = await ran(hosted, '@house upload {"file":"photo.jpg","path":"rooms/notebook/photo.jpg"}');
+  const occupied = await ran(hosted, '@house upload {"file":"photo.jpg","path":"rooms/notebook/cover.jpg"}');
+  const based = await ran(hosted, '@house upload {"file":"photo.jpg","path":"rooms/notebook/cover.jpg","base":"v_9.1.x"}');
 
-  expect(first).toMatchObject({ status: 0, stdout: 'path: /rooms/notes/photo.jpg\nrevision: v_1.1.x\n', stderr: '' });
+  expect(first).toMatchObject({ status: 0, stdout: 'path: rooms/notebook/photo.jpg\nrevision: v_1.1.x\n', stderr: '' });
   expect(occupied).toMatchObject({ status: 1, stdout: '', stderr: `house: ${refusal}\n` });
-  expect(based).toMatchObject({ status: 0, stdout: 'path: /rooms/notes/cover.jpg\nrevision: v_2.1.x\n' });
+  expect(based).toMatchObject({ status: 0, stdout: 'path: rooms/notebook/cover.jpg\nrevision: v_2.1.x\n' });
   const declared = { bytes: JPEG.length, sha256: digest(JPEG), media_type: 'image/jpeg' };
   const partSha256 = [JPEG.subarray(0, 5), JPEG.subarray(5, 10), JPEG.subarray(10)].map(digest);
   const finishing = (path: string) => ({ upload: expect.any(String), path, part_sha256: partSha256 });
   expect(hosted.mcp.map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual(
     [
-      { ...declared, path: '/rooms/notes/photo.jpg' },
-      finishing('/rooms/notes/photo.jpg'),
-      finishing('/rooms/notes/photo.jpg'),
-      { ...declared, path: '/rooms/notes/cover.jpg' },
-      { ...declared, path: '/rooms/notes/cover.jpg', base: 'v_9.1.x' },
-      finishing('/rooms/notes/cover.jpg'),
-      finishing('/rooms/notes/cover.jpg'),
+      { ...declared, path: 'rooms/notebook/photo.jpg' },
+      finishing('rooms/notebook/photo.jpg'),
+      finishing('rooms/notebook/photo.jpg'),
+      { ...declared, path: 'rooms/notebook/cover.jpg' },
+      { ...declared, path: 'rooms/notebook/cover.jpg', base: 'v_9.1.x' },
+      finishing('rooms/notebook/cover.jpg'),
+      finishing('rooms/notebook/cover.jpg'),
     ].map((args) => ['Bearer ahk_held', 'upload', args]),
   );
   expect(storeCalls(hosted)).toEqual([1, 2, 3, 1, 2, 3].map((part) => ['PUT', part, part === 3 ? 2 : 5, 200]));
@@ -108,9 +108,9 @@ it('resumes a transfer cut after some parts by sending only the parts the store 
   hosted.store.cut(2);
   await opened(hosted);
 
-  const sent = await ran(hosted, '@house upload {"file":"notes.bin","path":"/rooms/notes/notes.bin"}');
+  const sent = await ran(hosted, '@house upload {"file":"notes.bin","path":"rooms/notebook/notes.bin"}');
 
-  expect(sent).toMatchObject({ status: 0, stdout: 'path: /rooms/notes/notes.bin\nrevision: v_1.1.x\n', stderr: '' });
+  expect(sent).toMatchObject({ status: 0, stdout: 'path: rooms/notebook/notes.bin\nrevision: v_1.1.x\n', stderr: '' });
   expect(storeCalls(hosted)).toEqual([
     ['PUT', 1, 7, 200],
     ['PUT', 2, 0, 0],
@@ -132,7 +132,7 @@ it('refuses an upload whose file changed after House took its declaration, finis
   };
   await opened(hosted);
 
-  const refused = await ran(hosted, '@house upload {"file":"photo.jpg","path":"/rooms/notes/photo.jpg"}');
+  const refused = await ran(hosted, '@house upload {"file":"photo.jpg","path":"rooms/notebook/photo.jpg"}');
 
   expect(refused).toMatchObject({ status: 1, stdout: '', stderr: 'house: photo.jpg changed while it was uploaded; upload it again\n' });
   expect(uploads.calls.finished).toEqual([]);
@@ -148,16 +148,16 @@ it('downloads the head or a named revision of a binary Path to the file the call
   const head = join(hosted.workingDirectory, 'out', 'photo.jpg');
   const earlier = join(hosted.workingDirectory, 'photo-first.jpg');
 
-  const current = await ran(hosted, '@house download {"path":"/rooms/notes/photo.jpg","file":"out/photo.jpg"}');
-  const revision = await ran(hosted, `@house download {"path":"/rooms/notes/photo.jpg","ref":"${first}","file":"${earlier}"}`);
+  const current = await ran(hosted, '@house download {"path":"rooms/notebook/photo.jpg","file":"out/photo.jpg"}');
+  const revision = await ran(hosted, `@house download {"path":"rooms/notebook/photo.jpg","ref":"${first}","file":"${earlier}"}`);
 
   expect(current).toMatchObject({ status: 0, stdout: `${head}\n`, stderr: '' });
   expect(revision).toMatchObject({ status: 0, stdout: `${earlier}\n`, stderr: '' });
   expect(await readFile(head)).toEqual(REDRAWN);
   expect(await readFile(earlier)).toEqual(JPEG);
   expect(fileCalls(hosted).map((received) => [received.headers.authorization, called(received).name, called(received).arguments])).toEqual([
-    ['Bearer ahk_held', 'info', { path: '/rooms/notes/photo.jpg' }],
-    ['Bearer ahk_held', 'info', { path: '/rooms/notes/photo.jpg', ref: first }],
+    ['Bearer ahk_held', 'info', { path: 'rooms/notebook/photo.jpg' }],
+    ['Bearer ahk_held', 'info', { path: 'rooms/notebook/photo.jpg', ref: first }],
   ]);
   expect(storeCalls(hosted)).toEqual([
     ['GET', null, REDRAWN.length, 200],
@@ -172,13 +172,13 @@ it('replaces a download address the store refuses as expired by asking House aga
   await opened(hosted);
   const target = join(hosted.workingDirectory, 'photo.jpg');
 
-  const fetched = await ran(hosted, `@house download {"path":"/rooms/notes/photo.jpg","file":"${target}"}`);
+  const fetched = await ran(hosted, `@house download {"path":"rooms/notebook/photo.jpg","file":"${target}"}`);
 
   expect(fetched).toMatchObject({ status: 0, stdout: `${target}\n`, stderr: '' });
   expect(await readFile(target)).toEqual(JPEG);
   expect(fileCalls(hosted).map((received) => [called(received).name, called(received).arguments])).toEqual([
-    ['info', { path: '/rooms/notes/photo.jpg' }],
-    ['info', { path: '/rooms/notes/photo.jpg' }],
+    ['info', { path: 'rooms/notebook/photo.jpg' }],
+    ['info', { path: 'rooms/notebook/photo.jpg' }],
   ]);
   expect(storeCalls(hosted)).toEqual([
     ['GET', null, 0, 403],
@@ -191,11 +191,11 @@ it("refuses a download whose bytes do not match House's SHA-256 and one of a tex
   rooms.damages = true;
   const target = join(hosted.workingDirectory, 'photo.jpg');
 
-  const damaged = await house(hosted, hosted.workingDirectory, 'download', JSON.stringify({ path: '/rooms/notes/photo.jpg', file: target }));
-  const text = await house(hosted, hosted.workingDirectory, 'download', JSON.stringify({ path: '/rooms/notes/plan.md', file: target }));
+  const damaged = await house(hosted, hosted.workingDirectory, 'download', JSON.stringify({ path: 'rooms/notebook/photo.jpg', file: target }));
+  const text = await house(hosted, hosted.workingDirectory, 'download', JSON.stringify({ path: 'rooms/notebook/plan.md', file: target }));
 
-  expect(damaged).toEqual({ status: 1, stdout: '', stderr: 'house: /rooms/notes/photo.jpg did not arrive whole; download it again\n' });
-  expect(text).toEqual({ status: 1, stdout: '', stderr: 'house: /rooms/notes/plan.md holds no binary file; shell reads its text\n' });
+  expect(damaged).toEqual({ status: 1, stdout: '', stderr: 'house: rooms/notebook/photo.jpg did not arrive whole; download it again\n' });
+  expect(text).toEqual({ status: 1, stdout: '', stderr: 'house: rooms/notebook/plan.md holds no binary file; shell reads its text\n' });
   expect(existsSync(target)).toBe(false);
   expect((await readdir(hosted.workingDirectory)).filter((name) => name.includes('photo'))).toEqual([]);
   expect(fileCalls(hosted).map((received) => received.headers.authorization)).toEqual(['Bearer ahk_held', 'Bearer ahk_held']);
@@ -210,16 +210,16 @@ it('refuses a download of a document whose info answer pages its revisions as on
   };
   const target = join(hosted.workingDirectory, 'plan.copy');
 
-  const text = await house(hosted, hosted.workingDirectory, 'download', JSON.stringify({ path: '/rooms/notes/plan.md', file: target }));
+  const text = await house(hosted, hosted.workingDirectory, 'download', JSON.stringify({ path: 'rooms/notebook/plan.md', file: target }));
 
-  expect(text).toEqual({ status: 1, stdout: '', stderr: 'house: /rooms/notes/plan.md holds no binary file; shell reads its text\n' });
+  expect(text).toEqual({ status: 1, stdout: '', stderr: 'house: rooms/notebook/plan.md holds no binary file; shell reads its text\n' });
   expect(existsSync(target)).toBe(false);
 });
 
 it('copies and downloads a Room holding attachments with no byte read, recording each as skipped, and so does a second Local copy', async () => {
   const hosted = await hostKit();
   const rooms = serveRooms(hosted);
-  const room = rooms.room('notes');
+  const room = rooms.room('notebook');
   room.put('plan.md', 'one\n');
   room.upload('photo.jpg', JPEG);
   const own = rooms.room('private');
@@ -233,7 +233,7 @@ it('copies and downloads a Room holding attachments with no byte read, recording
   own.upload('scans/second.pdf', JPEG);
   const downloaded = await house(hosted, '/', 'download');
 
-  expect(downloaded).toEqual({ status: 0, stdout: '/rooms/notes: 1 file updated from House\n', stderr: '' });
+  expect(downloaded).toEqual({ status: 0, stdout: 'rooms/notebook: 1 file updated from House\n', stderr: '' });
   expect(await readFile(join(room.repository, 'plan.md'), 'utf8')).toBe('one\ntwo\n');
   for (const [copy, skipped] of [
     [room, ['images/cover.jpg', 'photo.jpg']],
@@ -275,8 +275,8 @@ it('appends a record as text linking a file it uploaded, and passes an attachmen
       : { content: [{ type: 'text', text: 'record: rec_1' }] };
   await opened(hosted);
 
-  const stored = await ran(hosted, '@house upload {"file":"photo.jpg","path":"/rooms/notes/scans/photo.jpg"}');
-  const linked = { room_ref: 'r_notes', source_ref: 's_mail', body: 'See [the scan](/rooms/notes/scans/photo.jpg).' };
+  const stored = await ran(hosted, '@house upload {"file":"photo.jpg","path":"rooms/notebook/scans/photo.jpg"}');
+  const linked = { room_ref: 'r_notes', source_ref: 's_mail', body: 'See [the scan](rooms/notebook/scans/photo.jpg).' };
   const appended = await ran(hosted, `@house records_append ${JSON.stringify(linked)}`);
   const attached = await ran(
     hosted,
