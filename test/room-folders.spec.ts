@@ -184,9 +184,9 @@ it('changes AGENTS.md at the next connection after an approval or a new version,
   await hosted.restart();
   await until(() => hosted.house.requests.filter((request) => request.path === '/kit/local-copies/selection/read').length > selections || undefined);
   await until(async () => ((await readFile(join(folderOf(hosted, 'garden'), 'AGENTS.md'), 'utf8')) === SECOND ? true : undefined));
+  await until(async () => ((await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')) === SECOND ? true : undefined));
 
   expect(roomRootReads(hosted).slice(reads).sort()).toEqual([garden.root, notes.root]);
-  expect(await readFile(join(notes.repository, 'AGENTS.md'), 'utf8')).toBe(SECOND);
 
   expect(await rooms.download([notes])).toMatchObject({ status: 0, stdout: 'Nothing new from House.\n' });
 

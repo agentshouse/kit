@@ -1,12 +1,9 @@
 import { execFile } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, expect, it, vi } from 'vitest';
 import { certificate, settle, until } from './double.ts';
-import { hostKit, type Hosted } from './environment.ts';
-import { temporaryDirectory } from './kit.ts';
+import { clocked, hostKit, type Hosted } from './environment.ts';
 import { startRelay, type Relay } from './relay-double.ts';
 
 const HELD_CLOCK = ['./moved-clock.ts', './fast-holds.ts'].flatMap((module) => ['--import', fileURLToPath(new URL(module, import.meta.url))]);
@@ -25,12 +22,12 @@ interface Relayed {
 async function relayed(): Promise<Relayed> {
   const tls = certificate();
   const relay = await startRelay(tls);
-  const shifted = join(await temporaryDirectory(), 'clock-shift');
+  const clock = await clocked();
   const hosted = await hostKit([{}], {
-    environment: { HOUSE_KIT_RELAY: relay.origin, NODE_EXTRA_CA_CERTS: tls.path, KIT_CLOCK_SHIFT: shifted },
+    environment: { HOUSE_KIT_RELAY: relay.origin, NODE_EXTRA_CA_CERTS: tls.path, ...clock.hosting.environment },
     node: HELD_CLOCK,
   });
-  return { hosted, relay, shift: (by) => writeFile(shifted, String(by)) };
+  return { hosted, relay, shift: clock.shift };
 }
 
 function reached(hosted: Hosted, path: string): number {

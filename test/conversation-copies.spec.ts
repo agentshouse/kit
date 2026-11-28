@@ -1,3 +1,4 @@
+import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
 import { agentInstructions, GUIDE } from '@agentshouse/skills';
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -100,26 +101,35 @@ async function contents(folder: string, skipped = ''): Promise<Record<string, st
   return Object.fromEntries(await Promise.all(files.map(async (file) => [file, (await readFile(file)).toString('base64')] as const)));
 }
 
+function savesBy(rooms: Rooms, index: number): number {
+  return rooms.edits().filter((received) => (received.body as McpCall).params._meta[CONVERSATION_META_KEY] === `conversation-${index}`).length;
+}
+
+async function savedBy(rooms: Rooms, index: number, count: number): Promise<void> {
+  await until(() => savesBy(rooms, index) >= count);
+}
+
 async function conflicted(hosted: Hosted, rooms: Rooms, marked: number, other: number): Promise<void> {
   const copy = copyOf(hosted, 'notes', `Plan ${marked}`);
-  const edits = rooms.edits().length;
+  const [theirs, ours] = [savesBy(rooms, other), savesBy(rooms, marked)];
   told(hosted, other, "@sh sed -i 's/beans/peas/' plan.md");
-  await edited(rooms, edits + 1);
+  await savedBy(rooms, other, theirs + 1);
   told(hosted, marked, "@sh sed -i 's/beans/corn/' plan.md");
-  await edited(rooms, edits + 2);
-  await until(async () => ((await readFile(join(copy, 'plan.md'), 'utf8')).includes('<<<<<<<') ? true : undefined));
-  await settle();
+  await savedBy(rooms, marked, ours + 1);
+  await until(async () => ((await entriesOf(copy))['plan.md']!.conflicted === true ? true : undefined));
+  expect(await readFile(join(copy, 'plan.md'), 'utf8')).toContain('<<<<<<<');
 }
 
 async function pending(hosted: Hosted, rooms: Rooms, index: number): Promise<void> {
   const copy = copyOf(hosted, 'notes', `Plan ${index}`);
-  const edits = rooms.edits().length;
+  const saves = savesBy(rooms, index);
   rooms.writeUnits = 0;
   told(hosted, index, '@sh echo two >> plan.md');
-  await edited(rooms, edits + 1);
-  await settle();
+  await savedBy(rooms, index, saves + 1);
   rooms.writeUnits = Infinity;
-  await writeFile(join(copy, 'plan.md'), 'Plant beans\n');
+  const whole = join(await temporaryDirectory(), 'plan.md');
+  await writeFile(whole, 'Plant beans\n');
+  await rename(whole, join(copy, 'plan.md'));
 }
 
 function bytes(text: string): Buffer {
@@ -256,11 +266,13 @@ it("asks House nothing before a turn while no notice came, the first turn after 
   notes.instructions = `${INSTRUCTIONS}Put new tasks on the map.\n`;
   await writeFile(join(copy, 'plan.md'), 'Plant beans and peas\n');
   noticed(hosted, garden);
+  await until(() => roomRootReads(hosted).length > read);
   await settle();
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree\n');
   noticed(hosted, notes);
 
   await shows(join(copy, 'AGENTS.md'), `${INSTRUCTIONS}Put new tasks on the map.\n`);
+  await shows(join(notes.repository, 'AGENTS.md'), `${INSTRUCTIONS}Put new tasks on the map.\n`);
   expect(await readFile(join(copy, 'a.md'), 'utf8')).toBe('one\ntwo\nthree, from House\n');
   expect(await readFile(join(copy, 'plan.md'), 'utf8')).toBe('Plant beans and peas\n');
   expect(roomRootReads(hosted).slice(read)).toEqual(['/rooms/garden', '/rooms/notes', '/rooms/notes']);
@@ -314,6 +326,7 @@ it("takes a change of the Environment's rights in the copy's Room at House's not
   noticed(hosted, notes);
 
   await until(async () => ((await entriesOf(copy))['a.md']!.read_only === true ? true : undefined));
+  await until(async () => ((await manifestOf(notes)).files['a.md']!.read_only === true ? true : undefined));
   await settle();
   const asked = roomAsks(hosted);
   const read = roomRootReads(hosted).length;
@@ -322,6 +335,7 @@ it("takes a change of the Environment's rights in the copy's Room at House's not
   noticed(hosted, own);
   await shows(join(copy, 'AGENTS.md'), `${INSTRUCTIONS}Your owner rules changed.\n`);
   await shows(join(notes.repository, 'AGENTS.md'), `${INSTRUCTIONS}Your owner rules changed.\n`);
+  await until(() => roomRootReads(hosted).length >= read + 3 && roomAsks(hosted) >= asked + 6);
   await settle();
   expect(roomRootReads(hosted).slice(read).sort()).toEqual(['/rooms/notes', '/rooms/notes', '/rooms/private']);
   expect(roomAsks(hosted)).toBe(asked + 6);
@@ -934,6 +948,7 @@ it("removes a copy whose linked attachment another folder wrote in place and upl
   await rooms.download([notes], '--with-attachments');
   const copy = (index: number) => copyOf(hosted, 'notes', `Plan ${index}`);
   for (const index of [1, 2, 3]) await opened(hosted, notes, `Plan ${index}`, `conversation-${index}`, `agent-${index}`);
+  rooms.denied.add('conversation-3');
   await replaced(join(copy(3), 'photo.jpg'), bytes('own bytes'));
   await writeFile(join(notes.repository, 'photo.jpg'), 'written in place');
   expect(await readFile(join(copy(1), 'photo.jpg'), 'utf8')).toBe('written in place');
