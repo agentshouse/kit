@@ -21,6 +21,7 @@ const KIT_PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.
 export const LOGIN_SHELL = { SHELL: '/bin/sh' };
 
 export const MOVED_CLOCK = ['./fast-intervals.ts', './moved-clock.ts'].flatMap((module) => ['--import', fileURLToPath(new URL(module, import.meta.url))]);
+export const HELD_SAVES = ['--import', fileURLToPath(new URL('./held-saves.ts', import.meta.url))];
 
 export function userBin(home: string): string {
   return join(home, 'user-bin');

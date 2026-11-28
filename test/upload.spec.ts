@@ -1,12 +1,10 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { hostKit, type Hosted } from './environment.ts';
+import { HELD_SAVES, hostKit, type Hosted } from './environment.ts';
 import { digest, house, manifestOf, serveRooms, upload, type Room, type Rooms } from './rooms.ts';
 
-const HELD_SAVES = ['--import', fileURLToPath(new URL('./held-saves.ts', import.meta.url))];
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
 const TYPES = '---\nfolders:\n  tasks/: task\ntask:\n  properties:\n    name: { type: string }\n    status: { type: string, title: Status }\n    owner: { type: string, title: Owner }\n---\n';
 const TASK = '# Ship\n\n- **Status**: open\n- **Owner**: Ada\n\nFirst step.\nSecond step.\n';

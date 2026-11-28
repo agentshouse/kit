@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { settle, until, type Received } from './double.ts';
 import { CONVERSATION_META_KEY } from '@agentshouse/kit-wire';
-import { clocked, hostKit, lastCall, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
+import { clocked, HELD_SAVES, hostKit, lastCall, type Hosted, type Hosting, type RouteOverrides } from './environment.ts';
 import { stop } from './kit.ts';
 import { house, manifestOf, serveRooms, type Room, type Rooms } from './rooms.ts';
 
@@ -244,7 +244,7 @@ it("removes a deleted conversation's copy only once no other living conversation
 });
 
 it("writes each document a house update changed and each attachment write of a file the copy holds, as House accepted it, into the file of the copy the conversation works in, or else of the copy holding the working directory, advancing its manifest entry, and keeps the bytes of a file changed since its entry, saying its local integration is pending", async () => {
-  const { hosted, rooms, notes } = await staged([{}, {}]);
+  const { hosted, rooms, notes } = await staged([{}, {}], { node: HELD_SAVES });
   notes.upload('table.csv', Buffer.from('a,b\n'));
   await rooms.download([notes], '--with-attachments');
   const imp = copyOf(hosted, 'notes', 'imp-1');
@@ -365,7 +365,7 @@ it("opens every Claude Code session, a Run's and its owner's alike, with the nam
 });
 
 it("moves and deletes with a house update each file unchanged since its entry, writes the text House merged, keeps a file changed since its entry saying its local integration is pending, and leaves the copy as it was where House refused the update", async () => {
-  const { hosted, rooms, notes } = await staged([{}]);
+  const { hosted, rooms, notes } = await staged([{}], { node: HELD_SAVES });
   notes.put('b.md', 'bee\n');
   notes.put('c.md', 'one\ntwo\n');
   await rooms.download([notes]);
