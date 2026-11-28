@@ -660,9 +660,10 @@ export class Conversations {
       outcome = error;
     }
     const took = outcome === 'injected' || outcome === 'startedNewTurn';
-    const begun = conversation.steering !== steering;
     opened.resolve(took ? waiting.call.message_id : null);
-    if (!begun && outcome !== 'startedNewTurn') conversation.steering = null;
+    if (conversation.steering === steering && outcome === 'startedNewTurn' && conversation.turn === null) this.begin(conversation);
+    const begun = conversation.steering !== steering;
+    if (!begun) conversation.steering = null;
     if (outcome === 'promptRequired') {
       this.ahead(conversation, waiting);
     } else if (took) {
@@ -670,7 +671,7 @@ export class Conversations {
         for (const turn of conversation.turns) turn.steered ||= turn.prompted;
       }
       this.kit.calls.keepResult(waiting.call.input_id, {});
-      if (begun || outcome === 'startedNewTurn') void claimed.promise.then((turn) => turn.reported).then(() => waiting.settle({}));
+      if (begun) void claimed.promise.then((turn) => turn.reported).then(() => waiting.settle({}));
       else waiting.settle({});
     } else {
       const cause = outcome instanceof Error ? outcome : new Error(`the CLI answered ${JSON.stringify(outcome)}`);

@@ -695,7 +695,10 @@ const app = agent({ name: 'adapter-double' })
       return { outcome: 'injected' };
     }
     if (kind === 'claude-agent-acp') return { outcome: 'promptRequired' };
+    const late = existsSync(join(home, 'late-new-turn'));
     void (async () => {
+      // A third of a second puts the new turn's first event well after the steer's answer, as a busy CLI sends it.
+      if (late) await new Promise((resolve) => setTimeout(resolve, 300));
       await turnStarted(client, params.sessionId);
       for (const line of steps) await directive(client, params.sessionId, line);
       await turnEnded(client, params.sessionId);

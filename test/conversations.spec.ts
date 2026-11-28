@@ -1169,6 +1169,26 @@ it('lands an at-once message as the turn Codex starts for it when Codex has alre
   expect((await hosted.adapterLog()).filter((entry) => entry.method === 'session/cancel')).toEqual([]);
 });
 
+it('settles each of two at-once messages Codex answers by starting a turn whose first event comes after its answer, and names the first in that turn\'s start', async () => {
+  const hosted = await opened();
+  const release = gated(hosted, 'first');
+  hosted.call({ kind: 'message', text: '@ended\n@gate first', first: false });
+  await until(() => hosted.turns.find((turn) => turn.path === '/kit/turns/start'));
+  await settle();
+  await writeFile(join(hosted.home, 'late-new-turn'), '');
+
+  hosted.call({ kind: 'message', text: '@say steered', first: false, at_once: true });
+  const steered = lastCall();
+  const named = lastMessage();
+  hosted.call({ kind: 'message', text: '@say again', first: false, at_once: true });
+
+  expect(await hosted.result(steered)).toEqual({});
+  expect(await hosted.result(lastCall())).toEqual({});
+  const starts = hosted.turns.filter((turn) => turn.path === '/kit/turns/start');
+  expect(starts.map((turn) => without(turn, 'conversation', 'turn'))[1]).toEqual({ message_id: named });
+  await release();
+});
+
 it("refuses an at-once message in the Kit's words when the CLI refuses to take it into its running turn, which goes on", async () => {
   const hosted = await opened();
   const release = gated(hosted, 'first');
